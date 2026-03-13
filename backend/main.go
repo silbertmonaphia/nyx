@@ -100,7 +100,17 @@ func moviesHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Access-Control-Allow-Origin", "*")
 
-	rows, err := db.Query("SELECT id, title, description, rating FROM movies")
+	queryParam := r.URL.Query().Get("q")
+	var rows *sql.Rows
+	var err error
+
+	if queryParam != "" {
+		// Use ILIKE for case-insensitive search in Postgres
+		rows, err = db.Query("SELECT id, title, description, rating FROM movies WHERE title ILIKE $1", "%"+queryParam+"%")
+	} else {
+		rows, err = db.Query("SELECT id, title, description, rating FROM movies")
+	}
+
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return

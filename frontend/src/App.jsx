@@ -7,19 +7,29 @@ import './App.css'
 function App() {
   const [movies, setMovies] = useState([])
   const [loading, setLoading] = useState(true)
+  const [searchTerm, setSearchTerm] = useState('')
 
   useEffect(() => {
-    fetch('http://localhost:8080/api/movies')
-      .then((res) => res.json())
-      .then((data) => {
-        setMovies(data)
-        setLoading(false)
-      })
-      .catch((err) => {
+    const fetchMovies = async () => {
+      setLoading(true)
+      try {
+        const response = await fetch(`http://localhost:8080/api/movies${searchTerm ? `?q=${searchTerm}` : ''}`)
+        const data = await response.json()
+        setMovies(data || [])
+      } catch (err) {
         console.error('Error fetching movies:', err)
+      } finally {
         setLoading(false)
-      })
-  }, [])
+      }
+    }
+
+    // Debounce search
+    const timer = setTimeout(() => {
+      fetchMovies()
+    }, 300)
+
+    return () => clearTimeout(timer)
+  }, [searchTerm])
 
   return (
     <>
@@ -34,10 +44,20 @@ function App() {
           <p>Your minimalist movie guide</p>
         </div>
 
+        <div className="search-container">
+          <input
+            type="text"
+            placeholder="Search for movies..."
+            value={searchTerm}
+            onChange={(e) => setSearchTerm(e.target.value)}
+            className="search-input"
+          />
+        </div>
+
         <div className="movie-list">
           {loading ? (
             <p>Loading movies...</p>
-          ) : (
+          ) : movies.length > 0 ? (
             movies.map((movie) => (
               <div key={movie.id} className="movie-item">
                 <h3>{movie.title}</h3>
@@ -45,6 +65,8 @@ function App() {
                 <span className="rating">★ {movie.rating}</span>
               </div>
             ))
+          ) : (
+            <p>No movies found matching "{searchTerm}"</p>
           )}
         </div>
       </section>

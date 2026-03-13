@@ -8,6 +8,13 @@ A minimalist media rating application with a Go backend and a React frontend.
 - `frontend/`: React 19 + Vite 8 SPA
 - `docker-compose.yml`: Database and backend service orchestration
 
+## Features
+
+- **Minimalist UI**: Simple and clean movie listing.
+- **Search**: Case-insensitive search by movie title.
+- **Backend API**: Robust Go backend with PostgreSQL.
+- **Containerized**: Easy development setup with Docker Compose.
+
 ## Getting Started
 
 ### Prerequisites
@@ -26,11 +33,15 @@ A minimalist media rating application with a Go backend and a React frontend.
 
 2. Start the services:
    ```bash
-   docker-compose up --build
+   # Build the backend binary locally first (CGO_ENABLED=0 for Alpine compatibility)
+   (cd backend && CGO_ENABLED=0 GOOS=linux go build -o main .)
+   
+   # Start all services
+   sudo docker compose up --build
    ```
 
 3. Access the application:
-   - Frontend: `http://localhost:5173` (once started)
+   - Frontend: `http://localhost:5173`
    - API: `http://localhost:8080/api/health`
 
 ## Backend API
@@ -38,15 +49,18 @@ A minimalist media rating application with a Go backend and a React frontend.
 | Endpoint | Method | Description |
 | --- | --- | --- |
 | `/api/health` | `GET` | API health check |
-| `/api/movies` | `GET` | List available movies |
+| `/api/movies` | `GET` | List available movies. Use `?q=term` for searching titles. |
 
 ## Testing
 
 ### Backend
 ```bash
 cd backend
-go test -v ./...
+go test -v .
 ```
 
 ### Frontend
-(Work in progress - Vitest setup pending)
+```bash
+cd frontend
+npm test
+```
