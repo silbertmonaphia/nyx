@@ -31,7 +31,13 @@ A minimalist media rating application with a Go backend and a React frontend.
    cd claude-test
    ```
 
-2. Start the services:
+2. Configure environment variables:
+   ```bash
+   cp .env.example .env
+   # Edit .env if you want to change default credentials
+   ```
+
+3. Start the services:
    ```bash
    # Build the backend binary locally first (CGO_ENABLED=0 for Alpine compatibility)
    (cd backend && CGO_ENABLED=0 GOOS=linux go build -o main .)
@@ -40,7 +46,7 @@ A minimalist media rating application with a Go backend and a React frontend.
    sudo docker compose up --build
    ```
 
-3. Access the application:
+4. Access the application:
    - Frontend: `http://localhost:5173`
    - API: `http://localhost:8080/api/health`
 

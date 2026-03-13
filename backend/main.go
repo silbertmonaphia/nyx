@@ -25,7 +25,7 @@ func main() {
 	var err error
 	dbURL := os.Getenv("DB_URL")
 	if dbURL == "" {
-		dbURL = "postgres://postgres:postgres@localhost:5433/douban_lite?sslmode=disable"
+		log.Fatal("DB_URL environment variable is required")
 	}
 
 	// Retry loop for database connection
