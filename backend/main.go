@@ -51,7 +51,22 @@ func main() {
 	initDB()
 
 	http.HandleFunc("/api/health", healthHandler)
-	http.HandleFunc("/api/movies", moviesHandler)
+	http.HandleFunc("/api/movies", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Access-Control-Allow-Origin", "*")
+		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
+
+		if r.Method == http.MethodOptions {
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+
+		if r.Method == http.MethodPost {
+			createMovieHandler(w, r)
+			return
+		}
+		moviesHandler(w, r)
+	})
 
 	port := ":8080"
 	log.Printf("Server starting on %s", port)
@@ -98,7 +113,6 @@ func healthHandler(w http.ResponseWriter, r *http.Request) {
 
 func moviesHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
-	w.Header().Set("Access-Control-Allow-Origin", "*")
 
 	queryParam := r.URL.Query().Get("q")
 	var rows *sql.Rows
@@ -128,4 +142,29 @@ func moviesHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	json.NewEncoder(w).Encode(movies)
+}
+
+func createMovieHandler(w http.ResponseWriter, r *http.Request) {
+	var m Movie
+	if err := json.NewDecoder(r.Body).Decode(&m); err != nil {
+		http.Error(w, "Invalid request payload", http.StatusBadRequest)
+		return
+	}
+
+	if m.Title == "" {
+		http.Error(w, "Title is required", http.StatusBadRequest)
+		return
+	}
+
+	query := "INSERT INTO movies (title, description, rating) VALUES ($1, $2, $3) RETURNING id"
+	err := db.QueryRow(query, m.Title, m.Description, m.Rating).Scan(&m.ID)
+	if err != nil {
+		log.Printf("Error inserting movie: %v", err)
+		http.Error(w, "Database error", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusCreated)
+	json.NewEncoder(w).Encode(m)
 }

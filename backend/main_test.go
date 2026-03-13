@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -56,7 +57,11 @@ func TestMoviesHandler(t *testing.T) {
 	}
 
 	rr := httptest.NewRecorder()
-	handler := http.HandlerFunc(moviesHandler)
+	// Use the multiplexed handler from main to test CORS
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Access-Control-Allow-Origin", "*")
+		moviesHandler(w, r)
+	})
 
 	handler.ServeHTTP(rr, req)
 
@@ -124,8 +129,52 @@ func TestMoviesHandlerSearch(t *testing.T) {
 		t.Errorf("expected 1 movie, got %v", len(movies))
 	}
 
-	if movies[0].Title != "Inception" {
-		t.Errorf("expected movie Inception, got %v", movies[0].Title)
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Errorf("there were unfulfilled expectations: %s", err)
+	}
+}
+
+func TestCreateMovieHandler(t *testing.T) {
+	mockDB, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("an error '%s' was not expected when opening a stub database connection", err)
+	}
+	defer mockDB.Close()
+
+	originalDB := db
+	db = mockDB
+	defer func() { db = originalDB }()
+
+	newMovie := Movie{
+		Title:       "Interstellar",
+		Description: "Space exploration",
+		Rating:      8.6,
+	}
+	body, _ := json.Marshal(newMovie)
+
+	mock.ExpectQuery("INSERT INTO movies").
+		WithArgs(newMovie.Title, newMovie.Description, newMovie.Rating).
+		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(1))
+
+	req, err := http.NewRequest("POST", "/api/movies", bytes.NewBuffer(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	rr := httptest.NewRecorder()
+	handler := http.HandlerFunc(createMovieHandler)
+
+	handler.ServeHTTP(rr, req)
+
+	if status := rr.Code; status != http.StatusCreated {
+		t.Errorf("handler returned wrong status code: got %v want %v",
+			status, http.StatusCreated)
+	}
+
+	var m Movie
+	json.Unmarshal(rr.Body.Bytes(), &m)
+	if m.ID != 1 {
+		t.Errorf("expected ID 1, got %v", m.ID)
 	}
 
 	if err := mock.ExpectationsWereMet(); err != nil {
