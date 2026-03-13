@@ -55,5 +55,5 @@ npm test
 1. **Docker-First Build**: The backend `Dockerfile` uses a pre-built static binary to bypass potential network timeouts during container builds. Always build the binary locally before running `docker compose up --build`.
 2. **Database Resilience**: Do not assume the database is immediately available. The backend must implement retry logic for the initial connection.
 3. **CORS Handling**: The backend explicitly sets `Access-Control-Allow-Origin: *` to facilitate development with the Vite dev server.
-4. **Environment Variables**: Use `DB_URL` to configure the database connection string. It defaults to `localhost:5433` if not provided.
+4. **Environment Variables**: Use a `.env` file to configure the database connection string (`DB_URL`) and other credentials. See `.env.example` for details.
 5. **Component Standards**: Frontend components should be functional and keep logic separated from presentation where possible.
