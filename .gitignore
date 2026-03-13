@@ -1,0 +1,32 @@
+# Node.js
+frontend/node_modules/
+frontend/dist/
+frontend/build/
+frontend/.env
+frontend/.env.local
+frontend/.env.*.local
+frontend/npm-debug.log*
+frontend/yarn-debug.log*
+frontend/yarn-error.log*
+frontend/.pnpm-debug.log*
+
+# Go
+backend/main
+backend/bin/
+backend/*.test
+backend/*.out
+backend/vendor/
+
+# OS/IDEs
+.DS_Store
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Docker
+.docker/
+db_data/
+
+# Logs
+*.log
