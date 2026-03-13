@@ -7,6 +7,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"time"
 
 	_ "github.com/lib/pq"
 )
@@ -24,20 +25,30 @@ func main() {
 	var err error
 	dbURL := os.Getenv("DB_URL")
 	if dbURL == "" {
-		dbURL = "postgres://postgres:postgres@localhost:5432/douban_lite?sslmode=disable"
+		dbURL = "postgres://postgres:postgres@localhost:5433/douban_lite?sslmode=disable"
 	}
 
-	db, err = sql.Open("postgres", dbURL)
+	// Retry loop for database connection
+	for i := 0; i < 10; i++ {
+		db, err = sql.Open("postgres", dbURL)
+		if err == nil {
+			err = db.Ping()
+			if err == nil {
+				log.Println("Successfully connected to the database")
+				break
+			}
+		}
+		log.Printf("Warning: Could not connect to DB (attempt %d/10): %v", i+1, err)
+		time.Sleep(3 * time.Second)
+	}
+
 	if err != nil {
-		log.Fatal(err)
+		log.Fatalf("Could not connect to database after retries: %v", err)
 	}
 	defer db.Close()
 
-	// Initial ping to check connection
-	err = db.Ping()
-	if err != nil {
-		log.Printf("Warning: Could not connect to DB yet: %v", err)
-	}
+	// Simple migration
+	initDB()
 
 	http.HandleFunc("/api/health", healthHandler)
 	http.HandleFunc("/api/movies", moviesHandler)
@@ -49,18 +60,61 @@ func main() {
 	}
 }
 
+func initDB() {
+	query := `
+	CREATE TABLE IF NOT EXISTS movies (
+		id SERIAL PRIMARY KEY,
+		title TEXT NOT NULL,
+		description TEXT,
+		rating DOUBLE PRECISION
+	);`
+	_, err := db.Exec(query)
+	if err != nil {
+		log.Printf("Error creating table: %v", err)
+		return
+	}
+
+	// Seed data if empty
+	var count int
+	db.QueryRow("SELECT COUNT(*) FROM movies").Scan(&count)
+	if count == 0 {
+		_, err = db.Exec(`
+			INSERT INTO movies (title, description, rating) VALUES 
+			('Inception', 'A thief who steals corporate secrets through the use of dream-sharing technology.', 8.8),
+			('The Matrix', 'A computer hacker learns from mysterious rebels about the true nature of his reality.', 8.7),
+			('Interstellar', 'A team of explorers travel through a wormhole in space in an attempt to ensure humanity''s survival.', 8.6);
+		`)
+		if err != nil {
+			log.Printf("Error seeding data: %v", err)
+		}
+	}
+}
+
 func healthHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Access-Control-Allow-Origin", "*")
 	fmt.Fprintf(w, `{"status": "ok", "message": "Douban Lite API is running"}`)
 }
 
 func moviesHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Access-Control-Allow-Origin", "*")
 
-	// Placeholder data for now until we have migrations
-	movies := []Movie{
-		{ID: 1, Title: "Inception", Description: "A thief who steals corporate secrets through the use of dream-sharing technology.", Rating: 8.8},
-		{ID: 2, Title: "The Matrix", Description: "A computer hacker learns from mysterious rebels about the true nature of his reality.", Rating: 8.7},
+	rows, err := db.Query("SELECT id, title, description, rating FROM movies")
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	defer rows.Close()
+
+	var movies []Movie
+	for rows.Next() {
+		var m Movie
+		if err := rows.Scan(&m.ID, &m.Title, &m.Description, &m.Rating); err != nil {
+			log.Printf("Error scanning row: %v", err)
+			continue
+		}
+		movies = append(movies, m)
 	}
 
 	json.NewEncoder(w).Encode(movies)

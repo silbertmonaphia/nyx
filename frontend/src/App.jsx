@@ -1,11 +1,25 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import reactLogo from './assets/react.svg'
 import viteLogo from './assets/vite.svg'
 import heroImg from './assets/hero.png'
 import './App.css'
 
 function App() {
-  const [count, setCount] = useState(0)
+  const [movies, setMovies] = useState([])
+  const [loading, setLoading] = useState(true)
+
+  useEffect(() => {
+    fetch('http://localhost:8080/api/movies')
+      .then((res) => res.json())
+      .then((data) => {
+        setMovies(data)
+        setLoading(false)
+      })
+      .catch((err) => {
+        console.error('Error fetching movies:', err)
+        setLoading(false)
+      })
+  }, [])
 
   return (
     <>
@@ -16,17 +30,23 @@ function App() {
           <img src={viteLogo} className="vite" alt="Vite logo" />
         </div>
         <div>
-          <h1>Get started</h1>
-          <p>
-            Edit <code>src/App.jsx</code> and save to test <code>HMR</code>
-          </p>
+          <h1>Douban Lite</h1>
+          <p>Your minimalist movie guide</p>
         </div>
-        <button
-          className="counter"
-          onClick={() => setCount((count) => count + 1)}
-        >
-          Count is {count}
-        </button>
+
+        <div className="movie-list">
+          {loading ? (
+            <p>Loading movies...</p>
+          ) : (
+            movies.map((movie) => (
+              <div key={movie.id} className="movie-item">
+                <h3>{movie.title}</h3>
+                <p>{movie.description}</p>
+                <span className="rating">★ {movie.rating}</span>
+              </div>
+            ))
+          )}
+        </div>
       </section>
 
       <div className="ticks"></div>
