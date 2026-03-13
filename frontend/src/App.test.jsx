@@ -11,7 +11,7 @@ describe('App component', () => {
     fetch.mockReset()
   })
 
-  it('renders Douban Lite heading', async () => {
+  it('renders Nyx heading', async () => {
     fetch.mockResolvedValue({
       ok: true,
       json: () => Promise.resolve([
@@ -20,7 +20,7 @@ describe('App component', () => {
     })
 
     render(<App />)
-    expect(screen.getByText(/Douban Lite/i)).toBeInTheDocument()
+    expect(screen.getByText(/Nyx/i)).toBeInTheDocument()
     
     // Check if loading state is shown initially
     expect(screen.getByText(/Loading movies.../i)).toBeInTheDocument()

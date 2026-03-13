@@ -108,7 +108,7 @@ func initDB() {
 func healthHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Access-Control-Allow-Origin", "*")
-	fmt.Fprintf(w, `{"status": "ok", "message": "Douban Lite API is running"}`)
+	fmt.Fprintf(w, `{"status": "ok", "message": "Nyx API is running"}`)
 }
 
 func moviesHandler(w http.ResponseWriter, r *http.Request) {

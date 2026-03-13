@@ -26,7 +26,7 @@ func TestHealthHandler(t *testing.T) {
 			status, http.StatusOK)
 	}
 
-	expected := `{"status": "ok", "message": "Douban Lite API is running"}`
+	expected := `{"status": "ok", "message": "Nyx API is running"}`
 	if rr.Body.String() != expected {
 		t.Errorf("handler returned unexpected body: got %v want %v",
 			rr.Body.String(), expected)

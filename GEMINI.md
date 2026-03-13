@@ -1,6 +1,6 @@
-# Douban Lite - Project Overview & Mandates
+# Nyx - Project Overview & Mandates
 
-Douban Lite is a minimalist media rating application featuring a Go backend, a React frontend, and a PostgreSQL database, all orchestrated via Docker Compose for a seamless development experience.
+Nyx is a minimalist media rating application featuring a Go backend, a React frontend, and a PostgreSQL database, all orchestrated via Docker Compose for a seamless development experience.
 
 ## Technical Architecture
 

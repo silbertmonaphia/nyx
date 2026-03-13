@@ -1,4 +1,4 @@
-# Douban Lite
+# Nyx
 
 A minimalist media rating application with a Go backend and a React frontend.
 
@@ -27,8 +27,8 @@ A minimalist media rating application with a Go backend and a React frontend.
 
 1. Clone the repository:
    ```bash
-   git clone <repository-url>
-   cd claude-test
+   git clone git@github.com:silbertmonaphia/nyx.git
+   cd nyx
    ```
 
 2. Configure environment variables:
