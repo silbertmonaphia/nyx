@@ -10,6 +10,7 @@ function App() {
   const [searchTerm, setSearchTerm] = useState('')
   const [showAddForm, setShowAddForm] = useState(false)
   const [newMovie, setNewMovie] = useState({ title: '', description: '', rating: 5.0 })
+  const [editingMovie, setEditingMovie] = useState(null)
 
   const fetchMovies = async () => {
     setLoading(true)
@@ -52,6 +53,40 @@ function App() {
     }
   }
 
+  const handleUpdateMovie = async (e) => {
+    e.preventDefault()
+    try {
+      const response = await fetch(`http://localhost:8080/api/movies/${editingMovie.id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          ...editingMovie,
+          rating: parseFloat(editingMovie.rating)
+        })
+      })
+      if (response.ok) {
+        setEditingMovie(null)
+        fetchMovies()
+      }
+    } catch (err) {
+      console.error('Error updating movie:', err)
+    }
+  }
+
+  const handleDeleteMovie = async (id) => {
+    if (!window.confirm('Are you sure you want to delete this movie?')) return
+    try {
+      const response = await fetch(`http://localhost:8080/api/movies/${id}`, {
+        method: 'DELETE'
+      })
+      if (response.ok) {
+        fetchMovies()
+      }
+    } catch (err) {
+      console.error('Error deleting movie:', err)
+    }
+  }
+
   return (
     <>
       <section id="center">
@@ -77,7 +112,10 @@ function App() {
           </div>
           <button 
             className="add-button"
-            onClick={() => setShowAddForm(!showAddForm)}
+            onClick={() => {
+              setShowAddForm(!showAddForm)
+              setEditingMovie(null)
+            }}
           >
             {showAddForm ? 'Cancel' : '+ Add Movie'}
           </button>
@@ -112,15 +150,70 @@ function App() {
           </form>
         )}
 
+        {editingMovie && (
+          <form className="add-movie-form edit-form" onSubmit={handleUpdateMovie}>
+            <h3>Edit Movie</h3>
+            <input
+              type="text"
+              placeholder="Title"
+              value={editingMovie.title}
+              onChange={(e) => setEditingMovie({...editingMovie, title: e.target.value})}
+              required
+            />
+            <textarea
+              placeholder="Description"
+              value={editingMovie.description}
+              onChange={(e) => setEditingMovie({...editingMovie, description: e.target.value})}
+            />
+            <div className="rating-input">
+              <label>Rating: {editingMovie.rating}</label>
+              <input
+                type="range"
+                min="0"
+                max="10"
+                step="0.1"
+                value={editingMovie.rating}
+                onChange={(e) => setEditingMovie({...editingMovie, rating: e.target.value})}
+              />
+            </div>
+            <div className="form-actions">
+              <button type="submit" className="submit-button">Update Movie</button>
+              <button type="button" className="cancel-button" onClick={() => setEditingMovie(null)}>Cancel</button>
+            </div>
+          </form>
+        )}
+
         <div className="movie-list">
           {loading ? (
             <p>Loading movies...</p>
           ) : movies.length > 0 ? (
             movies.map((movie) => (
               <div key={movie.id} className="movie-item">
-                <h3>{movie.title}</h3>
-                <p>{movie.description}</p>
-                <span className="rating">★ {movie.rating}</span>
+                <div className="movie-content">
+                  <h3>{movie.title}</h3>
+                  <p>{movie.description}</p>
+                  <span className="rating">★ {movie.rating}</span>
+                </div>
+                <div className="movie-actions">
+                  <button 
+                    className="edit-icon-button"
+                    onClick={() => {
+                      setEditingMovie(movie)
+                      setShowAddForm(false)
+                      window.scrollTo({ top: 0, behavior: 'smooth' })
+                    }}
+                    title="Edit"
+                  >
+                    ✎
+                  </button>
+                  <button 
+                    className="delete-icon-button"
+                    onClick={() => handleDeleteMovie(movie.id)}
+                    title="Delete"
+                  >
+                    ×
+                  </button>
+                </div>
               </div>
             ))
           ) : (

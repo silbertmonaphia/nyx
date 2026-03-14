@@ -135,4 +135,110 @@ describe('App component', () => {
       expect(screen.getByText('Interstellar')).toBeInTheDocument()
     })
   })
+
+  it('edits an existing movie', async () => {
+    // Initial fetch
+    fetch.mockResolvedValueOnce({
+      ok: true,
+      json: () => Promise.resolve([
+        { id: 1, title: 'Inception', description: 'Dream sharing', rating: 8.8 }
+      ])
+    })
+
+    render(<App />)
+
+    await waitFor(() => {
+      expect(screen.getByText('Inception')).toBeInTheDocument()
+    })
+
+    // Click edit button
+    const editButton = screen.getByTitle('Edit')
+    fireEvent.click(editButton)
+
+    // Check if edit form is shown
+    expect(screen.getByText('Edit Movie')).toBeInTheDocument()
+    const titleInput = screen.getByDisplayValue('Inception')
+    fireEvent.change(titleInput, { target: { value: 'Inception Updated' } })
+
+    // Mock PUT response
+    fetch.mockResolvedValueOnce({
+      ok: true,
+      json: () => Promise.resolve({ id: 1, title: 'Inception Updated', description: 'Dream sharing', rating: 8.8 })
+    })
+
+    // Mock refresh response
+    fetch.mockResolvedValueOnce({
+      ok: true,
+      json: () => Promise.resolve([
+        { id: 1, title: 'Inception Updated', description: 'Dream sharing', rating: 8.8 }
+      ])
+    })
+
+    const updateButton = screen.getByText('Update Movie')
+    fireEvent.click(updateButton)
+
+    // Verify PUT was called
+    await waitFor(() => {
+      const putCall = fetch.mock.calls.find(call => call[1]?.method === 'PUT')
+      expect(putCall).toBeDefined()
+      expect(putCall[0]).toBe('http://localhost:8080/api/movies/1')
+      expect(JSON.parse(putCall[1].body).title).toBe('Inception Updated')
+    })
+
+    // Verify list updated
+    await waitFor(() => {
+      expect(screen.getByText('Inception Updated')).toBeInTheDocument()
+    })
+  })
+
+  it('deletes a movie after confirmation', async () => {
+    // Initial fetch
+    fetch.mockResolvedValueOnce({
+      ok: true,
+      json: () => Promise.resolve([
+        { id: 1, title: 'Inception', description: 'Dream sharing', rating: 8.8 }
+      ])
+    })
+
+    // Mock window.confirm
+    const confirmSpy = vi.spyOn(window, 'confirm').mockImplementation(() => true)
+
+    render(<App />)
+
+    await waitFor(() => {
+      expect(screen.getByText('Inception')).toBeInTheDocument()
+    })
+
+    // Mock DELETE response
+    fetch.mockResolvedValueOnce({
+      ok: true,
+      json: () => Promise.resolve({})
+    })
+
+    // Mock refresh response
+    fetch.mockResolvedValueOnce({
+      ok: true,
+      json: () => Promise.resolve([])
+    })
+
+    // Click delete button
+    const deleteButton = screen.getByTitle('Delete')
+    fireEvent.click(deleteButton)
+
+    expect(confirmSpy).toHaveBeenCalled()
+
+    // Verify DELETE was called
+    await waitFor(() => {
+      const deleteCall = fetch.mock.calls.find(call => call[1]?.method === 'DELETE')
+      expect(deleteCall).toBeDefined()
+      expect(deleteCall[0]).toBe('http://localhost:8080/api/movies/1')
+    })
+
+    // Verify item is gone
+    await waitFor(() => {
+      expect(screen.queryByText('Inception')).not.toBeInTheDocument()
+    })
+
+    confirmSpy.mockRestore()
+  })
 })

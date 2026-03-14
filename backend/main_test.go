@@ -181,3 +181,86 @@ func TestCreateMovieHandler(t *testing.T) {
 		t.Errorf("there were unfulfilled expectations: %s", err)
 	}
 }
+
+func TestUpdateMovieHandler(t *testing.T) {
+	mockDB, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("an error '%s' was not expected when opening a stub database connection", err)
+	}
+	defer mockDB.Close()
+
+	originalDB := db
+	db = mockDB
+	defer func() { db = originalDB }()
+
+	updatedMovie := Movie{
+		Title:       "Inception Updated",
+		Description: "A deeper dream.",
+		Rating:      9.0,
+	}
+	body, _ := json.Marshal(updatedMovie)
+
+	mock.ExpectExec("UPDATE movies SET title = \\$1, description = \\$2, rating = \\$3 WHERE id = \\$4").
+		WithArgs(updatedMovie.Title, updatedMovie.Description, updatedMovie.Rating, 1).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+
+	req, err := http.NewRequest("PUT", "/api/movies/1", bytes.NewBuffer(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	rr := httptest.NewRecorder()
+	handler := http.HandlerFunc(moviesRouter)
+
+	handler.ServeHTTP(rr, req)
+
+	if status := rr.Code; status != http.StatusOK {
+		t.Errorf("handler returned wrong status code: got %v want %v",
+			status, http.StatusOK)
+	}
+
+	var m Movie
+	json.Unmarshal(rr.Body.Bytes(), &m)
+	if m.ID != 1 || m.Title != updatedMovie.Title {
+		t.Errorf("expected ID 1 and title %v, got ID %v and title %v", updatedMovie.Title, m.ID, m.Title)
+	}
+
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Errorf("there were unfulfilled expectations: %s", err)
+	}
+}
+
+func TestDeleteMovieHandler(t *testing.T) {
+	mockDB, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("an error '%s' was not expected when opening a stub database connection", err)
+	}
+	defer mockDB.Close()
+
+	originalDB := db
+	db = mockDB
+	defer func() { db = originalDB }()
+
+	mock.ExpectExec("DELETE FROM movies WHERE id = \\$1").
+		WithArgs(1).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+
+	req, err := http.NewRequest("DELETE", "/api/movies/1", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	rr := httptest.NewRecorder()
+	handler := http.HandlerFunc(moviesRouter)
+
+	handler.ServeHTTP(rr, req)
+
+	if status := rr.Code; status != http.StatusNoContent {
+		t.Errorf("handler returned wrong status code: got %v want %v",
+			status, http.StatusNoContent)
+	}
+
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Errorf("there were unfulfilled expectations: %s", err)
+	}
+}

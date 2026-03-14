@@ -7,6 +7,8 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"strconv"
+	"strings"
 	"time"
 
 	_ "github.com/lib/pq"
@@ -51,28 +53,61 @@ func main() {
 	initDB()
 
 	http.HandleFunc("/api/health", healthHandler)
-	http.HandleFunc("/api/movies", func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Access-Control-Allow-Origin", "*")
-		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
-		w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
-
-		if r.Method == http.MethodOptions {
-			w.WriteHeader(http.StatusOK)
-			return
-		}
-
-		if r.Method == http.MethodPost {
-			createMovieHandler(w, r)
-			return
-		}
-		moviesHandler(w, r)
-	})
+	http.HandleFunc("/api/movies", moviesRouter)
+	http.HandleFunc("/api/movies/", moviesRouter)
 
 	port := ":8080"
 	log.Printf("Server starting on %s", port)
 	if err := http.ListenAndServe(port, nil); err != nil {
 		log.Fatal(err)
 	}
+}
+
+func moviesRouter(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+	w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
+	w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
+
+	if r.Method == http.MethodOptions {
+		w.WriteHeader(http.StatusOK)
+		return
+	}
+
+	// Handle /api/movies and /api/movies/ as base path
+	path := r.URL.Path
+	idStr := strings.TrimPrefix(path, "/api/movies")
+	idStr = strings.TrimPrefix(idStr, "/")
+
+	if idStr == "" {
+		if r.Method == http.MethodPost {
+			createMovieHandler(w, r)
+			return
+		}
+		if r.Method == http.MethodGet {
+			moviesHandler(w, r)
+			return
+		}
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	// Handle /api/movies/{id}
+	id, err := strconv.Atoi(idStr)
+	if err != nil {
+		http.Error(w, "Invalid movie ID", http.StatusBadRequest)
+		return
+	}
+
+	if r.Method == http.MethodPut {
+		updateMovieHandler(w, r, id)
+		return
+	}
+	if r.Method == http.MethodDelete {
+		deleteMovieHandler(w, r, id)
+		return
+	}
+
+	http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 }
 
 func initDB() {
@@ -167,4 +202,53 @@ func createMovieHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
 	json.NewEncoder(w).Encode(m)
+}
+
+func updateMovieHandler(w http.ResponseWriter, r *http.Request, id int) {
+	var m Movie
+	if err := json.NewDecoder(r.Body).Decode(&m); err != nil {
+		http.Error(w, "Invalid request payload", http.StatusBadRequest)
+		return
+	}
+
+	if m.Title == "" {
+		http.Error(w, "Title is required", http.StatusBadRequest)
+		return
+	}
+
+	query := "UPDATE movies SET title = $1, description = $2, rating = $3 WHERE id = $4"
+	res, err := db.Exec(query, m.Title, m.Description, m.Rating, id)
+	if err != nil {
+		log.Printf("Error updating movie: %v", err)
+		http.Error(w, "Database error", http.StatusInternalServerError)
+		return
+	}
+
+	rowsAffected, _ := res.RowsAffected()
+	if rowsAffected == 0 {
+		http.Error(w, "Movie not found", http.StatusNotFound)
+		return
+	}
+
+	m.ID = id
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(m)
+}
+
+func deleteMovieHandler(w http.ResponseWriter, r *http.Request, id int) {
+	query := "DELETE FROM movies WHERE id = $1"
+	res, err := db.Exec(query, id)
+	if err != nil {
+		log.Printf("Error deleting movie: %v", err)
+		http.Error(w, "Database error", http.StatusInternalServerError)
+		return
+	}
+
+	rowsAffected, _ := res.RowsAffected()
+	if rowsAffected == 0 {
+		http.Error(w, "Movie not found", http.StatusNotFound)
+		return
+	}
+
+	w.WriteHeader(http.StatusNoContent)
 }

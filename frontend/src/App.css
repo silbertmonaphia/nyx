@@ -114,10 +114,50 @@
   border-radius: 12px;
   border: 1px solid var(--border);
   transition: transform 0.2s, box-shadow 0.2s;
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
 
   &:hover {
     transform: translateY(-2px);
     box-shadow: var(--shadow);
+  }
+
+  .movie-content {
+    flex-grow: 1;
+  }
+
+  .movie-actions {
+    display: flex;
+    gap: 8px;
+    margin-left: 16px;
+  }
+
+  .edit-icon-button, .delete-icon-button {
+    background: none;
+    border: none;
+    color: var(--text-p);
+    font-size: 20px;
+    cursor: pointer;
+    padding: 4px 8px;
+    border-radius: 6px;
+    transition: all 0.2s;
+    line-height: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+
+    &:hover {
+      background: var(--bg);
+    }
+  }
+
+  .edit-icon-button:hover {
+    color: var(--accent);
+  }
+
+  .delete-icon-button:hover {
+    color: #ff4646;
   }
 
   h3 {
@@ -138,6 +178,41 @@
     padding: 4px 10px;
     border-radius: 20px;
     font-size: 14px;
+  }
+}
+
+.edit-form {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent-bg);
+  
+  h3 {
+    margin: 0 0 8px;
+    color: var(--accent);
+  }
+}
+
+.form-actions {
+  display: flex;
+  gap: 12px;
+  margin-top: 8px;
+
+  button {
+    flex: 1;
+  }
+}
+
+.cancel-button {
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--text-h);
+  padding: 12px;
+  border-radius: 8px;
+  font-weight: bold;
+  cursor: pointer;
+  transition: background 0.2s;
+
+  &:hover {
+    background: var(--bg);
   }
 }
 
