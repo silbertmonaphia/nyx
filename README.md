@@ -4,7 +4,7 @@ A minimalist media rating application with a Go backend and a React frontend.
 
 ## Project Structure
 
-- `backend/`: Go 1.20 API server
+- `backend/`: Go 1.26.1 API server
 - `frontend/`: React 19 + Vite 8 SPA
 - `docker-compose.yml`: Database and backend service orchestration
 
@@ -20,7 +20,7 @@ A minimalist media rating application with a Go backend and a React frontend.
 ### Prerequisites
 
 - [Docker](https://www.docker.com/)
-- [Go 1.20+](https://go.dev/) (optional, for local development)
+- [Go 1.26.1+](https://go.dev/) (optional, for local development)
 - [Node.js 20+](https://nodejs.org/) (optional, for local development)
 
 ### Running with Docker

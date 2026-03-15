@@ -4,7 +4,7 @@ Nyx is a minimalist media rating application featuring a Go backend, a React fro
 
 ## Technical Architecture
 
-- **Backend**: Go 1.20 API server located in `backend/`.
+- **Backend**: Go 1.26.1 API server located in `backend/`.
   - Uses `github.com/lib/pq` for PostgreSQL connectivity.
   - Implements automatic database migrations and data seeding on startup.
   - Includes a retry mechanism (10 attempts, 3s delay) to wait for database readiness.
