@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -85,6 +86,30 @@ func TestMoviesHandler(t *testing.T) {
 	}
 }
 
+func TestMoviesHandlerError(t *testing.T) {
+	mockDB, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("error opening stub db: %s", err)
+	}
+	defer mockDB.Close()
+
+	originalDB := db
+	db = mockDB
+	defer func() { db = originalDB }()
+
+	mock.ExpectQuery("SELECT id, title, description, rating FROM movies").WillReturnError(fmt.Errorf("db error"))
+
+	req, _ := http.NewRequest("GET", "/api/movies", nil)
+	rr := httptest.NewRecorder()
+	handler := http.HandlerFunc(moviesHandler)
+
+	handler.ServeHTTP(rr, req)
+
+	if status := rr.Code; status != http.StatusInternalServerError {
+		t.Errorf("expected status 500, got %v", status)
+	}
+}
+
 func TestMoviesHandlerSearch(t *testing.T) {
 	mockDB, mock, err := sqlmock.New()
 	if err != nil {
@@ -131,6 +156,30 @@ func TestMoviesHandlerSearch(t *testing.T) {
 
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Errorf("there were unfulfilled expectations: %s", err)
+	}
+}
+
+func TestMoviesHandlerSearchError(t *testing.T) {
+	mockDB, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("error opening stub db: %s", err)
+	}
+	defer mockDB.Close()
+
+	originalDB := db
+	db = mockDB
+	defer func() { db = originalDB }()
+
+	mock.ExpectQuery("SELECT id, title, description, rating FROM movies WHERE title ILIKE \\$1").
+		WithArgs("%Error%").
+		WillReturnError(fmt.Errorf("db error"))
+
+	req, _ := http.NewRequest("GET", "/api/movies?q=Error", nil)
+	rr := httptest.NewRecorder()
+	moviesHandler(rr, req)
+
+	if status := rr.Code; status != http.StatusInternalServerError {
+		t.Errorf("expected status 500, got %v", status)
 	}
 }
 
@@ -182,6 +231,43 @@ func TestCreateMovieHandler(t *testing.T) {
 	}
 }
 
+func TestCreateMovieHandlerErrors(t *testing.T) {
+	mockDB, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("error opening stub db: %s", err)
+	}
+	defer mockDB.Close()
+
+	originalDB := db
+	db = mockDB
+	defer func() { db = originalDB }()
+
+	// Case 1: Invalid JSON
+	req, _ := http.NewRequest("POST", "/api/movies", bytes.NewBufferString("{invalid-json}"))
+	rr := httptest.NewRecorder()
+	createMovieHandler(rr, req)
+	if rr.Code != http.StatusBadRequest {
+		t.Errorf("Expected status 400 for invalid JSON, got %v", rr.Code)
+	}
+
+	// Case 2: Empty Title
+	req, _ = http.NewRequest("POST", "/api/movies", bytes.NewBufferString(`{"title":"","description":"test"}`))
+	rr = httptest.NewRecorder()
+	createMovieHandler(rr, req)
+	if rr.Code != http.StatusBadRequest {
+		t.Errorf("Expected status 400 for empty title, got %v", rr.Code)
+	}
+
+	// Case 3: DB Error
+	mock.ExpectQuery("INSERT INTO movies").WillReturnError(fmt.Errorf("insert error"))
+	req, _ = http.NewRequest("POST", "/api/movies", bytes.NewBufferString(`{"title":"Error","description":"test"}`))
+	rr = httptest.NewRecorder()
+	createMovieHandler(rr, req)
+	if rr.Code != http.StatusInternalServerError {
+		t.Errorf("Expected status 500 for DB error, got %v", rr.Code)
+	}
+}
+
 func TestUpdateMovieHandler(t *testing.T) {
 	mockDB, mock, err := sqlmock.New()
 	if err != nil {
@@ -230,6 +316,52 @@ func TestUpdateMovieHandler(t *testing.T) {
 	}
 }
 
+func TestUpdateMovieHandlerErrors(t *testing.T) {
+	mockDB, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("error opening stub db: %s", err)
+	}
+	defer mockDB.Close()
+
+	originalDB := db
+	db = mockDB
+	defer func() { db = originalDB }()
+
+	// Case 1: Invalid JSON
+	req, _ := http.NewRequest("PUT", "/api/movies/1", bytes.NewBufferString("{invalid-json}"))
+	rr := httptest.NewRecorder()
+	updateMovieHandler(rr, req, 1)
+	if rr.Code != http.StatusBadRequest {
+		t.Errorf("Expected status 400 for invalid JSON, got %v", rr.Code)
+	}
+
+	// Case 2: Empty Title
+	req, _ = http.NewRequest("PUT", "/api/movies/1", bytes.NewBufferString(`{"title":"","description":"test"}`))
+	rr = httptest.NewRecorder()
+	updateMovieHandler(rr, req, 1)
+	if rr.Code != http.StatusBadRequest {
+		t.Errorf("Expected status 400 for empty title, got %v", rr.Code)
+	}
+
+	// Case 3: DB Error
+	mock.ExpectExec("UPDATE movies").WillReturnError(fmt.Errorf("update error"))
+	req, _ = http.NewRequest("PUT", "/api/movies/1", bytes.NewBufferString(`{"title":"Error","description":"test"}`))
+	rr = httptest.NewRecorder()
+	updateMovieHandler(rr, req, 1)
+	if rr.Code != http.StatusInternalServerError {
+		t.Errorf("Expected status 500 for DB error, got %v", rr.Code)
+	}
+
+	// Case 4: Movie Not Found
+	mock.ExpectExec("UPDATE movies").WillReturnResult(sqlmock.NewResult(0, 0))
+	req, _ = http.NewRequest("PUT", "/api/movies/999", bytes.NewBufferString(`{"title":"Not Found","description":"test"}`))
+	rr = httptest.NewRecorder()
+	updateMovieHandler(rr, req, 999)
+	if rr.Code != http.StatusNotFound {
+		t.Errorf("Expected status 404 for not found, got %v", rr.Code)
+	}
+}
+
 func TestDeleteMovieHandler(t *testing.T) {
 	mockDB, mock, err := sqlmock.New()
 	if err != nil {
@@ -262,5 +394,61 @@ func TestDeleteMovieHandler(t *testing.T) {
 
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Errorf("there were unfulfilled expectations: %s", err)
+	}
+}
+
+func TestDeleteMovieHandlerErrors(t *testing.T) {
+	mockDB, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("error opening stub db: %s", err)
+	}
+	defer mockDB.Close()
+
+	originalDB := db
+	db = mockDB
+	defer func() { db = originalDB }()
+
+	// Case 1: DB Error
+	mock.ExpectExec("DELETE FROM movies").WillReturnError(fmt.Errorf("delete error"))
+	req, _ := http.NewRequest("DELETE", "/api/movies/1", nil)
+	rr := httptest.NewRecorder()
+	deleteMovieHandler(rr, req, 1)
+	if rr.Code != http.StatusInternalServerError {
+		t.Errorf("Expected status 500 for DB error, got %v", rr.Code)
+	}
+
+	// Case 2: Movie Not Found
+	mock.ExpectExec("DELETE FROM movies").WillReturnResult(sqlmock.NewResult(0, 0))
+	req, _ = http.NewRequest("DELETE", "/api/movies/999", nil)
+	rr = httptest.NewRecorder()
+	deleteMovieHandler(rr, req, 999)
+	if rr.Code != http.StatusNotFound {
+		t.Errorf("Expected status 404 for not found, got %v", rr.Code)
+	}
+}
+
+func TestMoviesRouterErrors(t *testing.T) {
+	// Case 1: Invalid ID format
+	req, _ := http.NewRequest("GET", "/api/movies/abc", nil)
+	rr := httptest.NewRecorder()
+	moviesRouter(rr, req)
+	if rr.Code != http.StatusBadRequest {
+		t.Errorf("Expected status 400 for invalid ID, got %v", rr.Code)
+	}
+
+	// Case 2: Unsupported method on base path
+	req, _ = http.NewRequest("PATCH", "/api/movies", nil)
+	rr = httptest.NewRecorder()
+	moviesRouter(rr, req)
+	if rr.Code != http.StatusMethodNotAllowed {
+		t.Errorf("Expected status 405 for unsupported method, got %v", rr.Code)
+	}
+
+	// Case 3: Unsupported method on ID path
+	req, _ = http.NewRequest("PATCH", "/api/movies/1", nil)
+	rr = httptest.NewRecorder()
+	moviesRouter(rr, req)
+	if rr.Code != http.StatusMethodNotAllowed {
+		t.Errorf("Expected status 405 for unsupported method on ID path, got %v", rr.Code)
 	}
 }
