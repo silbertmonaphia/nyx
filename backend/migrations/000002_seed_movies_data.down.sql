@@ -1,0 +1,1 @@
+DELETE FROM movies WHERE title IN ('Inception', 'The Matrix', 'Interstellar');

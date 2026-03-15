@@ -13,6 +13,10 @@ import (
 	_ "github.com/lib/pq"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
+
+	"github.com/golang-migrate/migrate/v4"
+	_ "github.com/golang-migrate/migrate/v4/database/postgres"
+	_ "github.com/golang-migrate/migrate/v4/source/file"
 )
 
 type Movie struct {
@@ -58,8 +62,8 @@ func main() {
 	}
 	defer db.Close()
 
-	// Simple migration
-	initDB()
+	// Run database migrations
+	runMigrations(dbURL)
 
 	http.HandleFunc("/api/health", healthHandler)
 	http.HandleFunc("/api/movies", moviesRouter)
@@ -119,34 +123,20 @@ func moviesRouter(w http.ResponseWriter, r *http.Request) {
 	http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 }
 
-func initDB() {
-	query := `
-	CREATE TABLE IF NOT EXISTS movies (
-		id SERIAL PRIMARY KEY,
-		title TEXT NOT NULL,
-		description TEXT,
-		rating DOUBLE PRECISION
-	);`
-	_, err := db.Exec(query)
+func runMigrations(dbURL string) {
+	m, err := migrate.New(
+		"file://migrations",
+		dbURL,
+	)
 	if err != nil {
-		log.Error().Err(err).Msg("Error creating table")
-		return
+		log.Fatal().Err(err).Msg("Could not create migration instance")
 	}
 
-	// Seed data if empty
-	var count int
-	db.QueryRow("SELECT COUNT(*) FROM movies").Scan(&count)
-	if count == 0 {
-		_, err = db.Exec(`
-			INSERT INTO movies (title, description, rating) VALUES 
-			('Inception', 'A thief who steals corporate secrets through the use of dream-sharing technology.', 8.8),
-			('The Matrix', 'A computer hacker learns from mysterious rebels about the true nature of his reality.', 8.7),
-			('Interstellar', 'A team of explorers travel through a wormhole in space in an attempt to ensure humanity''s survival.', 8.6);
-		`)
-		if err != nil {
-			log.Error().Err(err).Msg("Error seeding data")
-		}
+	if err := m.Up(); err != nil && err != migrate.ErrNoChange {
+		log.Fatal().Err(err).Msg("An error occurred while running migrations")
 	}
+
+	log.Info().Msg("Database migrations applied successfully")
 }
 
 func healthHandler(w http.ResponseWriter, r *http.Request) {
