@@ -4,7 +4,6 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
-	"log"
 	"net/http"
 	"os"
 	"strconv"
@@ -12,6 +11,8 @@ import (
 	"time"
 
 	_ "github.com/lib/pq"
+	"github.com/rs/zerolog"
+	"github.com/rs/zerolog/log"
 )
 
 type Movie struct {
@@ -24,10 +25,14 @@ type Movie struct {
 var db *sql.DB
 
 func main() {
+	// Configure zerolog
+	zerolog.TimeFieldFormat = zerolog.TimeFormatUnix
+	log.Logger = log.Output(os.Stdout)
+
 	var err error
 	dbURL := os.Getenv("DB_URL")
 	if dbURL == "" {
-		log.Fatal("DB_URL environment variable is required")
+		log.Fatal().Msg("DB_URL environment variable is required")
 	}
 
 	// Retry loop for database connection
@@ -36,16 +41,20 @@ func main() {
 		if err == nil {
 			err = db.Ping()
 			if err == nil {
-				log.Println("Successfully connected to the database")
+				log.Info().Msg("Successfully connected to the database")
 				break
 			}
 		}
-		log.Printf("Warning: Could not connect to DB (attempt %d/10): %v", i+1, err)
+		log.Warn().
+			Int("attempt", i+1).
+			Int("max_attempts", 10).
+			Err(err).
+			Msg("Could not connect to DB")
 		time.Sleep(3 * time.Second)
 	}
 
 	if err != nil {
-		log.Fatalf("Could not connect to database after retries: %v", err)
+		log.Fatal().Err(err).Msg("Could not connect to database after retries")
 	}
 	defer db.Close()
 
@@ -57,9 +66,9 @@ func main() {
 	http.HandleFunc("/api/movies/", moviesRouter)
 
 	port := ":8080"
-	log.Printf("Server starting on %s", port)
+	log.Info().Str("port", port).Msg("Server starting")
 	if err := http.ListenAndServe(port, nil); err != nil {
-		log.Fatal(err)
+		log.Fatal().Err(err).Msg("Server failed")
 	}
 }
 
@@ -120,7 +129,7 @@ func initDB() {
 	);`
 	_, err := db.Exec(query)
 	if err != nil {
-		log.Printf("Error creating table: %v", err)
+		log.Error().Err(err).Msg("Error creating table")
 		return
 	}
 
@@ -135,7 +144,7 @@ func initDB() {
 			('Interstellar', 'A team of explorers travel through a wormhole in space in an attempt to ensure humanity''s survival.', 8.6);
 		`)
 		if err != nil {
-			log.Printf("Error seeding data: %v", err)
+			log.Error().Err(err).Msg("Error seeding data")
 		}
 	}
 }
@@ -170,7 +179,7 @@ func moviesHandler(w http.ResponseWriter, r *http.Request) {
 	for rows.Next() {
 		var m Movie
 		if err := rows.Scan(&m.ID, &m.Title, &m.Description, &m.Rating); err != nil {
-			log.Printf("Error scanning row: %v", err)
+			log.Error().Err(err).Msg("Error scanning row")
 			continue
 		}
 		movies = append(movies, m)
@@ -194,7 +203,7 @@ func createMovieHandler(w http.ResponseWriter, r *http.Request) {
 	query := "INSERT INTO movies (title, description, rating) VALUES ($1, $2, $3) RETURNING id"
 	err := db.QueryRow(query, m.Title, m.Description, m.Rating).Scan(&m.ID)
 	if err != nil {
-		log.Printf("Error inserting movie: %v", err)
+		log.Error().Err(err).Msg("Error inserting movie")
 		http.Error(w, "Database error", http.StatusInternalServerError)
 		return
 	}
@@ -219,7 +228,7 @@ func updateMovieHandler(w http.ResponseWriter, r *http.Request, id int) {
 	query := "UPDATE movies SET title = $1, description = $2, rating = $3 WHERE id = $4"
 	res, err := db.Exec(query, m.Title, m.Description, m.Rating, id)
 	if err != nil {
-		log.Printf("Error updating movie: %v", err)
+		log.Error().Err(err).Msg("Error updating movie")
 		http.Error(w, "Database error", http.StatusInternalServerError)
 		return
 	}
@@ -239,7 +248,7 @@ func deleteMovieHandler(w http.ResponseWriter, r *http.Request, id int) {
 	query := "DELETE FROM movies WHERE id = $1"
 	res, err := db.Exec(query, id)
 	if err != nil {
-		log.Printf("Error deleting movie: %v", err)
+		log.Error().Err(err).Msg("Error deleting movie")
 		http.Error(w, "Database error", http.StatusInternalServerError)
 		return
 	}
