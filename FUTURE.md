@@ -6,7 +6,7 @@ This document outlines the planned improvements to transition Nyx from a minimal
 Advanced systems must be observable and handle shutdowns gracefully.
 - [x] **Structured Logging**: Replace standard `log` with `rs/zerolog` or `uber-go/zap` for JSON-formatted logs.
 - [ ] **Metrics**: Implement a `/metrics` endpoint using `prometheus/client_golang` for real-time monitoring.
-- [ ] **Graceful Shutdown**: Implement `context` and signal handling (`SIGTERM`, `SIGINT`) in the Go backend to finish active requests before exiting.
+- [x] **Graceful Shutdown**: Implement `context` and signal handling (`SIGTERM`, `SIGINT`) in the Go backend to finish active requests before exiting.
 - [ ] **Health Checks**: Expand `/api/health` to check database connectivity status beyond just the API being "up."
 
 ## 2. API Maturity & Security

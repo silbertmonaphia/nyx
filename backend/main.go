@@ -17,6 +17,9 @@ import (
 	"github.com/golang-migrate/migrate/v4"
 	_ "github.com/golang-migrate/migrate/v4/database/postgres"
 	_ "github.com/golang-migrate/migrate/v4/source/file"
+	"context"
+	"os/signal"
+	"syscall"
 )
 
 type Movie struct {
@@ -65,15 +68,43 @@ func main() {
 	// Run database migrations
 	runMigrations(dbURL)
 
-	http.HandleFunc("/api/health", healthHandler)
-	http.HandleFunc("/api/movies", moviesRouter)
-	http.HandleFunc("/api/movies/", moviesRouter)
+	// Create a cancellable context for handling signals
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
+
+	// Set up router and server
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/health", healthHandler)
+	mux.HandleFunc("/api/movies", moviesRouter)
+	mux.HandleFunc("/api/movies/", moviesRouter)
 
 	port := ":8080"
-	log.Info().Str("port", port).Msg("Server starting")
-	if err := http.ListenAndServe(port, nil); err != nil {
-		log.Fatal().Err(err).Msg("Server failed")
+	server := &http.Server{
+		Addr:    port,
+		Handler: mux,
 	}
+
+	// Start server in a goroutine
+	go func() {
+		log.Info().Str("port", port).Msg("Server starting")
+		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			log.Fatal().Err(err).Msg("Server failed to start")
+		}
+	}()
+
+	// Wait for shutdown signal
+	<-ctx.Done()
+
+	// Graceful shutdown
+	log.Info().Msg("Shutting down server gracefully")
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	if err := server.Shutdown(shutdownCtx); err != nil {
+		log.Fatal().Err(err).Msg("Server shutdown failed")
+	}
+
+	log.Info().Msg("Server exited properly")
 }
 
 func moviesRouter(w http.ResponseWriter, r *http.Request) {
