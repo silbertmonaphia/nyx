@@ -123,6 +123,7 @@ function App() {
 
         {showAddForm && (
           <form className="add-movie-form" onSubmit={handleAddMovie}>
+            <h2>New Movie</h2>
             <input
               type="text"
               placeholder="Title"
@@ -136,8 +137,9 @@ function App() {
               onChange={(e) => setNewMovie({...newMovie, description: e.target.value})}
             />
             <div className="rating-input">
-              <label>Rating: {newMovie.rating}</label>
+              <label htmlFor="new-rating">Rating: {newMovie.rating}</label>
               <input
+                id="new-rating"
                 type="range"
                 min="0"
                 max="10"
@@ -166,8 +168,9 @@ function App() {
               onChange={(e) => setEditingMovie({...editingMovie, description: e.target.value})}
             />
             <div className="rating-input">
-              <label>Rating: {editingMovie.rating}</label>
+              <label htmlFor="edit-rating">Rating: {editingMovie.rating}</label>
               <input
+                id="edit-rating"
                 type="range"
                 min="0"
                 max="10"
