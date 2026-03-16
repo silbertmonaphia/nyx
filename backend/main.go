@@ -22,10 +22,13 @@ import (
 )
 
 type Movie struct {
-	ID          int     `json:"id"`
-	Title       string  `json:"title"`
-	Description string  `json:"description"`
-	Rating      float64 `json:"rating"`
+	ID          int        `json:"id"`
+	Title       string     `json:"title"`
+	Description string     `json:"description"`
+	Rating      float64    `json:"rating"`
+	CreatedAt   time.Time  `json:"created_at"`
+	UpdatedAt   time.Time  `json:"updated_at"`
+	DeletedAt   *time.Time `json:"deleted_at,omitempty"`
 }
 
 var db *sql.DB
@@ -202,9 +205,9 @@ func moviesHandler(w http.ResponseWriter, r *http.Request) {
 
 	if queryParam != "" {
 		// Use ILIKE for case-insensitive search in Postgres
-		rows, err = db.Query("SELECT id, title, description, rating FROM movies WHERE title ILIKE $1", "%"+queryParam+"%")
+		rows, err = db.Query("SELECT id, title, description, rating, created_at, updated_at, deleted_at FROM movies WHERE title ILIKE $1 AND deleted_at IS NULL", "%"+queryParam+"%")
 	} else {
-		rows, err = db.Query("SELECT id, title, description, rating FROM movies")
+		rows, err = db.Query("SELECT id, title, description, rating, created_at, updated_at, deleted_at FROM movies WHERE deleted_at IS NULL")
 	}
 
 	if err != nil {
@@ -216,7 +219,7 @@ func moviesHandler(w http.ResponseWriter, r *http.Request) {
 	var movies []Movie
 	for rows.Next() {
 		var m Movie
-		if err := rows.Scan(&m.ID, &m.Title, &m.Description, &m.Rating); err != nil {
+		if err := rows.Scan(&m.ID, &m.Title, &m.Description, &m.Rating, &m.CreatedAt, &m.UpdatedAt, &m.DeletedAt); err != nil {
 			log.Error().Err(err).Msg("Error scanning row")
 			continue
 		}
@@ -238,8 +241,8 @@ func createMovieHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	query := "INSERT INTO movies (title, description, rating) VALUES ($1, $2, $3) RETURNING id"
-	err := db.QueryRow(query, m.Title, m.Description, m.Rating).Scan(&m.ID)
+	query := "INSERT INTO movies (title, description, rating) VALUES ($1, $2, $3) RETURNING id, created_at, updated_at"
+	err := db.QueryRow(query, m.Title, m.Description, m.Rating).Scan(&m.ID, &m.CreatedAt, &m.UpdatedAt)
 	if err != nil {
 		log.Error().Err(err).Msg("Error inserting movie")
 		http.Error(w, "Database error", http.StatusInternalServerError)
@@ -263,17 +266,15 @@ func updateMovieHandler(w http.ResponseWriter, r *http.Request, id int) {
 		return
 	}
 
-	query := "UPDATE movies SET title = $1, description = $2, rating = $3 WHERE id = $4"
-	res, err := db.Exec(query, m.Title, m.Description, m.Rating, id)
+	query := "UPDATE movies SET title = $1, description = $2, rating = $3, updated_at = CURRENT_TIMESTAMP WHERE id = $4 AND deleted_at IS NULL RETURNING created_at, updated_at"
+	err := db.QueryRow(query, m.Title, m.Description, m.Rating, id).Scan(&m.CreatedAt, &m.UpdatedAt)
 	if err != nil {
+		if err == sql.ErrNoRows {
+			http.Error(w, "Movie not found", http.StatusNotFound)
+			return
+		}
 		log.Error().Err(err).Msg("Error updating movie")
 		http.Error(w, "Database error", http.StatusInternalServerError)
-		return
-	}
-
-	rowsAffected, _ := res.RowsAffected()
-	if rowsAffected == 0 {
-		http.Error(w, "Movie not found", http.StatusNotFound)
 		return
 	}
 
@@ -283,7 +284,7 @@ func updateMovieHandler(w http.ResponseWriter, r *http.Request, id int) {
 }
 
 func deleteMovieHandler(w http.ResponseWriter, r *http.Request, id int) {
-	query := "DELETE FROM movies WHERE id = $1"
+	query := "UPDATE movies SET deleted_at = CURRENT_TIMESTAMP WHERE id = $1 AND deleted_at IS NULL"
 	res, err := db.Exec(query, id)
 	if err != nil {
 		log.Error().Err(err).Msg("Error deleting movie")

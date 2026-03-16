@@ -19,7 +19,7 @@ Move beyond basic endpoints to a robust, documented API.
 ## 3. Database Lifecycle Management
 Ensure schema changes are trackable and safe.
 - [x] **Migration Tooling**: Replace the `initDB()` function with a migration engine like `golang-migrate` or `pressly/goose`.
-- [ ] **Audit Fields**: Add `created_at`, `updated_at`, and `deleted_at` (soft deletes) to all tables.
+- [x] **Audit Fields**: Add `created_at`, `updated_at`, and `deleted_at` (soft deletes) to all tables.
 - [ ] **Connection Pooling**: Fine-tune PostgreSQL connection pool settings for high-concurrency scenarios.
 
 ## 4. Modern Frontend Architecture

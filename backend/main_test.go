@@ -2,11 +2,13 @@ package main
 
 import (
 	"bytes"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/DATA-DOG/go-sqlmock"
 )
@@ -125,11 +127,12 @@ func TestMoviesHandler(t *testing.T) {
 	db = mockDB
 	defer func() { db = originalDB }()
 
-	rows := sqlmock.NewRows([]string{"id", "title", "description", "rating"}).
-		AddRow(1, "Inception", "A thief who steals corporate secrets through the use of dream-sharing technology.", 8.8).
-		AddRow(2, "The Matrix", "A computer hacker learns from mysterious rebels about the true nature of his reality.", 8.7)
+	now := time.Now()
+	rows := sqlmock.NewRows([]string{"id", "title", "description", "rating", "created_at", "updated_at", "deleted_at"}).
+		AddRow(1, "Inception", "A thief who steals corporate secrets through the use of dream-sharing technology.", 8.8, now, now, nil).
+		AddRow(2, "The Matrix", "A computer hacker learns from mysterious rebels about the true nature of his reality.", 8.7, now, now, nil)
 
-	mock.ExpectQuery("SELECT id, title, description, rating FROM movies").WillReturnRows(rows)
+	mock.ExpectQuery("SELECT id, title, description, rating, created_at, updated_at, deleted_at FROM movies WHERE deleted_at IS NULL").WillReturnRows(rows)
 
 	req, err := http.NewRequest("GET", "/api/movies", nil)
 	if err != nil {
@@ -176,7 +179,7 @@ func TestMoviesHandlerError(t *testing.T) {
 	db = mockDB
 	defer func() { db = originalDB }()
 
-	mock.ExpectQuery("SELECT id, title, description, rating FROM movies").WillReturnError(fmt.Errorf("db error"))
+	mock.ExpectQuery("SELECT id, title, description, rating, created_at, updated_at, deleted_at FROM movies WHERE deleted_at IS NULL").WillReturnError(fmt.Errorf("db error"))
 
 	req, _ := http.NewRequest("GET", "/api/movies", nil)
 	rr := httptest.NewRecorder()
@@ -201,10 +204,11 @@ func TestMoviesHandlerSearch(t *testing.T) {
 	db = mockDB
 	defer func() { db = originalDB }()
 
-	rows := sqlmock.NewRows([]string{"id", "title", "description", "rating"}).
-		AddRow(1, "Inception", "A thief who steals corporate secrets through the use of dream-sharing technology.", 8.8)
+	now := time.Now()
+	rows := sqlmock.NewRows([]string{"id", "title", "description", "rating", "created_at", "updated_at", "deleted_at"}).
+		AddRow(1, "Inception", "A thief who steals corporate secrets through the use of dream-sharing technology.", 8.8, now, now, nil)
 
-	mock.ExpectQuery("SELECT id, title, description, rating FROM movies WHERE title ILIKE \\$1").
+	mock.ExpectQuery("SELECT id, title, description, rating, created_at, updated_at, deleted_at FROM movies WHERE title ILIKE \\$1 AND deleted_at IS NULL").
 		WithArgs("%Incep%").
 		WillReturnRows(rows)
 
@@ -249,7 +253,7 @@ func TestMoviesHandlerSearchError(t *testing.T) {
 	db = mockDB
 	defer func() { db = originalDB }()
 
-	mock.ExpectQuery("SELECT id, title, description, rating FROM movies WHERE title ILIKE \\$1").
+	mock.ExpectQuery("SELECT id, title, description, rating, created_at, updated_at, deleted_at FROM movies WHERE title ILIKE \\$1 AND deleted_at IS NULL").
 		WithArgs("%Error%").
 		WillReturnError(fmt.Errorf("db error"))
 
@@ -280,9 +284,10 @@ func TestCreateMovieHandler(t *testing.T) {
 	}
 	body, _ := json.Marshal(newMovie)
 
+	now := time.Now()
 	mock.ExpectQuery("INSERT INTO movies").
 		WithArgs(newMovie.Title, newMovie.Description, newMovie.Rating).
-		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(1))
+		WillReturnRows(sqlmock.NewRows([]string{"id", "created_at", "updated_at"}).AddRow(1, now, now))
 
 	req, err := http.NewRequest("POST", "/api/movies", bytes.NewBuffer(body))
 	if err != nil {
@@ -365,9 +370,10 @@ func TestUpdateMovieHandler(t *testing.T) {
 	}
 	body, _ := json.Marshal(updatedMovie)
 
-	mock.ExpectExec("UPDATE movies SET title = \\$1, description = \\$2, rating = \\$3 WHERE id = \\$4").
+	now := time.Now()
+	mock.ExpectQuery("UPDATE movies SET title = \\$1, description = \\$2, rating = \\$3, updated_at = CURRENT_TIMESTAMP WHERE id = \\$4 AND deleted_at IS NULL RETURNING created_at, updated_at").
 		WithArgs(updatedMovie.Title, updatedMovie.Description, updatedMovie.Rating, 1).
-		WillReturnResult(sqlmock.NewResult(0, 1))
+		WillReturnRows(sqlmock.NewRows([]string{"created_at", "updated_at"}).AddRow(now, now))
 
 	req, err := http.NewRequest("PUT", "/api/movies/1", bytes.NewBuffer(body))
 	if err != nil {
@@ -423,7 +429,7 @@ func TestUpdateMovieHandlerErrors(t *testing.T) {
 	}
 
 	// Case 3: DB Error
-	mock.ExpectExec("UPDATE movies").WillReturnError(fmt.Errorf("update error"))
+	mock.ExpectQuery("UPDATE movies").WillReturnError(fmt.Errorf("update error"))
 	req, _ = http.NewRequest("PUT", "/api/movies/1", bytes.NewBufferString(`{"title":"Error","description":"test"}`))
 	rr = httptest.NewRecorder()
 	updateMovieHandler(rr, req, 1)
@@ -432,7 +438,7 @@ func TestUpdateMovieHandlerErrors(t *testing.T) {
 	}
 
 	// Case 4: Movie Not Found
-	mock.ExpectExec("UPDATE movies").WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectQuery("UPDATE movies").WillReturnError(sql.ErrNoRows)
 	req, _ = http.NewRequest("PUT", "/api/movies/999", bytes.NewBufferString(`{"title":"Not Found","description":"test"}`))
 	rr = httptest.NewRecorder()
 	updateMovieHandler(rr, req, 999)
@@ -452,7 +458,7 @@ func TestDeleteMovieHandler(t *testing.T) {
 	db = mockDB
 	defer func() { db = originalDB }()
 
-	mock.ExpectExec("DELETE FROM movies WHERE id = \\$1").
+	mock.ExpectExec("UPDATE movies SET deleted_at = CURRENT_TIMESTAMP WHERE id = \\$1 AND deleted_at IS NULL").
 		WithArgs(1).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 
@@ -488,7 +494,7 @@ func TestDeleteMovieHandlerErrors(t *testing.T) {
 	defer func() { db = originalDB }()
 
 	// Case 1: DB Error
-	mock.ExpectExec("DELETE FROM movies").WillReturnError(fmt.Errorf("delete error"))
+	mock.ExpectExec("UPDATE movies SET deleted_at = CURRENT_TIMESTAMP WHERE id = \\$1 AND deleted_at IS NULL").WillReturnError(fmt.Errorf("delete error"))
 	req, _ := http.NewRequest("DELETE", "/api/movies/1", nil)
 	rr := httptest.NewRecorder()
 	deleteMovieHandler(rr, req, 1)
@@ -497,7 +503,7 @@ func TestDeleteMovieHandlerErrors(t *testing.T) {
 	}
 
 	// Case 2: Movie Not Found
-	mock.ExpectExec("DELETE FROM movies").WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectExec("UPDATE movies SET deleted_at = CURRENT_TIMESTAMP WHERE id = \\$1 AND deleted_at IS NULL").WillReturnResult(sqlmock.NewResult(0, 0))
 	req, _ = http.NewRequest("DELETE", "/api/movies/999", nil)
 	rr = httptest.NewRecorder()
 	deleteMovieHandler(rr, req, 999)
