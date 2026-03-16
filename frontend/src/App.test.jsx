@@ -325,15 +325,20 @@ describe('App component', () => {
     fetch.mockResolvedValueOnce({ ok: true, json: () => Promise.resolve([]) }) // Initial fetch
     
     render(<App />)
+    
+    // Wait for initial fetch to finish before proceeding
+    await waitFor(() => expect(fetch).toHaveBeenCalled())
+    
     fireEvent.click(screen.getByText(/\+ Add Movie/i))
+    
+    // Fill in required title
+    fireEvent.change(screen.getByPlaceholderText('Title'), { target: { value: 'Error Test Movie' } })
     
     fetch.mockResolvedValueOnce({ ok: false }) // Failed POST
     fireEvent.click(screen.getByText('Save Movie'))
 
-    await waitFor(() => {
-      // console.error is called because response.ok is false is not handled by a catch block but we can still check if logic flows correctly
-      // Actually App.jsx only console.errors on catch. Let's mock a rejection.
-    })
+    // Give it a tick to process
+    await new Promise(resolve => setTimeout(resolve, 0))
     
     fetch.mockRejectedValueOnce(new Error('Network error'))
     fireEvent.click(screen.getByText('Save Movie'))
