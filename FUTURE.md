@@ -7,14 +7,14 @@ Advanced systems must be observable and handle shutdowns gracefully.
 - [x] **Structured Logging**: Replace standard `log` with `rs/zerolog` or `uber-go/zap` for JSON-formatted logs.
 - [ ] **Metrics**: Implement a `/metrics` endpoint using `prometheus/client_golang` for real-time monitoring.
 - [x] **Graceful Shutdown**: Implement `context` and signal handling (`SIGTERM`, `SIGINT`) in the Go backend to finish active requests before exiting.
-- [ ] **Health Checks**: Expand `/api/health` to check database connectivity status beyond just the API being "up."
+- [x] **Health Checks**: Expand `/api/health` to check database connectivity status beyond just the API being "up."
 
 ## 2. API Maturity & Security
 Move beyond basic endpoints to a robust, documented API.
 - [ ] **OpenAPI/Swagger**: Integrate `swaggo/swag` to auto-generate documentation and a Swagger UI.
 - [ ] **Authentication**: Implement JWT-based authentication for movie creation, editing, and deletion.
 - [ ] **Rate Limiting**: Add middleware to prevent API abuse.
-- [ ] **Middleware Stack**: Refactor routing to use a proper middleware chain for CORS, Logging, and Recovery.
+- [x] **Middleware Stack**: Refactor routing to use a proper middleware chain for CORS, Logging, and Recovery.
 
 ## 3. Database Lifecycle Management
 Ensure schema changes are trackable and safe.

@@ -3,7 +3,6 @@ package main
 import (
 	"database/sql"
 	"encoding/json"
-	"fmt"
 	"net/http"
 	"os"
 	"strconv"
@@ -78,10 +77,17 @@ func main() {
 	mux.HandleFunc("/api/movies", moviesRouter)
 	mux.HandleFunc("/api/movies/", moviesRouter)
 
+	// Chain middleware
+	handler := chain(mux,
+		recoveryMiddleware,
+		loggingMiddleware,
+		corsMiddleware,
+	)
+
 	port := ":8080"
 	server := &http.Server{
 		Addr:    port,
-		Handler: mux,
+		Handler: handler,
 	}
 
 	// Start server in a goroutine
@@ -108,15 +114,6 @@ func main() {
 }
 
 func moviesRouter(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Access-Control-Allow-Origin", "*")
-	w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
-	w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
-
-	if r.Method == http.MethodOptions {
-		w.WriteHeader(http.StatusOK)
-		return
-	}
-
 	// Handle /api/movies and /api/movies/ as base path
 	path := r.URL.Path
 	idStr := strings.TrimPrefix(path, "/api/movies")
@@ -172,8 +169,28 @@ func runMigrations(dbURL string) {
 
 func healthHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
-	w.Header().Set("Access-Control-Allow-Origin", "*")
-	fmt.Fprintf(w, `{"status": "ok", "message": "Nyx API is running"}`)
+
+	dbStatus := "up"
+	if err := db.Ping(); err != nil {
+		dbStatus = "down"
+		log.Error().Err(err).Msg("Database health check failed")
+		w.WriteHeader(http.StatusServiceUnavailable)
+	}
+
+	status := "ok"
+	if dbStatus == "down" {
+		status = "error"
+	}
+
+	response := map[string]interface{}{
+		"status": status,
+		"services": map[string]string{
+			"api":      "up",
+			"database": dbStatus,
+		},
+	}
+
+	json.NewEncoder(w).Encode(response)
 }
 
 func moviesHandler(w http.ResponseWriter, r *http.Request) {
@@ -281,4 +298,54 @@ func deleteMovieHandler(w http.ResponseWriter, r *http.Request, id int) {
 	}
 
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// Middleware and Routing Helpers
+
+type middleware func(http.Handler) http.Handler
+
+func chain(h http.Handler, middlewares ...middleware) http.Handler {
+	for i := len(middlewares) - 1; i >= 0; i-- {
+		h = middlewares[i](h)
+	}
+	return h
+}
+
+func loggingMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		start := time.Now()
+		next.ServeHTTP(w, r)
+		log.Info().
+			Str("method", r.Method).
+			Str("path", r.URL.Path).
+			Dur("duration", time.Since(start)).
+			Msg("Request processed")
+	})
+}
+
+func corsMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Access-Control-Allow-Origin", "*")
+		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
+
+		if r.Method == http.MethodOptions {
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+
+		next.ServeHTTP(w, r)
+	})
+}
+
+func recoveryMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer func() {
+			if err := recover(); err != nil {
+				log.Error().Interface("error", err).Msg("Caught panic in handler")
+				http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+			}
+		}()
+		next.ServeHTTP(w, r)
+	})
 }

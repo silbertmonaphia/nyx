@@ -12,6 +12,18 @@ import (
 )
 
 func TestHealthHandler(t *testing.T) {
+	mockDB, mock, err := sqlmock.New(sqlmock.MonitorPingsOption(true))
+	if err != nil {
+		t.Fatalf("error opening stub db: %s", err)
+	}
+	defer mockDB.Close()
+
+	originalDB := db
+	db = mockDB
+	defer func() { db = originalDB }()
+
+	mock.ExpectPing()
+
 	req, err := http.NewRequest("GET", "/api/health", nil)
 	if err != nil {
 		t.Fatal(err)
@@ -27,10 +39,77 @@ func TestHealthHandler(t *testing.T) {
 			status, http.StatusOK)
 	}
 
-	expected := `{"status": "ok", "message": "Nyx API is running"}`
-	if rr.Body.String() != expected {
-		t.Errorf("handler returned unexpected body: got %v want %v",
-			rr.Body.String(), expected)
+	var response map[string]interface{}
+	err = json.Unmarshal(rr.Body.Bytes(), &response)
+	if err != nil {
+		t.Fatalf("could not unmarshal response: %v", err)
+	}
+
+	if response["status"] != "ok" {
+		t.Errorf("expected status 'ok', got %v", response["status"])
+	}
+}
+
+func TestHealthHandlerError(t *testing.T) {
+	mockDB, mock, err := sqlmock.New(sqlmock.MonitorPingsOption(true))
+	if err != nil {
+		t.Fatalf("error opening stub db: %s", err)
+	}
+	defer mockDB.Close()
+
+	originalDB := db
+	db = mockDB
+	defer func() { db = originalDB }()
+
+	mock.ExpectPing().WillReturnError(fmt.Errorf("db connection failed"))
+
+	req, _ := http.NewRequest("GET", "/api/health", nil)
+	rr := httptest.NewRecorder()
+	handler := http.HandlerFunc(healthHandler)
+
+	handler.ServeHTTP(rr, req)
+
+	if status := rr.Code; status != http.StatusServiceUnavailable {
+		t.Errorf("expected status 503, got %v", status)
+	}
+
+	var response map[string]interface{}
+	json.Unmarshal(rr.Body.Bytes(), &response)
+	if response["status"] != "error" {
+		t.Errorf("expected status 'error', got %v", response["status"])
+	}
+}
+
+func TestMiddleware(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/test", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+
+	handler := chain(mux, corsMiddleware, recoveryMiddleware)
+
+	// Test CORS
+	req, _ := http.NewRequest("OPTIONS", "/test", nil)
+	rr := httptest.NewRecorder()
+	handler.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Errorf("expected 200 for OPTIONS, got %v", rr.Code)
+	}
+	if rr.Header().Get("Access-Control-Allow-Origin") != "*" {
+		t.Errorf("expected CORS header, got %v", rr.Header().Get("Access-Control-Allow-Origin"))
+	}
+
+	// Test Recovery
+	mux.HandleFunc("/panic", func(w http.ResponseWriter, r *http.Request) {
+		panic("test panic")
+	})
+	req, _ = http.NewRequest("GET", "/panic", nil)
+	rr = httptest.NewRecorder()
+	handler.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusInternalServerError {
+		t.Errorf("expected 500 for panic, got %v", rr.Code)
 	}
 }
 
