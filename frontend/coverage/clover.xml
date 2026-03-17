@@ -1,0 +1,134 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<coverage generated="1773731263294" clover="3.2.0">
+  <project timestamp="1773731263294" name="All files">
+    <metrics statements="86" coveredstatements="48" conditionals="38" coveredconditionals="23" methods="32" coveredmethods="15" elements="156" coveredelements="86" complexity="0" loc="86" ncloc="86" packages="5" files="9" classes="9"/>
+    <package name="src">
+      <metrics statements="27" coveredstatements="20" conditionals="11" coveredconditionals="9" methods="8" coveredmethods="5"/>
+      <file name="App.css" path="/home/smona/nyx/frontend/src/App.css">
+        <metrics statements="0" coveredstatements="0" conditionals="0" coveredconditionals="0" methods="0" coveredmethods="0"/>
+      </file>
+      <file name="App.tsx" path="/home/smona/nyx/frontend/src/App.tsx">
+        <metrics statements="27" coveredstatements="20" conditionals="11" coveredconditionals="9" methods="8" coveredmethods="5"/>
+        <line num="12" count="10" type="stmt"/>
+        <line num="13" count="10" type="stmt"/>
+        <line num="14" count="10" type="stmt"/>
+        <line num="16" count="10" type="stmt"/>
+        <line num="17" count="10" type="cond" truecount="1" falsecount="0"/>
+        <line num="19" count="10" type="stmt"/>
+        <line num="20" count="1" type="stmt"/>
+        <line num="21" count="1" type="cond" truecount="1" falsecount="1"/>
+        <line num="22" count="0" type="stmt"/>
+        <line num="23" count="0" type="stmt"/>
+        <line num="25" count="1" type="stmt"/>
+        <line num="26" count="1" type="stmt"/>
+        <line num="29" count="0" type="stmt"/>
+        <line num="33" count="10" type="stmt"/>
+        <line num="34" count="1" type="cond" truecount="1" falsecount="1"/>
+        <line num="35" count="1" type="stmt"/>
+        <line num="36" count="1" type="stmt"/>
+        <line num="38" count="0" type="stmt"/>
+        <line num="42" count="10" type="stmt"/>
+        <line num="61" count="0" type="stmt"/>
+        <line num="68" count="1" type="stmt"/>
+        <line num="69" count="1" type="stmt"/>
+        <line num="80" count="0" type="stmt"/>
+        <line num="89" count="0" type="stmt"/>
+        <line num="98" count="1" type="stmt"/>
+        <line num="99" count="1" type="stmt"/>
+        <line num="100" count="1" type="stmt"/>
+      </file>
+    </package>
+    <package name="src.assets">
+      <metrics statements="0" coveredstatements="0" conditionals="0" coveredconditionals="0" methods="0" coveredmethods="0"/>
+      <file name="hero.png" path="/home/smona/nyx/frontend/src/assets/hero.png">
+        <metrics statements="0" coveredstatements="0" conditionals="0" coveredconditionals="0" methods="0" coveredmethods="0"/>
+      </file>
+      <file name="react.svg" path="/home/smona/nyx/frontend/src/assets/react.svg">
+        <metrics statements="0" coveredstatements="0" conditionals="0" coveredconditionals="0" methods="0" coveredmethods="0"/>
+      </file>
+      <file name="vite.svg" path="/home/smona/nyx/frontend/src/assets/vite.svg">
+        <metrics statements="0" coveredstatements="0" conditionals="0" coveredconditionals="0" methods="0" coveredmethods="0"/>
+      </file>
+    </package>
+    <package name="src.features.movies.components">
+      <metrics statements="26" coveredstatements="25" conditionals="14" coveredconditionals="14" methods="11" coveredmethods="10"/>
+      <file name="MovieForm.tsx" path="/home/smona/nyx/frontend/src/features/movies/components/MovieForm.tsx">
+        <metrics statements="15" coveredstatements="14" conditionals="8" coveredconditionals="8" methods="6" coveredmethods="5"/>
+        <line num="11" count="2" type="stmt"/>
+        <line num="12" count="63" type="stmt"/>
+        <line num="18" count="63" type="stmt"/>
+        <line num="19" count="7" type="cond" truecount="2" falsecount="0"/>
+        <line num="20" count="3" type="stmt"/>
+        <line num="26" count="4" type="stmt"/>
+        <line num="34" count="63" type="stmt"/>
+        <line num="35" count="3" type="stmt"/>
+        <line num="36" count="3" type="cond" truecount="2" falsecount="0"/>
+        <line num="37" count="1" type="stmt"/>
+        <line num="39" count="2" type="stmt"/>
+        <line num="43" count="63" type="stmt"/>
+        <line num="50" count="36" type="stmt"/>
+        <line num="56" count="13" type="stmt"/>
+        <line num="67" count="0" type="stmt"/>
+      </file>
+      <file name="MovieList.tsx" path="/home/smona/nyx/frontend/src/features/movies/components/MovieList.tsx">
+        <metrics statements="11" coveredstatements="11" conditionals="6" coveredconditionals="6" methods="5" coveredmethods="5"/>
+        <line num="10" count="2" type="stmt"/>
+        <line num="11" count="7" type="stmt"/>
+        <line num="21" count="1" type="stmt"/>
+        <line num="28" count="1" type="stmt"/>
+        <line num="46" count="2" type="stmt"/>
+        <line num="47" count="13" type="cond" truecount="2" falsecount="0"/>
+        <line num="48" count="3" type="stmt"/>
+        <line num="51" count="10" type="cond" truecount="2" falsecount="0"/>
+        <line num="52" count="5" type="cond" truecount="2" falsecount="0"/>
+        <line num="55" count="5" type="stmt"/>
+        <line num="58" count="7" type="stmt"/>
+      </file>
+    </package>
+    <package name="src.features.movies.hooks">
+      <metrics statements="14" coveredstatements="1" conditionals="0" coveredconditionals="0" methods="9" coveredmethods="0"/>
+      <file name="useMovies.ts" path="/home/smona/nyx/frontend/src/features/movies/hooks/useMovies.ts">
+        <metrics statements="14" coveredstatements="1" conditionals="0" coveredconditionals="0" methods="9" coveredmethods="0"/>
+        <line num="5" count="1" type="stmt"/>
+        <line num="6" count="0" type="stmt"/>
+        <line num="8" count="0" type="stmt"/>
+        <line num="11" count="0" type="stmt"/>
+        <line num="14" count="0" type="stmt"/>
+        <line num="15" count="0" type="stmt"/>
+        <line num="17" count="0" type="stmt"/>
+        <line num="21" count="0" type="stmt"/>
+        <line num="22" count="0" type="stmt"/>
+        <line num="24" count="0" type="stmt"/>
+        <line num="28" count="0" type="stmt"/>
+        <line num="29" count="0" type="stmt"/>
+        <line num="31" count="0" type="stmt"/>
+        <line num="35" count="0" type="stmt"/>
+      </file>
+    </package>
+    <package name="src.features.movies.services">
+      <metrics statements="19" coveredstatements="2" conditionals="13" coveredconditionals="0" methods="4" coveredmethods="0"/>
+      <file name="movieService.ts" path="/home/smona/nyx/frontend/src/features/movies/services/movieService.ts">
+        <metrics statements="19" coveredstatements="2" conditionals="13" coveredconditionals="0" methods="4" coveredmethods="0"/>
+        <line num="3" count="1" type="stmt"/>
+        <line num="5" count="1" type="stmt"/>
+        <line num="7" count="0" type="cond" truecount="0" falsecount="2"/>
+        <line num="8" count="0" type="stmt"/>
+        <line num="9" count="0" type="cond" truecount="0" falsecount="2"/>
+        <line num="10" count="0" type="stmt"/>
+        <line num="12" count="0" type="stmt"/>
+        <line num="13" count="0" type="cond" truecount="0" falsecount="2"/>
+        <line num="17" count="0" type="stmt"/>
+        <line num="22" count="0" type="cond" truecount="0" falsecount="2"/>
+        <line num="23" count="0" type="stmt"/>
+        <line num="25" count="0" type="stmt"/>
+        <line num="29" count="0" type="stmt"/>
+        <line num="34" count="0" type="cond" truecount="0" falsecount="2"/>
+        <line num="35" count="0" type="stmt"/>
+        <line num="37" count="0" type="stmt"/>
+        <line num="41" count="0" type="stmt"/>
+        <line num="44" count="0" type="cond" truecount="0" falsecount="2"/>
+        <line num="45" count="0" type="stmt"/>
+      </file>
+    </package>
+  </project>
+</coverage>
