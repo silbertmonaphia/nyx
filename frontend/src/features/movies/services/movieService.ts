@@ -1,48 +1,23 @@
 import { Movie, NewMovie } from '../types/movie';
-
-const API_BASE_URL = 'http://localhost:8080/api';
+import api from '~/services/api'; // Use the alias here
 
 export const movieService = {
   async getMovies(searchTerm: string = ''): Promise<Movie[]> {
-    const url = `${API_BASE_URL}/movies${searchTerm ? `?q=${encodeURIComponent(searchTerm)}` : ''}`;
-    const response = await fetch(url);
-    if (!response.ok) {
-      throw new Error(`Error fetching movies: ${response.statusText}`);
-    }
-    const data = await response.json();
-    return data || [];
+    const response = await api.get(`/movies${searchTerm ? `?q=${encodeURIComponent(searchTerm)}` : ''}`);
+    return response.data || [];
   },
 
   async addMovie(movie: NewMovie): Promise<Movie> {
-    const response = await fetch(`${API_BASE_URL}/movies`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(movie),
-    });
-    if (!response.ok) {
-      throw new Error(`Error adding movie: ${response.statusText}`);
-    }
-    return response.json();
+    const response = await api.post('/movies', movie);
+    return response.data;
   },
 
   async updateMovie(id: number, movie: Partial<Movie>): Promise<Movie> {
-    const response = await fetch(`${API_BASE_URL}/movies/${id}`, {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(movie),
-    });
-    if (!response.ok) {
-      throw new Error(`Error updating movie: ${response.statusText}`);
-    }
-    return response.json();
+    const response = await api.put(`/movies/${id}`, movie);
+    return response.data;
   },
 
   async deleteMovie(id: number): Promise<void> {
-    const response = await fetch(`${API_BASE_URL}/movies/${id}`, {
-      method: 'DELETE',
-    });
-    if (!response.ok) {
-      throw new Error(`Error deleting movie: ${response.statusText}`);
-    }
+    await api.delete(`/movies/${id}`);
   },
 };

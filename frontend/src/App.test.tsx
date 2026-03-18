@@ -78,7 +78,7 @@ describe('App', () => {
       updateMovie: { mutateAsync: updateMovieMock },
       deleteMovie: { mutateAsync: deleteMovieMock },
     });
-    addMovieMock.mockResolvedValue({});
+    addMovieMock.mockResolvedValue({ data: {} });
     
     render(<App />);
     
@@ -117,7 +117,7 @@ describe('App', () => {
       updateMovie: { mutateAsync: updateMovieMock },
       deleteMovie: { mutateAsync: deleteMovieMock },
     });
-    deleteMovieMock.mockResolvedValue({});
+    deleteMovieMock.mockResolvedValue({ data: {} });
     window.confirm = vi.fn(() => true); // Auto-confirm deletion
 
     render(<App />);

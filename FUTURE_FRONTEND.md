@@ -22,7 +22,7 @@ Manual `fetch` in `useEffect` is error-prone and lacks essential features like c
   - Automatic caching and background refetching.
   - Built-in loading, error, and pagination states.
   - Optimistic updates for a snappier UI during movie creation/deletion.
-- [ ] **Axios/Ky Centralized Client**: Create a configured API client with interceptors for global error handling and authentication headers.
+- [x] **Axios/Ky Centralized Client**: Create a configured API client with interceptors for global error handling and authentication headers.
 
 ## 3. Form Management & Validation
 Managing complex form state and validation manually is a common source of bugs.
