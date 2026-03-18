@@ -31,3 +31,5 @@ db_data/
 # Logs
 *.log
 .env
+.gemini/
+commit_message.txt
