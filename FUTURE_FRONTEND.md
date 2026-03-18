@@ -4,8 +4,8 @@ This document outlines the architectural and technical evolution of the Nyx fron
 
 ## 1. Core Architecture & Language
 Advanced projects prioritize type safety and scalability through modularity.
-- [ ] **TypeScript Migration**: Convert `.jsx` to `.tsx`. Implement strict typing for API responses, component props, and state.
-- [ ] **Feature-Based Folder Structure**: Move away from a flat `src/` directory to a domain-driven design:
+- [x] **TypeScript Migration**: Convert `.jsx` to `.tsx`. Implement strict typing for API responses, component props, and state.
+- [x] **Feature-Based Folder Structure**: Move away from a flat `src/` directory to a domain-driven design:
   ```text
   src/
   ├── features/        # Business logic for specific domains (e.g., movies/)
@@ -18,7 +18,7 @@ Advanced projects prioritize type safety and scalability through modularity.
 
 ## 2. Data Fetching & Server State
 Manual `fetch` in `useEffect` is error-prone and lacks essential features like caching.
-- [ ] **TanStack Query (React Query)**: Implement for all server-state management.
+- [x] **TanStack Query (React Query)**: Implement for all server-state management.
   - Automatic caching and background refetching.
   - Built-in loading, error, and pagination states.
   - Optimistic updates for a snappier UI during movie creation/deletion.
