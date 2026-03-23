@@ -47,9 +47,9 @@ function App() {
           <img src={reactLogo} className="framework" alt="React logo" />
           <img src={viteLogo} className="vite" alt="Vite logo" />
         </div>
-        <div>
-          <h1>Nyx</h1>
-          <p>Your minimalist movie guide</p>
+        <div className="text-center">
+          <h1 className="text-4xl md:text-6xl font-bold tracking-tight my-4 md:my-8 text-[var(--text-h)]">Nyx</h1>
+          <p className="text-lg text-[var(--text)]">Your minimalist movie guide</p>
         </div>
 
         <div className="controls">
