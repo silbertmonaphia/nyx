@@ -26,8 +26,8 @@ Manual `fetch` in `useEffect` is error-prone and lacks essential features like c
 
 ## 3. Form Management & Validation
 Managing complex form state and validation manually is a common source of bugs.
-- [ ] **React Hook Form**: Replace manual `useState` for forms to improve performance (uncontrolled components) and reduce boilerplate.
-- [ ] **Zod Schema Validation**: Define strict schemas for all forms and API responses. Ensure the frontend never processes malformed data from the backend.
+- [x] **React Hook Form**: Replace manual `useState` for forms to improve performance (uncontrolled components) and reduce boilerplate.
+- [x] **Zod Schema Validation**: Define strict schemas for all forms and API responses. Ensure the frontend never processes malformed data from the backend.
 
 ## 4. Styling & Design System
 Vanilla CSS is powerful but difficult to scale across large teams and components.

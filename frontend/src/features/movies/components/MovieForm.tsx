@@ -1,72 +1,94 @@
-import React, { useState, useEffect } from 'react';
-import { Movie, NewMovie } from '../types/movie';
+import React, { useEffect } from 'react';
+import { useForm } from 'react-hook-form';
+import { zodResolver } from '@hookform/resolvers/zod';
+import { Movie, movieSchema, MovieFormData } from '../types/movie';
 
 interface MovieFormProps {
   movie?: Movie | null;
-  onSubmit: (movie: NewMovie | Movie) => void;
+  onSubmit: (data: MovieFormData | Movie) => void;
   onCancel: () => void;
   title: string;
 }
 
 export const MovieForm: React.FC<MovieFormProps> = ({ movie, onSubmit, onCancel, title }) => {
-  const [formData, setFormData] = useState<NewMovie>({
-    title: '',
-    description: '',
-    rating: 5.0,
+  const {
+    register,
+    handleSubmit,
+    reset,
+    formState: { errors },
+    watch,
+  } = useForm<MovieFormData>({
+    resolver: zodResolver(movieSchema),
+    defaultValues: {
+      title: '',
+      description: '',
+      rating: 5.0,
+    },
   });
+
+  // Watch the rating field to display its value
+  const currentRating = watch('rating');
 
   useEffect(() => {
     if (movie) {
-      setFormData({
+      reset({
         title: movie.title,
-        description: movie.description,
+        description: movie.description || '',
         rating: movie.rating,
       });
     } else {
-      setFormData({
+      reset({
         title: '',
         description: '',
         rating: 5.0,
       });
     }
-  }, [movie]);
+  }, [movie, reset]);
 
-  const handleSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
+  const onFormSubmit = (data: MovieFormData) => {
     if (movie) {
-      onSubmit({ ...movie, ...formData, rating: Number(formData.rating) });
+      onSubmit({ ...movie, ...data });
     } else {
-      onSubmit({ ...formData, rating: Number(formData.rating) });
+      onSubmit(data);
     }
   };
 
   return (
-    <form className={`add-movie-form ${movie ? 'edit-form' : ''}`} onSubmit={handleSubmit}>
+    <form className={`add-movie-form ${movie ? 'edit-form' : ''}`} onSubmit={handleSubmit(onFormSubmit)}>
       <h2>{title}</h2>
-      <input
-        type="text"
-        placeholder="Title"
-        value={formData.title}
-        onChange={(e) => setFormData({ ...formData, title: e.target.value })}
-        required
-      />
-      <textarea
-        placeholder="Description"
-        value={formData.description}
-        onChange={(e) => setFormData({ ...formData, description: e.target.value })}
-      />
-      <div className="rating-input">
-        <label htmlFor="rating">Rating: {formData.rating}</label>
+      
+      <div className="form-field">
         <input
+          {...register('title')}
+          type="text"
+          placeholder="Title"
+          aria-invalid={!!errors.title}
+        />
+        {errors.title && <span className="error-message">{errors.title.message}</span>}
+      </div>
+
+      <div className="form-field">
+        <textarea
+          {...register('description')}
+          placeholder="Description"
+          aria-invalid={!!errors.description}
+        />
+        {errors.description && <span className="error-message">{errors.description.message}</span>}
+      </div>
+
+      <div className="rating-input">
+        <label htmlFor="rating">Rating: {currentRating}</label>
+        <input
+          {...register('rating')}
           id="rating"
           type="range"
           min="0"
           max="10"
           step="0.1"
-          value={formData.rating}
-          onChange={(e) => setFormData({ ...formData, rating: Number(e.target.value) })}
         />
+        {errors.rating && <span className="error-message">{errors.rating.message}</span>}
       </div>
+
       <div className="form-actions">
         <button type="submit" className="submit-button">
           {movie ? 'Update Movie' : 'Save Movie'}

@@ -45,6 +45,24 @@
   }
 }
 
+.form-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  text-align: left;
+
+  input[aria-invalid="true"], textarea[aria-invalid="true"] {
+    border-color: #ff4646 !important;
+  }
+}
+
+.error-message {
+  color: #ff4646;
+  font-size: 13px;
+  font-weight: 500;
+  margin-left: 4px;
+}
+
 .add-movie-form {
   display: flex;
   flex-direction: column;

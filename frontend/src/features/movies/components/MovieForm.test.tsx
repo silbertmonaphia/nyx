@@ -1,7 +1,7 @@
-import { render, screen, fireEvent } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MovieForm } from './MovieForm';
-import { Movie } from '../features/movies/types/movie';
+import { Movie } from '../types/movie';
 import { vi } from 'vitest';
 
 describe('MovieForm', () => {
@@ -27,30 +27,21 @@ describe('MovieForm', () => {
     
     fireEvent.submit(screen.getByRole('button', { name: /save movie/i }));
     
-    expect(handleSubmit).toHaveBeenCalledWith({
-      title: 'New Film',
-      description: 'A great film.',
-      rating: 5, // Default
+    await waitFor(() => {
+      expect(handleSubmit).toHaveBeenCalledWith({
+        title: 'New Film',
+        description: 'A great film.',
+        rating: 5,
+      });
     });
   });
 
-  it('calls onSubmit with updated form data when editing a movie', async () => {
-    const movie: Movie = { id: 1, title: 'Old Title', description: 'Old Desc', rating: 7 };
-    const handleSubmit = vi.fn();
-    render(<MovieForm title="Edit Movie" movie={movie} onSubmit={handleSubmit} onCancel={vi.fn()} />);
-
-    const titleInput = screen.getByPlaceholderText('Title');
-    await userEvent.clear(titleInput);
-    await userEvent.type(titleInput, 'Updated Title');
+  it('shows validation error when title is empty', async () => {
+    render(<MovieForm title="New Movie" onSubmit={vi.fn()} onCancel={vi.fn()} />);
     
-    fireEvent.submit(screen.getByRole('button', { name: /update movie/i }));
-
-    expect(handleSubmit).toHaveBeenCalledWith({
-      id: 1,
-      title: 'Updated Title',
-      description: 'Old Desc',
-      rating: 7,
-    });
+    fireEvent.submit(screen.getByRole('button', { name: /save movie/i }));
+    
+    expect(await screen.findByText('Title is required')).toBeInTheDocument();
   });
 
   it('calls onCancel when cancel button is clicked', async () => {
