@@ -4,26 +4,28 @@ A minimalist media rating application with a Go backend and a React frontend.
 
 ## Project Structure
 
-- `backend/`: Go 1.26.1 API server
-- `frontend/`: React 19 + Vite 8 SPA
-- `docker-compose.yml`: Database and backend service orchestration
+- `backend/`: Go 1.26.1 API server (Gin-ready)
+- `frontend/`: React 19 + Vite 8 SPA (TanStack Query + Tailwind CSS)
+- `docker-compose.yml`: General service orchestration
+- `docker-compose.prod.yml`: Production-specific configuration
 
 ## Features
 
-- **Minimalist UI**: Simple and clean movie listing.
+- **Advanced UI**: Modern React frontend with Tailwind CSS and TanStack Query.
 - **Search**: Case-insensitive search by movie title.
-- **Backend API**: Robust Go backend with PostgreSQL.
-- **Containerized**: Easy development setup with Docker Compose.
+- **Backend API**: Robust Go backend with PostgreSQL and auto-migrations.
+- **TypeScript**: Full-stack type safety with TypeScript in the frontend.
+- **Validation**: Runtime validation with Zod (frontend) and Go structs (backend).
+- **Containerized**: Production-ready multi-stage Docker builds.
 
 ## Getting Started
 
 ### Prerequisites
 
 - [Docker](https://www.docker.com/)
-- [Go 1.26.1+](https://go.dev/) (optional, for local development)
-- [Node.js 20+](https://nodejs.org/) (optional, for local development)
+- [Docker Compose](https://docs.docker.com/compose/)
 
-### Running with Docker
+### Development
 
 1. Clone the repository:
    ```bash
@@ -37,36 +39,43 @@ A minimalist media rating application with a Go backend and a React frontend.
    # Edit .env if you want to change default credentials
    ```
 
-3. Start the services:
+3. Start the services for development:
    ```bash
-   # Build the backend binary locally first (CGO_ENABLED=0 for Alpine compatibility)
-   (cd backend && CGO_ENABLED=0 GOOS=linux go build -o main .)
-   
-   # Start all services
-   sudo docker compose up --build
+   docker compose up --build
    ```
 
 4. Access the application:
-   - Frontend: `http://localhost:5173`
-   - API: `http://localhost:8080/api/health`
+   - Frontend: `http://localhost:5173` (with HMR)
+   - API: `http://localhost:8080/api/movies`
 
-## Backend API
+### Production Deployment
 
-| Endpoint | Method | Description |
-| --- | --- | --- |
-| `/api/health` | `GET` | API health check |
-| `/api/movies` | `GET` | List available movies. Use `?q=term` for searching titles. |
+To deploy Nyx in a production environment:
+
+1. Build and run with the production configuration:
+   ```bash
+   # Make sure to set VITE_API_URL to your production domain if different
+   VITE_API_URL=http://your-production-ip/api docker compose -f docker-compose.prod.yml up -d --build
+   ```
+
+2. The application will be accessible on port 80:
+   - Frontend: `http://your-production-ip`
+   - API: `http://your-production-ip/api` (internal communication)
 
 ## Testing
 
-### Backend
+### Backend (Go)
 ```bash
 cd backend
 go test -v .
 ```
 
-### Frontend
+### Frontend (Vitest)
 ```bash
 cd frontend
 npm test
 ```
+
+## Production Roadmap
+
+See `FUTURE_BACKEND.md` and `FUTURE_FRONTEND.md` for the planned enhancements towards a fully production-grade application, including JWT authentication, observability, and design system integration.

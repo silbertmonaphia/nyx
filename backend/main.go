@@ -1,14 +1,16 @@
 package main
 
 import (
+	"context"
 	"database/sql"
-	"encoding/json"
 	"net/http"
 	"os"
+	"os/signal"
 	"strconv"
-	"strings"
+	"syscall"
 	"time"
 
+	"github.com/gin-gonic/gin"
 	_ "github.com/lib/pq"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
@@ -16,16 +18,13 @@ import (
 	"github.com/golang-migrate/migrate/v4"
 	_ "github.com/golang-migrate/migrate/v4/database/postgres"
 	_ "github.com/golang-migrate/migrate/v4/source/file"
-	"context"
-	"os/signal"
-	"syscall"
 )
 
 type Movie struct {
 	ID          int        `json:"id"`
-	Title       string     `json:"title"`
-	Description string     `json:"description"`
-	Rating      float64    `json:"rating"`
+	Title       string     `json:"title" binding:"required,min=1,max=100"`
+	Description string     `json:"description" binding:"max=1000"`
+	Rating      float64    `json:"rating" binding:"min=0,max=10"`
 	CreatedAt   time.Time  `json:"created_at"`
 	UpdatedAt   time.Time  `json:"updated_at"`
 	DeletedAt   *time.Time `json:"deleted_at,omitempty"`
@@ -70,28 +69,34 @@ func main() {
 	// Run database migrations
 	runMigrations(dbURL)
 
-	// Create a cancellable context for handling signals
-	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
-	defer stop()
+	// Set up Gin
+	gin.SetMode(gin.ReleaseMode)
+	router := gin.New()
 
-	// Set up router and server
-	mux := http.NewServeMux()
-	mux.HandleFunc("/api/health", healthHandler)
-	mux.HandleFunc("/api/movies", moviesRouter)
-	mux.HandleFunc("/api/movies/", moviesRouter)
+	// Middleware
+	router.Use(gin.Recovery())
+	router.Use(loggingMiddleware())
+	router.Use(corsMiddleware())
 
-	// Chain middleware
-	handler := chain(mux,
-		recoveryMiddleware,
-		loggingMiddleware,
-		corsMiddleware,
-	)
+	// Routes
+	api := router.Group("/api")
+	{
+		api.GET("/health", healthHandler)
+		api.GET("/movies", getMoviesHandler)
+		api.POST("/movies", createMovieHandler)
+		api.PUT("/movies/:id", updateMovieHandler)
+		api.DELETE("/movies/:id", deleteMovieHandler)
+	}
 
 	port := ":8080"
 	server := &http.Server{
 		Addr:    port,
-		Handler: handler,
+		Handler: router,
 	}
+
+	// Create a cancellable context for handling signals
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
 
 	// Start server in a goroutine
 	go func() {
@@ -116,44 +121,6 @@ func main() {
 	log.Info().Msg("Server exited properly")
 }
 
-func moviesRouter(w http.ResponseWriter, r *http.Request) {
-	// Handle /api/movies and /api/movies/ as base path
-	path := r.URL.Path
-	idStr := strings.TrimPrefix(path, "/api/movies")
-	idStr = strings.TrimPrefix(idStr, "/")
-
-	if idStr == "" {
-		if r.Method == http.MethodPost {
-			createMovieHandler(w, r)
-			return
-		}
-		if r.Method == http.MethodGet {
-			moviesHandler(w, r)
-			return
-		}
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-
-	// Handle /api/movies/{id}
-	id, err := strconv.Atoi(idStr)
-	if err != nil {
-		http.Error(w, "Invalid movie ID", http.StatusBadRequest)
-		return
-	}
-
-	if r.Method == http.MethodPut {
-		updateMovieHandler(w, r, id)
-		return
-	}
-	if r.Method == http.MethodDelete {
-		deleteMovieHandler(w, r, id)
-		return
-	}
-
-	http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-}
-
 func runMigrations(dbURL string) {
 	m, err := migrate.New(
 		"file://migrations",
@@ -170,14 +137,11 @@ func runMigrations(dbURL string) {
 	log.Info().Msg("Database migrations applied successfully")
 }
 
-func healthHandler(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "application/json")
-
+func healthHandler(c *gin.Context) {
 	dbStatus := "up"
 	if err := db.Ping(); err != nil {
 		dbStatus = "down"
 		log.Error().Err(err).Msg("Database health check failed")
-		w.WriteHeader(http.StatusServiceUnavailable)
 	}
 
 	status := "ok"
@@ -185,38 +149,33 @@ func healthHandler(w http.ResponseWriter, r *http.Request) {
 		status = "error"
 	}
 
-	response := map[string]interface{}{
+	c.JSON(http.StatusOK, gin.H{
 		"status": status,
-		"services": map[string]string{
+		"services": gin.H{
 			"api":      "up",
 			"database": dbStatus,
 		},
-	}
-
-	json.NewEncoder(w).Encode(response)
+	})
 }
 
-func moviesHandler(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "application/json")
-
-	queryParam := r.URL.Query().Get("q")
+func getMoviesHandler(c *gin.Context) {
+	queryParam := c.Query("q")
 	var rows *sql.Rows
 	var err error
 
 	if queryParam != "" {
-		// Use ILIKE for case-insensitive search in Postgres
 		rows, err = db.Query("SELECT id, title, description, rating, created_at, updated_at, deleted_at FROM movies WHERE title ILIKE $1 AND deleted_at IS NULL", "%"+queryParam+"%")
 	} else {
 		rows, err = db.Query("SELECT id, title, description, rating, created_at, updated_at, deleted_at FROM movies WHERE deleted_at IS NULL")
 	}
 
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
 	defer rows.Close()
 
-	var movies []Movie
+	var movies []Movie = []Movie{}
 	for rows.Next() {
 		var m Movie
 		if err := rows.Scan(&m.ID, &m.Title, &m.Description, &m.Rating, &m.CreatedAt, &m.UpdatedAt, &m.DeletedAt); err != nil {
@@ -226,18 +185,13 @@ func moviesHandler(w http.ResponseWriter, r *http.Request) {
 		movies = append(movies, m)
 	}
 
-	json.NewEncoder(w).Encode(movies)
+	c.JSON(http.StatusOK, movies)
 }
 
-func createMovieHandler(w http.ResponseWriter, r *http.Request) {
+func createMovieHandler(c *gin.Context) {
 	var m Movie
-	if err := json.NewDecoder(r.Body).Decode(&m); err != nil {
-		http.Error(w, "Invalid request payload", http.StatusBadRequest)
-		return
-	}
-
-	if m.Title == "" {
-		http.Error(w, "Title is required", http.StatusBadRequest)
+	if err := c.ShouldBindJSON(&m); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid request payload", "details": err.Error()})
 		return
 	}
 
@@ -245,108 +199,103 @@ func createMovieHandler(w http.ResponseWriter, r *http.Request) {
 	err := db.QueryRow(query, m.Title, m.Description, m.Rating).Scan(&m.ID, &m.CreatedAt, &m.UpdatedAt)
 	if err != nil {
 		log.Error().Err(err).Msg("Error inserting movie")
-		http.Error(w, "Database error", http.StatusInternalServerError)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Database error"})
 		return
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusCreated)
-	json.NewEncoder(w).Encode(m)
+	c.JSON(http.StatusCreated, m)
 }
 
-func updateMovieHandler(w http.ResponseWriter, r *http.Request, id int) {
-	var m Movie
-	if err := json.NewDecoder(r.Body).Decode(&m); err != nil {
-		http.Error(w, "Invalid request payload", http.StatusBadRequest)
+func updateMovieHandler(c *gin.Context) {
+	idStr := c.Param("id")
+	id, err := strconv.Atoi(idStr)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid movie ID"})
 		return
 	}
 
-	if m.Title == "" {
-		http.Error(w, "Title is required", http.StatusBadRequest)
+	var m Movie
+	if err := c.ShouldBindJSON(&m); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid request payload", "details": err.Error()})
 		return
 	}
 
 	query := "UPDATE movies SET title = $1, description = $2, rating = $3, updated_at = CURRENT_TIMESTAMP WHERE id = $4 AND deleted_at IS NULL RETURNING created_at, updated_at"
-	err := db.QueryRow(query, m.Title, m.Description, m.Rating, id).Scan(&m.CreatedAt, &m.UpdatedAt)
+	err = db.QueryRow(query, m.Title, m.Description, m.Rating, id).Scan(&m.CreatedAt, &m.UpdatedAt)
 	if err != nil {
 		if err == sql.ErrNoRows {
-			http.Error(w, "Movie not found", http.StatusNotFound)
+			c.JSON(http.StatusNotFound, gin.H{"error": "Movie not found"})
 			return
 		}
 		log.Error().Err(err).Msg("Error updating movie")
-		http.Error(w, "Database error", http.StatusInternalServerError)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Database error"})
 		return
 	}
 
 	m.ID = id
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(m)
+	c.JSON(http.StatusOK, m)
 }
 
-func deleteMovieHandler(w http.ResponseWriter, r *http.Request, id int) {
+func deleteMovieHandler(c *gin.Context) {
+	idStr := c.Param("id")
+	id, err := strconv.Atoi(idStr)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid movie ID"})
+		return
+	}
+
 	query := "UPDATE movies SET deleted_at = CURRENT_TIMESTAMP WHERE id = $1 AND deleted_at IS NULL"
 	res, err := db.Exec(query, id)
 	if err != nil {
 		log.Error().Err(err).Msg("Error deleting movie")
-		http.Error(w, "Database error", http.StatusInternalServerError)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Database error"})
 		return
 	}
 
 	rowsAffected, _ := res.RowsAffected()
 	if rowsAffected == 0 {
-		http.Error(w, "Movie not found", http.StatusNotFound)
+		c.JSON(http.StatusNotFound, gin.H{"error": "Movie not found"})
 		return
 	}
 
-	w.WriteHeader(http.StatusNoContent)
+	c.Status(http.StatusNoContent)
 }
 
-// Middleware and Routing Helpers
+// Middleware
 
-type middleware func(http.Handler) http.Handler
-
-func chain(h http.Handler, middlewares ...middleware) http.Handler {
-	for i := len(middlewares) - 1; i >= 0; i-- {
-		h = middlewares[i](h)
-	}
-	return h
-}
-
-func loggingMiddleware(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+func loggingMiddleware() gin.HandlerFunc {
+	return func(c *gin.Context) {
 		start := time.Now()
-		next.ServeHTTP(w, r)
+		path := c.Request.URL.Path
+		raw := c.Request.URL.RawQuery
+
+		c.Next()
+
+		if raw != "" {
+			path = path + "?" + raw
+		}
+
 		log.Info().
-			Str("method", r.Method).
-			Str("path", r.URL.Path).
+			Str("method", c.Request.Method).
+			Str("path", path).
+			Int("status", c.Writer.Status()).
 			Dur("duration", time.Since(start)).
+			Str("client_ip", c.ClientIP()).
 			Msg("Request processed")
-	})
+	}
 }
 
-func corsMiddleware(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Access-Control-Allow-Origin", "*")
-		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
-		w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
+func corsMiddleware() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		c.Writer.Header().Set("Access-Control-Allow-Origin", "*")
+		c.Writer.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
+		c.Writer.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
 
-		if r.Method == http.MethodOptions {
-			w.WriteHeader(http.StatusOK)
+		if c.Request.Method == "OPTIONS" {
+			c.AbortWithStatus(http.StatusOK)
 			return
 		}
 
-		next.ServeHTTP(w, r)
-	})
-}
-
-func recoveryMiddleware(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		defer func() {
-			if err := recover(); err != nil {
-				log.Error().Interface("error", err).Msg("Caught panic in handler")
-				http.Error(w, "Internal Server Error", http.StatusInternalServerError)
-			}
-		}()
-		next.ServeHTTP(w, r)
-	})
+		c.Next()
+	}
 }

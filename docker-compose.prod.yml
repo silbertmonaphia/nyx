@@ -1,0 +1,47 @@
+version: '3.8'
+
+services:
+  db:
+    image: postgres:15-alpine
+    restart: always
+    environment:
+      - POSTGRES_USER=${POSTGRES_USER:-nyx_user}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-nyx_password}
+      - POSTGRES_DB=${POSTGRES_DB:-nyx_db}
+    # No ports exposed to the public in production
+    volumes:
+      - db_data:/var/lib/postgresql/data
+    networks:
+      - nyx_network
+
+  backend:
+    build: 
+      context: ./backend
+      dockerfile: Dockerfile
+    restart: always
+    environment:
+      - DB_URL=postgres://${POSTGRES_USER:-nyx_user}:${POSTGRES_PASSWORD:-nyx_password}@db:5432/${POSTGRES_DB:-nyx_db}?sslmode=disable
+    depends_on:
+      - db
+    networks:
+      - nyx_network
+
+  frontend:
+    build: 
+      context: ./frontend
+      dockerfile: Dockerfile
+      args:
+        - VITE_API_URL=${VITE_API_URL:-http://localhost:8080/api}
+    ports:
+      - "80:80"
+    depends_on:
+      - backend
+    networks:
+      - nyx_network
+
+networks:
+  nyx_network:
+    driver: bridge
+
+volumes:
+  db_data:
