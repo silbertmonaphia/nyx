@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React from 'react';
 import reactLogo from './assets/react.svg';
 import viteLogo from './assets/vite.svg';
 import heroImg from './assets/hero.png';
@@ -7,11 +7,18 @@ import { Movie, NewMovie } from './features/movies/types/movie';
 import { useMovies } from './features/movies/hooks/useMovies';
 import { MovieList } from './features/movies/components/MovieList';
 import { MovieForm } from './features/movies/components/MovieForm';
+import { useMovieUiStore } from './features/movies/store/movieUiStore';
 
 function App() {
-  const [searchTerm, setSearchTerm] = useState('');
-  const [showAddForm, setShowAddForm] = useState(false);
-  const [editingMovie, setEditingMovie] = useState<Movie | null>(null);
+  const { 
+    searchTerm, 
+    setSearchTerm, 
+    showAddForm, 
+    setShowAddForm, 
+    editingMovie, 
+    setEditingMovie,
+    resetFormState
+  } = useMovieUiStore();
 
   const { getMovies, addMovie, updateMovie, deleteMovie } = useMovies();
   const { data: movies = [], isLoading } = getMovies(searchTerm);
@@ -20,11 +27,10 @@ function App() {
     try {
       if ('id' in movieData) {
         await updateMovie.mutateAsync(movieData);
-        setEditingMovie(null);
       } else {
         await addMovie.mutateAsync(movieData);
-        setShowAddForm(false);
       }
+      resetFormState();
     } catch (err) {
       console.error('Error saving movie:', err);
     }
@@ -64,10 +70,7 @@ function App() {
           </div>
           <button 
             className="add-button"
-            onClick={() => {
-              setShowAddForm(!showAddForm);
-              setEditingMovie(null);
-            }}
+            onClick={() => setShowAddForm(!showAddForm)}
           >
             {showAddForm ? 'Cancel' : '+ Add Movie'}
           </button>
@@ -77,7 +80,7 @@ function App() {
           <MovieForm 
             title="New Movie"
             onSubmit={handleAddOrUpdateMovie}
-            onCancel={() => setShowAddForm(false)}
+            onCancel={resetFormState}
           />
         )}
 
@@ -86,7 +89,7 @@ function App() {
             title="Edit Movie"
             movie={editingMovie}
             onSubmit={handleAddOrUpdateMovie}
-            onCancel={() => setEditingMovie(null)}
+            onCancel={resetFormState}
           />
         )}
 
@@ -96,7 +99,6 @@ function App() {
           searchTerm={searchTerm}
           onEdit={(movie) => {
             setEditingMovie(movie);
-            setShowAddForm(false);
             window.scrollTo({ top: 0, behavior: 'smooth' });
           }}
           onDelete={handleDeleteMovie}
