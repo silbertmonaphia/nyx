@@ -11,6 +11,7 @@ import (
 	"nyx/internal/middleware"
 	"nyx/internal/movie"
 	"nyx/internal/platform/database"
+	"nyx/internal/user"
 
 	"github.com/gin-gonic/gin"
 	"github.com/rs/zerolog"
@@ -30,17 +31,22 @@ func main() {
 	// Initialize database
 	db, err := database.New(dbURL)
 	if err != nil {
-		log.Fatal().Err(err).Msg("Could not connect to database after retries")
+		log.Fatal().Err(err).Msg("Could not connect to database")
 	}
 	defer db.Close()
 
 	// Run migrations
 	database.RunMigrations(dbURL)
 
-	// Initialize layers
+	// Initialize Movie domain
 	movieRepo := movie.NewRepository(db)
 	movieService := movie.NewService(movieRepo)
 	movieHandler := movie.NewHandler(movieService)
+
+	// Initialize User domain
+	userRepo := user.NewRepository(db)
+	userService := user.NewService(userRepo)
+	userHandler := user.NewHandler(userService)
 
 	// Set up Gin
 	gin.SetMode(gin.ReleaseMode)
@@ -51,14 +57,29 @@ func main() {
 	router.Use(middleware.Logging())
 	router.Use(middleware.CORS())
 
-	// Routes
+	// API Routes
 	api := router.Group("/api")
 	{
 		api.GET("/health", movieHandler.HealthHandler)
-		api.GET("/movies", movieHandler.GetMoviesHandler)
-		api.POST("/movies", movieHandler.CreateMovieHandler)
-		api.PUT("/movies/:id", movieHandler.UpdateMovieHandler)
-		api.DELETE("/movies/:id", movieHandler.DeleteMovieHandler)
+
+		// Auth routes
+		api.POST("/register", userHandler.Register)
+		api.POST("/login", userHandler.Login)
+
+		// Movie routes
+		movies := api.Group("/movies")
+		{
+			movies.GET("", movieHandler.GetMoviesHandler)
+			
+			// Protected routes
+			protected := movies.Group("")
+			protected.Use(middleware.Auth())
+			{
+				protected.POST("", movieHandler.CreateMovieHandler)
+				protected.PUT("/:id", movieHandler.UpdateMovieHandler)
+				protected.DELETE("/:id", movieHandler.DeleteMovieHandler)
+			}
+		}
 	}
 
 	port := ":8080"

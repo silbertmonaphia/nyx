@@ -1,17 +1,20 @@
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import App from './App';
-import { vi } from 'vitest';
+import { vi, describe, it, expect, beforeEach } from 'vitest';
 import { useMovies } from './features/movies/hooks/useMovies';
+import { useAuthStore } from './store/authStore';
 
 vi.mock('./features/movies/hooks/useMovies');
+vi.mock('./store/authStore');
 
-const mockUseMovies = useMovies as vi.Mock;
+const mockUseMovies = useMovies as any;
+const mockUseAuthStore = useAuthStore as any;
 
 describe('App', () => {
-  let addMovieMock: vi.Mock;
-  let updateMovieMock: vi.Mock;
-  let deleteMovieMock: vi.Mock;
+  let addMovieMock: any;
+  let updateMovieMock: any;
+  let deleteMovieMock: any;
 
   beforeEach(() => {
     addMovieMock = vi.fn();
@@ -24,11 +27,19 @@ describe('App', () => {
       updateMovie: { mutateAsync: updateMovieMock },
       deleteMovie: { mutateAsync: deleteMovieMock },
     });
+
+    // Default: Unauthenticated
+    mockUseAuthStore.mockReturnValue({
+      isAuthenticated: false,
+      user: null,
+      logout: vi.fn(),
+    });
   });
 
   it('renders the main title', () => {
     render(<App />);
-    expect(screen.getByText('Nyx')).toBeInTheDocument();
+    // There are multiple "Nyx" elements now (Logo and Title), checking if at least one exists
+    expect(screen.getAllByText('Nyx').length).toBeGreaterThan(0);
   });
 
   it('displays loading state initially', () => {
@@ -71,7 +82,13 @@ describe('App', () => {
     });
   });
 
-  it('can add a new movie', async () => {
+  it('can add a new movie (when authenticated)', async () => {
+    mockUseAuthStore.mockReturnValue({
+      isAuthenticated: true,
+      user: { id: 1, username: 'testuser' },
+      logout: vi.fn(),
+    });
+
     mockUseMovies.mockReturnValue({
       getMovies: () => ({ data: [], isLoading: false }),
       addMovie: { mutateAsync: addMovieMock },
@@ -91,7 +108,13 @@ describe('App', () => {
     });
   });
 
-  it('can start editing a movie', async () => {
+  it('can start editing a movie (when authenticated)', async () => {
+    mockUseAuthStore.mockReturnValue({
+      isAuthenticated: true,
+      user: { id: 1, username: 'testuser' },
+      logout: vi.fn(),
+    });
+
     const movies = [{ id: 1, title: 'Movie to Edit', description: 'Desc', rating: 5 }];
     mockUseMovies.mockReturnValue({
       getMovies: () => ({ data: movies, isLoading: false }),
@@ -109,7 +132,13 @@ describe('App', () => {
     expect(screen.getByPlaceholderText('Title')).toHaveValue('Movie to Edit');
   });
 
-  it('can delete a movie', async () => {
+  it('can delete a movie (when authenticated)', async () => {
+    mockUseAuthStore.mockReturnValue({
+      isAuthenticated: true,
+      user: { id: 1, username: 'testuser' },
+      logout: vi.fn(),
+    });
+
     const movies = [{ id: 1, title: 'Movie to Delete', description: 'Desc', rating: 5 }];
     mockUseMovies.mockReturnValue({
       getMovies: () => ({ data: movies, isLoading: false }),

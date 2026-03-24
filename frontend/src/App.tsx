@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState } from 'react';
 import reactLogo from './assets/react.svg';
 import viteLogo from './assets/vite.svg';
 import heroImg from './assets/hero.png';
@@ -9,6 +9,9 @@ import { MovieList } from './features/movies/components/MovieList';
 import { MovieForm } from './features/movies/components/MovieForm';
 import { useMovieUiStore } from './features/movies/store/movieUiStore';
 import { ToastContainer } from './components/ui/ToastContainer';
+import { useUiStore } from './store/uiStore';
+import { useAuthStore } from './store/authStore';
+import { AuthForm } from './features/auth/components/AuthForm';
 
 function App() {
   const { 
@@ -20,6 +23,9 @@ function App() {
     setEditingMovie,
     resetFormState
   } = useMovieUiStore();
+
+  const { isAuthenticated, user, logout } = useAuthStore();
+  const [showAuthForm, setShowAuthForm] = useState(false);
 
   const { getMovies, addMovie, updateMovie, deleteMovie } = useMovies();
   const { data: movies = [], isLoading } = getMovies(searchTerm);
@@ -49,6 +55,22 @@ function App() {
   return (
     <>
       <ToastContainer />
+      <nav className="main-nav">
+        <div className="nav-container">
+          <div className="nav-logo">Nyx</div>
+          <div className="nav-auth">
+            {isAuthenticated ? (
+              <>
+                <span className="nav-user">Welcome, {user?.username}</span>
+                <button className="nav-button" onClick={() => logout()}>Logout</button>
+              </>
+            ) : (
+              <button className="nav-button" onClick={() => setShowAuthForm(true)}>Login / Register</button>
+            )}
+          </div>
+        </div>
+      </nav>
+
       <section id="center">
         <div className="hero">
           <img src={heroImg} className="base" width="170" height="179" alt="" />
@@ -70,15 +92,24 @@ function App() {
               className="search-input"
             />
           </div>
-          <button 
-            className="add-button"
-            onClick={() => setShowAddForm(!showAddForm)}
-          >
-            {showAddForm ? 'Cancel' : '+ Add Movie'}
-          </button>
+          {isAuthenticated && (
+            <button 
+              className="add-button"
+              onClick={() => setShowAddForm(!showAddForm)}
+            >
+              {showAddForm ? 'Cancel' : '+ Add Movie'}
+            </button>
+          )}
         </div>
 
-        {showAddForm && (
+        {showAuthForm && !isAuthenticated && (
+          <AuthForm 
+            onSuccess={() => setShowAuthForm(false)}
+            onCancel={() => setShowAuthForm(false)}
+          />
+        )}
+
+        {isAuthenticated && showAddForm && (
           <MovieForm 
             title="New Movie"
             onSubmit={handleAddOrUpdateMovie}
@@ -86,7 +117,7 @@ function App() {
           />
         )}
 
-        {editingMovie && (
+        {isAuthenticated && editingMovie && (
           <MovieForm 
             title="Edit Movie"
             movie={editingMovie}
@@ -100,10 +131,22 @@ function App() {
           loading={isLoading}
           searchTerm={searchTerm}
           onEdit={(movie) => {
+            if (!isAuthenticated) {
+              useUiStore.getState().addToast('Please login to edit movies', 'info');
+              setShowAuthForm(true);
+              return;
+            }
             setEditingMovie(movie);
             window.scrollTo({ top: 0, behavior: 'smooth' });
           }}
-          onDelete={handleDeleteMovie}
+          onDelete={(id) => {
+            if (!isAuthenticated) {
+              useUiStore.getState().addToast('Please login to delete movies', 'info');
+              setShowAuthForm(true);
+              return;
+            }
+            handleDeleteMovie(id);
+          }}
         />
       </section>
 

@@ -33,9 +33,9 @@ Never trust the client. Implement robust validation at the entry point.
 
 ## 3. Security & Authentication
 Secure the API against unauthorized access.
-- [ ] **JWT Authentication**: Implement JSON Web Tokens for secure session management.
+- [x] **JWT Authentication**: Implement JSON Web Tokens for secure session management.
 - [ ] **User Management**: Create a `users` table with hashed passwords using `bcrypt`.
-- [ ] **Auth Middleware**: Protect write/delete routes while keeping read routes public (or as configured).
+- [x] **Auth Middleware**: Protect write/delete routes while keeping read routes public (or as configured).
 - [ ] **Rate Limiting**: Add `uber-go/ratelimit` to prevent API abuse.
 
 ## 4. Database Layer Enhancement

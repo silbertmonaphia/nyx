@@ -12,7 +12,7 @@ Advanced systems must be observable and handle shutdowns gracefully.
 ## 2. API Maturity & Security
 Move beyond basic endpoints to a robust, documented API.
 - [ ] **OpenAPI/Swagger**: Integrate `swaggo/swag` to auto-generate documentation and a Swagger UI.
-- [ ] **Authentication**: Implement JWT-based authentication for movie creation, editing, and deletion.
+- [x] **Authentication**: Implement JWT-based authentication for movie creation, editing, and deletion.
 - [ ] **Rate Limiting**: Add middleware to prevent API abuse.
 - [x] **Middleware Stack**: Refactor routing to use a proper middleware chain for CORS, Logging, and Recovery.
 
@@ -27,7 +27,7 @@ Improve the React developer experience and application performance.
 - [ ] **Server State Management**: Replace manual `fetch` in `useEffect` with **TanStack Query (React Query)** for automatic caching and re-fetching.
 - [ ] **Zod Validation**: Use `zod` for runtime type validation of API responses and form inputs.
 - [ ] **Tailwind CSS**: Integrate Tailwind for more scalable and consistent styling patterns.
-- [ ] **Global Error Handling**: Implement React Error Boundaries and a global toast notification system for API errors.
+- [x] **Global Error Handling**: Implement React Error Boundaries and a global toast notification system for API errors.
 
 ## 5. Developer Experience (DX) & CI/CD
 Automate quality control and deployment.

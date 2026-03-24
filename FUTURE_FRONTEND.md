@@ -36,7 +36,7 @@ Vanilla CSS is powerful but difficult to scale across large teams and components
 - [ ] **CSS Modules or Vanilla Extract**: For component-specific styles that require complex logic while maintaining type safety.
 
 ## 5. Global State Management
-- [x] **Zustand**: For lightweight, high-performance global state (e.g., UI preferences, search filters) without the boilerplate of Redux.
+- [x] **Zustand**: For lightweight, high-performance global state (e.g., UI preferences, search filters, authentication) without the boilerplate of Redux.
 
 ## 6. Testing & Quality Assurance
 - [ ] **Component Storybook**: Develop components in isolation to ensure visual consistency and documentation.
