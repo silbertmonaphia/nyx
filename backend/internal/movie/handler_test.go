@@ -1,4 +1,4 @@
-package main
+package movie
 
 import (
 	"bytes"
@@ -9,23 +9,25 @@ import (
 	"testing"
 	"time"
 
+	"nyx/internal/middleware"
+
 	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/gin-gonic/gin"
 )
 
-func setupTestRouter() *gin.Engine {
+func setupTestRouter(h *Handler) *gin.Engine {
 	gin.SetMode(gin.TestMode)
 	router := gin.New()
 	router.Use(gin.Recovery())
-	router.Use(corsMiddleware())
+	router.Use(middleware.CORS())
 
 	api := router.Group("/api")
 	{
-		api.GET("/health", healthHandler)
-		api.GET("/movies", getMoviesHandler)
-		api.POST("/movies", createMovieHandler)
-		api.PUT("/movies/:id", updateMovieHandler)
-		api.DELETE("/movies/:id", deleteMovieHandler)
+		api.GET("/health", h.HealthHandler)
+		api.GET("/movies", h.GetMoviesHandler)
+		api.POST("/movies", h.CreateMovieHandler)
+		api.PUT("/movies/:id", h.UpdateMovieHandler)
+		api.DELETE("/movies/:id", h.DeleteMovieHandler)
 	}
 	return router
 }
@@ -37,13 +39,13 @@ func TestHealthHandler(t *testing.T) {
 	}
 	defer mockDB.Close()
 
-	originalDB := db
-	db = mockDB
-	defer func() { db = originalDB }()
+	repo := NewRepository(mockDB)
+	service := NewService(repo)
+	h := NewHandler(service)
 
 	mock.ExpectPing()
 
-	router := setupTestRouter()
+	router := setupTestRouter(h)
 	req, _ := http.NewRequest("GET", "/api/health", nil)
 	rr := httptest.NewRecorder()
 	router.ServeHTTP(rr, req)
@@ -66,19 +68,17 @@ func TestHealthHandlerError(t *testing.T) {
 	}
 	defer mockDB.Close()
 
-	originalDB := db
-	db = mockDB
-	defer func() { db = originalDB }()
+	repo := NewRepository(mockDB)
+	service := NewService(repo)
+	h := NewHandler(service)
 
 	mock.ExpectPing().WillReturnError(fmt.Errorf("db connection failed"))
 
-	router := setupTestRouter()
+	router := setupTestRouter(h)
 	req, _ := http.NewRequest("GET", "/api/health", nil)
 	rr := httptest.NewRecorder()
 	router.ServeHTTP(rr, req)
 
-	// In Gin version, we still return 200 but with status "error" in body for health
-	// based on my implementation in main.go
 	if rr.Code != http.StatusOK {
 		t.Errorf("expected status 200, got %v", rr.Code)
 	}
@@ -97,9 +97,9 @@ func TestGetMoviesHandler(t *testing.T) {
 	}
 	defer mockDB.Close()
 
-	originalDB := db
-	db = mockDB
-	defer func() { db = originalDB }()
+	repo := NewRepository(mockDB)
+	service := NewService(repo)
+	h := NewHandler(service)
 
 	now := time.Now()
 	rows := sqlmock.NewRows([]string{"id", "title", "description", "rating", "created_at", "updated_at", "deleted_at"}).
@@ -108,7 +108,7 @@ func TestGetMoviesHandler(t *testing.T) {
 
 	mock.ExpectQuery("SELECT id, title, description, rating, created_at, updated_at, deleted_at FROM movies WHERE deleted_at IS NULL").WillReturnRows(rows)
 
-	router := setupTestRouter()
+	router := setupTestRouter(h)
 	req, _ := http.NewRequest("GET", "/api/movies", nil)
 	rr := httptest.NewRecorder()
 	router.ServeHTTP(rr, req)
@@ -131,9 +131,9 @@ func TestCreateMovieHandler(t *testing.T) {
 	}
 	defer mockDB.Close()
 
-	originalDB := db
-	db = mockDB
-	defer func() { db = originalDB }()
+	repo := NewRepository(mockDB)
+	service := NewService(repo)
+	h := NewHandler(service)
 
 	newMovie := Movie{
 		Title:       "Interstellar",
@@ -147,7 +147,7 @@ func TestCreateMovieHandler(t *testing.T) {
 		WithArgs(newMovie.Title, newMovie.Description, newMovie.Rating).
 		WillReturnRows(sqlmock.NewRows([]string{"id", "created_at", "updated_at"}).AddRow(1, now, now))
 
-	router := setupTestRouter()
+	router := setupTestRouter(h)
 	req, _ := http.NewRequest("POST", "/api/movies", bytes.NewBuffer(body))
 	rr := httptest.NewRecorder()
 	router.ServeHTTP(rr, req)
@@ -164,7 +164,8 @@ func TestCreateMovieHandler(t *testing.T) {
 }
 
 func TestCreateMovieHandlerValidation(t *testing.T) {
-	router := setupTestRouter()
+	h := NewHandler(nil) // service not needed for validation usually, but Gin will call it if validation passes
+	router := setupTestRouter(h)
 
 	// Case 1: Empty Title (Required)
 	body, _ := json.Marshal(map[string]interface{}{
@@ -198,9 +199,9 @@ func TestUpdateMovieHandler(t *testing.T) {
 	}
 	defer mockDB.Close()
 
-	originalDB := db
-	db = mockDB
-	defer func() { db = originalDB }()
+	repo := NewRepository(mockDB)
+	service := NewService(repo)
+	h := NewHandler(service)
 
 	updatedMovie := Movie{
 		Title:       "Inception Updated",
@@ -214,7 +215,7 @@ func TestUpdateMovieHandler(t *testing.T) {
 		WithArgs(updatedMovie.Title, updatedMovie.Description, updatedMovie.Rating, 1).
 		WillReturnRows(sqlmock.NewRows([]string{"created_at", "updated_at"}).AddRow(now, now))
 
-	router := setupTestRouter()
+	router := setupTestRouter(h)
 	req, _ := http.NewRequest("PUT", "/api/movies/1", bytes.NewBuffer(body))
 	rr := httptest.NewRecorder()
 	router.ServeHTTP(rr, req)
@@ -237,34 +238,20 @@ func TestDeleteMovieHandler(t *testing.T) {
 	}
 	defer mockDB.Close()
 
-	originalDB := db
-	db = mockDB
-	defer func() { db = originalDB }()
+	repo := NewRepository(mockDB)
+	service := NewService(repo)
+	h := NewHandler(service)
 
 	mock.ExpectExec("UPDATE movies SET deleted_at = CURRENT_TIMESTAMP WHERE id = \\$1 AND deleted_at IS NULL").
 		WithArgs(1).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 
-	router := setupTestRouter()
+	router := setupTestRouter(h)
 	req, _ := http.NewRequest("DELETE", "/api/movies/1", nil)
 	rr := httptest.NewRecorder()
 	router.ServeHTTP(rr, req)
 
 	if rr.Code != http.StatusNoContent {
 		t.Errorf("handler returned wrong status code: got %v want %v", rr.Code, http.StatusNoContent)
-	}
-}
-
-func TestCorsMiddleware(t *testing.T) {
-	router := setupTestRouter()
-	req, _ := http.NewRequest("OPTIONS", "/api/health", nil)
-	rr := httptest.NewRecorder()
-	router.ServeHTTP(rr, req)
-
-	if rr.Code != http.StatusOK {
-		t.Errorf("expected 200 for OPTIONS, got %v", rr.Code)
-	}
-	if rr.Header().Get("Access-Control-Allow-Origin") != "*" {
-		t.Errorf("expected CORS header, got %v", rr.Header().Get("Access-Control-Allow-Origin"))
 	}
 }
