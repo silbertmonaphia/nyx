@@ -6,6 +6,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/rs/zerolog/log"
+	"nyx/internal/platform/api"
 )
 
 type Handler struct {
@@ -41,7 +42,7 @@ func (h *Handler) GetMoviesHandler(c *gin.Context) {
 	queryParam := c.Query("q")
 	movies, err := h.service.GetMovies(c.Request.Context(), queryParam)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		api.AbortWithError(c, http.StatusInternalServerError, "Failed to retrieve movies", err.Error())
 		return
 	}
 
@@ -51,13 +52,13 @@ func (h *Handler) GetMoviesHandler(c *gin.Context) {
 func (h *Handler) CreateMovieHandler(c *gin.Context) {
 	var m Movie
 	if err := c.ShouldBindJSON(&m); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid request payload", "details": err.Error()})
+		api.AbortWithError(c, http.StatusBadRequest, "Invalid request payload", err.Error())
 		return
 	}
 
 	if err := h.service.CreateMovie(c.Request.Context(), &m); err != nil {
 		log.Error().Err(err).Msg("Error inserting movie")
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Database error"})
+		api.AbortWithError(c, http.StatusInternalServerError, "Database error", err.Error())
 		return
 	}
 
@@ -68,23 +69,23 @@ func (h *Handler) UpdateMovieHandler(c *gin.Context) {
 	idStr := c.Param("id")
 	id, err := strconv.Atoi(idStr)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid movie ID"})
+		api.AbortWithError(c, http.StatusBadRequest, "Invalid movie ID", nil)
 		return
 	}
 
 	var m Movie
 	if err := c.ShouldBindJSON(&m); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid request payload", "details": err.Error()})
+		api.AbortWithError(c, http.StatusBadRequest, "Invalid request payload", err.Error())
 		return
 	}
 
 	if err := h.service.UpdateMovie(c.Request.Context(), id, &m); err != nil {
 		if err.Error() == "movie not found" {
-			c.JSON(http.StatusNotFound, gin.H{"error": "Movie not found"})
+			api.AbortWithError(c, http.StatusNotFound, "Movie not found", nil)
 			return
 		}
 		log.Error().Err(err).Msg("Error updating movie")
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Database error"})
+		api.AbortWithError(c, http.StatusInternalServerError, "Database error", err.Error())
 		return
 	}
 
@@ -96,17 +97,17 @@ func (h *Handler) DeleteMovieHandler(c *gin.Context) {
 	idStr := c.Param("id")
 	id, err := strconv.Atoi(idStr)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid movie ID"})
+		api.AbortWithError(c, http.StatusBadRequest, "Invalid movie ID", nil)
 		return
 	}
 
 	if err := h.service.DeleteMovie(c.Request.Context(), id); err != nil {
 		if err.Error() == "movie not found" {
-			c.JSON(http.StatusNotFound, gin.H{"error": "Movie not found"})
+			api.AbortWithError(c, http.StatusNotFound, "Movie not found", nil)
 			return
 		}
 		log.Error().Err(err).Msg("Error deleting movie")
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Database error"})
+		api.AbortWithError(c, http.StatusInternalServerError, "Database error", err.Error())
 		return
 	}
 

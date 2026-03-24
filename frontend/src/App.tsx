@@ -8,6 +8,7 @@ import { useMovies } from './features/movies/hooks/useMovies';
 import { MovieList } from './features/movies/components/MovieList';
 import { MovieForm } from './features/movies/components/MovieForm';
 import { useMovieUiStore } from './features/movies/store/movieUiStore';
+import { ToastContainer } from './components/ui/ToastContainer';
 
 function App() {
   const { 
@@ -47,6 +48,7 @@ function App() {
 
   return (
     <>
+      <ToastContainer />
       <section id="center">
         <div className="hero">
           <img src={heroImg} className="base" width="170" height="179" alt="" />
