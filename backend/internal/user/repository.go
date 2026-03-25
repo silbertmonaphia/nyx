@@ -35,9 +35,9 @@ func (r *sqlRepository) CreateUser(ctx context.Context, u *User) error {
 }
 
 func (r *sqlRepository) GetUserByUsername(ctx context.Context, username string) (*User, error) {
-	query := `SELECT id, username, email, password_hash, created_at, updated_at FROM users WHERE username = $1`
+	query := `SELECT id, username, email, password_hash, created_at, updated_at, deleted_at FROM users WHERE username = $1 AND deleted_at IS NULL`
 	var u User
-	err := r.db.QueryRowContext(ctx, query, username).Scan(&u.ID, &u.Username, &u.Email, &u.PasswordHash, &u.CreatedAt, &u.UpdatedAt)
+	err := r.db.QueryRowContext(ctx, query, username).Scan(&u.ID, &u.Username, &u.Email, &u.PasswordHash, &u.CreatedAt, &u.UpdatedAt, &u.DeletedAt)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, ErrUserNotFound
@@ -48,9 +48,9 @@ func (r *sqlRepository) GetUserByUsername(ctx context.Context, username string) 
 }
 
 func (r *sqlRepository) GetUserByID(ctx context.Context, id int) (*User, error) {
-	query := `SELECT id, username, email, password_hash, created_at, updated_at FROM users WHERE id = $1`
+	query := `SELECT id, username, email, password_hash, created_at, updated_at, deleted_at FROM users WHERE id = $1 AND deleted_at IS NULL`
 	var u User
-	err := r.db.QueryRowContext(ctx, query, id).Scan(&u.ID, &u.Username, &u.Email, &u.PasswordHash, &u.CreatedAt, &u.UpdatedAt)
+	err := r.db.QueryRowContext(ctx, query, id).Scan(&u.ID, &u.Username, &u.Email, &u.PasswordHash, &u.CreatedAt, &u.UpdatedAt, &u.DeletedAt)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, ErrUserNotFound
