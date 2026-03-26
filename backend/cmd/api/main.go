@@ -75,7 +75,8 @@ func main() {
 	api := router.Group("/api")
 	{
 		api.GET("/health", movieHandler.HealthHandler)
-		api.GET("/swagger/*any", ginSwagger.WrapHandler(swaggerFiles.Handler))
+		url := ginSwagger.URL("/api/swagger/doc.json")
+		api.GET("/swagger/*any", ginSwagger.WrapHandler(swaggerFiles.Handler, url))
 
 		// Auth routes
 		api.POST("/register", userHandler.Register)
