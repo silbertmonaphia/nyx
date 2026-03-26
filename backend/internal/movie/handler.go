@@ -17,6 +17,13 @@ func NewHandler(service Service) *Handler {
 	return &Handler{service: service}
 }
 
+// HealthHandler checks the health of the API and database
+// @Summary Check health
+// @Description Check the status of the API and its database connection
+// @Tags health
+// @Produce json
+// @Success 200 {object} map[string]interface{}
+// @Router /health [get]
 func (h *Handler) HealthHandler(c *gin.Context) {
 	dbStatus := "up"
 	if err := h.service.CheckHealth(c.Request.Context()); err != nil {
@@ -38,6 +45,15 @@ func (h *Handler) HealthHandler(c *gin.Context) {
 	})
 }
 
+// GetMoviesHandler retrieves a list of movies
+// @Summary Get movies
+// @Description Retrieve a list of movies, optionally filtered by title or description
+// @Tags movies
+// @Produce json
+// @Param q query string false "Search query"
+// @Success 200 {array} Movie
+// @Failure 500 {object} api.ErrorResponse
+// @Router /movies [get]
 func (h *Handler) GetMoviesHandler(c *gin.Context) {
 	queryParam := c.Query("q")
 	movies, err := h.service.GetMovies(c.Request.Context(), queryParam)
@@ -49,6 +65,19 @@ func (h *Handler) GetMoviesHandler(c *gin.Context) {
 	c.JSON(http.StatusOK, movies)
 }
 
+// CreateMovieHandler adds a new movie to the system
+// @Summary Create a movie
+// @Description Create a new movie record
+// @Tags movies
+// @Accept json
+// @Produce json
+// @Param movie body Movie true "Movie object"
+// @Success 201 {object} Movie
+// @Failure 400 {object} api.ErrorResponse
+// @Failure 401 {object} api.ErrorResponse
+// @Failure 500 {object} api.ErrorResponse
+// @Security ApiKeyAuth
+// @Router /movies [post]
 func (h *Handler) CreateMovieHandler(c *gin.Context) {
 	var m Movie
 	if err := c.ShouldBindJSON(&m); err != nil {
@@ -65,6 +94,21 @@ func (h *Handler) CreateMovieHandler(c *gin.Context) {
 	c.JSON(http.StatusCreated, m)
 }
 
+// UpdateMovieHandler updates an existing movie record
+// @Summary Update a movie
+// @Description Update the details of an existing movie
+// @Tags movies
+// @Accept json
+// @Produce json
+// @Param id path int true "Movie ID"
+// @Param movie body Movie true "Updated movie object"
+// @Success 200 {object} Movie
+// @Failure 400 {object} api.ErrorResponse
+// @Failure 401 {object} api.ErrorResponse
+// @Failure 404 {object} api.ErrorResponse
+// @Failure 500 {object} api.ErrorResponse
+// @Security ApiKeyAuth
+// @Router /movies/{id} [put]
 func (h *Handler) UpdateMovieHandler(c *gin.Context) {
 	idStr := c.Param("id")
 	id, err := strconv.Atoi(idStr)
@@ -93,6 +137,18 @@ func (h *Handler) UpdateMovieHandler(c *gin.Context) {
 	c.JSON(http.StatusOK, m)
 }
 
+// DeleteMovieHandler removes a movie from the system
+// @Summary Delete a movie
+// @Description Remove a movie record by ID
+// @Tags movies
+// @Param id path int true "Movie ID"
+// @Success 204 "No Content"
+// @Failure 400 {object} api.ErrorResponse
+// @Failure 401 {object} api.ErrorResponse
+// @Failure 404 {object} api.ErrorResponse
+// @Failure 500 {object} api.ErrorResponse
+// @Security ApiKeyAuth
+// @Router /movies/{id} [delete]
 func (h *Handler) DeleteMovieHandler(c *gin.Context) {
 	idStr := c.Param("id")
 	id, err := strconv.Atoi(idStr)

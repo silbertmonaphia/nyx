@@ -13,10 +13,24 @@ import (
 	"nyx/internal/platform/database"
 	"nyx/internal/user"
 
+	_ "nyx/docs"
+	swaggerFiles "github.com/swaggo/files"
+	ginSwagger "github.com/swaggo/gin-swagger"
+
 	"github.com/gin-gonic/gin"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 )
+
+// @title Nyx API
+// @version 1.0
+// @description Minimalist media rating application API.
+// @host localhost:8080
+// @BasePath /api
+
+// @securityDefinitions.apikey ApiKeyAuth
+// @in header
+// @name Authorization
 
 func main() {
 	// Configure zerolog
@@ -61,6 +75,7 @@ func main() {
 	api := router.Group("/api")
 	{
 		api.GET("/health", movieHandler.HealthHandler)
+		api.GET("/swagger/*any", ginSwagger.WrapHandler(swaggerFiles.Handler))
 
 		// Auth routes
 		api.POST("/register", userHandler.Register)

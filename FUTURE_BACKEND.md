@@ -46,7 +46,7 @@ Improve data safety and developer speed.
 
 ## 5. Observability & Documentation
 Make the system transparent and easy to integrate with.
-- [ ] **Swagger (OpenAPI 3.0)**: Use `swaggo/swag` to auto-generate interactive API documentation.
+- [x] **Swagger (OpenAPI 3.0)**: Use `swaggo/swag` to auto-generate interactive API documentation.
 - [ ] **Prometheus Metrics**: Export latency, error rates, and request counts via a `/metrics` endpoint.
 - [ ] **Contextual Logging**: Pass `context` through layers to trace requests and include Request IDs in logs.
 
