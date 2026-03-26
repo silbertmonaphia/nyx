@@ -5,7 +5,7 @@ This document outlines the architectural and technical evolution of the Nyx back
 ## 1. Core Framework & Architecture
 Advanced projects prioritize scalability and separation of concerns through modular design.
 - [x] **Refactor to Gin Gonic**: Replace standard `net/http` for better routing, middleware management, and JSON binding performance.
-- [ ] **Project Restructuring (Clean Architecture)**:
+- [x] **Project Restructuring (Clean Architecture)**:
   ```text
   backend/
   ├── cmd/api/          # Entry point
@@ -22,7 +22,7 @@ Advanced projects prioritize scalability and separation of concerns through modu
 ## 2. Validation & Error Handling
 Never trust the client. Implement robust validation at the entry point.
 - [x] **Struct-Based Validation**: Use `go-playground/validator` with struct tags (e.g., `validate:"required,min=1,max=100"`).
-- [ ] **Standardized Error Responses**: Implement a global error handler that returns consistent JSON structures:
+- [x] **Standardized Error Responses**: Implement a global error handler that returns consistent JSON structures:
   ```json
   {
     "error": "Validation Failed",
