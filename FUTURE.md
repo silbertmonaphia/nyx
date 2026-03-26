@@ -13,8 +13,10 @@ Advanced systems must be observable and handle shutdowns gracefully.
 Move beyond basic endpoints to a robust, documented API.
 - [ ] **OpenAPI/Swagger**: Integrate `swaggo/swag` to auto-generate documentation and a Swagger UI.
 - [x] **Authentication**: Implement JWT-based authentication for movie creation, editing, and deletion.
+- [x] **Project Restructuring (Clean Architecture)**: Move from a single-file script to a modular, domain-driven structure for better maintainability.
 - [ ] **Rate Limiting**: Add middleware to prevent API abuse.
 - [x] **Middleware Stack**: Refactor routing to use a proper middleware chain for CORS, Logging, and Recovery.
+- [x] **Standardized Error Responses**: Implement consistent JSON error formats across all endpoints.
 
 ## 3. Database Lifecycle Management
 Ensure schema changes are trackable and safe.
@@ -24,10 +26,14 @@ Ensure schema changes are trackable and safe.
 
 ## 4. Modern Frontend Architecture
 Improve the React developer experience and application performance.
-- [ ] **Server State Management**: Replace manual `fetch` in `useEffect` with **TanStack Query (React Query)** for automatic caching and re-fetching.
-- [ ] **Zod Validation**: Use `zod` for runtime type validation of API responses and form inputs.
-- [ ] **Tailwind CSS**: Integrate Tailwind for more scalable and consistent styling patterns.
-- [x] **Global Error Handling**: Implement React Error Boundaries and a global toast notification system for API errors.
+- [x] **TypeScript Migration**: Full type safety for components, props, and API responses.
+- [x] **Feature-Based Architecture**: Modular domain-driven folder structure (`src/features/`).
+- [x] **Server State Management**: Replaced manual `fetch` in `useEffect` with **TanStack Query (React Query)** for automatic caching and re-fetching.
+- [x] **Zod Validation**: Implemented runtime type validation for API responses and forms using `zod` and `react-hook-form`.
+- [x] **Global State Management**: Implemented **Zustand** for lightweight and high-performance client state.
+- [x] **Tailwind CSS Integration**: Utility-first styling for consistent design patterns.
+- [x] **Global Error Handling**: React Error Boundaries and a global toast notification system.
+- [ ] **UI Component Library**: Integrate **Shadcn UI** or **Radix UI** for accessible, high-quality primitives.
 
 ## 5. Developer Experience (DX) & CI/CD
 Automate quality control and deployment.
