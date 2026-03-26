@@ -34,7 +34,7 @@ Never trust the client. Implement robust validation at the entry point.
 ## 3. Security & Authentication
 Secure the API against unauthorized access.
 - [x] **JWT Authentication**: Implement JSON Web Tokens for secure session management.
-- [ ] **User Management**: Create a `users` table with hashed passwords using `bcrypt`.
+- [x] **User Management**: Created a `users` table with hashed passwords using `bcrypt`.
 - [x] **Auth Middleware**: Protect write/delete routes while keeping read routes public (or as configured).
 - [ ] **Rate Limiting**: Add `uber-go/ratelimit` to prevent API abuse.
 
@@ -52,9 +52,9 @@ Make the system transparent and easy to integrate with.
 
 ## 6. Configuration & Environment
 - [ ] **Viper Configuration**: Use `spf13/viper` for multi-source configuration (env, .yaml, .env).
-- [ ] **Graceful Shutdown (Advanced)**: Ensure all background tasks and database transactions complete before exit.
+- [x] **Graceful Shutdown**: Ensured background tasks and database connections are closed correctly on exit.
 
 ## 7. Quality Assurance
-- [ ] **Unit Testing (Deep)**: Use `testify` and `mockery` to test business logic in isolation from the database.
+- [x] **Unit Testing (Core)**: Implemented tests for handlers and services using `sqlmock`.
 - [ ] **Integration Testing**: Use `testcontainers-go` to run real PostgreSQL instances during tests.
 - [ ] **GolangCI-Lint**: Integrate a strict linting pipeline (revive, gosec, staticcheck).
