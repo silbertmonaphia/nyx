@@ -33,3 +33,6 @@ db_data/
 .env
 .gemini/
 commit_message.txt
+.qwen/
+QWEN.md
+.qwenignore

@@ -16,7 +16,7 @@ A minimalist media rating application with a Go backend and a React frontend.
 - **Backend API**: Robust Go backend with PostgreSQL and auto-migrations.
 - **TypeScript**: Full-stack type safety with TypeScript in the frontend.
 - **Validation**: Runtime validation with Zod (frontend) and Go structs (backend).
-- **Containerized**: Production-ready multi-stage Docker builds.
+- **Containerized**: Production-ready Docker builds with pre-compiled binaries.
 
 ## Getting Started
 
@@ -24,6 +24,13 @@ A minimalist media rating application with a Go backend and a React frontend.
 
 - [Docker](https://www.docker.com/)
 - [Docker Compose](https://docs.docker.com/compose/)
+- [Go 1.26+](https://go.dev/dl/)
+- [Node.js 22+](https://nodejs.org/)
+
+> **Tip:** To avoid using `sudo` with Docker, add your user to the docker group:
+> ```bash
+> sudo usermod -aG docker $USER && newgrp docker
+> ```
 
 ### Development
 
@@ -39,14 +46,19 @@ A minimalist media rating application with a Go backend and a React frontend.
    # Edit .env if you want to change default credentials
    ```
 
-3. Start the services for development:
+3. Build and start the services:
    ```bash
-   docker compose up --build
+   # Build backend binary (Alpine requires static binary)
+   (cd backend && CGO_ENABLED=0 go build -o main ./cmd/api)
+   
+   # Start all services
+   sudo docker compose up --build
    ```
 
 4. Access the application:
    - Frontend: `http://localhost:5173` (with HMR)
    - API: `http://localhost:8080/api/movies`
+   - Swagger UI: `http://localhost:8080/api/swagger/index.html`
 
 ### Production Deployment
 
@@ -55,7 +67,7 @@ To deploy Nyx in a production environment:
 1. Build and run with the production configuration:
    ```bash
    # Make sure to set VITE_API_URL to your production domain if different
-   VITE_API_URL=http://your-production-ip/api docker compose -f docker-compose.prod.yml up -d --build
+   VITE_API_URL=http://your-production-ip/api sudo docker compose -f docker-compose.prod.yml up -d --build
    ```
 
 2. The application will be accessible on port 80:
