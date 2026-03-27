@@ -70,6 +70,7 @@ func main() {
 	router.Use(gin.Recovery())
 	router.Use(middleware.Logging())
 	router.Use(middleware.CORS())
+	router.Use(middleware.DefaultRateLimit())
 
 	// API Routes
 	api := router.Group("/api")

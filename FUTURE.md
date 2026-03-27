@@ -14,7 +14,7 @@ Move beyond basic endpoints to a robust, documented API.
 - [x] **OpenAPI/Swagger**: Integrate `swaggo/swag` to auto-generate documentation and a Swagger UI.
 - [x] **Authentication**: Implement JWT-based authentication for movie creation, editing, and deletion.
 - [x] **Project Restructuring (Clean Architecture)**: Move from a single-file script to a modular, domain-driven structure for better maintainability.
-- [ ] **Rate Limiting**: Add middleware to prevent API abuse.
+- [x] **Rate Limiting**: Add middleware to prevent API abuse.
 - [x] **Middleware Stack**: Refactor routing to use a proper middleware chain for CORS, Logging, and Recovery.
 - [x] **Standardized Error Responses**: Implement consistent JSON error formats across all endpoints.
 

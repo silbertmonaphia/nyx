@@ -36,7 +36,7 @@ Secure the API against unauthorized access.
 - [x] **JWT Authentication**: Implement JSON Web Tokens for secure session management.
 - [x] **User Management**: Created a `users` table with hashed passwords using `bcrypt`.
 - [x] **Auth Middleware**: Protect write/delete routes while keeping read routes public (or as configured).
-- [ ] **Rate Limiting**: Add `uber-go/ratelimit` to prevent API abuse.
+- [x] **Rate Limiting**: Implemented token bucket algorithm middleware to prevent API abuse.
 
 ## 4. Database Layer Enhancement
 Improve data safety and developer speed.
