@@ -79,7 +79,7 @@ To deploy Nyx in a production environment:
 ### Backend (Go)
 ```bash
 cd backend
-go test -v .
+go test -v ./...
 ```
 
 ### Frontend (Vitest)
