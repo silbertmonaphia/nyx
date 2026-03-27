@@ -52,7 +52,7 @@ A minimalist media rating application with a Go backend and a React frontend.
    (cd backend && CGO_ENABLED=0 go build -o main ./cmd/api)
    
    # Start all services
-   sudo docker compose up --build
+   sudo docker compose up --build -d
    ```
 
 4. Access the application:
