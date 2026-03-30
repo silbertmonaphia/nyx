@@ -22,7 +22,7 @@ type Claims struct {
 func GenerateToken(userID int, username string) (string, error) {
 	secret := os.Getenv("JWT_SECRET")
 	if secret == "" {
-		secret = "your-default-secret-key-change-it-in-prod" // Fallback for local dev
+		secret = "your-default-secret-key-change-it-in-prod"
 	}
 
 	claims := Claims{

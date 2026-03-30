@@ -60,6 +60,15 @@ A minimalist media rating application with a Go backend and a React frontend.
    - API: `http://localhost:8080/api/movies`
    - Swagger UI: `http://localhost:8080/api/swagger/index.html`
 
+5. Access the database:
+   ```bash
+   # Connect to PostgreSQL (default credentials: postgres/postgres)
+   PGPASSWORD=postgres psql -h localhost -p 5433 -U postgres -d nyx
+   
+   # Or via Docker container
+   sudo docker compose exec db psql -U postgres -d nyx
+   ```
+
 ### Production Deployment
 
 To deploy Nyx in a production environment:

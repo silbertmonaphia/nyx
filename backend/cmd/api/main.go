@@ -10,12 +10,14 @@ import (
 
 	"nyx/internal/middleware"
 	"nyx/internal/movie"
+	"nyx/internal/platform/config"
 	"nyx/internal/platform/database"
 	"nyx/internal/user"
 
 	_ "nyx/docs"
 	swaggerFiles "github.com/swaggo/files"
 	ginSwagger "github.com/swaggo/gin-swagger"
+	"github.com/zsais/go-gin-prometheus"
 
 	"github.com/gin-gonic/gin"
 	"github.com/rs/zerolog"
@@ -37,20 +39,25 @@ func main() {
 	zerolog.TimeFieldFormat = zerolog.TimeFormatUnix
 	log.Logger = log.Output(os.Stdout)
 
-	dbURL := os.Getenv("DB_URL")
-	if dbURL == "" {
+	// Load configuration
+	cfg, err := config.Load()
+	if err != nil {
+		log.Fatal().Err(err).Msg("Could not load configuration")
+	}
+
+	if cfg.DBURL == "" {
 		log.Fatal().Msg("DB_URL environment variable is required")
 	}
 
 	// Initialize database
-	db, err := database.New(dbURL)
+	db, err := database.New(cfg.DBURL)
 	if err != nil {
 		log.Fatal().Err(err).Msg("Could not connect to database")
 	}
 	defer db.Close()
 
 	// Run migrations
-	database.RunMigrations(dbURL)
+	database.RunMigrations(cfg.DBURL)
 
 	// Initialize Movie domain
 	movieRepo := movie.NewRepository(db)
@@ -63,8 +70,12 @@ func main() {
 	userHandler := user.NewHandler(userService)
 
 	// Set up Gin
-	gin.SetMode(gin.ReleaseMode)
+	gin.SetMode(cfg.GinMode)
 	router := gin.New()
+
+	// Metrics
+	p := ginprometheus.NewPrometheus("gin")
+	p.Use(router)
 
 	// Middleware
 	router.Use(gin.Recovery())
@@ -99,7 +110,7 @@ func main() {
 		}
 	}
 
-	port := ":8080"
+	port := ":" + cfg.Port
 	server := &http.Server{
 		Addr:    port,
 		Handler: router,

@@ -9,7 +9,6 @@ RUN npm install
 
 # Copy source code and build the production version
 COPY . .
-# We can pass VITE_API_URL as an build argument if needed
 ARG VITE_API_URL
 ENV VITE_API_URL=$VITE_API_URL
 RUN npm run build
@@ -17,12 +16,21 @@ RUN npm run build
 # Production stage
 FROM nginx:stable-alpine
 
+# Use a non-root user
+RUN touch /var/run/nginx.pid && \
+    chown -R nginx:nginx /var/run/nginx.pid && \
+    chown -R nginx:nginx /var/cache/nginx && \
+    chown -R nginx:nginx /var/log/nginx && \
+    chown -R nginx:nginx /etc/nginx/conf.d
+
+USER nginx
+
 # Copy the built files from the build stage to Nginx's static file directory
 COPY --from=build /app/dist /usr/share/nginx/html
 
-# Copy a custom Nginx configuration to handle SPA routing
+# Copy a custom Nginx configuration
 COPY nginx.conf /etc/nginx/conf.d/default.conf
 
-EXPOSE 80
+EXPOSE 8080
 
 CMD ["nginx", "-g", "daemon off;"]
