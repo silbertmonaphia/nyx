@@ -1,24 +1,25 @@
 package database
 
 import (
-	"database/sql"
+	"context"
 	"os"
 	"time"
 
 	"github.com/golang-migrate/migrate/v4"
 	_ "github.com/golang-migrate/migrate/v4/database/postgres"
 	_ "github.com/golang-migrate/migrate/v4/source/file"
+	"github.com/jmoiron/sqlx"
 	_ "github.com/lib/pq"
 	"github.com/rs/zerolog/log"
 )
 
-func New(dbURL string) (*sql.DB, error) {
-	var db *sql.DB
+func New(dbURL string) (*sqlx.DB, error) {
+	var db *sqlx.DB
 	var err error
 
 	// Retry loop for database connection
 	for i := 0; i < 10; i++ {
-		db, err = sql.Open("postgres", dbURL)
+		db, err = sqlx.Open("postgres", dbURL)
 		if err == nil {
 			err = db.Ping()
 			if err == nil {
@@ -35,6 +36,10 @@ func New(dbURL string) (*sql.DB, error) {
 	}
 
 	return nil, err
+}
+
+func BeginTx(ctx context.Context, db *sqlx.DB) (*sqlx.Tx, error) {
+	return db.BeginTxx(ctx, nil)
 }
 
 func RunMigrations(dbURL string) {

@@ -13,6 +13,7 @@ import (
 
 	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/gin-gonic/gin"
+	"github.com/jmoiron/sqlx"
 )
 
 func setupTestRouter(h *Handler) *gin.Engine {
@@ -39,7 +40,7 @@ func TestHealthHandler(t *testing.T) {
 	}
 	defer mockDB.Close()
 
-	repo := NewRepository(mockDB)
+	repo := NewRepository(sqlx.NewDb(mockDB, "postgres"))
 	service := NewService(repo)
 	h := NewHandler(service)
 
@@ -68,7 +69,7 @@ func TestHealthHandlerError(t *testing.T) {
 	}
 	defer mockDB.Close()
 
-	repo := NewRepository(mockDB)
+	repo := NewRepository(sqlx.NewDb(mockDB, "postgres"))
 	service := NewService(repo)
 	h := NewHandler(service)
 
@@ -97,7 +98,7 @@ func TestGetMoviesHandler(t *testing.T) {
 	}
 	defer mockDB.Close()
 
-	repo := NewRepository(mockDB)
+	repo := NewRepository(sqlx.NewDb(mockDB, "postgres"))
 	service := NewService(repo)
 	h := NewHandler(service)
 
@@ -131,7 +132,7 @@ func TestCreateMovieHandler(t *testing.T) {
 	}
 	defer mockDB.Close()
 
-	repo := NewRepository(mockDB)
+	repo := NewRepository(sqlx.NewDb(mockDB, "postgres"))
 	service := NewService(repo)
 	h := NewHandler(service)
 
@@ -199,7 +200,7 @@ func TestUpdateMovieHandler(t *testing.T) {
 	}
 	defer mockDB.Close()
 
-	repo := NewRepository(mockDB)
+	repo := NewRepository(sqlx.NewDb(mockDB, "postgres"))
 	service := NewService(repo)
 	h := NewHandler(service)
 
@@ -238,7 +239,7 @@ func TestDeleteMovieHandler(t *testing.T) {
 	}
 	defer mockDB.Close()
 
-	repo := NewRepository(mockDB)
+	repo := NewRepository(sqlx.NewDb(mockDB, "postgres"))
 	service := NewService(repo)
 	h := NewHandler(service)
 
