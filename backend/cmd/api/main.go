@@ -79,6 +79,7 @@ func main() {
 
 	// Middleware
 	router.Use(gin.Recovery())
+	router.Use(middleware.RequestID())
 	router.Use(middleware.Logging())
 	router.Use(middleware.CORS())
 	router.Use(middleware.DefaultRateLimit())

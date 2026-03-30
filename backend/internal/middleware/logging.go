@@ -19,7 +19,10 @@ func Logging() gin.HandlerFunc {
 			path = path + "?" + raw
 		}
 
+		requestID := GetRequestID(c)
+
 		log.Info().
+			Str("request_id", requestID).
 			Str("method", c.Request.Method).
 			Str("path", path).
 			Int("status", c.Writer.Status()).
