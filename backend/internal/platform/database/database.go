@@ -21,6 +21,12 @@ func New(dbURL string) (*sqlx.DB, error) {
 	for i := 0; i < 10; i++ {
 		db, err = sqlx.Open("postgres", dbURL)
 		if err == nil {
+			// Configure connection pool
+			db.SetMaxOpenConns(25)
+			db.SetMaxIdleConns(5)
+			db.SetConnMaxLifetime(5 * time.Minute)
+			db.SetConnMaxIdleTime(5 * time.Minute)
+
 			err = db.Ping()
 			if err == nil {
 				log.Info().Msg("Successfully connected to the database")
