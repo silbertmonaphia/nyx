@@ -41,7 +41,7 @@ Vanilla CSS is powerful but difficult to scale across large teams and components
 ## 6. Testing & Quality Assurance
 - [x] **Component Testing**: Implemented unit and integration tests for React components using **Vitest** and **React Testing Library**.
 - [ ] **Component Storybook**: Develop components in isolation to ensure visual consistency and documentation.
-- [ ] **Playwright/Cypress**: Add End-to-End (E2E) tests for critical user journeys (e.g., "User can add and then delete a movie").
+- [x] **Playwright/Cypress**: Add End-to-End (E2E) tests for critical user journeys (e.g., "User can add and then delete a movie").
 - [ ] **Accessibility (a11y) Auditing**: Integrate `eslint-plugin-jsx-a11y` and automated a11y testing.
 
 ## 7. Performance & Optimization
