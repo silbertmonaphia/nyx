@@ -99,8 +99,8 @@ describe('App', () => {
     
     render(<App />);
     
-    await userEvent.click(screen.getByText('+ Add Movie'));
-    await userEvent.type(screen.getByPlaceholderText('Title'), 'New Test Movie');
+    await userEvent.click(screen.getByText('Add Movie'));
+    await userEvent.type(screen.getByPlaceholderText('Movie title'), 'New Test Movie');
     await userEvent.click(screen.getByRole('button', { name: /save movie/i }));
 
     await waitFor(() => {
@@ -129,7 +129,7 @@ describe('App', () => {
     await userEvent.click(screen.getByTitle('Edit'));
 
     expect(screen.getByRole('heading', { name: 'Edit Movie' })).toBeInTheDocument();
-    expect(screen.getByPlaceholderText('Title')).toHaveValue('Movie to Edit');
+    expect(screen.getByPlaceholderText('Movie title')).toHaveValue('Movie to Edit');
   });
 
   it('can delete a movie (when authenticated)', async () => {

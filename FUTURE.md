@@ -5,7 +5,7 @@ This document outlines the planned improvements to transition Nyx from a minimal
 ## 1. Reliability & Observability (Ops)
 Advanced systems must be observable and handle shutdowns gracefully.
 - [x] **Structured Logging**: Replace standard `log` with `rs/zerolog` or `uber-go/zap` for JSON-formatted logs.
-- [ ] **Metrics**: Implement a `/metrics` endpoint using `prometheus/client_golang` for real-time monitoring.
+- [x] **Metrics**: Implement a `/metrics` endpoint using `prometheus/client_golang` for real-time monitoring.
 - [x] **Graceful Shutdown**: Implement `context` and signal handling (`SIGTERM`, `SIGINT`) in the Go backend to finish active requests before exiting.
 - [x] **Health Checks**: Expand `/api/health` to check database connectivity status beyond just the API being "up."
 
@@ -33,14 +33,14 @@ Improve the React developer experience and application performance.
 - [x] **Global State Management**: Implemented **Zustand** for lightweight and high-performance client state.
 - [x] **Tailwind CSS Integration**: Utility-first styling for consistent design patterns.
 - [x] **Global Error Handling**: React Error Boundaries and a global toast notification system.
-- [ ] **UI Component Library**: Integrate **Shadcn UI** or **Radix UI** for accessible, high-quality primitives.
+- [x] **UI Component Library**: Integrate **Shadcn UI** or **Radix UI** for accessible, high-quality primitives.
 
 ## 5. Developer Experience (DX) & CI/CD
 Automate quality control and deployment.
-- [ ] **GitHub Actions**: Create a CI pipeline to run `go test` and `npm test` on every pull request.
+- [x] **GitHub Actions**: Create a CI pipeline to run `go test` and `npm test` on every pull request.
 - [ ] **Linting**: Add `golangci-lint` for Go and tighten `eslint` rules for React.
-- [ ] **Kubernetes Manifests**: Draft `Deployment`, `Service`, and `Ingress` YAMLs for seamless production deployment.
-- [ ] **Environment Configuration**: Use a more robust configuration loader (like `spf13/viper`) for the backend.
+- [x] **Kubernetes Manifests**: Draft `Deployment`, `Service`, and `Ingress` YAMLs for seamless production deployment.
+- [x] **Environment Configuration**: Use a more robust configuration loader (like `spf13/viper`) for the backend.
 
 ---
 *Nyx: Minimalist by design, powerful by choice.*

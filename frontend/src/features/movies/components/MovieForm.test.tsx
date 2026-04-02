@@ -8,21 +8,21 @@ describe('MovieForm', () => {
   it('renders correctly for adding a new movie', () => {
     render(<MovieForm title="New Movie" onSubmit={vi.fn()} onCancel={vi.fn()} />);
     expect(screen.getByText('New Movie')).toBeInTheDocument();
-    expect(screen.getByPlaceholderText('Title')).toHaveValue('');
+    expect(screen.getByPlaceholderText('Movie title')).toHaveValue('');
   });
 
   it('renders correctly for editing an existing movie', () => {
     const movie: Movie = { id: 1, title: 'Existing Movie', description: 'Existing Desc', rating: 7 };
     render(<MovieForm title="Edit Movie" movie={movie} onSubmit={vi.fn()} onCancel={vi.fn()} />);
     expect(screen.getByText('Edit Movie')).toBeInTheDocument();
-    expect(screen.getByPlaceholderText('Title')).toHaveValue('Existing Movie');
+    expect(screen.getByPlaceholderText('Movie title')).toHaveValue('Existing Movie');
   });
 
   it('calls onSubmit with form data when creating a movie', async () => {
     const handleSubmit = vi.fn();
     render(<MovieForm title="New Movie" onSubmit={handleSubmit} onCancel={vi.fn()} />);
     
-    await userEvent.type(screen.getByPlaceholderText('Title'), 'New Film');
+    await userEvent.type(screen.getByPlaceholderText('Movie title'), 'New Film');
     await userEvent.type(screen.getByPlaceholderText('Description'), 'A great film.');
     
     fireEvent.submit(screen.getByRole('button', { name: /save movie/i }));

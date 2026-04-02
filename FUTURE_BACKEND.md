@@ -40,18 +40,18 @@ Secure the API against unauthorized access.
 
 ## 4. Database Layer Enhancement
 Improve data safety and developer speed.
-- [ ] **GORM or SQLX**: Transition to an ORM or a typed SQL builder for safer queries and easier mapping.
-- [ ] **Transaction Management**: Ensure atomic operations for complex logic.
+- [x] **GORM or SQLX**: Transition to an ORM or a typed SQL builder for safer queries and easier mapping.
+- [x] **Transaction Management**: Ensure atomic operations for complex logic.
 - [ ] **Connection Pooling**: Tune PostgreSQL connection pool settings for production loads.
 
 ## 5. Observability & Documentation
 Make the system transparent and easy to integrate with.
 - [x] **Swagger (OpenAPI 3.0)**: Use `swaggo/swag` to auto-generate interactive API documentation.
-- [ ] **Prometheus Metrics**: Export latency, error rates, and request counts via a `/metrics` endpoint.
-- [ ] **Contextual Logging**: Pass `context` through layers to trace requests and include Request IDs in logs.
+- [x] **Prometheus Metrics**: Export latency, error rates, and request counts via a `/metrics` endpoint.
+- [x] **Contextual Logging**: Pass `context` through layers to trace requests and include Request IDs in logs.
 
 ## 6. Configuration & Environment
-- [ ] **Viper Configuration**: Use `spf13/viper` for multi-source configuration (env, .yaml, .env).
+- [x] **Viper Configuration**: Use `spf13/viper` for multi-source configuration (env, .yaml, .env).
 - [x] **Graceful Shutdown**: Ensured background tasks and database connections are closed correctly on exit.
 
 ## 7. Quality Assurance

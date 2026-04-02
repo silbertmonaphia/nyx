@@ -32,7 +32,7 @@ Managing complex form state and validation manually is a common source of bugs.
 ## 4. Styling & Design System
 Vanilla CSS is powerful but difficult to scale across large teams and components.
 - [x] **Tailwind CSS**: Integrate for rapid, utility-first styling that ensures consistency.
-- [ ] **Shadcn UI / Radix UI**: Adopt headless UI primitives to ensure accessibility (WAI-ARIA) and high-quality interactive components (Modals, Toasts, Tooltips).
+- [x] **Shadcn UI / Radix UI**: Adopt headless UI primitives to ensure accessibility (WAI-ARIA) and high-quality interactive components (Modals, Toasts, Tooltips).
 - [ ] **CSS Modules or Vanilla Extract**: For component-specific styles that require complex logic while maintaining type safety.
 
 ## 5. Global State Management
