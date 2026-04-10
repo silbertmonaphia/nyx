@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"testing"
+	"time"
 
 	"github.com/golang-migrate/migrate/v4"
 	_ "github.com/golang-migrate/migrate/v4/database/postgres"
@@ -30,7 +31,7 @@ func StartPostgres(ctx context.Context) (*TestDB, error) {
 		testcontainers.WithWaitStrategy(
 			wait.ForLog("database system is ready to accept connections").
 				WithOccurrence(1).
-				WithStartupTimeout(60),
+				WithStartupTimeout(60 * time.Second),
 		),
 	)
 	if err != nil {
