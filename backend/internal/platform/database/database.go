@@ -2,8 +2,11 @@ package database
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"time"
+
+	"nyx/internal/platform/config"
 
 	"github.com/golang-migrate/migrate/v4"
 	_ "github.com/golang-migrate/migrate/v4/database/postgres"
@@ -13,19 +16,31 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
-func New(dbURL string) (*sqlx.DB, error) {
+func New(cfg *config.Config) (*sqlx.DB, error) {
 	var db *sqlx.DB
 	var err error
+
+	dbURL := cfg.DBURL
+
+	// Parse durations
+	maxLifetime, err := time.ParseDuration(cfg.DBConnMaxLifetime)
+	if err != nil {
+		return nil, fmt.Errorf("invalid DB_CONN_MAX_LIFETIME: %w", err)
+	}
+	maxIdleTime, err := time.ParseDuration(cfg.DBConnMaxIdleTime)
+	if err != nil {
+		return nil, fmt.Errorf("invalid DB_CONN_MAX_IDLE_TIME: %w", err)
+	}
 
 	// Retry loop for database connection
 	for i := 0; i < 10; i++ {
 		db, err = sqlx.Open("postgres", dbURL)
 		if err == nil {
 			// Configure connection pool
-			db.SetMaxOpenConns(25)
-			db.SetMaxIdleConns(5)
-			db.SetConnMaxLifetime(5 * time.Minute)
-			db.SetConnMaxIdleTime(5 * time.Minute)
+			db.SetMaxOpenConns(cfg.DBMaxOpenConns)
+			db.SetMaxIdleConns(cfg.DBMaxIdleConns)
+			db.SetConnMaxLifetime(maxLifetime)
+			db.SetConnMaxIdleTime(maxIdleTime)
 
 			err = db.Ping()
 			if err == nil {

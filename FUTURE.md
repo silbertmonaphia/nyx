@@ -23,7 +23,7 @@ Ensure schema changes are trackable and safe.
 - [x] **Migration Tooling**: Replace the `initDB()` function with a migration engine like `golang-migrate` or `pressly/goose`.
 - [x] **Audit Fields**: Add `created_at`, `updated_at`, and `deleted_at` (soft deletes) to all tables.
 - [x] **Integration Testing**: Implemented test infrastructure using `testcontainers-go` for real PostgreSQL instances during tests.
-- [ ] **Connection Pooling**: Fine-tune PostgreSQL connection pool settings for high-concurrency scenarios.
+- [x] **Connection Pooling**: Fine-tuned PostgreSQL connection pool settings via environment variables (Viper).
 
 ## 4. Modern Frontend Architecture
 Improve the React developer experience and application performance.

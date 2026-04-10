@@ -42,7 +42,7 @@ Secure the API against unauthorized access.
 Improve data safety and developer speed.
 - [x] **GORM or SQLX**: Transition to an ORM or a typed SQL builder for safer queries and easier mapping.
 - [x] **Transaction Management**: Ensure atomic operations for complex logic.
-- [ ] **Connection Pooling**: Tune PostgreSQL connection pool settings for production loads.
+- [x] **Connection Pooling**: Tune PostgreSQL connection pool settings for production loads via environment variables.
 
 ## 5. Observability & Documentation
 Make the system transparent and easy to integrate with.

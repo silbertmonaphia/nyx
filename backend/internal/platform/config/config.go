@@ -12,6 +12,12 @@ type Config struct {
 	Port           string `mapstructure:"PORT"`
 	GinMode        string `mapstructure:"GIN_MODE"`
 	MigrationPath  string `mapstructure:"MIGRATION_PATH"`
+
+	// Database Connection Pool
+	DBMaxOpenConns    int    `mapstructure:"DB_MAX_OPEN_CONNS"`
+	DBMaxIdleConns    int    `mapstructure:"DB_MAX_IDLE_CONNS"`
+	DBConnMaxLifetime string `mapstructure:"DB_CONN_MAX_LIFETIME"`
+	DBConnMaxIdleTime string `mapstructure:"DB_CONN_MAX_IDLE_TIME"`
 }
 
 func Load() (*Config, error) {
@@ -19,6 +25,12 @@ func Load() (*Config, error) {
 	viper.SetDefault("GIN_MODE", "release")
 	viper.SetDefault("MIGRATION_PATH", "file://migrations")
 	viper.SetDefault("JWT_SECRET", "your-default-secret-key-change-it-in-prod")
+
+	// Database Connection Pool Defaults
+	viper.SetDefault("DB_MAX_OPEN_CONNS", 25)
+	viper.SetDefault("DB_MAX_IDLE_CONNS", 10)
+	viper.SetDefault("DB_CONN_MAX_LIFETIME", "1h")
+	viper.SetDefault("DB_CONN_MAX_IDLE_TIME", "30m")
 
 	viper.AutomaticEnv()
 	// Allow environment variables to override config file (e.g., DB_URL instead of db_url)
