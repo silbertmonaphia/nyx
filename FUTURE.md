@@ -22,6 +22,7 @@ Move beyond basic endpoints to a robust, documented API.
 Ensure schema changes are trackable and safe.
 - [x] **Migration Tooling**: Replace the `initDB()` function with a migration engine like `golang-migrate` or `pressly/goose`.
 - [x] **Audit Fields**: Add `created_at`, `updated_at`, and `deleted_at` (soft deletes) to all tables.
+- [x] **Integration Testing**: Implemented test infrastructure using `testcontainers-go` for real PostgreSQL instances during tests.
 - [ ] **Connection Pooling**: Fine-tune PostgreSQL connection pool settings for high-concurrency scenarios.
 
 ## 4. Modern Frontend Architecture
@@ -38,7 +39,9 @@ Improve the React developer experience and application performance.
 ## 5. Developer Experience (DX) & CI/CD
 Automate quality control and deployment.
 - [x] **GitHub Actions**: Create a CI pipeline to run `go test` and `npm test` on every pull request.
-- [ ] **Linting**: Add `golangci-lint` for Go and tighten `eslint` rules for React.
+- [x] **E2E Testing**: Implemented Playwright end-to-end tests for critical user journeys.
+- [ ] **Backend Linting**: Add `golangci-lint` for Go code quality and security checks.
+- [ ] **Frontend Linting**: Tighten `eslint` rules and integrate pre-commit hooks.
 - [x] **Kubernetes Manifests**: Draft `Deployment`, `Service`, and `Ingress` YAMLs for seamless production deployment.
 - [x] **Environment Configuration**: Use a more robust configuration loader (like `spf13/viper`) for the backend.
 
