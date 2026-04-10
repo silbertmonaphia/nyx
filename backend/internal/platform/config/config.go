@@ -1,7 +1,9 @@
 package config
 
 import (
+	"fmt"
 	"strings"
+	"time"
 
 	"github.com/spf13/viper"
 )
@@ -46,6 +48,14 @@ func Load() (*Config, error) {
 	var cfg Config
 	if err := viper.Unmarshal(&cfg); err != nil {
 		return nil, err
+	}
+
+	// Validate Durations
+	if _, err := time.ParseDuration(cfg.DBConnMaxLifetime); err != nil {
+		return nil, fmt.Errorf("invalid DB_CONN_MAX_LIFETIME: %w", err)
+	}
+	if _, err := time.ParseDuration(cfg.DBConnMaxIdleTime); err != nil {
+		return nil, fmt.Errorf("invalid DB_CONN_MAX_IDLE_TIME: %w", err)
 	}
 
 	return &cfg, nil
