@@ -97,6 +97,19 @@ cd frontend
 npm test
 ```
 
-## Production Roadmap
+## Kubernetes Deployment
 
-See `FUTURE_BACKEND.md` and `FUTURE_FRONTEND.md` for the planned enhancements towards a fully production-grade application, including JWT authentication, observability, and design system integration.
+For Kubernetes environments, manifests are provided in the `k8s/` directory.
+
+1. **Configure Secrets**:
+   ```bash
+   cp k8s/secrets.yaml.example k8s/secrets.yaml
+   # Edit k8s/secrets.yaml with your base64-encoded production secrets
+   ```
+
+2. **Apply Manifests**:
+   ```bash
+   kubectl apply -f k8s/
+   ```
+
+See individual `.yaml` files in `k8s/` for detailed configuration.
