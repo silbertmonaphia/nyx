@@ -2,9 +2,12 @@ name: CI
 
 on:
   push:
-    branches: [ main ]
+    branches: [ main, mvp ]
   pull_request:
-    branches: [ main ]
+    branches: [ main, mvp ]
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
   backend-test:
@@ -15,11 +18,13 @@ jobs:
       uses: actions/setup-go@v5
       with:
         go-version: '1.26.1'
+        cache-dependency-path: backend/go.sum
     - name: golangci-lint
       uses: golangci/golangci-lint-action@v6
       with:
         version: latest
         working-directory: backend
+        args: --timeout=5m
     - name: Test
       run: cd backend && go test -v ./...
 
