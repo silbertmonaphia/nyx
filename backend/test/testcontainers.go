@@ -3,6 +3,8 @@ package test
 import (
 	"context"
 	"fmt"
+	"path/filepath"
+	"runtime"
 	"testing"
 	"time"
 
@@ -84,13 +86,23 @@ func (tdb *TestDB) RunMigrations(t *testing.T) {
 }
 
 func runMigrations(ctx context.Context, dbURL string) error {
+	// Use runtime.Caller to find the location of this file and resolve migrations path.
+	_, filename, _, ok := runtime.Caller(0)
+	if !ok {
+		return fmt.Errorf("failed to get caller information")
+	}
+
+	// This file is in backend/test/testcontainers.go
+	// Migrations are in backend/migrations
+	testDir := filepath.Dir(filename)
+	migrationsPath := filepath.Join(testDir, "..", "migrations")
+
 	// Use golang-migrate to run migrations
-	// We need to find the migrations path relative to the test
-	migrationPath := "file://../migrations"
+	migrationPath := "file://" + migrationsPath
 
 	m, err := migrate.New(migrationPath, dbURL)
 	if err != nil {
-		return fmt.Errorf("could not create migration instance: %w", err)
+		return fmt.Errorf("could not create migration instance at %s: %w", migrationPath, err)
 	}
 	defer m.Close()
 
