@@ -3,7 +3,10 @@ package test
 import (
 	"context"
 	"fmt"
+	"path/filepath"
+	"runtime"
 	"testing"
+	"time"
 
 	"github.com/golang-migrate/migrate/v4"
 	_ "github.com/golang-migrate/migrate/v4/database/postgres"
@@ -19,67 +22,101 @@ type TestDB struct {
 	DBURL     string
 }
 
-// SetupPostgres starts a PostgreSQL container for testing
-func SetupPostgres(t *testing.T) *TestDB {
-	t.Helper()
-
-	ctx := context.Background()
-
+// StartPostgres starts a PostgreSQL container and returns the TestDB instance.
+// It does not use t.Cleanup so the caller is responsible for termination.
+func StartPostgres(ctx context.Context) (*TestDB, error) {
 	container, err := postgres.Run(ctx,
-		"postgres:15-alpine",
+		"postgres:17-alpine",
 		postgres.WithDatabase("nyx_test"),
 		postgres.WithUsername("postgres"),
 		postgres.WithPassword("postgres"),
 		testcontainers.WithWaitStrategy(
 			wait.ForLog("database system is ready to accept connections").
-				WithOccurrence(2).
-				WithStartupTimeout(30),
+				WithOccurrence(1).
+				WithStartupTimeout(60 * time.Second),
 		),
 	)
 	if err != nil {
-		t.Fatalf("Failed to start PostgreSQL container: %v", err)
+		return nil, fmt.Errorf("failed to start PostgreSQL container: %w", err)
 	}
+
+	// Brief sleep to let post-ready initialization settle
+	time.Sleep(1 * time.Second)
 
 	dbURL, err := container.ConnectionString(ctx, "sslmode=disable")
 	if err != nil {
-		container.Terminate(ctx)
-		t.Fatalf("Failed to get connection string: %v", err)
+		_ = container.Terminate(ctx)
+		return nil, fmt.Errorf("failed to get connection string: %w", err)
 	}
-
-	// Register cleanup
-	t.Cleanup(func() {
-		container.Terminate(ctx)
-	})
 
 	return &TestDB{
 		Container: container,
 		DBURL:     dbURL,
-	}
+	}, nil
 }
 
-// RunMigrations applies database migrations to the test database
+// SetupPostgres starts a PostgreSQL container for testing and registers cleanup.
+func SetupPostgres(t *testing.T) *TestDB {
+	t.Helper()
+
+	ctx := context.Background()
+	tdb, err := StartPostgres(ctx)
+	if err != nil {
+		t.Fatalf("SetupPostgres failed: %v", err)
+	}
+
+	// Register cleanup
+	t.Cleanup(func() {
+		_ = tdb.Container.Terminate(ctx)
+	})
+
+	return tdb
+}
+
+// RunMigrationsWithContext applies database migrations to the test database.
+func (tdb *TestDB) RunMigrationsWithContext(ctx context.Context) error {
+	return runMigrations(ctx, tdb.DBURL)
+}
+
+// RunMigrations applies database migrations and fails the test if it fails.
 func (tdb *TestDB) RunMigrations(t *testing.T) {
 	t.Helper()
 
-	// Use the migration package to run migrations
-	ctx := context.Background()
-
-	// Create a temporary migration runner using the testcontainers-go migrate package
-	// We'll use the migrate package directly
-	err := runMigrations(ctx, tdb.DBURL)
+	err := tdb.RunMigrationsWithContext(context.Background())
 	if err != nil {
 		t.Fatalf("Failed to run migrations: %v", err)
 	}
 }
 
 func runMigrations(ctx context.Context, dbURL string) error {
-	// Use golang-migrate to run migrations
-	// We need to find the migrations path relative to the test
-	migrationPath := "file://../migrations"
+	// Use runtime.Caller to find the location of this file and resolve migrations path.
+	_, filename, _, ok := runtime.Caller(0)
+	if !ok {
+		return fmt.Errorf("failed to get caller information")
+	}
 
-	m, err := migrate.New(migrationPath, dbURL)
+	// This file is in backend/test/testcontainers.go
+	// Migrations are in backend/migrations
+	testDir := filepath.Dir(filename)
+	migrationsPath := filepath.Join(testDir, "..", "migrations")
+
+	// Use golang-migrate to run migrations
+	migrationPath := "file://" + migrationsPath
+
+	var m *migrate.Migrate
+	var err error
+
+	// Retry migration creation to handle transient "connection reset by peer" issues
+	for i := 0; i < 5; i++ {
+		m, err = migrate.New(migrationPath, dbURL)
+		if err == nil {
+			break
+		}
+		time.Sleep(1 * time.Second)
+	}
+
 	if err != nil {
-		return fmt.Errorf("could not create migration instance: %w", err)
+		return fmt.Errorf("could not create migration instance at %s after retries: %w", migrationPath, err)
 	}
 	defer m.Close()
 

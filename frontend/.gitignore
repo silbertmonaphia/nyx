@@ -26,3 +26,6 @@ dist-ssr
 # Test coverage
 coverage
 commit_message.txt
+
+# Husky
+.husky/_

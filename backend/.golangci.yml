@@ -1,0 +1,81 @@
+run:
+  timeout: 5m
+  tests: true
+
+linters:
+  enable:
+    - errcheck     # Checks for unchecked errors
+    - govet        # Standard Go tool (vet)
+    - staticcheck  # Modern, high-performance checks
+    - gosec        # Security audits
+    - revive       # Fast, configurable linter (successor to golint)
+    - whitespace   # Detects unnecessary newlines/whitespaces
+    - goconst      # Detects magic strings that should be constants
+    - gocyclo      # Detects complex functions
+    - bodyclose    # Checks for HTTP body leaks
+    - unparam      # Detects unused function parameters
+    - unconvert    # Detects redundant type conversions
+    - prealloc     # Detects slice pre-allocations
+    - copyloopvar  # Detects pointer to loop variable (Go 1.22+)
+
+linters-settings:
+  govet:
+    enable:
+      - shadow
+  gocyclo:
+    min-complexity: 15
+  revive:
+    rules:
+      - name: exported
+        disabled: true
+      - name: package-comments
+        disabled: true
+      - name: indent-error-flow
+      - name: error-return
+      - name: error-naming
+      - name: if-return
+      - name: increment-decrement
+      - name: var-naming
+      - name: var-declaration
+      - name: range
+      - name: receiver-naming
+      - name: time-naming
+      - name: unexported-return
+      - name: errorf
+      - name: empty-block
+      - name: superfluous-else
+      - name: unused-parameter
+        disabled: true
+      - name: unreachable-code
+      - name: redefines-builtin-id
+
+issues:
+  exclude-dirs:
+    - vendor
+  exclude-use-default: false
+  max-issues-per-linter: 0
+  max-same-issues: 0
+  exclude-rules:
+    # Exclude errcheck for specific functions that are commonly ignored in tests or cleanup
+    - linters:
+        - errcheck
+        - gosec
+      text: "Error return value of .*(Close|Terminate|Unmarshal|Rollback|Commit). is not checked"
+    - linters:
+        - gosec
+      text: "G104:"
+    # Exclude G112: Potential Slowloris Attack (missing ReadHeaderTimeout)
+    - linters:
+        - gosec
+      text: "G112:"
+    - path: internal/user/service\.go
+      linters:
+        - govet
+      text: "shadow: declaration of .err. shadows declaration"
+    - linters:
+        - revive
+        - staticcheck
+      text: "empty-block:|SA9003:"
+    - linters:
+        - unparam
+      text: "is unused"

@@ -22,7 +22,8 @@ Move beyond basic endpoints to a robust, documented API.
 Ensure schema changes are trackable and safe.
 - [x] **Migration Tooling**: Replace the `initDB()` function with a migration engine like `golang-migrate` or `pressly/goose`.
 - [x] **Audit Fields**: Add `created_at`, `updated_at`, and `deleted_at` (soft deletes) to all tables.
-- [ ] **Connection Pooling**: Fine-tune PostgreSQL connection pool settings for high-concurrency scenarios.
+- [x] **Integration Testing**: Implemented test infrastructure using `testcontainers-go` for real PostgreSQL instances during tests.
+- [x] **Connection Pooling**: Fine-tuned PostgreSQL connection pool settings via environment variables (Viper).
 
 ## 4. Modern Frontend Architecture
 Improve the React developer experience and application performance.
@@ -38,7 +39,9 @@ Improve the React developer experience and application performance.
 ## 5. Developer Experience (DX) & CI/CD
 Automate quality control and deployment.
 - [x] **GitHub Actions**: Create a CI pipeline to run `go test` and `npm test` on every pull request.
-- [ ] **Linting**: Add `golangci-lint` for Go and tighten `eslint` rules for React.
+- [x] **E2E Testing**: Implemented Playwright end-to-end tests for critical user journeys.
+- [x] **Backend Linting**: Integrated `golangci-lint` into the CI/CD pipeline for Go code quality and security checks.
+- [x] **Frontend Linting**: Tightened `eslint` rules and integrated `husky` pre-commit hooks with `lint-staged`.
 - [x] **Kubernetes Manifests**: Draft `Deployment`, `Service`, and `Ingress` YAMLs for seamless production deployment.
 - [x] **Environment Configuration**: Use a more robust configuration loader (like `spf13/viper`) for the backend.
 

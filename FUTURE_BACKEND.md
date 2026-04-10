@@ -42,7 +42,7 @@ Secure the API against unauthorized access.
 Improve data safety and developer speed.
 - [x] **GORM or SQLX**: Transition to an ORM or a typed SQL builder for safer queries and easier mapping.
 - [x] **Transaction Management**: Ensure atomic operations for complex logic.
-- [ ] **Connection Pooling**: Tune PostgreSQL connection pool settings for production loads.
+- [x] **Connection Pooling**: Tune PostgreSQL connection pool settings for production loads via environment variables.
 
 ## 5. Observability & Documentation
 Make the system transparent and easy to integrate with.
@@ -56,5 +56,5 @@ Make the system transparent and easy to integrate with.
 
 ## 7. Quality Assurance
 - [x] **Unit Testing (Core)**: Implemented tests for handlers and services using `sqlmock`.
-- [ ] **Integration Testing**: Use `testcontainers-go` to run real PostgreSQL instances during tests.
-- [ ] **GolangCI-Lint**: Integrate a strict linting pipeline (revive, gosec, staticcheck).
+- [x] **Integration Testing**: Implemented test infrastructure using `testcontainers-go` to run real PostgreSQL instances during tests.
+- [x] **GolangCI-Lint**: Integrated a strict linting pipeline (revive, gosec, staticcheck) into GitHub Actions.
