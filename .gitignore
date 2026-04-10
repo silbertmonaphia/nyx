@@ -34,6 +34,7 @@ db_data/
 *.log
 .env
 k8s/secrets.yaml
+!k8s/secrets.yaml.example
 .gemini/
 commit_message.txt
 .qwen/
