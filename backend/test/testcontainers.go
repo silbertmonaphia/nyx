@@ -26,7 +26,7 @@ func SetupPostgres(t *testing.T) *TestDB {
 	ctx := context.Background()
 
 	container, err := postgres.Run(ctx,
-		"postgres:15-alpine",
+		"postgres:17-alpine",
 		postgres.WithDatabase("nyx_test"),
 		postgres.WithUsername("postgres"),
 		postgres.WithPassword("postgres"),
