@@ -40,7 +40,7 @@ Improve the React developer experience and application performance.
 Automate quality control and deployment.
 - [x] **GitHub Actions**: Create a CI pipeline to run `go test` and `npm test` on every pull request.
 - [x] **E2E Testing**: Implemented Playwright end-to-end tests for critical user journeys.
-- [ ] **Backend Linting**: Add `golangci-lint` for Go code quality and security checks.
+- [x] **Backend Linting**: Integrated `golangci-lint` into the CI/CD pipeline for Go code quality and security checks.
 - [ ] **Frontend Linting**: Tighten `eslint` rules and integrate pre-commit hooks.
 - [x] **Kubernetes Manifests**: Draft `Deployment`, `Service`, and `Ingress` YAMLs for seamless production deployment.
 - [x] **Environment Configuration**: Use a more robust configuration loader (like `spf13/viper`) for the backend.

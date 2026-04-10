@@ -1,0 +1,54 @@
+run:
+  timeout: 5m
+  tests: true
+  skip-dirs:
+    - vendor
+
+linters:
+  enable:
+    - errcheck     # Checks for unchecked errors
+    - govet        # Standard Go tool (vet)
+    - staticcheck  # Modern, high-performance checks
+    - gosec        # Security audits
+    - revive       # Fast, configurable linter (successor to golint)
+    - whitespace   # Detects unnecessary newlines/whitespaces
+    - goconst      # Detects magic strings that should be constants
+    - gocyclo      # Detects complex functions
+    - bodyclose    # Checks for HTTP body leaks
+    - unparam      # Detects unused function parameters
+    - unconvert    # Detects redundant type conversions
+    - prealloc     # Detects slice pre-allocations
+    - exportloopref # Detects pointer to loop variable
+
+linters-settings:
+  govet:
+    check-shadowing: true
+  gocyclo:
+    min-complexity: 15
+  revive:
+    rules:
+      - name: exported
+      - name: indent-error-flow
+      - name: error-return
+      - name: error-naming
+      - name: if-return
+      - name: increment-decrement
+      - name: var-naming
+      - name: var-declaration
+      - name: package-comments
+      - name: range
+      - name: receiver-naming
+      - name: time-naming
+      - name: unexported-return
+      - name: indent-error-flow
+      - name: errorf
+      - name: empty-block
+      - name: superfluous-else
+      - name: unused-parameter
+      - name: unreachable-code
+      - name: redefines-builtin-id
+
+issues:
+  exclude-use-default: false
+  max-issues-per-linter: 0
+  max-same-issues: 0

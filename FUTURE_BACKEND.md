@@ -57,4 +57,4 @@ Make the system transparent and easy to integrate with.
 ## 7. Quality Assurance
 - [x] **Unit Testing (Core)**: Implemented tests for handlers and services using `sqlmock`.
 - [x] **Integration Testing**: Implemented test infrastructure using `testcontainers-go` to run real PostgreSQL instances during tests.
-- [ ] **GolangCI-Lint**: Integrate a strict linting pipeline (revive, gosec, staticcheck).
+- [x] **GolangCI-Lint**: Integrated a strict linting pipeline (revive, gosec, staticcheck) into GitHub Actions.
