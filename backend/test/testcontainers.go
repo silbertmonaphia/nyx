@@ -32,8 +32,8 @@ func SetupPostgres(t *testing.T) *TestDB {
 		postgres.WithPassword("postgres"),
 		testcontainers.WithWaitStrategy(
 			wait.ForLog("database system is ready to accept connections").
-				WithOccurrence(2).
-				WithStartupTimeout(30),
+				WithOccurrence(1).
+				WithStartupTimeout(60),
 		),
 	)
 	if err != nil {
