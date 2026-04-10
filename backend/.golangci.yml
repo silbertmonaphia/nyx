@@ -1,8 +1,7 @@
 run:
   timeout: 5m
   tests: true
-  skip-dirs:
-    - vendor
+  go: '1.24'
 
 linters:
   enable:
@@ -22,7 +21,8 @@ linters:
 
 linters-settings:
   govet:
-    check-shadowing: true
+    enable:
+      - shadow
   gocyclo:
     min-complexity: 15
   revive:
@@ -40,7 +40,6 @@ linters-settings:
       - name: receiver-naming
       - name: time-naming
       - name: unexported-return
-      - name: indent-error-flow
       - name: errorf
       - name: empty-block
       - name: superfluous-else
@@ -49,6 +48,8 @@ linters-settings:
       - name: redefines-builtin-id
 
 issues:
+  exclude-dirs:
+    - vendor
   exclude-use-default: false
   max-issues-per-linter: 0
   max-same-issues: 0
