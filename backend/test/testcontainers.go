@@ -31,8 +31,8 @@ func StartPostgres(ctx context.Context) (*TestDB, error) {
 		postgres.WithUsername("postgres"),
 		postgres.WithPassword("postgres"),
 		testcontainers.WithWaitStrategy(
-			wait.ForLog("database system is ready to accept connections").
-				WithOccurrence(1).
+			wait.ForSQL("postgres").
+				WithSQL("SELECT 1").
 				WithStartupTimeout(60 * time.Second),
 		),
 	)
@@ -100,9 +100,20 @@ func runMigrations(ctx context.Context, dbURL string) error {
 	// Use golang-migrate to run migrations
 	migrationPath := "file://" + migrationsPath
 
-	m, err := migrate.New(migrationPath, dbURL)
+	var m *migrate.Migrate
+	var err error
+
+	// Retry migration creation to handle transient "connection reset by peer" issues
+	for i := 0; i < 5; i++ {
+		m, err = migrate.New(migrationPath, dbURL)
+		if err == nil {
+			break
+		}
+		time.Sleep(1 * time.Second)
+	}
+
 	if err != nil {
-		return fmt.Errorf("could not create migration instance at %s: %w", migrationPath, err)
+		return fmt.Errorf("could not create migration instance at %s after retries: %w", migrationPath, err)
 	}
 	defer m.Close()
 
