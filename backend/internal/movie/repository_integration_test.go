@@ -2,6 +2,8 @@ package movie
 
 import (
 	"context"
+	"fmt"
+	"os"
 	"testing"
 	"time"
 
@@ -13,17 +15,53 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+var (
+	testDB *test.TestDB
+	dbURL  string
+)
+
+func TestMain(m *testing.M) {
+	// Set up the database container once for all tests in this package
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+
+	var err error
+	testDB, err = test.StartPostgres(ctx)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Failed to start PostgreSQL container: %v\n", err)
+		os.Exit(1)
+	}
+	dbURL = testDB.DBURL
+
+	// Run migrations
+	if err := testDB.RunMigrationsWithContext(ctx); err != nil {
+		fmt.Fprintf(os.Stderr, "Failed to run migrations: %v\n", err)
+		if testDB.Container != nil {
+			_ = testDB.Container.Terminate(context.Background())
+		}
+		os.Exit(1)
+	}
+
+	// Run tests
+	code := m.Run()
+
+	// Cleanup
+	if testDB.Container != nil {
+		_ = testDB.Container.Terminate(context.Background())
+	}
+
+	os.Exit(code)
+}
+
 func setupIntegrationTest(t *testing.T) (*sqlx.DB, Repository) {
 	t.Helper()
 
-	// Start PostgreSQL container
-	testDB := test.SetupPostgres(t)
+	// Create database connection using the shared container
+	db, err := sqlx.Open("postgres", dbURL)
+	require.NoError(t, err)
 
-	// Run migrations
-	testDB.RunMigrations(t)
-
-	// Create database connection
-	db, err := sqlx.Open("postgres", testDB.DBURL)
+	// Clean up tables before each test to ensure isolation
+	_, err = db.Exec("DELETE FROM movies")
 	require.NoError(t, err)
 
 	// Configure connection pool for tests

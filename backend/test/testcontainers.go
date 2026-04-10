@@ -19,12 +19,9 @@ type TestDB struct {
 	DBURL     string
 }
 
-// SetupPostgres starts a PostgreSQL container for testing
-func SetupPostgres(t *testing.T) *TestDB {
-	t.Helper()
-
-	ctx := context.Background()
-
+// StartPostgres starts a PostgreSQL container and returns the TestDB instance.
+// It does not use t.Cleanup so the caller is responsible for termination.
+func StartPostgres(ctx context.Context) (*TestDB, error) {
 	container, err := postgres.Run(ctx,
 		"postgres:17-alpine",
 		postgres.WithDatabase("nyx_test"),
@@ -37,36 +34,49 @@ func SetupPostgres(t *testing.T) *TestDB {
 		),
 	)
 	if err != nil {
-		t.Fatalf("Failed to start PostgreSQL container: %v", err)
+		return nil, fmt.Errorf("failed to start PostgreSQL container: %w", err)
 	}
 
 	dbURL, err := container.ConnectionString(ctx, "sslmode=disable")
 	if err != nil {
-		container.Terminate(ctx)
-		t.Fatalf("Failed to get connection string: %v", err)
+		_ = container.Terminate(ctx)
+		return nil, fmt.Errorf("failed to get connection string: %w", err)
 	}
-
-	// Register cleanup
-	t.Cleanup(func() {
-		container.Terminate(ctx)
-	})
 
 	return &TestDB{
 		Container: container,
 		DBURL:     dbURL,
-	}
+	}, nil
 }
 
-// RunMigrations applies database migrations to the test database
+// SetupPostgres starts a PostgreSQL container for testing and registers cleanup.
+func SetupPostgres(t *testing.T) *TestDB {
+	t.Helper()
+
+	ctx := context.Background()
+	tdb, err := StartPostgres(ctx)
+	if err != nil {
+		t.Fatalf("SetupPostgres failed: %v", err)
+	}
+
+	// Register cleanup
+	t.Cleanup(func() {
+		_ = tdb.Container.Terminate(ctx)
+	})
+
+	return tdb
+}
+
+// RunMigrationsWithContext applies database migrations to the test database.
+func (tdb *TestDB) RunMigrationsWithContext(ctx context.Context) error {
+	return runMigrations(ctx, tdb.DBURL)
+}
+
+// RunMigrations applies database migrations and fails the test if it fails.
 func (tdb *TestDB) RunMigrations(t *testing.T) {
 	t.Helper()
 
-	// Use the migration package to run migrations
-	ctx := context.Background()
-
-	// Create a temporary migration runner using the testcontainers-go migrate package
-	// We'll use the migrate package directly
-	err := runMigrations(ctx, tdb.DBURL)
+	err := tdb.RunMigrationsWithContext(context.Background())
 	if err != nil {
 		t.Fatalf("Failed to run migrations: %v", err)
 	}
