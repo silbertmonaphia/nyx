@@ -31,14 +31,17 @@ func StartPostgres(ctx context.Context) (*TestDB, error) {
 		postgres.WithUsername("postgres"),
 		postgres.WithPassword("postgres"),
 		testcontainers.WithWaitStrategy(
-			wait.ForSQL("postgres").
-				WithSQL("SELECT 1").
+			wait.ForLog("database system is ready to accept connections").
+				WithOccurrence(1).
 				WithStartupTimeout(60 * time.Second),
 		),
 	)
 	if err != nil {
 		return nil, fmt.Errorf("failed to start PostgreSQL container: %w", err)
 	}
+
+	// Brief sleep to let post-ready initialization settle
+	time.Sleep(1 * time.Second)
 
 	dbURL, err := container.ConnectionString(ctx, "sslmode=disable")
 	if err != nil {
