@@ -50,4 +50,4 @@ Vanilla CSS is powerful but difficult to scale across large teams and components
 
 ## 8. Developer Experience (DX)
 - [x] **ESLint + Prettier**: Standardized code style and linting rules.
-- [ ] **Husky + Lint-Staged**: Prevent bad code from being committed by running linting and tests on pre-commit hooks.
+- [x] **Husky + Lint-Staged**: Prevent bad code from being committed by running linting and tests on pre-commit hooks.
