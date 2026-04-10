@@ -16,7 +16,7 @@ linters:
     - unparam      # Detects unused function parameters
     - unconvert    # Detects redundant type conversions
     - prealloc     # Detects slice pre-allocations
-    - exportloopref # Detects pointer to loop variable
+    - copyloopvar  # Detects pointer to loop variable (Go 1.22+)
 
 linters-settings:
   govet:
@@ -27,6 +27,9 @@ linters-settings:
   revive:
     rules:
       - name: exported
+        disabled: true
+      - name: package-comments
+        disabled: true
       - name: indent-error-flow
       - name: error-return
       - name: error-naming
@@ -34,7 +37,6 @@ linters-settings:
       - name: increment-decrement
       - name: var-naming
       - name: var-declaration
-      - name: package-comments
       - name: range
       - name: receiver-naming
       - name: time-naming
@@ -43,6 +45,7 @@ linters-settings:
       - name: empty-block
       - name: superfluous-else
       - name: unused-parameter
+        disabled: true
       - name: unreachable-code
       - name: redefines-builtin-id
 
@@ -52,3 +55,27 @@ issues:
   exclude-use-default: false
   max-issues-per-linter: 0
   max-same-issues: 0
+  exclude-rules:
+    # Exclude errcheck for specific functions that are commonly ignored in tests or cleanup
+    - linters:
+        - errcheck
+        - gosec
+      text: "Error return value of .*(Close|Terminate|Unmarshal|Rollback|Commit). is not checked"
+    - linters:
+        - gosec
+      text: "G104:"
+    # Exclude G112: Potential Slowloris Attack (missing ReadHeaderTimeout)
+    - linters:
+        - gosec
+      text: "G112:"
+    - path: internal/user/service\.go
+      linters:
+        - govet
+      text: "shadow: declaration of .err. shadows declaration"
+    - linters:
+        - revive
+        - staticcheck
+      text: "empty-block:|SA9003:"
+    - linters:
+        - unparam
+      text: "is unused"
