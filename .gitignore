@@ -16,6 +16,8 @@ backend/bin/
 backend/*.test
 backend/*.out
 backend/vendor/
+backend/.env
+backend/coverage.out
 
 # OS/IDEs
 .DS_Store
@@ -31,6 +33,7 @@ db_data/
 # Logs
 *.log
 .env
+k8s/secrets.yaml
 .gemini/
 commit_message.txt
 .qwen/
