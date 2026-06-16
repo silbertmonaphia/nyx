@@ -42,12 +42,16 @@ Vanilla CSS is powerful but difficult to scale across large teams and components
 - [x] **Component Testing**: Implemented unit and integration tests for React components using **Vitest** and **React Testing Library**.
 - [ ] **Component Storybook**: Develop components in isolation to ensure visual consistency and documentation.
 - [x] **Playwright E2E**: Implemented End-to-End tests for critical user journeys (e.g., "User can add and then delete a movie").
+- [ ] **E2E Testing in CI/CD**: Integrate Playwright end-to-end tests into the GitHub Actions CI pipeline to run automatically on every pull request.
 - [ ] **Accessibility (a11y) Auditing**: Integrate `eslint-plugin-jsx-a11y` and automated a11y testing.
 
 ## 7. Performance & Optimization
 - [ ] **Code Splitting**: Utilize `React.lazy` and dynamic imports for route-based chunking.
 - [ ] **Image Optimization**: Implement responsive images and modern formats (WebP/AVIF) for the hero section.
 
-## 8. Developer Experience (DX)
+## 8. Search Engine Optimization (SEO)
+- [ ] **Dynamic Metadata**: Set up dynamic document titles and meta descriptions per page (e.g., using `react-helmet-async` or standard DOM updates) for optimal search indexing.
+
+## 9. Developer Experience (DX)
 - [x] **ESLint + Prettier**: Standardized code style and linting rules.
 - [x] **Husky + Lint-Staged**: Prevent bad code from being committed by running linting and tests on pre-commit hooks.

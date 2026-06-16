@@ -21,6 +21,12 @@ var (
 )
 
 func TestMain(m *testing.M) {
+	// Allow skipping container-based tests locally
+	if os.Getenv("SKIP_CONTAINERS") == "true" {
+		fmt.Println("Skipping container-based integration tests")
+		os.Exit(0)
+	}
+
 	// Set up the database container once for all tests in this package
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()

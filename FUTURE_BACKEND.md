@@ -30,6 +30,7 @@ Never trust the client. Implement robust validation at the entry point.
     "code": 400
   }
   ```
+- [ ] **API Error Translators**: Implement an error mapping layer to catch database-specific constraint errors (e.g. duplicate username) and return user-friendly, semantic error messages instead of raw DB error details.
 
 ## 3. Security & Authentication
 Secure the API against unauthorized access.
@@ -43,16 +44,20 @@ Improve data safety and developer speed.
 - [x] **GORM or SQLX**: Transition to an ORM or a typed SQL builder for safer queries and easier mapping.
 - [x] **Transaction Management**: Ensure atomic operations for complex logic.
 - [x] **Connection Pooling**: Tune PostgreSQL connection pool settings for production loads via environment variables.
+- [ ] **Database Index Optimization**: Analyze access patterns and optimize PostgreSQL indexes for queries/filtering.
+- [ ] **Caching Layer**: Integrate Redis or an in-memory cache for read-heavy resources to minimize database lookup times.
 
 ## 5. Observability & Documentation
 Make the system transparent and easy to integrate with.
 - [x] **Swagger (OpenAPI 3.0)**: Use `swaggo/swag` to auto-generate interactive API documentation.
 - [x] **Prometheus Metrics**: Export latency, error rates, and request counts via a `/metrics` endpoint.
 - [x] **Contextual Logging**: Pass `context` through layers to trace requests and include Request IDs in logs.
+- [ ] **Distributed Tracing**: Integrate OpenTelemetry (OTel) to trace HTTP requests across router middlewares and down to individual database queries.
 
 ## 6. Configuration & Environment
 - [x] **Viper Configuration**: Use `spf13/viper` for multi-source configuration (env, .yaml, .env).
 - [x] **Graceful Shutdown**: Ensured background tasks and database connections are closed correctly on exit.
+- [ ] **Docker Volume Guardrail**: Add developer checks or tooling to handle PostgreSQL major version upgrades/downgrades gracefully (e.g. detect incompatibilities between PG 15 and 17 and warn/auto-prune volumes).
 
 ## 7. Quality Assurance
 - [x] **Unit Testing (Core)**: Implemented tests for handlers and services using `sqlmock`.
