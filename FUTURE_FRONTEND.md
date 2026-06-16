@@ -23,6 +23,9 @@ Manual `fetch` in `useEffect` is error-prone and lacks essential features like c
   - Built-in loading, error, and pagination states.
   - Optimistic updates for a snappier UI during movie creation/deletion.
 - [x] **Axios/Ky Centralized Client**: Create a configured API client with interceptors for global error handling and authentication headers.
+- [ ] **Optimistic Updates**: `useMovies.ts` invalidates the query cache on mutation success but does not implement optimistic updates. Use `onMutate`/`onError`/`onSettled` for instant UI feedback.
+- [ ] **Search Debounce**: `App.tsx` passes `searchTerm` directly to `getMovies()` on every keystroke, triggering an API call for every character typed. Debounce the input (e.g. 300ms) to reduce server load.
+- [ ] **Pagination / Infinite Scroll**: `GetAll` returns all movies in one payload. Add server-side pagination and implement `useInfiniteQuery` on the frontend.
 
 ## 3. Form Management & Validation
 Managing complex form state and validation manually is a common source of bugs.
@@ -37,6 +40,8 @@ Vanilla CSS is powerful but difficult to scale across large teams and components
 
 ## 5. Global State Management
 - [x] **Zustand**: For lightweight, high-performance global state (e.g., UI preferences, search filters, authentication) without the boilerplate of Redux.
+- [ ] **Persist Auth Token Securely**: `authStore.ts` uses Zustand `persist` which stores the JWT in `localStorage`. Consider `httpOnly` cookies or at minimum document the XSS risk.
+- [ ] **Token Refresh Handling**: `api.ts` logs out on 401 but does not attempt a token refresh. Pair with a backend refresh-token endpoint once that is implemented.
 
 ## 6. Testing & Quality Assurance
 - [x] **Component Testing**: Implemented unit and integration tests for React components using **Vitest** and **React Testing Library**.
@@ -48,6 +53,8 @@ Vanilla CSS is powerful but difficult to scale across large teams and components
 ## 7. Performance & Optimization
 - [ ] **Code Splitting**: Utilize `React.lazy` and dynamic imports for route-based chunking.
 - [ ] **Image Optimization**: Implement responsive images and modern formats (WebP/AVIF) for the hero section.
+- [ ] **Loading Skeletons**: `MovieList.tsx` shows a plain text `"Loading movies..."` string while fetching. Replace with skeleton placeholder cards for a more polished UX.
+- [ ] **Confirm Dialog Component**: `App.tsx` uses `window.confirm()` for delete confirmation — a browser native dialog that blocks the thread and cannot be styled. Replace with a modal/dialog component.
 
 ## 8. Search Engine Optimization (SEO)
 - [ ] **Dynamic Metadata**: Set up dynamic document titles and meta descriptions per page (e.g., using `react-helmet-async` or standard DOM updates) for optimal search indexing.

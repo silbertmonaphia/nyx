@@ -38,6 +38,9 @@ Secure the API against unauthorized access.
 - [x] **User Management**: Created a `users` table with hashed passwords using `bcrypt`.
 - [x] **Auth Middleware**: Protect write/delete routes while keeping read routes public (or as configured).
 - [x] **Rate Limiting**: Implemented token bucket algorithm middleware to prevent API abuse.
+- [ ] **CORS Hardening**: `cors.go` currently allows `Access-Control-Allow-Origin: *`. Restrict to a configurable allowlist of origins in production.
+- [ ] **JWT Secret via Config**: `jwt.go` reads the secret directly via `os.Getenv` instead of using the Viper `cfg` struct. Consolidate to use the centralized config loader.
+- [ ] **JWT Refresh Tokens**: Current tokens expire in 24h with no refresh flow. Add a refresh token endpoint and short-lived access tokens for better session security.
 
 ## 4. Database Layer Enhancement
 Improve data safety and developer speed.
@@ -63,3 +66,7 @@ Make the system transparent and easy to integrate with.
 - [x] **Unit Testing (Core)**: Implemented tests for handlers and services using `sqlmock`.
 - [x] **Integration Testing**: Implemented test infrastructure using `testcontainers-go` to run real PostgreSQL instances during tests.
 - [x] **GolangCI-Lint**: Integrated a strict linting pipeline (revive, gosec, staticcheck) into GitHub Actions.
+- [ ] **Fix CI Integration Tests**: `ci.yml` runs `go test -v ./...` without `SKIP_CONTAINERS=true`, so the `testcontainers-go` tests will panic in CI since Docker access is needed. Either add a Postgres service container or pass the skip flag.
+- [ ] **Error Sentinel Values**: `handler.go` compares errors by string (`err.Error() == "movie not found"`). Replace with typed sentinel errors (e.g. `errors.Is(err, movie.ErrNotFound)`) for reliability.
+- [ ] **User Service Tests**: The `user` domain has no unit or integration tests. Add coverage for `Register` and `Login` service methods.
+- [ ] **Handler Tests for User Domain**: `user/handler.go` has no corresponding `handler_test.go`. Add tests for register/login endpoints.
