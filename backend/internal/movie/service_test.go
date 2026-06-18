@@ -127,3 +127,25 @@ func TestCheckHealth_AndCheckCacheHealth(t *testing.T) {
 		t.Errorf("CheckCacheHealth: %v", err)
 	}
 }
+
+// TestMutationCacheFailure_DoesNotFailRequest verifies that a cache
+// failure during invalidation is best-effort: the mutation still
+// succeeds and the next read still gets a fresh result from the repo.
+func TestMutationCacheFailure_DoesNotFailRequest(t *testing.T) {
+	svc, repo, mr := newServiceWithCache(t)
+	ctx := context.Background()
+
+	repo.getAllResp = &Page{Items: []Movie{{ID: 1, Title: "A"}}, Total: 1, Page: 1, PageSize: 20}
+
+	if _, err := svc.GetMovies(ctx, "", 1, 20); err != nil {
+		t.Fatalf("warm cache: %v", err)
+	}
+
+	// Kill the cache so the mutation's invalidation will fail. The
+	// service must not propagate that error.
+	mr.Close()
+
+	if err := svc.CreateMovie(ctx, &Movie{Title: "B"}); err != nil {
+		t.Fatalf("create should not fail when cache invalidation fails: %v", err)
+	}
+}

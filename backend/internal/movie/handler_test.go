@@ -113,7 +113,7 @@ func TestGetMoviesHandler(t *testing.T) {
 		WithArgs(20, 0).
 		WillReturnRows(rows)
 	mock.ExpectQuery("SELECT COUNT\\(\\*\\) FROM movies WHERE deleted_at IS NULL").
-		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(2))
+		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(25))
 	mock.ExpectCommit()
 
 	router := setupTestRouter(h)
@@ -132,7 +132,7 @@ func TestGetMoviesHandler(t *testing.T) {
 	if len(page.Data) != 2 {
 		t.Errorf("expected 2 movies, got %v", len(page.Data))
 	}
-	if page.Page != 1 || page.PageSize != 20 || page.Total != 2 {
+	if page.Page != 1 || page.PageSize != 20 || page.Total != 25 {
 		t.Errorf("unexpected page meta: page=%d page_size=%d total=%d", page.Page, page.PageSize, page.Total)
 	}
 	if !page.HasMore {

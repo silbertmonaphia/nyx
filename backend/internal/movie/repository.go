@@ -42,6 +42,11 @@ func (r *sqlRepository) WithTx(tx *sqlx.Tx) Repository {
 // single transaction so the page count and the items stay consistent even
 // under concurrent writes. The repo caller is responsible for clamping
 // page/pageSize; defaults are applied defensively here.
+//
+// Known consistency caveat: this is a cache-aside read. A mutation that
+// lands between the DB read and the cache.Set call will leave a stale
+// entry in the cache for up to CACHE_TTL. This is accepted for this
+// workload; the TTL is the eventual safety net.
 func (r *sqlRepository) GetAll(ctx context.Context, queryParam string, page, pageSize int) (*Page, error) {
 	if page < 1 {
 		page = 1
@@ -51,6 +56,9 @@ func (r *sqlRepository) GetAll(ctx context.Context, queryParam string, page, pag
 	}
 	offset := (page - 1) * pageSize
 
+	// GetAll is the entry point for the listing endpoint, so it must be
+	// called on *sqlx.DB. Nested transactions are not supported; callers
+	// that already hold a tx should use queryMoviesPage directly.
 	db, ok := r.db.(*sqlx.DB)
 	if !ok {
 		return nil, fmt.Errorf("movie.GetAll requires *sqlx.DB, got %T", r.db)
@@ -62,7 +70,7 @@ func (r *sqlRepository) GetAll(ctx context.Context, queryParam string, page, pag
 	}
 	defer func() { _ = tx.Rollback() }() // no-op after Commit succeeds
 
-	items, total, err := r.WithTx(tx).(*sqlRepository).queryPage(ctx, queryParam, pageSize, offset)
+	items, total, err := queryMoviesPage(ctx, tx, queryParam, pageSize, offset)
 	if err != nil {
 		return nil, err
 	}
@@ -79,9 +87,10 @@ func (r *sqlRepository) GetAll(ctx context.Context, queryParam string, page, pag
 	}, nil
 }
 
-// queryPage runs the SELECT + COUNT pair against the supplied connection.
-// Search and no-search branches share the ORDER BY / LIMIT / OFFSET.
-func (r *sqlRepository) queryPage(ctx context.Context, queryParam string, pageSize, offset int) ([]Movie, int, error) {
+// queryMoviesPage runs the SELECT + COUNT pair against the supplied
+// connection (a *sqlx.DB or a *sqlx.Tx). Search and no-search branches
+// share the ORDER BY / LIMIT / OFFSET.
+func queryMoviesPage(ctx context.Context, db sqlx.ExtContext, queryParam string, pageSize, offset int) ([]Movie, int, error) {
 	var (
 		items []Movie
 		total int
@@ -89,12 +98,12 @@ func (r *sqlRepository) queryPage(ctx context.Context, queryParam string, pageSi
 
 	if queryParam != "" {
 		pattern := "%" + queryParam + "%"
-		if err := sqlx.SelectContext(ctx, r.db, &items,
+		if err := sqlx.SelectContext(ctx, db, &items,
 			"SELECT id, title, description, rating, created_at, updated_at, deleted_at FROM movies WHERE (title ILIKE $1 OR description ILIKE $1) AND deleted_at IS NULL ORDER BY created_at DESC, id DESC LIMIT $2 OFFSET $3",
 			pattern, pageSize, offset); err != nil {
 			return nil, 0, err
 		}
-		if err := sqlx.GetContext(ctx, r.db, &total,
+		if err := sqlx.GetContext(ctx, db, &total,
 			"SELECT COUNT(*) FROM movies WHERE (title ILIKE $1 OR description ILIKE $1) AND deleted_at IS NULL",
 			pattern); err != nil {
 			return nil, 0, err
@@ -102,12 +111,12 @@ func (r *sqlRepository) queryPage(ctx context.Context, queryParam string, pageSi
 		return items, total, nil
 	}
 
-	if err := sqlx.SelectContext(ctx, r.db, &items,
+	if err := sqlx.SelectContext(ctx, db, &items,
 		"SELECT id, title, description, rating, created_at, updated_at, deleted_at FROM movies WHERE deleted_at IS NULL ORDER BY created_at DESC, id DESC LIMIT $1 OFFSET $2",
 		pageSize, offset); err != nil {
 		return nil, 0, err
 	}
-	if err := sqlx.GetContext(ctx, r.db, &total,
+	if err := sqlx.GetContext(ctx, db, &total,
 		"SELECT COUNT(*) FROM movies WHERE deleted_at IS NULL"); err != nil {
 		return nil, 0, err
 	}

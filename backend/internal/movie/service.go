@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/rs/zerolog/log"
+
 	"nyx/internal/platform/cache"
 )
 
@@ -33,6 +35,11 @@ func NewService(repo Repository, c cache.Cache, ttl time.Duration) Service {
 // GetMovies is a cache-aside read. On miss it falls through to the
 // repository and best-effort writes the result back to the cache; cache
 // errors never fail the request.
+//
+// Known race: a mutation landing between the DB read and the cache.Set
+// here can leave a stale entry in the cache for up to CACHE_TTL. We rely
+// on TTL expiry as the eventual safety net rather than synchronising
+// the read and write paths.
 func (s *movieService) GetMovies(ctx context.Context, query string, page, pageSize int) (*Page, error) {
 	key := cacheKey(query, page, pageSize)
 
@@ -46,7 +53,9 @@ func (s *movieService) GetMovies(ctx context.Context, query string, page, pageSi
 		return nil, err
 	}
 
-	_ = s.cache.Set(ctx, key, result, s.ttl)
+	if err := s.cache.Set(ctx, key, result, s.ttl); err != nil {
+		log.Warn().Err(err).Str("key", key).Msg("movie cache write failed")
+	}
 	return result, nil
 }
 
@@ -86,9 +95,12 @@ func (s *movieService) CheckCacheHealth(ctx context.Context) error {
 }
 
 // invalidate removes every movies:* cache key. Best-effort: a cache
-// failure here is logged by callers but does not fail the write.
+// failure here is logged but does not fail the write — the next read
+// will refresh the entry once its TTL expires.
 func (s *movieService) invalidate(ctx context.Context) {
-	_ = s.cache.DeletePrefix(ctx, "movies:")
+	if err := s.cache.DeletePrefix(ctx, "movies:"); err != nil {
+		log.Warn().Err(err).Msg("movie cache invalidation failed")
+	}
 }
 
 func cacheKey(query string, page, pageSize int) string {

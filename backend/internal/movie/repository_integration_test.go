@@ -21,38 +21,41 @@ var (
 )
 
 func TestMain(m *testing.M) {
-	// Allow skipping container-based tests locally
-	if os.Getenv("SKIP_CONTAINERS") == "true" {
-		fmt.Println("Skipping container-based integration tests")
-		os.Exit(0)
-	}
+	// Allow skipping container-based tests locally. The unit tests
+	// (service_test.go, handler_test.go) still run in this mode; only
+	// the Postgres-backed integration tests are skipped.
+	skipContainers := os.Getenv("SKIP_CONTAINERS") == "true"
 
 	// Set up the database container once for all tests in this package
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 
-	var err error
-	testDB, err = test.StartPostgres(ctx)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Failed to start PostgreSQL container: %v\n", err)
-		os.Exit(1)
-	}
-	dbURL = testDB.DBURL
-
-	// Run migrations
-	if err := testDB.RunMigrationsWithContext(ctx); err != nil {
-		fmt.Fprintf(os.Stderr, "Failed to run migrations: %v\n", err)
-		if testDB.Container != nil {
-			_ = testDB.Container.Terminate(context.Background())
+	if !skipContainers {
+		var err error
+		testDB, err = test.StartPostgres(ctx)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Failed to start PostgreSQL container: %v\n", err)
+			os.Exit(1)
 		}
-		os.Exit(1)
+		dbURL = testDB.DBURL
+
+		// Run migrations
+		if err := testDB.RunMigrationsWithContext(ctx); err != nil {
+			fmt.Fprintf(os.Stderr, "Failed to run migrations: %v\n", err)
+			if testDB.Container != nil {
+				_ = testDB.Container.Terminate(context.Background())
+			}
+			os.Exit(1)
+		}
+	} else {
+		fmt.Println("Skipping container-based integration tests")
 	}
 
-	// Run tests
+	// Run all tests; integration tests in this file self-skip when
+	// dbURL == "".
 	code := m.Run()
 
-	// Cleanup
-	if testDB.Container != nil {
+	if !skipContainers && testDB != nil && testDB.Container != nil {
 		_ = testDB.Container.Terminate(context.Background())
 	}
 
@@ -61,6 +64,12 @@ func TestMain(m *testing.M) {
 
 func setupIntegrationTest(t *testing.T) (*sqlx.DB, Repository) {
 	t.Helper()
+
+	// Skip when the container-backed TestMain decided not to start one
+	// (e.g. SKIP_CONTAINERS=true).
+	if dbURL == "" {
+		t.Skip("PostgreSQL container not available; set SKIP_CONTAINERS=false to run integration tests")
+	}
 
 	// Create database connection using the shared container
 	db, err := sqlx.Open("postgres", dbURL)
@@ -84,6 +93,9 @@ func setupIntegrationTest(t *testing.T) (*sqlx.DB, Repository) {
 }
 
 func TestRepositoryIntegration(t *testing.T) {
+	if dbURL == "" {
+		t.Skip("PostgreSQL container not available; set SKIP_CONTAINERS=false to run integration tests")
+	}
 	ctx := context.Background()
 
 	t.Run("CreateMovie", func(t *testing.T) {
@@ -243,6 +255,9 @@ func TestRepositoryIntegration(t *testing.T) {
 }
 
 func TestRepositoryWithTransactions(t *testing.T) {
+	if dbURL == "" {
+		t.Skip("PostgreSQL container not available; set SKIP_CONTAINERS=false to run integration tests")
+	}
 	ctx := context.Background()
 
 	t.Run("TransactionRollback", func(t *testing.T) {
