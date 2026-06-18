@@ -37,6 +37,8 @@ services:
     build:
       context: ./backend
       dockerfile: Dockerfile
+      args:
+        - GOPROXY=${GOPROXY:-https://goproxy.cn,direct}
     restart: always
     environment:
       - DB_URL=postgres://${POSTGRES_USER:-nyx_user}:${POSTGRES_PASSWORD:-nyx_password}@db:5432/${POSTGRES_DB:-nyx_db}?sslmode=disable

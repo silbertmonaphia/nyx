@@ -30,7 +30,10 @@ services:
       retries: 10
 
   backend:
-    build: ./backend
+    build:
+      context: ./backend
+      args:
+        - GOPROXY=${GOPROXY:-https://goproxy.cn,direct}
     ports:
       - "8080:8080"
     environment:
