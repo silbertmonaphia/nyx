@@ -30,8 +30,8 @@ Ensure schema changes are trackable and safe.
 - [x] **Audit Fields**: Add `created_at`, `updated_at`, and `deleted_at` (soft deletes) to all tables.
 - [x] **Integration Testing**: Implemented test infrastructure using `testcontainers-go` for real PostgreSQL instances during tests.
 - [x] **Connection Pooling**: Fine-tuned PostgreSQL connection pool settings via environment variables (Viper).
-- [ ] **Caching Layer**: Integrate Redis or an in-memory cache for read-heavy resources to minimize database lookup times.
-- [ ] **Database Index Optimization**: Analyze access patterns and optimize PostgreSQL indexes for queries/filtering.
+- [x] **Caching Layer**: Integrate Redis or an in-memory cache for read-heavy resources to minimize database lookup times.
+- [x] **Database Index Optimization**: Analyze access patterns and optimize PostgreSQL indexes for queries/filtering.
 - [ ] **Container Version Conflict Guardrail**: Script checks to warn developers or automate Docker volume pruning when upgrading/downgrading Postgres major versions.
 
 ## 4. Modern Frontend Architecture

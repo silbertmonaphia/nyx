@@ -118,9 +118,10 @@ func TestRepositoryIntegration(t *testing.T) {
 		}
 
 		// Get all movies
-		allMovies, err := repo.GetAll(ctx, "")
+		allMovies, err := repo.GetAll(ctx, "", 1, 100)
 		require.NoError(t, err)
-		assert.Len(t, allMovies, 3)
+		assert.Len(t, allMovies.Items, 3)
+		assert.Equal(t, 3, allMovies.Total)
 	})
 
 	t.Run("SearchMovies", func(t *testing.T) {
@@ -139,21 +140,21 @@ func TestRepositoryIntegration(t *testing.T) {
 		}
 
 		// Search by title
-		results, err := repo.GetAll(ctx, "matrix")
+		results, err := repo.GetAll(ctx, "matrix", 1, 20)
 		require.NoError(t, err)
-		assert.Len(t, results, 1)
-		assert.Equal(t, "The Matrix", results[0].Title)
+		assert.Len(t, results.Items, 1)
+		assert.Equal(t, "The Matrix", results.Items[0].Title)
 
 		// Search by description
-		results, err = repo.GetAll(ctx, "thriller")
+		results, err = repo.GetAll(ctx, "thriller", 1, 20)
 		require.NoError(t, err)
-		assert.Len(t, results, 1)
-		assert.Equal(t, "Inception", results[0].Title)
+		assert.Len(t, results.Items, 1)
+		assert.Equal(t, "Inception", results.Items[0].Title)
 
 		// Search with no matches
-		results, err = repo.GetAll(ctx, "nonexistent")
+		results, err = repo.GetAll(ctx, "nonexistent", 1, 20)
 		require.NoError(t, err)
-		assert.Empty(t, results)
+		assert.Empty(t, results.Items)
 	})
 
 	t.Run("UpdateMovie", func(t *testing.T) {
@@ -180,12 +181,12 @@ func TestRepositoryIntegration(t *testing.T) {
 		require.NoError(t, err)
 
 		// Verify update
-		allMovies, err := repo.GetAll(ctx, "")
+		allMovies, err := repo.GetAll(ctx, "", 1, 100)
 		require.NoError(t, err)
-		assert.Len(t, allMovies, 1)
-		assert.Equal(t, "Updated Title", allMovies[0].Title)
-		assert.Equal(t, "Updated description", allMovies[0].Description)
-		assert.Equal(t, 9.5, allMovies[0].Rating)
+		assert.Len(t, allMovies.Items, 1)
+		assert.Equal(t, "Updated Title", allMovies.Items[0].Title)
+		assert.Equal(t, "Updated description", allMovies.Items[0].Description)
+		assert.Equal(t, 9.5, allMovies.Items[0].Rating)
 	})
 
 	t.Run("UpdateMovieNotFound", func(t *testing.T) {
@@ -217,9 +218,9 @@ func TestRepositoryIntegration(t *testing.T) {
 		require.NoError(t, err)
 
 		// Verify soft delete (movie should not appear in results)
-		allMovies, err := repo.GetAll(ctx, "")
+		allMovies, err := repo.GetAll(ctx, "", 1, 100)
 		require.NoError(t, err)
-		assert.Empty(t, allMovies)
+		assert.Empty(t, allMovies.Items)
 	})
 
 	t.Run("DeleteMovieNotFound", func(t *testing.T) {
@@ -266,9 +267,9 @@ func TestRepositoryWithTransactions(t *testing.T) {
 		tx.Rollback()
 
 		// Verify movie was not created
-		allMovies, err := repo.GetAll(ctx, "")
+		allMovies, err := repo.GetAll(ctx, "", 1, 100)
 		require.NoError(t, err)
-		assert.Empty(t, allMovies)
+		assert.Empty(t, allMovies.Items)
 	})
 
 	t.Run("TransactionCommit", func(t *testing.T) {
@@ -293,9 +294,9 @@ func TestRepositoryWithTransactions(t *testing.T) {
 		tx.Commit()
 
 		// Verify movie was created
-		allMovies, err := repo.GetAll(ctx, "")
+		allMovies, err := repo.GetAll(ctx, "", 1, 100)
 		require.NoError(t, err)
-		assert.Len(t, allMovies, 1)
-		assert.Equal(t, "Transaction Commit Test", allMovies[0].Title)
+		assert.Len(t, allMovies.Items, 1)
+		assert.Equal(t, "Transaction Commit Test", allMovies.Items[0].Title)
 	})
 }

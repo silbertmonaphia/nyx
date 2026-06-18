@@ -17,9 +17,9 @@ func NewHandler(service Service) *Handler {
 	return &Handler{service: service}
 }
 
-// HealthHandler checks the health of the API and database
+// HealthHandler checks the health of the API, database, and cache.
 // @Summary Check health
-// @Description Check the status of the API and its database connection
+// @Description Check the status of the API and its database and cache connections
 // @Tags health
 // @Produce json
 // @Success 200 {object} map[string]interface{}
@@ -29,6 +29,12 @@ func (h *Handler) HealthHandler(c *gin.Context) {
 	if err := h.service.CheckHealth(c.Request.Context()); err != nil {
 		dbStatus = "down"
 		log.Error().Err(err).Msg("Database health check failed")
+	}
+
+	cacheStatus := "up"
+	if err := h.service.CheckCacheHealth(c.Request.Context()); err != nil {
+		cacheStatus = "down"
+		log.Error().Err(err).Msg("Cache health check failed")
 	}
 
 	status := "ok"
@@ -41,28 +47,44 @@ func (h *Handler) HealthHandler(c *gin.Context) {
 		"services": gin.H{
 			"api":      "up",
 			"database": dbStatus,
+			"cache":    cacheStatus,
 		},
 	})
 }
 
-// GetMoviesHandler retrieves a list of movies
+// GetMoviesHandler retrieves a paginated list of movies.
 // @Summary Get movies
-// @Description Retrieve a list of movies, optionally filtered by title or description
+// @Description Retrieve a paginated list of movies, optionally filtered by title or description
 // @Tags movies
 // @Produce json
 // @Param q query string false "Search query"
-// @Success 200 {array} Movie
+// @Param page query int false "Page number (1-based)" default(1)
+// @Param page_size query int false "Items per page (max 100)" default(20)
+// @Success 200 {object} MoviesPage
 // @Failure 500 {object} api.ErrorResponse
 // @Router /movies [get]
 func (h *Handler) GetMoviesHandler(c *gin.Context) {
 	queryParam := c.Query("q")
-	movies, err := h.service.GetMovies(c.Request.Context(), queryParam)
+
+	page, err := strconv.Atoi(c.DefaultQuery("page", "1"))
+	if err != nil || page < 1 {
+		page = 1
+	}
+	pageSize, err := strconv.Atoi(c.DefaultQuery("page_size", "20"))
+	if err != nil || pageSize < 1 {
+		pageSize = 20
+	}
+	if pageSize > 100 {
+		pageSize = 100
+	}
+
+	result, err := h.service.GetMovies(c.Request.Context(), queryParam, page, pageSize)
 	if err != nil {
 		api.AbortWithError(c, http.StatusInternalServerError, "Failed to retrieve movies", err.Error())
 		return
 	}
 
-	c.JSON(http.StatusOK, movies)
+	c.JSON(http.StatusOK, NewMoviesPage(result))
 }
 
 // CreateMovieHandler adds a new movie to the system

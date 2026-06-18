@@ -10,6 +10,7 @@ import (
 
 	"nyx/internal/middleware"
 	"nyx/internal/movie"
+	"nyx/internal/platform/cache"
 	"nyx/internal/platform/config"
 	"nyx/internal/platform/database"
 	"nyx/internal/user"
@@ -59,9 +60,30 @@ func main() {
 	// Run migrations
 	database.RunMigrations(cfg.DBURL)
 
+	// Initialize cache. Disabled by default; when enabled we wait up to
+	// 10s for Redis to come up so we fail fast on misconfiguration rather
+	// than serving cache errors on every request.
+	var cacheClient cache.Cache = cache.NewNoop()
+	if cfg.RedisEnabled {
+		var err error
+		cacheClient, err = connectRedisWithRetry(cfg.RedisURL, 10)
+		if err != nil {
+			log.Fatal().Err(err).Msg("Could not connect to Redis")
+		}
+		defer func() { _ = cacheClient.Close() }()
+		log.Info().Str("url", cfg.RedisURL).Msg("Cache enabled")
+	} else {
+		log.Info().Msg("Cache disabled (REDIS_ENABLED=false); using no-op cache")
+	}
+
+	cacheTTL, err := time.ParseDuration(cfg.CacheTTL)
+	if err != nil {
+		log.Fatal().Err(err).Msg("Invalid CACHE_TTL")
+	}
+
 	// Initialize Movie domain
 	movieRepo := movie.NewRepository(db)
-	movieService := movie.NewService(movieRepo)
+	movieService := movie.NewService(movieRepo, cacheClient, cacheTTL)
 	movieHandler := movie.NewHandler(movieService)
 
 	// Initialize User domain
@@ -142,4 +164,19 @@ func main() {
 	}
 
 	log.Info().Msg("Server exited properly")
+}
+
+// connectRedisWithRetry mirrors database.New's startup retry pattern so
+// the API tolerates a Redis container that is still booting.
+func connectRedisWithRetry(url string, attempts int) (cache.Cache, error) {
+	var lastErr error
+	for i := 0; i < attempts; i++ {
+		c, err := cache.NewRedis(url)
+		if err == nil {
+			return c, nil
+		}
+		lastErr = err
+		time.Sleep(1 * time.Second)
+	}
+	return nil, lastErr
 }

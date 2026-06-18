@@ -20,6 +20,11 @@ type Config struct {
 	DBMaxIdleConns    int    `mapstructure:"DB_MAX_IDLE_CONNS"`
 	DBConnMaxLifetime string `mapstructure:"DB_CONN_MAX_LIFETIME"`
 	DBConnMaxIdleTime string `mapstructure:"DB_CONN_MAX_IDLE_TIME"`
+
+	// Cache
+	RedisURL     string `mapstructure:"REDIS_URL"`
+	RedisEnabled bool   `mapstructure:"REDIS_ENABLED"`
+	CacheTTL     string `mapstructure:"CACHE_TTL"`
 }
 
 func Load() (*Config, error) {
@@ -33,6 +38,11 @@ func Load() (*Config, error) {
 	viper.SetDefault("DB_MAX_IDLE_CONNS", 10)
 	viper.SetDefault("DB_CONN_MAX_LIFETIME", "1h")
 	viper.SetDefault("DB_CONN_MAX_IDLE_TIME", "30m")
+
+	// Cache defaults — caching is opt-in. Set REDIS_ENABLED=true to enable.
+	viper.SetDefault("REDIS_ENABLED", false)
+	viper.SetDefault("REDIS_URL", "redis://localhost:6379")
+	viper.SetDefault("CACHE_TTL", "5m")
 
 	viper.AutomaticEnv()
 	// Allow environment variables to override config file (e.g., DB_URL instead of db_url)
@@ -56,6 +66,14 @@ func Load() (*Config, error) {
 	}
 	if _, err := time.ParseDuration(cfg.DBConnMaxIdleTime); err != nil {
 		return nil, fmt.Errorf("invalid DB_CONN_MAX_IDLE_TIME: %w", err)
+	}
+	if _, err := time.ParseDuration(cfg.CacheTTL); err != nil {
+		return nil, fmt.Errorf("invalid CACHE_TTL: %w", err)
+	}
+
+	// Cross-field validation: enabling the cache requires a URL to connect to.
+	if cfg.RedisEnabled && cfg.RedisURL == "" {
+		return nil, fmt.Errorf("REDIS_URL is required when REDIS_ENABLED=true")
 	}
 
 	return &cfg, nil

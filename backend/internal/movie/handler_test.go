@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"nyx/internal/middleware"
+	"nyx/internal/platform/cache"
 
 	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/gin-gonic/gin"
@@ -41,7 +42,7 @@ func TestHealthHandler(t *testing.T) {
 	defer mockDB.Close()
 
 	repo := NewRepository(sqlx.NewDb(mockDB, "postgres"))
-	service := NewService(repo)
+	service := NewService(repo, cache.NewNoop(), time.Minute)
 	h := NewHandler(service)
 
 	mock.ExpectPing()
@@ -70,7 +71,7 @@ func TestHealthHandlerError(t *testing.T) {
 	defer mockDB.Close()
 
 	repo := NewRepository(sqlx.NewDb(mockDB, "postgres"))
-	service := NewService(repo)
+	service := NewService(repo, cache.NewNoop(), time.Minute)
 	h := NewHandler(service)
 
 	mock.ExpectPing().WillReturnError(fmt.Errorf("db connection failed"))
@@ -99,7 +100,7 @@ func TestGetMoviesHandler(t *testing.T) {
 	defer mockDB.Close()
 
 	repo := NewRepository(sqlx.NewDb(mockDB, "postgres"))
-	service := NewService(repo)
+	service := NewService(repo, cache.NewNoop(), time.Minute)
 	h := NewHandler(service)
 
 	now := time.Now()
@@ -107,7 +108,13 @@ func TestGetMoviesHandler(t *testing.T) {
 		AddRow(1, "Inception", "A thief who steals corporate secrets through the use of dream-sharing technology.", 8.8, now, now, nil).
 		AddRow(2, "The Matrix", "A computer hacker learns from mysterious rebels about the true nature of his reality.", 8.7, now, now, nil)
 
-	mock.ExpectQuery("SELECT id, title, description, rating, created_at, updated_at, deleted_at FROM movies WHERE deleted_at IS NULL").WillReturnRows(rows)
+	mock.ExpectBegin()
+	mock.ExpectQuery("SELECT id, title, description, rating, created_at, updated_at, deleted_at FROM movies WHERE deleted_at IS NULL ORDER BY created_at DESC, id DESC LIMIT").
+		WithArgs(20, 0).
+		WillReturnRows(rows)
+	mock.ExpectQuery("SELECT COUNT\\(\\*\\) FROM movies WHERE deleted_at IS NULL").
+		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(2))
+	mock.ExpectCommit()
 
 	router := setupTestRouter(h)
 	req, _ := http.NewRequest("GET", "/api/movies", nil)
@@ -118,10 +125,144 @@ func TestGetMoviesHandler(t *testing.T) {
 		t.Errorf("handler returned wrong status code: got %v want %v", rr.Code, http.StatusOK)
 	}
 
-	var movies []Movie
-	json.Unmarshal(rr.Body.Bytes(), &movies)
-	if len(movies) != 2 {
-		t.Errorf("expected 2 movies, got %v", len(movies))
+	var page MoviesPage
+	if err := json.Unmarshal(rr.Body.Bytes(), &page); err != nil {
+		t.Fatalf("unmarshal envelope: %v", err)
+	}
+	if len(page.Data) != 2 {
+		t.Errorf("expected 2 movies, got %v", len(page.Data))
+	}
+	if page.Page != 1 || page.PageSize != 20 || page.Total != 2 {
+		t.Errorf("unexpected page meta: page=%d page_size=%d total=%d", page.Page, page.PageSize, page.Total)
+	}
+	if !page.HasMore {
+		t.Errorf("expected has_more=true when total > page*page_size")
+	}
+}
+
+func TestGetMoviesHandlerPaginationParams(t *testing.T) {
+	mockDB, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("an error '%s' was not expected when opening a stub database connection", err)
+	}
+	defer mockDB.Close()
+
+	repo := NewRepository(sqlx.NewDb(mockDB, "postgres"))
+	service := NewService(repo, cache.NewNoop(), time.Minute)
+	h := NewHandler(service)
+
+	rows := sqlmock.NewRows([]string{"id", "title", "description", "rating", "created_at", "updated_at", "deleted_at"})
+
+	mock.ExpectBegin()
+	mock.ExpectQuery("SELECT id, title, description, rating, created_at, updated_at, deleted_at FROM movies WHERE deleted_at IS NULL ORDER BY created_at DESC, id DESC LIMIT").
+		WithArgs(5, 10). // page=3, page_size=5 => offset=10
+		WillReturnRows(rows)
+	mock.ExpectQuery("SELECT COUNT\\(\\*\\) FROM movies WHERE deleted_at IS NULL").
+		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(0))
+	mock.ExpectCommit()
+
+	router := setupTestRouter(h)
+	req, _ := http.NewRequest("GET", "/api/movies?page=3&page_size=5", nil)
+	rr := httptest.NewRecorder()
+	router.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Errorf("handler returned wrong status code: got %v want %v", rr.Code, http.StatusOK)
+	}
+
+	var page MoviesPage
+	if err := json.Unmarshal(rr.Body.Bytes(), &page); err != nil {
+		t.Fatalf("unmarshal envelope: %v", err)
+	}
+	if page.Page != 3 || page.PageSize != 5 {
+		t.Errorf("expected page=3 page_size=5, got page=%d page_size=%d", page.Page, page.PageSize)
+	}
+	if page.HasMore {
+		t.Errorf("expected has_more=false when total=0")
+	}
+}
+
+func TestGetMoviesHandlerPageSizeClamped(t *testing.T) {
+	mockDB, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("an error '%s' was not expected when opening a stub database connection", err)
+	}
+	defer mockDB.Close()
+
+	repo := NewRepository(sqlx.NewDb(mockDB, "postgres"))
+	service := NewService(repo, cache.NewNoop(), time.Minute)
+	h := NewHandler(service)
+
+	rows := sqlmock.NewRows([]string{"id", "title", "description", "rating", "created_at", "updated_at", "deleted_at"})
+
+	mock.ExpectBegin()
+	mock.ExpectQuery("SELECT id, title, description, rating, created_at, updated_at, deleted_at FROM movies WHERE deleted_at IS NULL ORDER BY created_at DESC, id DESC LIMIT").
+		WithArgs(100, 0). // page_size=500 should clamp to 100
+		WillReturnRows(rows)
+	mock.ExpectQuery("SELECT COUNT\\(\\*\\) FROM movies WHERE deleted_at IS NULL").
+		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(0))
+	mock.ExpectCommit()
+
+	router := setupTestRouter(h)
+	req, _ := http.NewRequest("GET", "/api/movies?page_size=500", nil)
+	rr := httptest.NewRecorder()
+	router.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Errorf("handler returned wrong status code: got %v want %v", rr.Code, http.StatusOK)
+	}
+
+	var page MoviesPage
+	if err := json.Unmarshal(rr.Body.Bytes(), &page); err != nil {
+		t.Fatalf("unmarshal envelope: %v", err)
+	}
+	if page.PageSize != 100 {
+		t.Errorf("expected page_size clamped to 100, got %d", page.PageSize)
+	}
+}
+
+func TestGetMoviesHandlerSearch(t *testing.T) {
+	mockDB, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("an error '%s' was not expected when opening a stub database connection", err)
+	}
+	defer mockDB.Close()
+
+	repo := NewRepository(sqlx.NewDb(mockDB, "postgres"))
+	service := NewService(repo, cache.NewNoop(), time.Minute)
+	h := NewHandler(service)
+
+	now := time.Now()
+	rows := sqlmock.NewRows([]string{"id", "title", "description", "rating", "created_at", "updated_at", "deleted_at"}).
+		AddRow(3, "The Matrix Reloaded", "Continuation of the Matrix saga.", 7.2, now, now, nil)
+
+	mock.ExpectBegin()
+	mock.ExpectQuery("SELECT id, title, description, rating, created_at, updated_at, deleted_at FROM movies WHERE \\(title ILIKE \\$1 OR description ILIKE \\$1\\) AND deleted_at IS NULL ORDER BY created_at DESC, id DESC LIMIT").
+		WithArgs("%matrix%", 20, 0).
+		WillReturnRows(rows)
+	mock.ExpectQuery("SELECT COUNT\\(\\*\\) FROM movies WHERE \\(title ILIKE \\$1 OR description ILIKE \\$1\\) AND deleted_at IS NULL").
+		WithArgs("%matrix%").
+		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(1))
+	mock.ExpectCommit()
+
+	router := setupTestRouter(h)
+	req, _ := http.NewRequest("GET", "/api/movies?q=matrix", nil)
+	rr := httptest.NewRecorder()
+	router.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Errorf("handler returned wrong status code: got %v want %v", rr.Code, http.StatusOK)
+	}
+
+	var page MoviesPage
+	if err := json.Unmarshal(rr.Body.Bytes(), &page); err != nil {
+		t.Fatalf("unmarshal envelope: %v", err)
+	}
+	if len(page.Data) != 1 || page.Data[0].Title != "The Matrix Reloaded" {
+		t.Errorf("expected one Matrix movie, got %+v", page.Data)
+	}
+	if page.Total != 1 {
+		t.Errorf("expected total=1, got %d", page.Total)
 	}
 }
 
@@ -133,7 +274,7 @@ func TestCreateMovieHandler(t *testing.T) {
 	defer mockDB.Close()
 
 	repo := NewRepository(sqlx.NewDb(mockDB, "postgres"))
-	service := NewService(repo)
+	service := NewService(repo, cache.NewNoop(), time.Minute)
 	h := NewHandler(service)
 
 	newMovie := Movie{
@@ -201,7 +342,7 @@ func TestUpdateMovieHandler(t *testing.T) {
 	defer mockDB.Close()
 
 	repo := NewRepository(sqlx.NewDb(mockDB, "postgres"))
-	service := NewService(repo)
+	service := NewService(repo, cache.NewNoop(), time.Minute)
 	h := NewHandler(service)
 
 	updatedMovie := Movie{
@@ -240,7 +381,7 @@ func TestDeleteMovieHandler(t *testing.T) {
 	defer mockDB.Close()
 
 	repo := NewRepository(sqlx.NewDb(mockDB, "postgres"))
-	service := NewService(repo)
+	service := NewService(repo, cache.NewNoop(), time.Minute)
 	h := NewHandler(service)
 
 	mock.ExpectExec("UPDATE movies SET deleted_at = CURRENT_TIMESTAMP WHERE id = \\$1 AND deleted_at IS NULL").

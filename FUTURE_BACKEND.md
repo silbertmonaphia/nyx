@@ -47,8 +47,8 @@ Improve data safety and developer speed.
 - [x] **GORM or SQLX**: Transition to an ORM or a typed SQL builder for safer queries and easier mapping.
 - [x] **Transaction Management**: Ensure atomic operations for complex logic.
 - [x] **Connection Pooling**: Tune PostgreSQL connection pool settings for production loads via environment variables.
-- [ ] **Database Index Optimization**: Analyze access patterns and optimize PostgreSQL indexes for queries/filtering.
-- [ ] **Caching Layer**: Integrate Redis or an in-memory cache for read-heavy resources to minimize database lookup times.
+- [x] **Database Index Optimization**: Analyze access patterns and optimize PostgreSQL indexes for queries/filtering.
+- [x] **Caching Layer**: Integrate Redis or an in-memory cache for read-heavy resources to minimize database lookup times.
 
 ## 5. Observability & Documentation
 Make the system transparent and easy to integrate with.

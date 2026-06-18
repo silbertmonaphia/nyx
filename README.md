@@ -14,6 +14,8 @@ A minimalist media rating application with a Go backend and a React frontend.
 - **Advanced UI**: Modern React frontend with Tailwind CSS and TanStack Query.
 - **Search**: Case-insensitive search by movie title.
 - **Backend API**: Robust Go backend with PostgreSQL and auto-migrations.
+- **Cache**: Redis-backed cache-aside layer for the read-heavy `GET /movies` endpoint (opt-in via `REDIS_ENABLED=true`).
+- **Pagination**: `GET /movies` returns a paginated envelope (`page`, `page_size`, `total`, `has_more`); defaults to 20 items per page, max 100.
 - **TypeScript**: Full-stack type safety with TypeScript in the frontend.
 - **Validation**: Runtime validation with Zod (frontend) and Go structs (backend).
 - **Containerized**: Production-ready Docker builds with pre-compiled binaries.
@@ -67,6 +69,11 @@ A minimalist media rating application with a Go backend and a React frontend.
    
    # Or via Docker container
    sudo docker compose exec db psql -U postgres -d nyx
+   ```
+
+6. (Optional) Inspect the cache:
+   ```bash
+   sudo docker compose exec redis redis-cli KEYS 'movies:*'
    ```
 
 ### Production Deployment

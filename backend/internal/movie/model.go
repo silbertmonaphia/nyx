@@ -13,3 +13,28 @@ type Movie struct {
 	UpdatedAt   time.Time  `json:"updated_at" db:"updated_at"`
 	DeletedAt   *time.Time `json:"deleted_at,omitempty" db:"deleted_at"`
 }
+
+// MoviesPage is the paginated response envelope returned by GET /movies.
+type MoviesPage struct {
+	Data     []Movie `json:"data"`
+	Page     int     `json:"page" example:"1"`
+	PageSize int     `json:"page_size" example:"20"`
+	Total    int     `json:"total" example:"42"`
+	HasMore  bool    `json:"has_more" example:"true"`
+}
+
+// NewMoviesPage converts a repository Page into the response envelope.
+// Empty result sets must serialize as [] not null.
+func NewMoviesPage(p *Page) MoviesPage {
+	items := p.Items
+	if items == nil {
+		items = []Movie{}
+	}
+	return MoviesPage{
+		Data:     items,
+		Page:     p.Page,
+		PageSize: p.PageSize,
+		Total:    p.Total,
+		HasMore:  p.Page*p.PageSize < p.Total,
+	}
+}
