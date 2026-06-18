@@ -40,9 +40,25 @@ func Load() (*Config, error) {
 	viper.SetDefault("DB_CONN_MAX_IDLE_TIME", "30m")
 
 	// Cache defaults — caching is opt-in. Set REDIS_ENABLED=true to enable.
+	// REDIS_URL has no default: when REDIS_ENABLED=true it must come from env,
+	// and when REDIS_ENABLED=false it's unused. A blanket default would mask
+	// the cross-field validation below.
 	viper.SetDefault("REDIS_ENABLED", false)
-	viper.SetDefault("REDIS_URL", "redis://localhost:6379")
 	viper.SetDefault("CACHE_TTL", "5m")
+
+	// Explicitly bind every env-sourced key. viper.AutomaticEnv() only checks
+	// env vars for keys already known to viper (via SetDefault, BindEnv, or a
+	// successful ReadInConfig). In Docker there's no .env file next to the
+	// binary, so without BindEnv the env vars are silently ignored and
+	// DB_URL comes back empty.
+	for _, key := range []string{
+		"DB_URL", "JWT_SECRET", "PORT", "GIN_MODE", "MIGRATION_PATH",
+		"DB_MAX_OPEN_CONNS", "DB_MAX_IDLE_CONNS",
+		"DB_CONN_MAX_LIFETIME", "DB_CONN_MAX_IDLE_TIME",
+		"REDIS_URL", "REDIS_ENABLED", "CACHE_TTL",
+	} {
+		_ = viper.BindEnv(key)
+	}
 
 	viper.AutomaticEnv()
 	// Allow environment variables to override config file (e.g., DB_URL instead of db_url)
