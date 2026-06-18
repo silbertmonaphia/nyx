@@ -11,6 +11,11 @@ import { Movie, NewMovie, PaginatedMovies } from '../types/movie';
 const MOVIES_QUERY_KEY = 'movies' as const;
 const PAGE_SIZE = 20;
 
+// Negative ids are placeholders for rows that have not yet been
+// confirmed by the server (see addMovie's optimistic update). They
+// must never be sent to the API.
+const isOptimisticId = (id: number) => id < 0;
+
 interface MoviesContext {
   previous: Array<[readonly unknown[], unknown]> | undefined;
 }
@@ -32,6 +37,9 @@ export const useMovies = (searchTerm: string) => {
     initialPageParam: 1,
     getNextPageParam: (last) => (last.has_more ? last.page + 1 : undefined),
     staleTime: 30_000,
+    // Keep the cache around long enough to make back-navigation feel
+    // instant; the default 5 min is too eager for this dataset.
+    gcTime: 30 * 60 * 1000,
   });
 
   const movies = useMemo<Movie[]>(
@@ -70,6 +78,24 @@ export const useMovies = (searchTerm: string) => {
       );
       return { previous };
     },
+    onSuccess: (created) => {
+      // Swap the optimistic placeholder (negative id) for the real row
+      // returned by the server so subsequent edit/delete targets the
+      // persisted id. Failures still flow through onError → onSettled.
+      queryClient.setQueriesData<InfiniteData<PaginatedMovies>>(
+        { queryKey },
+        (old) => {
+          if (!old) return old;
+          return {
+            ...old,
+            pages: old.pages.map((page) => ({
+              ...page,
+              data: page.data.map((m) => (isOptimisticId(m.id) ? created : m)),
+            })),
+          };
+        },
+      );
+    },
     onError: (_err, _vars, ctx) => {
       ctx?.previous?.forEach(([key, snapshot]) => {
         queryClient.setQueryData(key, snapshot);
@@ -81,7 +107,15 @@ export const useMovies = (searchTerm: string) => {
   });
 
   const updateMovie = useMutation<Movie, Error, Movie, MoviesContext>({
-    mutationFn: (movie) => movieService.updateMovie(movie.id, movie),
+    mutationFn: (movie) => {
+      if (isOptimisticId(movie.id)) {
+        // Refuse to PUT a placeholder id — the server has no row to
+        // update. The optimistic row will be replaced by addMovie's
+        // onSuccess once the create mutation settles.
+        return Promise.reject(new Error('Cannot update a movie before it has been created'));
+      }
+      return movieService.updateMovie(movie.id, movie);
+    },
     onMutate: async (updated) => {
       await queryClient.cancelQueries({ queryKey });
       const previous = queryClient.getQueriesData({ queryKey });
@@ -111,7 +145,15 @@ export const useMovies = (searchTerm: string) => {
   });
 
   const deleteMovie = useMutation<void, Error, number, MoviesContext>({
-    mutationFn: (id) => movieService.deleteMovie(id),
+    mutationFn: (id) => {
+      if (isOptimisticId(id)) {
+        // The row never reached the server. Removing it locally is
+        // safe — we already removed it in onMutate, just skip the API
+        // call that would 404 on a negative id.
+        return Promise.resolve();
+      }
+      return movieService.deleteMovie(id);
+    },
     onMutate: async (id) => {
       await queryClient.cancelQueries({ queryKey });
       const previous = queryClient.getQueriesData({ queryKey });
