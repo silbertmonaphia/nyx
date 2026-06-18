@@ -46,10 +46,10 @@ Improve the React developer experience and application performance.
 - [x] **UI Component Library**: Integrate **Shadcn UI** or **Radix UI** for accessible, high-quality primitives.
 - [ ] **Dynamic Metadata (SEO)**: Implement proper, dynamic title tags and meta descriptions per page for improved SEO.
 - [ ] **Search Debounce**: `App.tsx` fires an API request on every search keystroke. Add a 300ms debounce.
-- [ ] **Pagination / Infinite Scroll**: The API returns all records in a single payload. Add server-side pagination.
-- [ ] **Optimistic Updates**: Mutations invalidate cache after success. Use TanStack Query `onMutate` for instant UI feedback.
-- [ ] **Loading Skeletons**: Replace the plain `"Loading movies..."` text with skeleton placeholder cards.
-- [ ] **Confirm Dialog Component**: `App.tsx` uses `window.confirm()` for delete — replace with an accessible modal dialog.
+- [x] **Pagination / Infinite Scroll**: The API returns all records in a single payload. Add server-side pagination.
+- [x] **Optimistic Updates**: Mutations invalidate cache after success. Use TanStack Query `onMutate` for instant UI feedback.
+- [x] **Loading Skeletons**: Replace the plain `"Loading movies..."` text with skeleton placeholder cards.
+- [x] **Confirm Dialog Component**: `App.tsx` uses `window.confirm()` for delete — replace with an accessible modal dialog.
 - [ ] **Persist Auth Token Securely**: The JWT is stored in `localStorage` via Zustand persist. Consider `httpOnly` cookies or document the XSS risk.
 
 ## 5. Developer Experience (DX) & CI/CD

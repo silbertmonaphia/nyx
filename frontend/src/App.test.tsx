@@ -11,24 +11,22 @@ vi.mock('./store/authStore');
 const mockUseMovies = useMovies as any;
 const mockUseAuthStore = useAuthStore as any;
 
+const baseMovies = {
+  movies: [],
+  totalCount: 0,
+  isLoading: false,
+  isError: false,
+  hasMore: false,
+  isLoadingMore: false,
+  loadMore: vi.fn(),
+  addMovie: { mutateAsync: vi.fn() },
+  updateMovie: { mutateAsync: vi.fn() },
+  deleteMovie: { mutateAsync: vi.fn() },
+};
+
 describe('App', () => {
-  let addMovieMock: any;
-  let updateMovieMock: any;
-  let deleteMovieMock: any;
-
   beforeEach(() => {
-    addMovieMock = vi.fn();
-    updateMovieMock = vi.fn();
-    deleteMovieMock = vi.fn();
-
-    mockUseMovies.mockReturnValue({
-      getMovies: () => ({ data: [], isLoading: true }),
-      addMovie: { mutateAsync: addMovieMock },
-      updateMovie: { mutateAsync: updateMovieMock },
-      deleteMovie: { mutateAsync: deleteMovieMock },
-    });
-
-    // Default: Unauthenticated
+    mockUseMovies.mockReturnValue({ ...baseMovies });
     mockUseAuthStore.mockReturnValue({
       isAuthenticated: false,
       user: null,
@@ -38,13 +36,13 @@ describe('App', () => {
 
   it('renders the main title', () => {
     render(<App />);
-    // There are multiple "Nyx" elements now (Logo and Title), checking if at least one exists
     expect(screen.getAllByText('Nyx').length).toBeGreaterThan(0);
   });
 
-  it('displays loading state initially', () => {
+  it('displays loading skeleton initially', () => {
+    mockUseMovies.mockReturnValue({ ...baseMovies, isLoading: true });
     render(<App />);
-    expect(screen.getByText('Loading movies...')).toBeInTheDocument();
+    expect(screen.getByTestId('movie-list-skeleton')).toBeInTheDocument();
   });
 
   it('fetches and displays movies', async () => {
@@ -52,12 +50,7 @@ describe('App', () => {
       { id: 1, title: 'Test Movie 1', description: 'Desc 1', rating: 8 },
       { id: 2, title: 'Test Movie 2', description: 'Desc 2', rating: 9 },
     ];
-    mockUseMovies.mockReturnValue({
-      getMovies: () => ({ data: movies, isLoading: false }),
-      addMovie: { mutateAsync: addMovieMock },
-      updateMovie: { mutateAsync: updateMovieMock },
-      deleteMovie: { mutateAsync: deleteMovieMock },
-    });
+    mockUseMovies.mockReturnValue({ ...baseMovies, movies });
 
     render(<App />);
 
@@ -68,13 +61,6 @@ describe('App', () => {
   });
 
   it('shows "No movies found" message when there are no movies', async () => {
-    mockUseMovies.mockReturnValue({
-      getMovies: () => ({ data: [], isLoading: false }),
-      addMovie: { mutateAsync: addMovieMock },
-      updateMovie: { mutateAsync: updateMovieMock },
-      deleteMovie: { mutateAsync: deleteMovieMock },
-    });
-
     render(<App />);
 
     await waitFor(() => {
@@ -89,22 +75,22 @@ describe('App', () => {
       logout: vi.fn(),
     });
 
+    const addMovieMock = vi.fn().mockResolvedValue({});
     mockUseMovies.mockReturnValue({
-      getMovies: () => ({ data: [], isLoading: false }),
+      ...baseMovies,
       addMovie: { mutateAsync: addMovieMock },
-      updateMovie: { mutateAsync: updateMovieMock },
-      deleteMovie: { mutateAsync: deleteMovieMock },
     });
-    addMovieMock.mockResolvedValue({ data: {} });
-    
+
     render(<App />);
-    
+
     await userEvent.click(screen.getByText('Add Movie'));
     await userEvent.type(screen.getByPlaceholderText('Movie title'), 'New Test Movie');
     await userEvent.click(screen.getByRole('button', { name: /save movie/i }));
 
     await waitFor(() => {
-      expect(addMovieMock).toHaveBeenCalledWith(expect.objectContaining({ title: 'New Test Movie' }));
+      expect(addMovieMock).toHaveBeenCalledWith(
+        expect.objectContaining({ title: 'New Test Movie' }),
+      );
     });
   });
 
@@ -116,12 +102,7 @@ describe('App', () => {
     });
 
     const movies = [{ id: 1, title: 'Movie to Edit', description: 'Desc', rating: 5 }];
-    mockUseMovies.mockReturnValue({
-      getMovies: () => ({ data: movies, isLoading: false }),
-      addMovie: { mutateAsync: addMovieMock },
-      updateMovie: { mutateAsync: updateMovieMock },
-      deleteMovie: { mutateAsync: deleteMovieMock },
-    });
+    mockUseMovies.mockReturnValue({ ...baseMovies, movies });
 
     render(<App />);
 
@@ -132,30 +113,58 @@ describe('App', () => {
     expect(screen.getByPlaceholderText('Movie title')).toHaveValue('Movie to Edit');
   });
 
-  it('can delete a movie (when authenticated)', async () => {
+  it('can delete a movie via the confirm dialog (when authenticated)', async () => {
     mockUseAuthStore.mockReturnValue({
       isAuthenticated: true,
       user: { id: 1, username: 'testuser' },
       logout: vi.fn(),
     });
 
+    const deleteMovieMock = vi.fn().mockResolvedValue({});
     const movies = [{ id: 1, title: 'Movie to Delete', description: 'Desc', rating: 5 }];
     mockUseMovies.mockReturnValue({
-      getMovies: () => ({ data: movies, isLoading: false }),
-      addMovie: { mutateAsync: addMovieMock },
-      updateMovie: { mutateAsync: updateMovieMock },
+      ...baseMovies,
+      movies,
       deleteMovie: { mutateAsync: deleteMovieMock },
     });
-    deleteMovieMock.mockResolvedValue({ data: {} });
-    window.confirm = vi.fn(() => true); // Auto-confirm deletion
 
     render(<App />);
-    
+
     await waitFor(() => screen.getByText('Movie to Delete'));
     await userEvent.click(screen.getByTitle('Delete'));
+
+    // The Radix dialog should now be open; click the confirm button.
+    const confirmButton = await screen.findByTestId('confirm-delete');
+    await userEvent.click(confirmButton);
 
     await waitFor(() => {
       expect(deleteMovieMock).toHaveBeenCalledWith(1);
     });
+  });
+
+  it('does not delete when the cancel button is clicked in the confirm dialog', async () => {
+    mockUseAuthStore.mockReturnValue({
+      isAuthenticated: true,
+      user: { id: 1, username: 'testuser' },
+      logout: vi.fn(),
+    });
+
+    const deleteMovieMock = vi.fn().mockResolvedValue({});
+    const movies = [{ id: 1, title: 'Movie to Keep', description: 'Desc', rating: 5 }];
+    mockUseMovies.mockReturnValue({
+      ...baseMovies,
+      movies,
+      deleteMovie: { mutateAsync: deleteMovieMock },
+    });
+
+    render(<App />);
+
+    await waitFor(() => screen.getByText('Movie to Keep'));
+    await userEvent.click(screen.getByTitle('Delete'));
+
+    const cancelButton = await screen.findByRole('button', { name: /cancel/i });
+    await userEvent.click(cancelButton);
+
+    expect(deleteMovieMock).not.toHaveBeenCalled();
   });
 });

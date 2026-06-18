@@ -23,9 +23,9 @@ Manual `fetch` in `useEffect` is error-prone and lacks essential features like c
   - Built-in loading, error, and pagination states.
   - Optimistic updates for a snappier UI during movie creation/deletion.
 - [x] **Axios/Ky Centralized Client**: Create a configured API client with interceptors for global error handling and authentication headers.
-- [ ] **Optimistic Updates**: `useMovies.ts` invalidates the query cache on mutation success but does not implement optimistic updates. Use `onMutate`/`onError`/`onSettled` for instant UI feedback.
+- [x] **Optimistic Updates**: `useMovies.ts` invalidates the query cache on mutation success but does not implement optimistic updates. Use `onMutate`/`onError`/`onSettled` for instant UI feedback.
 - [ ] **Search Debounce**: `App.tsx` passes `searchTerm` directly to `getMovies()` on every keystroke, triggering an API call for every character typed. Debounce the input (e.g. 300ms) to reduce server load.
-- [ ] **Pagination / Infinite Scroll**: `GetAll` returns all movies in one payload. Add server-side pagination and implement `useInfiniteQuery` on the frontend.
+- [x] **Pagination / Infinite Scroll**: `GetAll` returns all movies in one payload. Add server-side pagination and implement `useInfiniteQuery` on the frontend.
 
 ## 3. Form Management & Validation
 Managing complex form state and validation manually is a common source of bugs.

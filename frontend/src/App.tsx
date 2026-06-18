@@ -14,24 +14,41 @@ import { useAuthStore } from './store/authStore';
 import { AuthForm } from './features/auth/components/AuthForm';
 import { Button } from './components/ui/Button';
 import { Input } from './components/ui/Input';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from './components/ui/Dialog';
 import { Plus, X, Search, LogOut, User as UserIcon } from 'lucide-react';
 
 function App() {
-  const { 
-    searchTerm, 
-    setSearchTerm, 
-    showAddForm, 
-    setShowAddForm, 
-    editingMovie, 
+  const {
+    searchTerm,
+    setSearchTerm,
+    showAddForm,
+    setShowAddForm,
+    editingMovie,
     setEditingMovie,
-    resetFormState
+    resetFormState,
   } = useMovieUiStore();
 
   const { isAuthenticated, user, logout } = useAuthStore();
   const [showAuthForm, setShowAuthForm] = useState(false);
+  const [confirmDeleteId, setConfirmDeleteId] = useState<number | null>(null);
 
-  const { getMovies, addMovie, updateMovie, deleteMovie } = useMovies();
-  const { data: movies = [], isLoading } = getMovies(searchTerm);
+  const {
+    movies,
+    isLoading,
+    hasMore,
+    isLoadingMore,
+    loadMore,
+    addMovie,
+    updateMovie,
+    deleteMovie,
+  } = useMovies(searchTerm);
 
   const handleAddOrUpdateMovie = async (movieData: NewMovie | Movie) => {
     try {
@@ -46,8 +63,14 @@ function App() {
     }
   };
 
-  const handleDeleteMovie = async (id: number) => {
-    if (!window.confirm('Are you sure you want to delete this movie?')) return;
+  const confirmDelete = (id: number) => {
+    setConfirmDeleteId(id);
+  };
+
+  const executeDelete = async () => {
+    if (confirmDeleteId === null) return;
+    const id = confirmDeleteId;
+    setConfirmDeleteId(null);
     try {
       await deleteMovie.mutateAsync(id);
     } catch (err) {
@@ -144,10 +167,13 @@ function App() {
             />
           )}
 
-          <MovieList 
+          <MovieList
             movies={movies}
             loading={isLoading}
             searchTerm={searchTerm}
+            hasMore={hasMore}
+            isLoadingMore={isLoadingMore}
+            onLoadMore={loadMore}
             onEdit={(movie) => {
               if (!isAuthenticated) {
                 useUiStore.getState().addToast('Please login to edit movies', 'info');
@@ -163,11 +189,35 @@ function App() {
                 setShowAuthForm(true);
                 return;
               }
-              handleDeleteMovie(id);
+              confirmDelete(id);
             }}
           />
         </div>
       </section>
+
+      <Dialog
+        open={confirmDeleteId !== null}
+        onOpenChange={(open) => {
+          if (!open) setConfirmDeleteId(null);
+        }}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Delete movie</DialogTitle>
+            <DialogDescription>
+              This will remove the movie from your list. This action cannot be undone.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setConfirmDeleteId(null)}>
+              Cancel
+            </Button>
+            <Button variant="destructive" onClick={executeDelete} data-testid="confirm-delete">
+              Delete
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       <div className="ticks"></div>
 
