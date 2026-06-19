@@ -1,7 +1,4 @@
 import React, { useState } from 'react';
-import reactLogo from './assets/react.svg';
-import viteLogo from './assets/vite.svg';
-import heroImg from './assets/hero.png';
 import './App.css';
 import { Movie, NewMovie } from './features/movies/types/movie';
 import { useMovies } from './features/movies/hooks/useMovies';
@@ -104,12 +101,6 @@ function App() {
       </nav>
 
       <section id="center" className="container mx-auto px-4 py-8">
-        <div className="hero mb-8">
-          <img src={heroImg} className="base mx-auto" width="170" height="179" alt="" />
-          <img src={reactLogo} className="framework" alt="React logo" />
-          <img src={viteLogo} className="vite" alt="Vite logo" />
-        </div>
-        
         <div className="max-w-2xl mx-auto text-center mb-12">
           <h1 className="text-5xl md:text-7xl font-extrabold tracking-tight mb-4">Nyx</h1>
           <p className="text-xl text-muted-foreground">Your minimalist movie guide</p>
