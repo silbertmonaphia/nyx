@@ -41,6 +41,11 @@ jobs:
       run: |
         cd backend
         golangci-lint run --timeout=5m
+    - name: Install sqlc
+      run: go install github.com/sqlc-dev/sqlc/cmd/sqlc@v1.31.1
+    - name: Verify sqlc generated code is up to date
+      working-directory: backend
+      run: make sqlc-diff
     - name: Test
       run: cd backend && go test -v ./...
 
