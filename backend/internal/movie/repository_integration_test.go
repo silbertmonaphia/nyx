@@ -31,21 +31,32 @@ func TestMain(m *testing.M) {
 	defer cancel()
 
 	if !skipContainers {
-		var err error
-		testDB, err = test.StartPostgres(ctx)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "Failed to start PostgreSQL container: %v\n", err)
-			os.Exit(1)
-		}
-		dbURL = testDB.DBURL
-
-		// Run migrations
-		if err := testDB.RunMigrationsWithContext(ctx); err != nil {
-			fmt.Fprintf(os.Stderr, "Failed to run migrations: %v\n", err)
-			if testDB.Container != nil {
-				_ = testDB.Container.Terminate(context.Background())
+		// CI path: if DB_URL is set, use the externally-provided
+		// Postgres (e.g. a service container) directly instead of
+		// spinning up a testcontainer.
+		if url := os.Getenv("DB_URL"); url != "" {
+			dbURL = url
+			if err := test.RunMigrationsForURL(ctx, dbURL); err != nil {
+				fmt.Fprintf(os.Stderr, "Failed to run migrations: %v\n", err)
+				os.Exit(1)
 			}
-			os.Exit(1)
+		} else {
+			var err error
+			testDB, err = test.StartPostgres(ctx)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "Failed to start PostgreSQL container: %v\n", err)
+				os.Exit(1)
+			}
+			dbURL = testDB.DBURL
+
+			// Run migrations
+			if err := testDB.RunMigrationsWithContext(ctx); err != nil {
+				fmt.Fprintf(os.Stderr, "Failed to run migrations: %v\n", err)
+				if testDB.Container != nil {
+					_ = testDB.Container.Terminate(context.Background())
+				}
+				os.Exit(1)
+			}
 		}
 	} else {
 		fmt.Println("Skipping container-based integration tests")

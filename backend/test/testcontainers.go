@@ -78,6 +78,13 @@ func (tdb *TestDB) RunMigrationsWithContext(ctx context.Context) error {
 	return runMigrations(ctx, tdb.DBURL)
 }
 
+// RunMigrationsForURL applies migrations to a database reachable at dbURL.
+// Used in CI where the database is provided by a service container rather
+// than spun up by testcontainers.
+func RunMigrationsForURL(ctx context.Context, dbURL string) error {
+	return runMigrations(ctx, dbURL)
+}
+
 // RunMigrations applies database migrations and fails the test if it fails.
 func (tdb *TestDB) RunMigrations(t *testing.T) {
 	t.Helper()
