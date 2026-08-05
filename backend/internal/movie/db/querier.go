@@ -6,15 +6,25 @@ package db
 
 import (
 	"context"
+
+	"github.com/jackc/pgx/v5/pgtype"
 )
 
 type Querier interface {
+	CountMovies(ctx context.Context, query pgtype.Text) (int64, error)
+	InsertMovie(ctx context.Context, arg InsertMovieParams) (Movie, error)
 	// SQL queries for the movie feature. Each block becomes a method on the
-	// generated internal/movie/db.Querier interface. Names come from the
-	// @name annotation on the first line of each block.
-	// PLACEHOLDER — replaced in step 2 with the real queries extracted
-	// from internal/movie/repository.go.
-	PlaceholderMovieQuery(ctx context.Context) (int32, error)
+	// generated internal/movie/db.Querier interface. The first line of each
+	// block is the @name annotation (which becomes the method name) and the
+	// query type (`:one`, `:many`, `:exec`, `:execrows`).
+	//
+	// `sqlc.narg('query')` returns NULL when the caller does not set the
+	// `query` parameter, which short-circuits the LIKE clauses via the
+	// `IS NULL OR ...` pattern. When the caller sets it, the caller is
+	// responsible for wrapping the search term in `%` wildcards.
+	QueryMoviesPage(ctx context.Context, arg QueryMoviesPageParams) ([]Movie, error)
+	SoftDeleteMovie(ctx context.Context, id int32) (int64, error)
+	UpdateMovie(ctx context.Context, arg UpdateMovieParams) (Movie, error)
 }
 
 var _ Querier = (*Queries)(nil)

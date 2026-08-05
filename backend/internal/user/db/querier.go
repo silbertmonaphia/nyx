@@ -9,12 +9,13 @@ import (
 )
 
 type Querier interface {
+	GetUserByID(ctx context.Context, id int32) (User, error)
+	GetUserByUsername(ctx context.Context, username string) (User, error)
 	// SQL queries for the user feature. Each block becomes a method on the
-	// generated internal/user/db.Querier interface. Names come from the
-	// @name annotation on the first line of each block.
-	// PLACEHOLDER — replaced in step 2 with the real queries extracted
-	// from internal/user/repository.go.
-	PlaceholderUserQuery(ctx context.Context) (int32, error)
+	// generated internal/user/db.Querier interface. The first line of each
+	// block is the @name annotation (which becomes the method name) and the
+	// query type (`:one`, `:many`, `:exec`, `:execrows`).
+	InsertUser(ctx context.Context, arg InsertUserParams) (User, error)
 }
 
 var _ Querier = (*Queries)(nil)

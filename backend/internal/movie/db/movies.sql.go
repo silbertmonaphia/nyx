@@ -7,21 +7,160 @@ package db
 
 import (
 	"context"
+
+	"github.com/jackc/pgx/v5/pgtype"
 )
 
-const placeholderMovieQuery = `-- name: PlaceholderMovieQuery :one
-
-SELECT 1
+const countMovies = `-- name: CountMovies :one
+SELECT COUNT(*)
+FROM movies
+WHERE (
+        $1::text IS NULL
+        OR title       ILIKE $1
+        OR description ILIKE $1
+      )
+  AND deleted_at IS NULL
 `
 
+func (q *Queries) CountMovies(ctx context.Context, query pgtype.Text) (int64, error) {
+	row := q.db.QueryRow(ctx, countMovies, query)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
+const insertMovie = `-- name: InsertMovie :one
+INSERT INTO movies (title, description, rating)
+VALUES ($1, $2, $3)
+RETURNING id, title, description, rating, created_at, updated_at, deleted_at
+`
+
+type InsertMovieParams struct {
+	Title       string
+	Description pgtype.Text
+	Rating      pgtype.Float8
+}
+
+func (q *Queries) InsertMovie(ctx context.Context, arg InsertMovieParams) (Movie, error) {
+	row := q.db.QueryRow(ctx, insertMovie, arg.Title, arg.Description, arg.Rating)
+	var i Movie
+	err := row.Scan(
+		&i.ID,
+		&i.Title,
+		&i.Description,
+		&i.Rating,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.DeletedAt,
+	)
+	return i, err
+}
+
+const queryMoviesPage = `-- name: QueryMoviesPage :many
+
+SELECT id, title, description, rating, created_at, updated_at, deleted_at
+FROM movies
+WHERE (
+        $1::text IS NULL
+        OR title       ILIKE $1
+        OR description ILIKE $1
+      )
+  AND deleted_at IS NULL
+ORDER BY created_at DESC, id DESC
+LIMIT  $3::int
+OFFSET $2::int
+`
+
+type QueryMoviesPageParams struct {
+	Query    pgtype.Text
+	Offset   int32
+	PageSize int32
+}
+
 // SQL queries for the movie feature. Each block becomes a method on the
-// generated internal/movie/db.Querier interface. Names come from the
-// @name annotation on the first line of each block.
-// PLACEHOLDER — replaced in step 2 with the real queries extracted
-// from internal/movie/repository.go.
-func (q *Queries) PlaceholderMovieQuery(ctx context.Context) (int32, error) {
-	row := q.db.QueryRow(ctx, placeholderMovieQuery)
-	var column_1 int32
-	err := row.Scan(&column_1)
-	return column_1, err
+// generated internal/movie/db.Querier interface. The first line of each
+// block is the @name annotation (which becomes the method name) and the
+// query type (`:one`, `:many`, `:exec`, `:execrows`).
+//
+// `sqlc.narg('query')` returns NULL when the caller does not set the
+// `query` parameter, which short-circuits the LIKE clauses via the
+// `IS NULL OR ...` pattern. When the caller sets it, the caller is
+// responsible for wrapping the search term in `%` wildcards.
+func (q *Queries) QueryMoviesPage(ctx context.Context, arg QueryMoviesPageParams) ([]Movie, error) {
+	rows, err := q.db.Query(ctx, queryMoviesPage, arg.Query, arg.Offset, arg.PageSize)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []Movie{}
+	for rows.Next() {
+		var i Movie
+		if err := rows.Scan(
+			&i.ID,
+			&i.Title,
+			&i.Description,
+			&i.Rating,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.DeletedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const softDeleteMovie = `-- name: SoftDeleteMovie :execrows
+UPDATE movies
+SET deleted_at = CURRENT_TIMESTAMP
+WHERE id = $1 AND deleted_at IS NULL
+`
+
+func (q *Queries) SoftDeleteMovie(ctx context.Context, id int32) (int64, error) {
+	result, err := q.db.Exec(ctx, softDeleteMovie, id)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const updateMovie = `-- name: UpdateMovie :one
+UPDATE movies
+SET title       = $1,
+    description = $2,
+    rating      = $3,
+    updated_at  = CURRENT_TIMESTAMP
+WHERE id = $4 AND deleted_at IS NULL
+RETURNING id, title, description, rating, created_at, updated_at, deleted_at
+`
+
+type UpdateMovieParams struct {
+	Title       string
+	Description pgtype.Text
+	Rating      pgtype.Float8
+	ID          int32
+}
+
+func (q *Queries) UpdateMovie(ctx context.Context, arg UpdateMovieParams) (Movie, error) {
+	row := q.db.QueryRow(ctx, updateMovie,
+		arg.Title,
+		arg.Description,
+		arg.Rating,
+		arg.ID,
+	)
+	var i Movie
+	err := row.Scan(
+		&i.ID,
+		&i.Title,
+		&i.Description,
+		&i.Rating,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.DeletedAt,
+	)
+	return i, err
 }

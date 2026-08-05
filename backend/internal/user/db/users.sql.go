@@ -9,19 +9,76 @@ import (
 	"context"
 )
 
-const placeholderUserQuery = `-- name: PlaceholderUserQuery :one
-
-SELECT 1
+const getUserByID = `-- name: GetUserByID :one
+SELECT id, username, email, password_hash, created_at, updated_at, deleted_at
+FROM users
+WHERE id = $1 AND deleted_at IS NULL
 `
 
+func (q *Queries) GetUserByID(ctx context.Context, id int32) (User, error) {
+	row := q.db.QueryRow(ctx, getUserByID, id)
+	var i User
+	err := row.Scan(
+		&i.ID,
+		&i.Username,
+		&i.Email,
+		&i.PasswordHash,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.DeletedAt,
+	)
+	return i, err
+}
+
+const getUserByUsername = `-- name: GetUserByUsername :one
+SELECT id, username, email, password_hash, created_at, updated_at, deleted_at
+FROM users
+WHERE username = $1 AND deleted_at IS NULL
+`
+
+func (q *Queries) GetUserByUsername(ctx context.Context, username string) (User, error) {
+	row := q.db.QueryRow(ctx, getUserByUsername, username)
+	var i User
+	err := row.Scan(
+		&i.ID,
+		&i.Username,
+		&i.Email,
+		&i.PasswordHash,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.DeletedAt,
+	)
+	return i, err
+}
+
+const insertUser = `-- name: InsertUser :one
+
+INSERT INTO users (username, email, password_hash)
+VALUES ($1, $2, $3)
+RETURNING id, username, email, password_hash, created_at, updated_at, deleted_at
+`
+
+type InsertUserParams struct {
+	Username     string
+	Email        string
+	PasswordHash string
+}
+
 // SQL queries for the user feature. Each block becomes a method on the
-// generated internal/user/db.Querier interface. Names come from the
-// @name annotation on the first line of each block.
-// PLACEHOLDER — replaced in step 2 with the real queries extracted
-// from internal/user/repository.go.
-func (q *Queries) PlaceholderUserQuery(ctx context.Context) (int32, error) {
-	row := q.db.QueryRow(ctx, placeholderUserQuery)
-	var column_1 int32
-	err := row.Scan(&column_1)
-	return column_1, err
+// generated internal/user/db.Querier interface. The first line of each
+// block is the @name annotation (which becomes the method name) and the
+// query type (`:one`, `:many`, `:exec`, `:execrows`).
+func (q *Queries) InsertUser(ctx context.Context, arg InsertUserParams) (User, error) {
+	row := q.db.QueryRow(ctx, insertUser, arg.Username, arg.Email, arg.PasswordHash)
+	var i User
+	err := row.Scan(
+		&i.ID,
+		&i.Username,
+		&i.Email,
+		&i.PasswordHash,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.DeletedAt,
+	)
+	return i, err
 }
