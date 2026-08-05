@@ -19,7 +19,7 @@ Move beyond basic endpoints to a robust, documented API.
 - [x] **Middleware Stack**: Refactor routing to use a proper middleware chain for CORS, Logging, and Recovery.
 - [x] **Standardized Error Responses**: Implement consistent JSON error formats across all endpoints.
 - [ ] **Semantic API Error Translators**: Implement an error mapping layer to catch database-specific constraint errors and return clean client-facing messages.
-- [ ] **Error Sentinel Values**: `handler.go` compares errors by string. Replace with typed sentinel errors using `errors.Is()` for reliability.
+- [ ] **Error Sentinel Values**: Adopt typed sentinel errors across more domains (currently only `movie.ErrNotFound` uses them). Replace `err.Error()` string compares in any remaining call sites with `errors.Is()` for reliability.
 - [ ] **CORS Hardening**: `cors.go` uses `Access-Control-Allow-Origin: *`. Restrict to a configurable origin allowlist for production.
 - [ ] **JWT Secret via Viper Config**: `jwt.go` reads the secret via `os.Getenv` instead of the central Viper config struct — consolidate.
 - [ ] **JWT Refresh Tokens**: Add a refresh token endpoint with short-lived access tokens for better session security.

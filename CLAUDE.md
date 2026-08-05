@@ -18,6 +18,7 @@ All commands run from the repo root unless noted.
 - **All tests (needs Docker for testcontainers)**: `cd backend && go test ./...`
 - **Single package**: `cd backend && go test -v ./internal/movie/...`
 - **Lint**: `cd backend && golangci-lint run --timeout=5m` (config at `backend/.golangci.yml`)
+- **Regenerate sqlc bindings** (after editing `backend/queries/*.sql` or `backend/migrations/`): `cd backend && make sqlc`. See `backend/SQLC.md`.
 - **Run with cache disabled**: `DB_URL=... JWT_SECRET=... go run ./cmd/api`
 - **Run with cache enabled**: `DB_URL=... JWT_SECRET=... REDIS_ENABLED=true REDIS_URL=redis://localhost:6379 CACHE_TTL=5m go run ./cmd/api`
 
@@ -41,13 +42,14 @@ All commands run from the repo root unless noted.
 ### Backend layering (`backend/internal/`)
 - `cmd/api/main.go` — wiring: config → DB → migrations → cache → movie + user services → gin router → graceful shutdown. Routes: `GET /api/health`, `/api/movies` (public list), `POST/PUT/DELETE /api/movies*` (JWT-guarded via `middleware.Auth()`), `/api/register`, `/api/login`, `/api/swagger/*`.
 - `middleware/` — request ID, structured logging (zerolog), CORS, rate limit, JWT auth.
-- `movie/` — clean-architecture domain. Files: `model.go` (entity + `MoviesPage` envelope + `NewMoviesPage`), `repository.go` (sqlx, paginated `GetAll` in a tx with shared `sqlx.ExtContext` helper `queryMoviesPage`), `service.go` (cache-aside wrapper around repo; `invalidate()` deletes the `movies:` prefix on every mutation), `handler.go` (Gin handlers). Tests use sqlmock for the handler and miniredis for the service.
+- `movie/` — clean-architecture domain. Files: `model.go` (entity + `MoviesPage` envelope + `NewMoviesPage`), `repository.go` (sqlc-generated querier; `GetAll` opens an internal tx for SELECT+COUNT consistency; "not found" returns `ErrNotFound` sentinel — handlers map it to HTTP 404), `service.go` (cache-aside wrapper around repo; `invalidate()` deletes the `movies:` prefix on every mutation), `handler.go` (Gin handlers). Tests use pgxmock for the handler and miniredis for the service.
 - `user/` — registration + login (JWT issuance). No tests yet (open roadmap item).
 - `platform/` — cross-cutting infrastructure:
   - `config/` — viper-based loader; see `Config` struct for the full env var list.
-  - `database/` — `New(cfg)` opens sqlx + pool tuning; `RunMigrations(url)` applies `backend/migrations/`.
+  - `database/` — `New(cfg)` opens a `*pgxpool.Pool` with pool tuning (MaxConns / MinConns / MaxConnLifetime / MaxConnIdleTime); `RunMigrations(url)` applies `backend/migrations/` via golang-migrate.
   - `cache/` — `Cache` interface (`Get/Set/Delete/DeletePrefix/Ping`) with two impls: `NewRedis(url)` (go-redis v9; `DeletePrefix` uses `SCAN MATCH + UNLINK`, non-blocking) and `NewNoop()` (used when `REDIS_ENABLED=false`).
   - `auth/`, `api/` — JWT helpers and error-response types.
+- **Generated code** — `internal/movie/db/` and `internal/user/db/` are sqlc output (do not edit by hand). Regenerate with `make sqlc` after any query or schema change. See `backend/SQLC.md`.
 
 ### Frontend (`frontend/src/`)
 Feature-first layout. Each feature owns its components, hooks, services, types, store.
@@ -71,9 +73,9 @@ Feature-first layout. Each feature owns its components, hooks, services, types, 
 ## Conventions worth knowing
 
 - **Commit style**: Conventional Commits (`feat:`, `fix:`, `refactor:`, `docs:`, `test:`, `chore:`). The repo just shipped a 4-commit split of a 3-phase plan (pagination + cache + UI + review fixes) — see git log if you need a template.
-- **Backend error pattern**: handler still uses `err.Error() == "movie not found"` string comparison (open roadmap item for sentinel errors). New code should not perpetuate this.
+- **Backend error pattern**: use `errors.Is(err, movie.ErrNotFound)` (or the relevant domain sentinel) to detect missing rows. The handler translates `ErrNotFound` to HTTP 404; the old `err.Error() == "movie not found"` string compare has been removed.
 - **Cache is best-effort**: every cache call site should swallow errors with a `log.Warn` and never fail the request — that's the documented invariant.
-- **Tests**: backend uses sqlmock for handler/repo and miniredis for cache. Frontend uses vitest + RTL; e2e uses Playwright (auto-starts `vite dev`).
+- **Tests**: backend uses pgxmock for handler/repo and miniredis for cache. Frontend uses vitest + RTL; e2e uses Playwright (auto-starts `vite dev`).
 - **Pre-commit hook** (`.husky/pre-commit`): runs `lint-staged` on staged `src/**/*.{js,jsx,ts,tsx}` — `eslint --fix` + `vitest related --run --passWithNoTests`. Note: vitest v4's `related` is a subcommand, not a `--related` flag.
 
 ## Test infra caveat
