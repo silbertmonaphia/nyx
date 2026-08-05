@@ -8,11 +8,10 @@ import (
 	"nyx/internal/platform/cache"
 
 	"github.com/alicebob/miniredis/v2"
-	"github.com/jmoiron/sqlx"
 )
 
 // stubRepo captures arguments and returns canned values. It avoids
-// sqlmock because this test is about the cache layer, not SQL.
+// pgxmock because this test is about the cache layer, not SQL.
 type stubRepo struct {
 	getAllCalls int
 	getAllResp  *Page
@@ -23,11 +22,10 @@ func (s *stubRepo) GetAll(ctx context.Context, query string, page, pageSize int)
 	s.getAllCalls++
 	return s.getAllResp, s.getAllErr
 }
-func (s *stubRepo) Create(context.Context, *Movie) error   { return nil }
+func (s *stubRepo) Create(context.Context, *Movie) error  { return nil }
 func (s *stubRepo) Update(context.Context, int, *Movie) error { return nil }
-func (s *stubRepo) Delete(context.Context, int) error       { return nil }
-func (s *stubRepo) Ping(context.Context) error             { return nil }
-func (s *stubRepo) WithTx(tx *sqlx.Tx) Repository          { return s }
+func (s *stubRepo) Delete(context.Context, int) error    { return nil }
+func (s *stubRepo) Ping(context.Context) error          { return nil }
 
 func newServiceWithCache(t *testing.T) (Service, *stubRepo, *miniredis.Miniredis) {
 	t.Helper()

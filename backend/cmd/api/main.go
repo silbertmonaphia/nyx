@@ -14,6 +14,7 @@ import (
 	"nyx/internal/platform/config"
 	"nyx/internal/platform/database"
 	"nyx/internal/user"
+	userdb "nyx/internal/user/db"
 
 	_ "nyx/docs"
 	swaggerFiles "github.com/swaggo/files"
@@ -87,7 +88,7 @@ func main() {
 	movieHandler := movie.NewHandler(movieService)
 
 	// Initialize User domain
-	userRepo := user.NewRepository(db)
+	userRepo := user.NewRepository(userdb.New(db))
 	userService := user.NewService(userRepo)
 	userHandler := user.NewHandler(userService)
 

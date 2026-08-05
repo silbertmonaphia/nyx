@@ -1,6 +1,7 @@
 package movie
 
 import (
+	"errors"
 	"net/http"
 	"strconv"
 
@@ -146,7 +147,7 @@ func (h *Handler) UpdateMovieHandler(c *gin.Context) {
 	}
 
 	if err := h.service.UpdateMovie(c.Request.Context(), id, &m); err != nil {
-		if err.Error() == "movie not found" {
+		if errors.Is(err, ErrNotFound) {
 			api.AbortWithError(c, http.StatusNotFound, "Movie not found", nil)
 			return
 		}
@@ -180,7 +181,7 @@ func (h *Handler) DeleteMovieHandler(c *gin.Context) {
 	}
 
 	if err := h.service.DeleteMovie(c.Request.Context(), id); err != nil {
-		if err.Error() == "movie not found" {
+		if errors.Is(err, ErrNotFound) {
 			api.AbortWithError(c, http.StatusNotFound, "Movie not found", nil)
 			return
 		}

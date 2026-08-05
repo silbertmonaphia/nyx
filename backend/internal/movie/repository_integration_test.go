@@ -7,10 +7,10 @@ import (
 	"testing"
 	"time"
 
+	"nyx/internal/movie/db"
 	"nyx/test"
 
-	"github.com/jmoiron/sqlx"
-	_ "github.com/lib/pq"
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -73,7 +73,7 @@ func TestMain(m *testing.M) {
 	os.Exit(code)
 }
 
-func setupIntegrationTest(t *testing.T) (*sqlx.DB, Repository) {
+func setupIntegrationTest(t *testing.T) (*pgxpool.Pool, Repository) {
 	t.Helper()
 
 	// Skip when the container-backed TestMain decided not to start one
@@ -82,25 +82,24 @@ func setupIntegrationTest(t *testing.T) (*sqlx.DB, Repository) {
 		t.Skip("PostgreSQL container not available; set SKIP_CONTAINERS=false to run integration tests")
 	}
 
-	// Create database connection using the shared container
-	db, err := sqlx.Open("postgres", dbURL)
+	// Open a pgxpool for the test. Cap the pool small so a single
+	// test process never starves the local Postgres.
+	poolCfg, err := pgxpool.ParseConfig(dbURL)
+	require.NoError(t, err)
+	poolCfg.MaxConns = 5
+	poolCfg.MinConns = 2
+	poolCfg.MaxConnLifetime = 2 * time.Minute
+	pool, err := pgxpool.NewWithConfig(context.Background(), poolCfg)
 	require.NoError(t, err)
 
-	// Clean up tables before each test to ensure isolation
-	_, err = db.Exec("DELETE FROM movies")
+	// Clean up tables before each test to ensure isolation.
+	_, err = pool.Exec(context.Background(), "DELETE FROM movies")
 	require.NoError(t, err)
 
-	// Configure connection pool for tests
-	db.SetMaxOpenConns(5)
-	db.SetMaxIdleConns(2)
-	db.SetConnMaxLifetime(2 * time.Minute)
+	t.Cleanup(func() { pool.Close() })
 
-	t.Cleanup(func() {
-		db.Close()
-	})
-
-	repo := NewRepository(db)
-	return db, repo
+	repo := NewRepository(pool)
+	return pool, repo
 }
 
 func TestRepositoryIntegration(t *testing.T) {
@@ -222,7 +221,7 @@ func TestRepositoryIntegration(t *testing.T) {
 
 		err := repo.Update(ctx, 999, movie)
 		assert.Error(t, err)
-		assert.Equal(t, "movie not found", err.Error())
+		assert.ErrorIs(t, err, ErrNotFound)
 	})
 
 	t.Run("DeleteMovie", func(t *testing.T) {
@@ -251,20 +250,21 @@ func TestRepositoryIntegration(t *testing.T) {
 
 		err := repo.Delete(ctx, 999)
 		assert.Error(t, err)
-		assert.Equal(t, "movie not found", err.Error())
+		assert.ErrorIs(t, err, ErrNotFound)
 	})
 
 	t.Run("Ping", func(t *testing.T) {
-		db, repo := setupIntegrationTest(t)
+		_, repo := setupIntegrationTest(t)
 
 		err := repo.Ping(ctx)
 		require.NoError(t, err)
-
-		// Verify it's the actual database connection
-		assert.NotNil(t, db)
 	})
 }
 
+// TestRepositoryWithTransactions exercises the new
+// NewRepositoryFromQuerier constructor. A tx-bound *db.Queries is
+// built via db.New(pool).WithTx(tx), so the same Repository
+// interface works for non-tx and tx-scoped operations.
 func TestRepositoryWithTransactions(t *testing.T) {
 	if dbURL == "" {
 		t.Skip("PostgreSQL container not available; set SKIP_CONTAINERS=false to run integration tests")
@@ -272,14 +272,14 @@ func TestRepositoryWithTransactions(t *testing.T) {
 	ctx := context.Background()
 
 	t.Run("TransactionRollback", func(t *testing.T) {
-		db, repo := setupIntegrationTest(t)
+		pool, repo := setupIntegrationTest(t)
 
 		// Start transaction
-		tx, err := db.BeginTxx(ctx, nil)
+		tx, err := pool.Begin(ctx)
 		require.NoError(t, err)
 
 		// Get repository with transaction
-		txRepo := repo.WithTx(tx)
+		txRepo := NewRepositoryFromQuerier(db.New(pool).WithTx(tx))
 
 		// Create a movie in transaction
 		movie := &Movie{
@@ -290,7 +290,7 @@ func TestRepositoryWithTransactions(t *testing.T) {
 		require.NoError(t, err)
 
 		// Rollback
-		tx.Rollback()
+		require.NoError(t, tx.Rollback(ctx))
 
 		// Verify movie was not created
 		allMovies, err := repo.GetAll(ctx, "", 1, 100)
@@ -299,14 +299,14 @@ func TestRepositoryWithTransactions(t *testing.T) {
 	})
 
 	t.Run("TransactionCommit", func(t *testing.T) {
-		db, repo := setupIntegrationTest(t)
+		pool, repo := setupIntegrationTest(t)
 
 		// Start transaction
-		tx, err := db.BeginTxx(ctx, nil)
+		tx, err := pool.Begin(ctx)
 		require.NoError(t, err)
 
 		// Get repository with transaction
-		txRepo := repo.WithTx(tx)
+		txRepo := NewRepositoryFromQuerier(db.New(pool).WithTx(tx))
 
 		// Create a movie in transaction
 		movie := &Movie{
@@ -317,7 +317,7 @@ func TestRepositoryWithTransactions(t *testing.T) {
 		require.NoError(t, err)
 
 		// Commit
-		tx.Commit()
+		require.NoError(t, tx.Commit(ctx))
 
 		// Verify movie was created
 		allMovies, err := repo.GetAll(ctx, "", 1, 100)
