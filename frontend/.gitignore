@@ -29,3 +29,7 @@ commit_message.txt
 
 # Husky
 .husky/_
+
+# Playwright
+playwright-report/
+test-results/
