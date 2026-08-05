@@ -25,6 +25,7 @@ func NewHandler(service Service) *Handler {
 // @Param request body RegisterRequest true "Registration details"
 // @Success 201 {object} AuthResponse
 // @Failure 400 {object} api.ErrorResponse
+// @Failure 409 {object} api.ErrorResponse
 // @Failure 500 {object} api.ErrorResponse
 // @Router /register [post]
 func (h *Handler) Register(c *gin.Context) {
@@ -36,6 +37,10 @@ func (h *Handler) Register(c *gin.Context) {
 
 	res, err := h.service.Register(c.Request.Context(), req)
 	if err != nil {
+		if errors.Is(err, ErrUserAlreadyExists) {
+			api.AbortWithError(c, http.StatusConflict, "User already exists", nil)
+			return
+		}
 		api.AbortWithError(c, http.StatusInternalServerError, "Failed to register user", err.Error())
 		return
 	}

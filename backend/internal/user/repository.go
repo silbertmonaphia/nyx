@@ -7,6 +7,7 @@ import (
 	"nyx/internal/user/db"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 )
 
 // Sentinel errors. ErrUserNotFound is the contract the service layer
@@ -49,11 +50,30 @@ func (r *sqlRepository) CreateUser(ctx context.Context, u *User) error {
 		PasswordHash: u.PasswordHash,
 	})
 	if err != nil {
+		// Postgres unique-constraint violation (SQLSTATE 23505) — both
+		// username and email have UNIQUE indexes. Translate the
+		// driver-specific error into the domain sentinel so the service
+		// and handler layers stay decoupled from pgx.
+		if isUniqueViolation(err) {
+			return ErrUserAlreadyExists
+		}
 		return err
 	}
 	converted := toUser(row)
 	*u = converted
 	return nil
+}
+
+// isUniqueViolation reports whether err is a Postgres unique-constraint
+// violation (SQLSTATE 23505). The repository layer is the right place to
+// translate driver-specific errors into domain sentinels; service and
+// handler layers stay decoupled from pgx.
+func isUniqueViolation(err error) bool {
+	var pgErr *pgconn.PgError
+	if errors.As(err, &pgErr) {
+		return pgErr.Code == "23505"
+	}
+	return false
 }
 
 func (r *sqlRepository) GetUserByUsername(ctx context.Context, username string) (*User, error) {
