@@ -1,68 +1,70 @@
-# Nyx Roadmap: From Minimalist to Production-Grade
+# Nyx Roadmap
 
-This document outlines the planned improvements to transition Nyx from a minimalist media rating application to an advanced, enterprise-ready system.
+Single source of truth for "what's done / what's next" across the stack. Tick an item when the work lands. Deeper context for each area lives in `FUTURE_BACKEND.md` and `FUTURE_FRONTEND.md`.
 
-## 1. Reliability & Observability (Ops)
-Advanced systems must be observable and handle shutdowns gracefully.
-- [x] **Structured Logging**: Replace standard `log` with `rs/zerolog` or `uber-go/zap` for JSON-formatted logs.
-- [x] **Metrics**: Implement a `/metrics` endpoint using `prometheus/client_golang` for real-time monitoring.
-- [x] **Graceful Shutdown**: Implement `context` and signal handling (`SIGTERM`, `SIGINT`) in the Go backend to finish active requests before exiting.
-- [x] **Health Checks**: Expand `/api/health` to check database connectivity status beyond just the API being "up."
-- [ ] **Distributed Tracing**: Integrate OpenTelemetry (OTel) to trace requests across the API and database layers.
+## 1. Reliability & Observability
+
+- [x] Structured logging (`rs/zerolog`, JSON output, request IDs).
+- [x] Prometheus `/metrics` endpoint + `prometheus` middleware.
+- [x] Graceful shutdown (`SIGTERM`/`SIGINT` + `context`).
+- [x] Health checks — `/api/health` includes DB connectivity.
+- [ ] Distributed Tracing — `go.opentelemetry.io/otel` is in `go.mod`; no exporter wired in `main.go` yet.
 
 ## 2. API Maturity & Security
-Move beyond basic endpoints to a robust, documented API.
-- [x] **OpenAPI/Swagger**: OpenAPI 3.1 generated at runtime via huma struct tags; UI at `/api/swagger` (Stoplight Elements). See `backend/HUMA.md`.
-- [x] **Authentication**: Implement JWT-based authentication for movie creation, editing, and deletion.
-- [x] **Project Restructuring (Clean Architecture)**: Move from a single-file script to a modular, domain-driven structure for better maintainability.
-- [x] **Rate Limiting**: Add middleware to prevent API abuse.
-- [x] **Middleware Stack**: Refactor routing to use a proper middleware chain for CORS, Logging, and Recovery.
-- [x] **Standardized Error Responses**: Implement consistent JSON error formats across all endpoints.
-- [ ] **Semantic API Error Translators**: Implement an error mapping layer to catch database-specific constraint errors and return clean client-facing messages.
-- [ ] **Error Sentinel Values**: Adopt typed sentinel errors across more domains (currently only `movie.ErrNotFound` uses them). Replace `err.Error()` string compares in any remaining call sites with `errors.Is()` for reliability.
-- [ ] **CORS Hardening**: `cors.go` uses `Access-Control-Allow-Origin: *`. Restrict to a configurable origin allowlist for production.
-- [ ] **JWT Secret via Viper Config**: `jwt.go` reads the secret via `os.Getenv` instead of the central Viper config struct — consolidate.
-- [ ] **JWT Refresh Tokens**: Add a refresh token endpoint with short-lived access tokens for better session security.
 
-## 3. Database Lifecycle Management
-Ensure schema changes are trackable and safe.
-- [x] **Migration Tooling**: Replace the `initDB()` function with a migration engine like `golang-migrate` or `pressly/goose`.
-- [x] **Audit Fields**: Add `created_at`, `updated_at`, and `deleted_at` (soft deletes) to all tables.
-- [x] **Integration Testing**: Implemented test infrastructure using `testcontainers-go` for real PostgreSQL instances during tests.
-- [x] **Connection Pooling**: Fine-tuned PostgreSQL connection pool settings via environment variables (Viper).
-- [x] **Caching Layer**: Integrate Redis or an in-memory cache for read-heavy resources to minimize database lookup times.
-- [x] **Database Index Optimization**: Analyze access patterns and optimize PostgreSQL indexes for queries/filtering.
-- [ ] **Container Version Conflict Guardrail**: Script checks to warn developers or automate Docker volume pruning when upgrading/downgrading Postgres major versions.
+- [x] OpenAPI 3.1 — generated at runtime from huma struct tags; UI at `/api/swagger` (Stoplight Elements). See `backend/HUMA.md`.
+- [x] JWT auth on write endpoints (`POST/PUT/DELETE /api/movies`).
+- [x] Clean architecture — `internal/{movie,user}/` with `model / repository / service / huma_handler`.
+- [x] Rate limiting middleware (token bucket).
+- [x] Middleware chain on chi v5 — RequestID, RealIP, Recoverer, Prometheus, Logging, CORS, RateLimit.
+- [x] Standardized JSON error envelopes.
+- [x] Domain error sentinels — `movie.ErrNotFound`, `user.ErrInvalidCredentials`, `auth.ErrInvalidToken`, `auth.ErrExpiredToken`. Handlers translate to HTTP status; never string-compare.
+- [ ] Semantic API Error Translators — map DB constraint errors (e.g. duplicate username) to clean client-facing messages.
+- [ ] CORS Hardening — `cors.go` uses `Access-Control-Allow-Origin: *`. Restrict to a configurable allowlist for production.
+- [ ] JWT Secret via Viper Config — `auth/jwt.go` reads via `os.Getenv`; consolidate to the central viper config struct.
+- [ ] JWT Refresh Tokens — current tokens expire in 24h, no refresh flow.
 
-## 4. Modern Frontend Architecture
-Improve the React developer experience and application performance.
-- [x] **TypeScript Migration**: Full type safety for components, props, and API responses.
-- [x] **Feature-Based Architecture**: Modular domain-driven folder structure (`src/features/`).
-- [x] **Server State Management**: Replaced manual `fetch` in `useEffect` with **TanStack Query (React Query)** for automatic caching and re-fetching.
-- [x] **Zod Validation**: Implemented runtime type validation for API responses and forms using `zod` and `react-hook-form`.
-- [x] **Global State Management**: Implemented **Zustand** for lightweight and high-performance client state.
-- [x] **Tailwind CSS Integration**: Utility-first styling for consistent design patterns.
-- [x] **Global Error Handling**: React Error Boundaries and a global toast notification system.
-- [x] **UI Component Library**: Integrate **Shadcn UI** or **Radix UI** for accessible, high-quality primitives.
-- [ ] **Dynamic Metadata (SEO)**: Implement proper, dynamic title tags and meta descriptions per page for improved SEO.
-- [ ] **Search Debounce**: `App.tsx` fires an API request on every search keystroke. Add a 300ms debounce.
-- [x] **Pagination / Infinite Scroll**: The API returns all records in a single payload. Add server-side pagination.
-- [x] **Optimistic Updates**: Mutations invalidate cache after success. Use TanStack Query `onMutate` for instant UI feedback.
-- [x] **Loading Skeletons**: Replace the plain `"Loading movies..."` text with skeleton placeholder cards.
-- [x] **Confirm Dialog Component**: `App.tsx` uses `window.confirm()` for delete — replace with an accessible modal dialog.
-- [ ] **Persist Auth Token Securely**: The JWT is stored in `localStorage` via Zustand persist. Consider `httpOnly` cookies or document the XSS risk.
+## 3. Database Lifecycle
 
-## 5. Developer Experience (DX) & CI/CD
-Automate quality control and deployment.
-- [x] **GitHub Actions**: Create a CI pipeline to run `go test` and `npm test` on every pull request.
-- [x] **E2E Testing**: Implemented Playwright end-to-end tests for critical user journeys.
-- [ ] **E2E in CI/CD**: The `e2e-test` job in `ci.yml` currently skips actual test execution. Wire up a Postgres service container and run `npm run test:e2e` end-to-end.
-- [ ] **Fix Backend CI Integration Tests**: `ci.yml` runs `go test -v ./...` without a Docker service, causing `testcontainers-go` tests to panic. Add a Postgres service container or pass `SKIP_CONTAINERS=true`.
-- [ ] **User Domain Test Coverage**: `user/huma_handler.go` and `user/service.go` have no test files. Add unit tests for `Register` and `Login`.
-- [x] **Backend Linting**: Integrated `golangci-lint` into the CI/CD pipeline for Go code quality and security checks.
-- [x] **Frontend Linting**: Tightened `eslint` rules and integrated `husky` pre-commit hooks with `lint-staged`.
-- [x] **Kubernetes Manifests**: Draft `Deployment`, `Service`, and `Ingress` YAMLs for seamless production deployment.
-- [x] **Environment Configuration**: Use a more robust configuration loader (like `spf13/viper`) for the backend.
+- [x] Migration engine — `golang-migrate`, applied on every backend boot.
+- [x] Audit fields — `created_at`, `updated_at`, `deleted_at` (soft deletes) on `movies` and `users`.
+- [x] Integration testing — `testcontainers-go` Postgres in `backend/internal/movie/repository_integration_test.go`.
+- [x] Connection pooling — pgxpool settings via viper.
+- [x] Cache-aside — Redis for `GET /api/movies` (opt-in via `REDIS_ENABLED=true`). Best-effort, never fails the request.
+- [x] Index optimization — `migrations/000006_add_movies_indexes.sql`, `000007_add_movies_description_trgm_index.sql`.
+- [x] Type-safe SQL — `sqlc` over `pgx/v5` + `pgxpool`. `make sqlc` to regenerate; `make sqlc-diff` in CI.
+- [ ] Container Version Conflict Guardrail — script to warn / auto-prune volumes on Postgres major-version upgrades.
+
+## 4. Frontend
+
+- [x] TypeScript end-to-end.
+- [x] Feature-based folder structure (`src/features/{movies,auth}/`).
+- [x] Server state — TanStack Query (caching, background refetch, pagination).
+- [x] Form validation — React Hook Form + Zod.
+- [x] Client state — Zustand (`authStore`, `uiStore`, `movieUiStore`).
+- [x] Styling — Tailwind CSS v4.
+- [x] UI primitives — Radix UI (`Dialog`, `Label`, `Slot`) behind shadcn-style components (Button, Card, Dialog, Input, Label, Textarea, ToastContainer).
+- [x] Optimistic updates — `useMovies.ts` uses `onMutate` for create / update / delete.
+- [x] Loading skeletons — `SkeletonCard`, `MovieListSkeleton` in `MovieList.tsx`.
+- [x] Confirm dialog — `Dialog` (Radix) replaces `window.confirm()` in `App.tsx`.
+- [x] Toast notifications — `ToastContainer` + `uiStore`.
+- [x] Axios interceptors — auth header injection + global 401 handling.
+- [ ] Search Debounce — `App.tsx` fires an API request on every keystroke. Add a 300ms debounce.
+- [ ] Dynamic Metadata (SEO) — per-page `<title>` and meta description.
+- [ ] Persist Auth Token Securely — JWT in `localStorage` via Zustand `persist`. httpOnly cookies (or a documented XSS caveat) pending.
+- [ ] Token Refresh — `api.ts` logs out on 401; pair with the backend refresh-token endpoint once it lands.
+
+## 5. Developer Experience & CI/CD
+
+- [x] GitHub Actions — jobs: `backend-test` (lint + sqlc-diff + tests), `frontend-test` (lint + test + build), `e2e-test` (depends on both).
+- [x] Backend CI service container — `postgres:17-alpine` in `backend-test` and `e2e-test` jobs so `testcontainers-go` tests run.
+- [x] E2E — Playwright in `frontend/tests/e2e`.
+- [x] Backend lint — `golangci-lint` in CI.
+- [x] Frontend lint — `eslint` + `husky` pre-commit + `lint-staged`.
+- [ ] User Domain Handler Test Coverage — `user/huma_handler.go` lacks a `huma_handler_test.go`. (`service_test.go` and `repository_test.go` exist.)
+- [x] Kubernetes manifests — `Deployment`, `Service`, `Ingress`, `Secrets`, `StatefulSet` (Postgres), `Deployment` (Redis) in `k8s/`.
+- [x] Viper config — multi-source (env + `.env` + defaults).
 
 ---
-*Nyx: Minimalist by design, powerful by choice.*
+
+*Nyx: Minimalist by design, production-credible by choice.*

@@ -1,64 +1,70 @@
-# Nyx Frontend: Advanced Industry Standards Roadmap
+# Nyx Frontend: Architectural Evolution
 
-This document outlines the architectural and technical evolution of the Nyx frontend, moving from a minimalist prototype to a high-performance, maintainable, and type-safe enterprise-grade application.
+The history and design decisions behind the current frontend. For the high-level "done / next" checklist, see `FUTURE.md` §4.
 
-## 1. Core Architecture & Language
-Advanced projects prioritize type safety and scalability through modularity.
-- [x] **TypeScript Migration**: Convert `.jsx` to `.tsx`. Implement strict typing for API responses, component props, and state.
-- [x] **Feature-Based Folder Structure**: Move away from a flat `src/` directory to a domain-driven design:
-  ```text
-  src/
-  ├── features/        # Business logic for specific domains (e.g., movies/)
-  ├── components/      # Shared UI components (Button, Input, Card)
-  ├── hooks/           # Reusable custom hooks
-  ├── services/        # API clients and external integrations
-  ├── store/           # Global state management
-  └── utils/           # Helper functions and constants
+## 1. Core Architecture
+
+- [x] **TypeScript** — strict mode (`.tsx` across components, typed API responses, typed Zustand stores).
+- [x] **Feature-based folder structure** — domain-driven:
+  ```
+  frontend/src/
+  ├── features/
+  │   ├── movies/              # components, hooks, services, store, types
+  │   └── auth/                # components
+  ├── components/              # Shared UI primitives (Button, Card, Dialog, Input, Label, Textarea, ToastContainer)
+  ├── services/                # axios client (api.ts)
+  ├── store/                   # Zustand stores (authStore, uiStore, movieUiStore)
+  ├── hooks/                   # Custom React hooks
+  ├── types/                   # Cross-feature TypeScript types
+  ├── utils/                   # Helpers (cn classnames merger)
+  └── test/                    # Vitest setup (e.g. IntersectionObserver polyfill)
   ```
 
 ## 2. Data Fetching & Server State
-Manual `fetch` in `useEffect` is error-prone and lacks essential features like caching.
-- [x] **TanStack Query (React Query)**: Implement for all server-state management.
-  - Automatic caching and background refetching.
-  - Built-in loading, error, and pagination states.
-  - Optimistic updates for a snappier UI during movie creation/deletion.
-- [x] **Axios/Ky Centralized Client**: Create a configured API client with interceptors for global error handling and authentication headers.
-- [x] **Optimistic Updates**: `useMovies.ts` invalidates the query cache on mutation success but does not implement optimistic updates. Use `onMutate`/`onError`/`onSettled` for instant UI feedback.
-- [ ] **Search Debounce**: `App.tsx` passes `searchTerm` directly to `getMovies()` on every keystroke, triggering an API call for every character typed. Debounce the input (e.g. 300ms) to reduce server load.
-- [x] **Pagination / Infinite Scroll**: `GetAll` returns all movies in one payload. Add server-side pagination and implement `useInfiniteQuery` on the frontend.
+
+- [x] **TanStack Query** — automatic caching, background refetch, pagination, `keepPreviousData` for smooth page transitions.
+- [x] **Axios client** — `services/api.ts` with request interceptor (auth header) and response interceptor (global 401 → logout, error message extraction).
+- [x] **Optimistic updates** — `useMovies.ts` uses `onMutate` / `onError` / `onSettled` for create / update / delete. Placeholders use negative IDs and are swapped when the server response arrives.
+- [x] **Pagination** — `useMovies` exposes `page`, `pageSize`, `total`, `hasMore`, `isLoadingMore`, `loadMore`.
+- [ ] **Search Debounce** — `App.tsx` passes `searchTerm` directly to `useMovies(searchTerm)` on every keystroke. Add a 300ms debounce (custom hook or `use-debounce`) to cut request volume.
 
 ## 3. Form Management & Validation
-Managing complex form state and validation manually is a common source of bugs.
-- [x] **React Hook Form**: Replace manual `useState` for forms to improve performance (uncontrolled components) and reduce boilerplate.
-- [x] **Zod Schema Validation**: Define strict schemas for all forms and API responses. Ensure the frontend never processes malformed data from the backend.
+
+- [x] **React Hook Form** — uncontrolled components; less re-render churn than `useState`-driven forms.
+- [x] **Zod** — schemas live with the feature (`features/movies/types.ts`); `@hookform/resolvers/zod` wires them into `<form>`.
 
 ## 4. Styling & Design System
-Vanilla CSS is powerful but difficult to scale across large teams and components.
-- [x] **Tailwind CSS**: Integrate for rapid, utility-first styling that ensures consistency.
-- [x] **Shadcn UI / Radix UI**: Adopt headless UI primitives to ensure accessibility (WAI-ARIA) and high-quality interactive components (Modals, Toasts, Tooltips).
-- [ ] **CSS Modules or Vanilla Extract**: For component-specific styles that require complex logic while maintaining type safety.
 
-## 5. Global State Management
-- [x] **Zustand**: For lightweight, high-performance global state (e.g., UI preferences, search filters, authentication) without the boilerplate of Redux.
-- [ ] **Persist Auth Token Securely**: `authStore.ts` uses Zustand `persist` which stores the JWT in `localStorage`. Consider `httpOnly` cookies or at minimum document the XSS risk.
-- [ ] **Token Refresh Handling**: `api.ts` logs out on 401 but does not attempt a token refresh. Pair with a backend refresh-token endpoint once that is implemented.
+- [x] **Tailwind CSS v4** — `@tailwindcss/postcss` config; design tokens via `tailwind.config.js`.
+- [x] **Radix UI + shadcn-style primitives** — `@radix-ui/react-dialog`, `@radix-ui/react-label`, `@radix-ui/react-slot` power accessible `Dialog`, `Label`, `Button asChild`. Components in `src/components/ui/` are owned (not installed) so we can tweak freely.
+- [ ] **CSS Modules / Vanilla Extract** — for component-specific styles that need complex logic while keeping type safety. Currently Tailwind is sufficient; revisit if/when a design system has to grow.
 
-## 6. Testing & Quality Assurance
-- [x] **Component Testing**: Implemented unit and integration tests for React components using **Vitest** and **React Testing Library**.
-- [ ] **Component Storybook**: Develop components in isolation to ensure visual consistency and documentation.
-- [x] **Playwright E2E**: Implemented End-to-End tests for critical user journeys (e.g., "User can add and then delete a movie").
-- [ ] **E2E Testing in CI/CD**: Integrate Playwright end-to-end tests into the GitHub Actions CI pipeline to run automatically on every pull request.
-- [ ] **Accessibility (a11y) Auditing**: Integrate `eslint-plugin-jsx-a11y` and automated a11y testing.
+## 5. Global State
 
-## 7. Performance & Optimization
-- [ ] **Code Splitting**: Utilize `React.lazy` and dynamic imports for route-based chunking.
-- [ ] **Image Optimization**: Implement responsive images and modern formats (WebP/AVIF) for the hero section.
-- [ ] **Loading Skeletons**: `MovieList.tsx` shows a plain text `"Loading movies..."` string while fetching. Replace with skeleton placeholder cards for a more polished UX.
-- [ ] **Confirm Dialog Component**: `App.tsx` uses `window.confirm()` for delete confirmation — a browser native dialog that blocks the thread and cannot be styled. Replace with a modal/dialog component.
+- [x] **Zustand** — `authStore` (token, login, logout, register), `uiStore` (toasts), `movieUiStore` (filter UI). Lightweight, no provider boilerplate.
+- [ ] **Persist Auth Token Securely** — `authStore.ts` uses Zustand `persist` which writes the JWT to `localStorage`. Consider httpOnly cookies, or at minimum document the XSS risk in the README.
+- [ ] **Token Refresh** — `api.ts` logs out on 401 but does not attempt a refresh. Pair with the backend refresh-token endpoint once §2 (JWT Refresh Tokens) lands in `FUTURE_BACKEND.md`.
 
-## 8. Search Engine Optimization (SEO)
-- [ ] **Dynamic Metadata**: Set up dynamic document titles and meta descriptions per page (e.g., using `react-helmet-async` or standard DOM updates) for optimal search indexing.
+## 6. Testing & Quality
 
-## 9. Developer Experience (DX)
-- [x] **ESLint + Prettier**: Standardized code style and linting rules.
-- [x] **Husky + Lint-Staged**: Prevent bad code from being committed by running linting and tests on pre-commit hooks.
+- [x] **Component tests** — Vitest + React Testing Library + `@testing-library/user-event`. `IntersectionObserver` polyfill in `test/setup.js`.
+- [x] **Playwright E2E** — `frontend/tests/e2e` covers login → create → delete a movie, etc. Auto-starts `vite dev`.
+- [x] **CI lint + test + build** — `frontend-test` job in `.github/workflows/ci.yml`.
+- [ ] **Storybook** — develop components in isolation for visual consistency and design docs.
+- [ ] **Accessibility (a11y) auditing** — `eslint-plugin-jsx-a11y` and automated a11y assertions in tests.
+
+## 7. Performance
+
+- [x] **Loading skeletons** — `SkeletonCard`, `MovieListSkeleton` in `MovieList.tsx` replace plain "Loading…" text.
+- [x] **Confirm dialog** — Radix `Dialog` replaces `window.confirm()` in `App.tsx` (accessible, keyboard-navigable, non-blocking).
+- [ ] **Code Splitting** — `React.lazy` + dynamic imports for route-based chunking (currently single bundle).
+- [ ] **Image Optimization** — responsive images (WebP/AVIF) for hero/posters when the asset pipeline grows.
+
+## 8. SEO
+
+- [ ] **Dynamic Metadata** — per-page `<title>` and meta description (`react-helmet-async` or standard DOM updates). Currently only a static title in `index.html`.
+
+## 9. Developer Experience
+
+- [x] **ESLint + Prettier** — `eslint.config.js` (flat config), React + hooks plugins.
+- [x] **Husky + lint-staged** — pre-commit runs `eslint --fix` + `vitest related --run --passWithNoTests` on staged files.

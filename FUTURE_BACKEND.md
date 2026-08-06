@@ -1,75 +1,66 @@
-# Nyx Backend: Advanced Industry Standards Roadmap
+# Nyx Backend: Architectural Evolution
 
-This document outlines the architectural and technical evolution of the Nyx backend, moving from a minimalist script to a high-performance, maintainable, and secure enterprise-grade API.
+The history and design decisions behind the current backend. For the high-level "done / next" checklist, see `FUTURE.md` §1–3, 5.
 
 ## 1. Core Framework & Architecture
-Advanced projects prioritize scalability and separation of concerns through modular design.
-- [x] **Refactor to Gin Gonic** *(superseded)*: Originally replaced standard `net/http` for better routing and middleware management; later superseded by chi + huma.
-- [x] **Migrate to chi + huma**: Stdlib-compatible middleware (`func(http.Handler) http.Handler`) on chi v5; declarative operations on huma v2 with OpenAPI 3.1 generated from struct tags. See `backend/HUMA.md`. REST contract preserved byte-for-byte (paths, methods, JSON envelopes) so the frontend, e2e suite, and CI are unaffected.
-- [x] **Project Restructuring (Clean Architecture)**:
-  ```text
+
+- [x] **Migrate to chi v5 + huma v2** (superseded the original Gin attempt). Stdlib-compatible `func(http.Handler) http.Handler` middleware chain on chi v5; declarative `huma.Operation{}` on huma v2 emits OpenAPI 3.1 from struct tags. REST contract preserved byte-for-byte (paths, methods, JSON envelopes) so the frontend, e2e suite, and CI are unaffected. See `backend/HUMA.md`.
+- [x] **Clean Architecture** — `internal/{movie,user}/{model,repository,service,huma_handler}.go`. Cross-cutting infra in `internal/platform/{config,database,cache,auth,api}` and `internal/reqctx/`.
+  ```
   backend/
-  ├── cmd/api/          # Entry point
+  ├── cmd/api/                 # main.go: viper → DB → cache → domains → router → http.Server
   ├── internal/
-  │   ├── movie/        # Movie domain logic
-  │   │   ├── handler/  # API endpoints
-  │   │   ├── service/  # Business logic
-  │   │   └── repository/# Database interactions
-  │   ├── middleware/   # Shared middlewares (Auth, Logging)
-  │   └── platform/     # Database, Logger, etc.
-  └── pkg/              # Public libraries
+  │   ├── middleware/          # chi middlewares (RequestID, RealIP, Recoverer, Prometheus, Logging, CORS, RateLimit)
+  │   ├── movie/               # Movie domain — model, repository, service, huma_handler, *tests
+  │   ├── user/                # User domain — model, repository, service, huma_handler, *tests
+  │   ├── platform/            # config, database, cache, auth, api
+  │   └── reqctx/              # Typed ctx values (auth claims, request id)
+  ├── migrations/              # golang-migrate, applied on boot
+  └── queries/                 # sqlc input (.sql)
   ```
 
 ## 2. Validation & Error Handling
-Never trust the client. Implement robust validation at the entry point.
-- [x] **Struct-Based Validation**: Use `go-playground/validator` with struct tags (e.g., `validate:"required,min=1,max=100"`).
-- [x] **Standardized Error Responses**: Implement a global error handler that returns consistent JSON structures:
-  ```json
-  {
-    "error": "Validation Failed",
-    "details": { "title": "is required" },
-    "code": 400
-  }
-  ```
-- [ ] **API Error Translators**: Implement an error mapping layer to catch database-specific constraint errors (e.g. duplicate username) and return user-friendly, semantic error messages instead of raw DB error details.
+
+- [x] **Struct-based validation** — `go-playground/validator` driven by struct tags on huma input/output types.
+- [x] **Standardized JSON errors** — uniform envelope across handlers; central mapper in `internal/platform/api`.
+- [x] **Domain error sentinels** — `movie.ErrNotFound`, `user.ErrInvalidCredentials`, `auth.ErrInvalidToken`, `auth.ErrExpiredToken`. Handlers translate to HTTP status; never string-compare in tests or call sites.
+- [ ] **Semantic API Error Translators** — map DB constraint errors (duplicate username, foreign key on delete, etc.) to clean client-facing messages.
 
 ## 3. Security & Authentication
-Secure the API against unauthorized access.
-- [x] **JWT Authentication**: Implement JSON Web Tokens for secure session management.
-- [x] **User Management**: Created a `users` table with hashed passwords using `bcrypt`.
-- [x] **Auth Middleware**: Protect write/delete routes while keeping read routes public (or as configured).
-- [x] **Rate Limiting**: Implemented token bucket algorithm middleware to prevent API abuse.
-- [ ] **CORS Hardening**: `cors.go` currently allows `Access-Control-Allow-Origin: *`. Restrict to a configurable allowlist of origins in production.
-- [ ] **JWT Secret via Config**: `jwt.go` reads the secret directly via `os.Getenv` instead of using the Viper `cfg` struct. Consolidate to use the centralized config loader.
-- [ ] **JWT Refresh Tokens**: Current tokens expire in 24h with no refresh flow. Add a refresh token endpoint and short-lived access tokens for better session security.
 
-## 4. Database Layer Enhancement
-Improve data safety and developer speed.
-- [x] **Type-safe SQL layer**: Migrated from `sqlx` + `lib/pq` to [sqlc][sqlc] + `pgx/v5` + `pgxpool`. SQL queries now live in `backend/queries/*.sql`; generated code in `internal/{movie,user}/db/` is regenerated via `make sqlc`. See `backend/SQLC.md`.
-- [x] **Transaction Management**: Ensure atomic operations for complex logic.
-- [x] **Connection Pooling**: Tune PostgreSQL connection pool settings for production loads via environment variables.
-- [x] **Database Index Optimization**: Analyze access patterns and optimize PostgreSQL indexes for queries/filtering.
-- [x] **Caching Layer**: Integrate Redis or an in-memory cache for read-heavy resources to minimize database lookup times.
+- [x] **JWT auth** — `auth/jwt.go` issues `Bearer` tokens with 24h expiry; `huma.Adapter` validates the header and stores claims on `reqctx`.
+- [x] **User management** — `users` table with bcrypt-hashed passwords.
+- [x] **Auth middleware** — write/delete routes require a valid token; read routes are public.
+- [x] **Rate limiting** — token bucket middleware (`middleware/ratelimit.go`).
+- [ ] **CORS Hardening** — `cors.go` uses `Access-Control-Allow-Origin: *`. Restrict to a configurable allowlist for production.
+- [ ] **JWT Secret via Viper Config** — `auth/jwt.go` reads the secret via `os.Getenv` directly. Consolidate to the central viper config struct.
+- [ ] **JWT Refresh Tokens** — current tokens expire in 24h with no refresh flow. Add a refresh endpoint and short-lived access tokens.
 
-[sqlc]: https://docs.sqlc.dev/
+## 4. Database Layer
+
+- [x] **Type-safe SQL** — `sqlc` over `pgx/v5` + `pgxpool`. SQL lives in `backend/queries/*.sql`; generated code in `internal/{movie,user}/db/` is regenerated via `make sqlc` and verified in CI via `make sqlc-diff`. See `backend/SQLC.md`.
+- [x] **Transaction support** — pooled connections; complex flows use explicit `pgx.Tx` boundaries.
+- [x] **Connection pooling** — pgxpool settings via viper (`MaxConns`, `MinConns`, `MaxConnLifetime`, `MaxConnIdleTime`).
+- [x] **Index optimization** — `migrations/000006_add_movies_indexes.sql`, `000007_add_movies_description_trgm_index.sql` (pg_trgm for `ILIKE` search).
+- [x] **Cache-aside** — Redis for `GET /api/movies`. Keys: `movies:q={query}:p={page}:s={size}`. Mutations call `DeletePrefix("movies:")` (SCAN + UNLINK, non-blocking). Cache is best-effort: every call swallows errors with `log.Warn` and never fails the request.
 
 ## 5. Observability & Documentation
-Make the system transparent and easy to integrate with.
-- [x] **OpenAPI 3.1 via huma**: OpenAPI 3.1 spec generated at runtime from huma struct tags on each operation's Input/Output structs. UI at `/api/swagger` (Stoplight Elements). See `backend/HUMA.md`.
-- [x] **Prometheus Metrics**: Export latency, error rates, and request counts via a `/metrics` endpoint.
-- [x] **Contextual Logging**: Pass `context` through layers to trace requests and include Request IDs in logs.
-- [ ] **Distributed Tracing**: Integrate OpenTelemetry (OTel) to trace HTTP requests across router middlewares and down to individual database queries.
+
+- [x] **OpenAPI 3.1** — generated at runtime from huma struct tags on each operation's Input/Output. UI at `/api/swagger` (Stoplight Elements); raw spec at `/api/swagger/doc.json`. See `backend/HUMA.md`.
+- [x] **Prometheus metrics** — `/metrics` endpoint + `prometheus` middleware (request count, latency, status, in-flight).
+- [x] **Contextual logging** — `context` threaded through every layer; request ID propagated from the `RequestID` middleware through `Logging` → services → repositories.
+- [ ] **Distributed Tracing (OTel)** — `go.opentelemetry.io/otel` is in `go.mod`; no exporter wired in `main.go` yet. Goal: span router → middleware → service → repository → SQL.
 
 ## 6. Configuration & Environment
-- [x] **Viper Configuration**: Use `spf13/viper` for multi-source configuration (env, .yaml, .env).
-- [x] **Graceful Shutdown**: Ensured background tasks and database connections are closed correctly on exit.
-- [ ] **Docker Volume Guardrail**: Add developer checks or tooling to handle PostgreSQL major version upgrades/downgrades gracefully (e.g. detect incompatibilities between PG 15 and 17 and warn/auto-prune volumes).
+
+- [x] **Viper** — multi-source: defaults, env vars, `.env` auto-loaded.
+- [x] **Graceful shutdown** — `SIGTERM`/`SIGINT` triggers `http.Server.Shutdown` with a deadline; DB and cache teardown afterwards.
+- [ ] **Container Version Conflict Guardrail** — developer-facing script to detect (and warn on, or auto-prune) Postgres major-version volume upgrades.
 
 ## 7. Quality Assurance
-- [x] **Unit Testing (Core)**: Implemented tests for handlers and services using `sqlmock`.
-- [x] **Integration Testing**: Implemented test infrastructure using `testcontainers-go` to run real PostgreSQL instances during tests.
-- [x] **GolangCI-Lint**: Integrated a strict linting pipeline (revive, gosec, staticcheck) into GitHub Actions.
-- [ ] **Fix CI Integration Tests**: `ci.yml` runs `go test -v ./...` without `SKIP_CONTAINERS=true`, so the `testcontainers-go` tests will panic in CI since Docker access is needed. Either add a Postgres service container or pass the skip flag.
-- [x] **Error Sentinel Values**: `huma_handler.go` compares errors via `errors.Is(err, movie.ErrNotFound)`; the handler maps the sentinel to HTTP 404.
-- [ ] **User Service Tests**: The `user` domain has no unit or integration tests. Add coverage for `Register` and `Login` service methods.
-- [ ] **Handler Tests for User Domain**: `user/huma_handler.go` has no corresponding `handler_test.go`. Add tests for register/login operations on the chi + huma stack.
+
+- [x] **Unit tests** — handlers and services use `pgxmock`; cache uses `miniredis`. No Docker required.
+- [x] **Integration tests** — `testcontainers-go` boots a real Postgres. Self-skip via `t.Skip()` when `dbURL == ""`. Never reintroduce an early `os.Exit(0)` in `TestMain` — it silently skips unit tests.
+- [x] **golangci-lint** — strict pipeline (revive, gosec, staticcheck, …) in CI.
+- [x] **CI service container** — `postgres:17-alpine` in `backend-test` and `e2e-test` jobs so `testcontainers-go` tests run.
+- [ ] **User huma_handler test coverage** — `user/huma_handler.go` lacks a `huma_handler_test.go`. (`service_test.go` and `repository_test.go` exist.) Add tests for `Register` and `Login` through the chi + huma stack.

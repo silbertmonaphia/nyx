@@ -38,10 +38,12 @@ k8s/secrets.yaml
 
 # AI Agents
 .gemini/
-.qwen/
 .geminiignore
-.qwenignore
 GEMINI.md
+
+.qwen/
+.qwenignore
 QWEN.md
+
 commit_message.txt
 .claude/settings.local.json
