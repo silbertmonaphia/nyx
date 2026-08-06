@@ -210,7 +210,7 @@ literal as the response status.
 
 **Validation rejects valid input** — check the struct tag on the input
 field. Huma uses its own validation dialect (not gin's `binding:` tags);
-remove any leftover `binding:"required,..."` tags when migrating.
+never add `binding:"required,..."` to a huma input struct.
 
 **`http.MaxBytesReader` errors look like 400 with a generic message** —
 the JSON decoder returns `io.ErrUnexpectedEOF` when the body cap is hit.

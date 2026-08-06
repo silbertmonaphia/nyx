@@ -4,7 +4,7 @@ This document outlines the architectural and technical evolution of the Nyx back
 
 ## 1. Core Framework & Architecture
 Advanced projects prioritize scalability and separation of concerns through modular design.
-- [x] **Refactor to Gin Gonic**: Replace standard `net/http` for better routing, middleware management, and JSON binding performance.
+- [x] **Refactor to Gin Gonic** *(superseded)*: Originally replaced standard `net/http` for better routing and middleware management; later superseded by chi + huma.
 - [x] **Migrate to chi + huma**: Stdlib-compatible middleware (`func(http.Handler) http.Handler`) on chi v5; declarative operations on huma v2 with OpenAPI 3.1 generated from struct tags. See `backend/HUMA.md`. REST contract preserved byte-for-byte (paths, methods, JSON envelopes) so the frontend, e2e suite, and CI are unaffected.
 - [x] **Project Restructuring (Clean Architecture)**:
   ```text
@@ -70,6 +70,6 @@ Make the system transparent and easy to integrate with.
 - [x] **Integration Testing**: Implemented test infrastructure using `testcontainers-go` to run real PostgreSQL instances during tests.
 - [x] **GolangCI-Lint**: Integrated a strict linting pipeline (revive, gosec, staticcheck) into GitHub Actions.
 - [ ] **Fix CI Integration Tests**: `ci.yml` runs `go test -v ./...` without `SKIP_CONTAINERS=true`, so the `testcontainers-go` tests will panic in CI since Docker access is needed. Either add a Postgres service container or pass the skip flag.
-- [x] **Error Sentinel Values**: `handler.go` compared errors by string (`err.Error() == "movie not found"`). Replaced with `movie.ErrNotFound` + `errors.Is()` checks; the handler maps the sentinel to HTTP 404.
+- [x] **Error Sentinel Values**: `huma_handler.go` compares errors via `errors.Is(err, movie.ErrNotFound)`; the handler maps the sentinel to HTTP 404.
 - [ ] **User Service Tests**: The `user` domain has no unit or integration tests. Add coverage for `Register` and `Login` service methods.
 - [ ] **Handler Tests for User Domain**: `user/huma_handler.go` has no corresponding `handler_test.go`. Add tests for register/login operations on the chi + huma stack.

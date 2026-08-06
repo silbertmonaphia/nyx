@@ -60,7 +60,7 @@ A minimalist media rating application with a Go backend and a React frontend.
 4. Access the application:
    - Frontend: `http://localhost:5173` (with HMR)
    - API: `http://localhost:8080/api/movies`
-   - Swagger UI: `http://localhost:8080/api/swagger`
+   - API docs (Stoplight Elements): `http://localhost:8080/api/swagger`
 
 5. Access the database:
    ```bash

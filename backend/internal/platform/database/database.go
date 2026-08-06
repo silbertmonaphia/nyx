@@ -23,7 +23,7 @@ import (
 // retry loop tolerates a Postgres container that is still booting
 // during local development; the first successful ping returns.
 //
-// Pool tuning maps the previous *sqlx.DB settings:
+// Pool tuning fields:
 //   - DBMaxOpenConns    -> MaxConns
 //   - DBMaxIdleConns    -> MinConns (pgxpool has no MaxIdleConns equivalent;
 //     MinConns is the closest fit and keeps that many connections warm)
@@ -74,8 +74,7 @@ func New(cfg *config.Config) (*pgxpool.Pool, error) {
 
 // RunMigrations applies the SQL migrations under migrations/. It is
 // independent of the application's DB driver: golang-migrate opens its
-// own short-lived connection using the same URL, so swapping the app
-// from lib/pq to pgx does not affect this path.
+// own short-lived connection using the same URL.
 func RunMigrations(dbURL string) {
 	migrationPath := os.Getenv("MIGRATION_PATH")
 	if migrationPath == "" {

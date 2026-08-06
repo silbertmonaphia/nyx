@@ -88,7 +88,7 @@ Feature-first layout. Each feature owns its components, hooks, services, types, 
 ## Open roadmap items (next candidates)
 
 - **Fix Backend CI Integration Tests** (`FUTURE.md` §5) — `ci.yml` runs `go test -v ./...` with no Postgres service container. Set `SKIP_CONTAINERS=true` in CI, or add a Postgres service container.
-- **User domain test coverage** — `user/handler.go` and `user/service.go` have no test files.
+- **User domain test coverage** — `user/huma_handler.go` and `user/service.go` have no test files.
 - **Search Debounce** — `App.tsx` fires an API request on every keystroke.
 - **Distributed Tracing (OTel)** — partial wiring already in `go.mod` (`go.opentelemetry.io/otel`); no exporter wired in `main.go` yet.
 - **Container Version Conflict Guardrail** — script checks for Postgres major-version volume upgrades.

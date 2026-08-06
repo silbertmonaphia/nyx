@@ -89,7 +89,6 @@ jobs:
       DB_URL: "postgres://postgres:postgres@localhost:5432/nyx?sslmode=disable"
       JWT_SECRET: "ci-secret"
       PORT: "8080"
-      GIN_MODE: "release"
       REDIS_ENABLED: "false"
     steps:
     - uses: actions/checkout@v4

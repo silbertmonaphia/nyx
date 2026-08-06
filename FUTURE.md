@@ -58,7 +58,7 @@ Automate quality control and deployment.
 - [x] **E2E Testing**: Implemented Playwright end-to-end tests for critical user journeys.
 - [ ] **E2E in CI/CD**: The `e2e-test` job in `ci.yml` currently skips actual test execution. Wire up a Postgres service container and run `npm run test:e2e` end-to-end.
 - [ ] **Fix Backend CI Integration Tests**: `ci.yml` runs `go test -v ./...` without a Docker service, causing `testcontainers-go` tests to panic. Add a Postgres service container or pass `SKIP_CONTAINERS=true`.
-- [ ] **User Domain Test Coverage**: `user/handler.go` and `user/service.go` have no test files. Add unit tests for `Register` and `Login`.
+- [ ] **User Domain Test Coverage**: `user/huma_handler.go` and `user/service.go` have no test files. Add unit tests for `Register` and `Login`.
 - [x] **Backend Linting**: Integrated `golangci-lint` into the CI/CD pipeline for Go code quality and security checks.
 - [x] **Frontend Linting**: Tightened `eslint` rules and integrated `husky` pre-commit hooks with `lint-staged`.
 - [x] **Kubernetes Manifests**: Draft `Deployment`, `Service`, and `Ingress` YAMLs for seamless production deployment.
