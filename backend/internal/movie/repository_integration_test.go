@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"nyx/internal/movie/db"
+	"nyx/internal/platform/api"
 	"nyx/test"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -21,6 +22,12 @@ var (
 )
 
 func TestMain(m *testing.M) {
+	// Install the huma error override before any huma-using test
+	// (handler_test.go) builds its router. This keeps the on-wire
+	// error envelope identical to the gin-era contract that the
+	// Vite frontend and the e2e suite expect.
+	api.OverrideHumaErrors()
+
 	// Allow skipping container-based tests locally. The unit tests
 	// (service_test.go, handler_test.go) still run in this mode; only
 	// the Postgres-backed integration tests are skipped.

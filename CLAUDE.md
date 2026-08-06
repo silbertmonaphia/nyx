@@ -40,16 +40,19 @@ All commands run from the repo root unless noted.
 ## Architecture
 
 ### Backend layering (`backend/internal/`)
-- `cmd/api/main.go` — wiring: config → DB → migrations → cache → movie + user services → gin router → graceful shutdown. Routes: `GET /api/health`, `/api/movies` (public list), `POST/PUT/DELETE /api/movies*` (JWT-guarded via `middleware.Auth()`), `/api/register`, `/api/login`, `/api/swagger/*`.
-- `middleware/` — request ID, structured logging (zerolog), CORS, rate limit, JWT auth.
-- `movie/` — clean-architecture domain. Files: `model.go` (entity + `MoviesPage` envelope + `NewMoviesPage`), `repository.go` (sqlc-generated querier; `GetAll` opens an internal tx for SELECT+COUNT consistency; "not found" returns `ErrNotFound` sentinel — handlers map it to HTTP 404), `service.go` (cache-aside wrapper around repo; `invalidate()` deletes the `movies:` prefix on every mutation), `handler.go` (Gin handlers). Tests use pgxmock for the handler and miniredis for the service.
-- `user/` — registration + login (JWT issuance). No tests yet (open roadmap item).
+- `cmd/api/main.go` — wiring: config → DB → migrations → cache → movie + user services → chi router + huma API → graceful shutdown. Routes: `GET /api/health`, `/api/movies` (public list), `POST/PUT/DELETE /api/movies*` (JWT-guarded via `middleware.HumaAuth()` per-operation), `/api/register`, `/api/login`, `/api/swagger`, `/api/swagger/doc.json`, `/metrics`.
+- `middleware/` — stdlib-shaped middleware: `RequestID`, `RealIP` (chi-backed), `Recoverer`, `Prometheus` (hand-rolled, uses chi route-pattern label), `Logging`, `CORS`, `RateLimit`, `Auth`. `huma_adapter.go` provides `HumaAuth()` for `huma.Operation.Middlewares`.
+- `movie/` — clean-architecture domain. Files: `model.go` (entity + `MoviesPage` envelope + `NewMoviesPage` + huma validation tags), `repository.go` (sqlc-generated querier; `GetAll` opens an internal tx for SELECT+COUNT consistency; "not found" returns `ErrNotFound` sentinel — handlers map it to HTTP 404), `service.go` (cache-aside wrapper around repo; `invalidate()` deletes the `movies:` prefix on every mutation), `huma_handler.go` (huma operations: Health, GetMovies, CreateMovie, UpdateMovie, DeleteMovie). Tests use pgxmock for the handler and miniredis for the service.
+- `user/` — registration + login (JWT issuance). `huma_handler.go` defines Register and Login operations.
 - `platform/` — cross-cutting infrastructure:
   - `config/` — viper-based loader; see `Config` struct for the full env var list.
   - `database/` — `New(cfg)` opens a `*pgxpool.Pool` with pool tuning (MaxConns / MinConns / MaxConnLifetime / MaxConnIdleTime); `RunMigrations(url)` applies `backend/migrations/` via golang-migrate.
   - `cache/` — `Cache` interface (`Get/Set/Delete/DeletePrefix/Ping`) with two impls: `NewRedis(url)` (go-redis v9; `DeletePrefix` uses `SCAN MATCH + UNLINK`, non-blocking) and `NewNoop()` (used when `REDIS_ENABLED=false`).
-  - `auth/`, `api/` — JWT helpers and error-response types.
+  - `auth/` — JWT helpers (`GenerateToken` / `ValidateToken`).
+  - `api/` — `ErrorResponse` (implements `huma.StatusError`) + `WriteError` + `OverrideHumaErrors` (rewires `huma.NewError`/`NewErrorWithContext` to use the legacy `{error, code, request_id, details}` envelope so huma's RFC 9457 default doesn't leak).
+- `reqctx/` — typed context keys for request ID, user ID, username, client IP. Leaf package imported by both `middleware` and `platform/api` to break an import cycle.
 - **Generated code** — `internal/movie/db/` and `internal/user/db/` are sqlc output (do not edit by hand). Regenerate with `make sqlc` after any query or schema change. See `backend/SQLC.md`.
+- **Adding an HTTP endpoint** — see `backend/HUMA.md` for the operation conventions, validation tags, and middleware order.
 
 ### Frontend (`frontend/src/`)
 Feature-first layout. Each feature owns its components, hooks, services, types, store.

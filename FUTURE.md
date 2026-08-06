@@ -12,7 +12,7 @@ Advanced systems must be observable and handle shutdowns gracefully.
 
 ## 2. API Maturity & Security
 Move beyond basic endpoints to a robust, documented API.
-- [x] **OpenAPI/Swagger**: Integrate `swaggo/swag` to auto-generate documentation and a Swagger UI.
+- [x] **OpenAPI/Swagger**: OpenAPI 3.1 generated at runtime via huma struct tags; UI at `/api/swagger` (Stoplight Elements). See `backend/HUMA.md`.
 - [x] **Authentication**: Implement JWT-based authentication for movie creation, editing, and deletion.
 - [x] **Project Restructuring (Clean Architecture)**: Move from a single-file script to a modular, domain-driven structure for better maintainability.
 - [x] **Rate Limiting**: Add middleware to prevent API abuse.

@@ -4,11 +4,16 @@ import (
 	"time"
 )
 
+// Movie is the on-wire and persistence shape for a movie record. The
+// huma validation tags drive the request validation performed by the
+// create / update operations; the `db` tags drive sqlc's column
+// mapping; the `json` tags drive wire format (huma respects these for
+// both input and output bodies).
 type Movie struct {
 	ID          int        `json:"id" db:"id"`
-	Title       string     `json:"title" db:"title" binding:"required,min=1,max=100"`
-	Description string     `json:"description" db:"description" binding:"max=1000"`
-	Rating      float64    `json:"rating" db:"rating" binding:"min=0,max=10"`
+	Title       string     `json:"title" db:"title" required:"true" minLength:"1" maxLength:"100"`
+	Description string     `json:"description" db:"description" maxLength:"1000"`
+	Rating      float64    `json:"rating" db:"rating" minimum:"0" maximum:"10"`
 	CreatedAt   time.Time  `json:"created_at" db:"created_at"`
 	UpdatedAt   time.Time  `json:"updated_at" db:"updated_at"`
 	DeletedAt   *time.Time `json:"deleted_at,omitempty" db:"deleted_at"`

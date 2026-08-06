@@ -4,7 +4,7 @@ A minimalist media rating application with a Go backend and a React frontend.
 
 ## Project Structure
 
-- `backend/`: Go 1.26.1 API server (Gin-ready)
+- `backend/`: Go 1.26.1 API server (chi + huma)
 - `frontend/`: React 19 + Vite 8 SPA (TanStack Query + Tailwind CSS)
 - `docker-compose.yml`: General service orchestration
 - `docker-compose.prod.yml`: Production-specific configuration
@@ -60,7 +60,7 @@ A minimalist media rating application with a Go backend and a React frontend.
 4. Access the application:
    - Frontend: `http://localhost:5173` (with HMR)
    - API: `http://localhost:8080/api/movies`
-   - Swagger UI: `http://localhost:8080/api/swagger/index.html`
+   - Swagger UI: `http://localhost:8080/api/swagger`
 
 5. Access the database:
    ```bash

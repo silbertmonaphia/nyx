@@ -10,29 +10,53 @@ import (
 	"testing"
 	"time"
 
-	"nyx/internal/middleware"
+	"nyx/internal/platform/auth"
 	"nyx/internal/platform/cache"
 
-	"github.com/gin-gonic/gin"
+	"github.com/danielgtaylor/huma/v2"
+	"github.com/danielgtaylor/huma/v2/adapters/humachi"
+	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5"
 	"github.com/pashagolub/pgxmock/v3"
 )
 
-func setupTestRouter(h *Handler) *gin.Engine {
-	gin.SetMode(gin.TestMode)
-	router := gin.New()
-	router.Use(gin.Recovery())
-	router.Use(middleware.CORS())
-
-	api := router.Group("/api")
-	{
-		api.GET("/health", h.HealthHandler)
-		api.GET("/movies", h.GetMoviesHandler)
-		api.POST("/movies", h.CreateMovieHandler)
-		api.PUT("/movies/:id", h.UpdateMovieHandler)
-		api.DELETE("/movies/:id", h.DeleteMovieHandler)
-	}
+// setupTestRouter builds a chi + huma router wired with the same movie
+// operations as the real API. We deliberately skip Prometheus, RequestID,
+// Logging, CORS, and RateLimit — those have their own tests and add
+// noise (and one goroutine in the case of RateLimit) to every handler
+// test. The error envelope override is called once at the package level
+// via TestMain in handler_test.go so validation errors also come back
+// in the legacy shape.
+//
+// The `auth` flag toggles whether the protected operations (POST/PUT/
+// DELETE) carry the JWT middleware. Tests that don't exercise auth pass
+// false; tests that want a 401 pass false and skip the header; tests
+// that want a 200 pass true and mint a token via testJWTAuthHeader.
+func setupTestRouter(h *Handler, auth bool) *chi.Mux {
+	router := chi.NewMux()
+	hapi := humachi.New(router, huma.Config{
+		OpenAPI: &huma.OpenAPI{
+			OpenAPI: "3.1.0",
+			Info:    &huma.Info{Title: "Nyx test", Version: "0.0.0"},
+		},
+		Formats:       huma.DefaultFormats,
+		DefaultFormat: "application/json",
+	})
+	RegisterMovieOpsTest(hapi, h, auth)
 	return router
+}
+
+// testJWTAuthHeader mints a fresh JWT signed with whatever secret the
+// auth package will use to validate it (it reads JWT_SECRET from the
+// environment, falling back to the package default). The header value
+// can be dropped straight into an Authorization field.
+func testJWTAuthHeader(t *testing.T) string {
+	t.Helper()
+	tok, err := auth.GenerateToken(1, "tester")
+	if err != nil {
+		t.Fatalf("mint test JWT: %v", err)
+	}
+	return "Bearer " + tok
 }
 
 // newMockRepo wires a pgxmock pool through to NewRepository. The
@@ -50,6 +74,10 @@ func newMockRepo(t *testing.T) (Repository, pgxmock.PgxPoolIface) {
 	return NewRepository(mock), mock
 }
 
+// api.OverrideHumaErrors() is installed once via TestMain in
+// repository_integration_test.go (Go allows only one TestMain per
+// package; that file already owns the test bootstrap).
+
 func TestHealthHandler(t *testing.T) {
 	repo, mock := newMockRepo(t)
 	service := NewService(repo, cache.NewNoop(), time.Minute)
@@ -57,7 +85,7 @@ func TestHealthHandler(t *testing.T) {
 
 	mock.ExpectPing()
 
-	router := setupTestRouter(h)
+	router := setupTestRouter(h, false)
 	req, _ := http.NewRequest("GET", "/api/health", nil)
 	rr := httptest.NewRecorder()
 	router.ServeHTTP(rr, req)
@@ -85,7 +113,7 @@ func TestHealthHandlerError(t *testing.T) {
 
 	mock.ExpectPing().WillReturnError(fmt.Errorf("db connection failed"))
 
-	router := setupTestRouter(h)
+	router := setupTestRouter(h, false)
 	req, _ := http.NewRequest("GET", "/api/health", nil)
 	rr := httptest.NewRecorder()
 	router.ServeHTTP(rr, req)
@@ -126,7 +154,7 @@ func TestGetMoviesHandler(t *testing.T) {
 		WillReturnRows(pgxmock.NewRows([]string{"count"}).AddRow(int64(25)))
 	mock.ExpectCommit()
 
-	router := setupTestRouter(h)
+	router := setupTestRouter(h, false)
 	req, _ := http.NewRequest("GET", "/api/movies", nil)
 	rr := httptest.NewRecorder()
 	router.ServeHTTP(rr, req)
@@ -169,7 +197,7 @@ func TestGetMoviesHandlerPaginationParams(t *testing.T) {
 		WillReturnRows(pgxmock.NewRows([]string{"count"}).AddRow(int64(0)))
 	mock.ExpectCommit()
 
-	router := setupTestRouter(h)
+	router := setupTestRouter(h, false)
 	req, _ := http.NewRequest("GET", "/api/movies?page=3&page_size=5", nil)
 	rr := httptest.NewRecorder()
 	router.ServeHTTP(rr, req)
@@ -209,7 +237,7 @@ func TestGetMoviesHandlerPageSizeClamped(t *testing.T) {
 		WillReturnRows(pgxmock.NewRows([]string{"count"}).AddRow(int64(0)))
 	mock.ExpectCommit()
 
-	router := setupTestRouter(h)
+	router := setupTestRouter(h, false)
 	req, _ := http.NewRequest("GET", "/api/movies?page_size=500", nil)
 	rr := httptest.NewRecorder()
 	router.ServeHTTP(rr, req)
@@ -254,7 +282,7 @@ func TestGetMoviesHandlerSearch(t *testing.T) {
 		WillReturnRows(pgxmock.NewRows([]string{"count"}).AddRow(int64(1)))
 	mock.ExpectCommit()
 
-	router := setupTestRouter(h)
+	router := setupTestRouter(h, false)
 	req, _ := http.NewRequest("GET", "/api/movies?q=matrix", nil)
 	rr := httptest.NewRecorder()
 	router.ServeHTTP(rr, req)
@@ -301,8 +329,9 @@ func TestCreateMovieHandler(t *testing.T) {
 		WillReturnRows(pgxmock.NewRows([]string{"id", "title", "description", "rating", "created_at", "updated_at", "deleted_at"}).
 			AddRow(int32(1), newMovie.Title, newMovie.Description, newMovie.Rating, now, now, nil))
 
-	router := setupTestRouter(h)
+	router := setupTestRouter(h, true)
 	req, _ := http.NewRequest("POST", "/api/movies", bytes.NewBuffer(body))
+	req.Header.Set("Authorization", testJWTAuthHeader(t))
 	rr := httptest.NewRecorder()
 	router.ServeHTTP(rr, req)
 
@@ -324,7 +353,7 @@ func TestCreateMovieHandler(t *testing.T) {
 
 func TestCreateMovieHandlerValidation(t *testing.T) {
 	h := NewHandler(nil) // service not needed; validation rejects before the repo is called
-	router := setupTestRouter(h)
+	router := setupTestRouter(h, false)
 
 	// Case 1: Empty Title (Required)
 	body, _ := json.Marshal(map[string]interface{}{
@@ -374,8 +403,9 @@ func TestUpdateMovieHandler(t *testing.T) {
 		WillReturnRows(pgxmock.NewRows([]string{"id", "title", "description", "rating", "created_at", "updated_at", "deleted_at"}).
 			AddRow(int32(1), updatedMovie.Title, updatedMovie.Description, updatedMovie.Rating, now, now, nil))
 
-	router := setupTestRouter(h)
+	router := setupTestRouter(h, true)
 	req, _ := http.NewRequest("PUT", "/api/movies/1", bytes.NewBuffer(body))
+	req.Header.Set("Authorization", testJWTAuthHeader(t))
 	rr := httptest.NewRecorder()
 	router.ServeHTTP(rr, req)
 
@@ -404,8 +434,9 @@ func TestDeleteMovieHandler(t *testing.T) {
 		WithArgs(int32(1)).
 		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
 
-	router := setupTestRouter(h)
+	router := setupTestRouter(h, true)
 	req, _ := http.NewRequest("DELETE", "/api/movies/1", nil)
+	req.Header.Set("Authorization", testJWTAuthHeader(t))
 	rr := httptest.NewRecorder()
 	router.ServeHTTP(rr, req)
 
@@ -433,8 +464,9 @@ func TestUpdateMovieHandlerNotFound(t *testing.T) {
 		WithArgs(updatedMovie.Title, pgxmock.AnyArg(), pgxmock.AnyArg(), int32(999)).
 		WillReturnError(pgx.ErrNoRows)
 
-	router := setupTestRouter(h)
+	router := setupTestRouter(h, true)
 	req, _ := http.NewRequest("PUT", "/api/movies/999", bytes.NewBuffer(body))
+	req.Header.Set("Authorization", testJWTAuthHeader(t))
 	rr := httptest.NewRecorder()
 	router.ServeHTTP(rr, req)
 
@@ -457,8 +489,9 @@ func TestDeleteMovieHandlerNotFound(t *testing.T) {
 		WithArgs(int32(999)).
 		WillReturnResult(pgxmock.NewResult("UPDATE", 0))
 
-	router := setupTestRouter(h)
+	router := setupTestRouter(h, true)
 	req, _ := http.NewRequest("DELETE", "/api/movies/999", nil)
+	req.Header.Set("Authorization", testJWTAuthHeader(t))
 	rr := httptest.NewRecorder()
 	router.ServeHTTP(rr, req)
 

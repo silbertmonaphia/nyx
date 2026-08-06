@@ -5,6 +5,7 @@ This document outlines the architectural and technical evolution of the Nyx back
 ## 1. Core Framework & Architecture
 Advanced projects prioritize scalability and separation of concerns through modular design.
 - [x] **Refactor to Gin Gonic**: Replace standard `net/http` for better routing, middleware management, and JSON binding performance.
+- [x] **Migrate to chi + huma**: Stdlib-compatible middleware (`func(http.Handler) http.Handler`) on chi v5; declarative operations on huma v2 with OpenAPI 3.1 generated from struct tags. See `backend/HUMA.md`. REST contract preserved byte-for-byte (paths, methods, JSON envelopes) so the frontend, e2e suite, and CI are unaffected.
 - [x] **Project Restructuring (Clean Architecture)**:
   ```text
   backend/
@@ -54,7 +55,7 @@ Improve data safety and developer speed.
 
 ## 5. Observability & Documentation
 Make the system transparent and easy to integrate with.
-- [x] **Swagger (OpenAPI 3.0)**: Use `swaggo/swag` to auto-generate interactive API documentation.
+- [x] **OpenAPI 3.1 via huma**: OpenAPI 3.1 spec generated at runtime from huma struct tags on each operation's Input/Output structs. UI at `/api/swagger` (Stoplight Elements). See `backend/HUMA.md`.
 - [x] **Prometheus Metrics**: Export latency, error rates, and request counts via a `/metrics` endpoint.
 - [x] **Contextual Logging**: Pass `context` through layers to trace requests and include Request IDs in logs.
 - [ ] **Distributed Tracing**: Integrate OpenTelemetry (OTel) to trace HTTP requests across router middlewares and down to individual database queries.
@@ -71,4 +72,4 @@ Make the system transparent and easy to integrate with.
 - [ ] **Fix CI Integration Tests**: `ci.yml` runs `go test -v ./...` without `SKIP_CONTAINERS=true`, so the `testcontainers-go` tests will panic in CI since Docker access is needed. Either add a Postgres service container or pass the skip flag.
 - [x] **Error Sentinel Values**: `handler.go` compared errors by string (`err.Error() == "movie not found"`). Replaced with `movie.ErrNotFound` + `errors.Is()` checks; the handler maps the sentinel to HTTP 404.
 - [ ] **User Service Tests**: The `user` domain has no unit or integration tests. Add coverage for `Register` and `Login` service methods.
-- [ ] **Handler Tests for User Domain**: `user/handler.go` has no corresponding `handler_test.go`. Add tests for register/login endpoints.
+- [ ] **Handler Tests for User Domain**: `user/huma_handler.go` has no corresponding `handler_test.go`. Add tests for register/login operations on the chi + huma stack.
