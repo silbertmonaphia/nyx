@@ -1,0 +1,45 @@
+version: "2"
+sql:
+  - engine: "postgresql"
+    queries: "queries/movies.sql"
+    schema:
+      - "migrations/000001_create_movies_table.up.sql"
+      - "migrations/000003_add_audit_fields_to_movies_table.up.sql"
+      - "migrations/000006_add_movies_indexes.up.sql"
+      - "migrations/000007_add_movies_description_trgm_index.up.sql"
+    gen:
+      go:
+        package: "db"
+        out: "internal/movie/db"
+        sql_package: "pgx/v5"
+        emit_interface: true
+        emit_json_tags: false
+        emit_prepared_queries: false
+        emit_empty_slices: true
+        rename:
+          id: "ID"
+          created_at: "CreatedAt"
+          updated_at: "UpdatedAt"
+          deleted_at: "DeletedAt"
+  - engine: "postgresql"
+    queries: "queries/users.sql"
+    schema:
+      - "migrations/000004_create_users_table.up.sql"
+      - "migrations/000005_add_deleted_at_to_users_table.up.sql"
+    gen:
+      go:
+        package: "db"
+        out: "internal/user/db"
+        sql_package: "pgx/v5"
+        emit_interface: true
+        emit_json_tags: false
+        emit_prepared_queries: false
+        emit_empty_slices: true
+        rename:
+          id: "ID"
+          username: "Username"
+          email: "Email"
+          password_hash: "PasswordHash"
+          created_at: "CreatedAt"
+          updated_at: "UpdatedAt"
+          deleted_at: "DeletedAt"

@@ -4,6 +4,8 @@ services:
   db:
     image: postgres:17-alpine
     restart: always
+    env_file:
+      - .env
     environment:
       - POSTGRES_USER=${POSTGRES_USER}
       - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
@@ -12,23 +14,55 @@ services:
       - "5433:5432"
     volumes:
       - db_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    restart: always
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
 
   backend:
-    build: ./backend
+    build:
+      context: ./backend
+      args:
+        - GOPROXY=${GOPROXY:-https://goproxy.cn,direct}
     ports:
       - "8080:8080"
+    # env_file makes .env loading independent of the shell's CWD —
+    # compose always reads the file next to this compose file.
+    env_file:
+      - .env
     environment:
       - DB_URL=${DB_URL}
+      - REDIS_URL=${REDIS_URL:-redis://redis:6379}
+      - REDIS_ENABLED=${REDIS_ENABLED:-true}
+      - CACHE_TTL=${CACHE_TTL:-5m}
+      - JWT_SECRET=${JWT_SECRET}
     depends_on:
-      - db
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
 
   frontend:
     build:
       context: ./frontend
       args:
         - VITE_API_URL=http://localhost:8080/api
+    # nginx runs as non-root (USER nginx in Dockerfile) so it can't bind
+    # privileged port 80. The nginx.conf inside the container listens on 8080.
     ports:
-      - "5173:80"
+      - "5173:8080"
     depends_on:
       - backend
 

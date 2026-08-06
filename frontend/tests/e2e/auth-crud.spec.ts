@@ -61,11 +61,10 @@ test.describe('Authentication and Movie CRUD', () => {
     
     await expect(page.getByText(updatedTitle)).toBeVisible();
 
-    // 4. Delete
+    // 4. Delete — uses the new Radix-based confirm dialog, not window.confirm
     await page.getByTitle('Delete').first().click();
-    // Confirm dialog (Playwright auto-dismisses but we can listen)
-    page.on('dialog', dialog => dialog.accept());
-    
+    await page.getByTestId('confirm-delete').click();
+
     await expect(page.getByText(updatedTitle)).not.toBeVisible();
   });
 });

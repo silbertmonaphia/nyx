@@ -1,0 +1,92 @@
+Nyx — PolyForm Noncommercial License 1.0.0 with AI Training Restriction
+
+Adapted from the PolyForm Noncommercial License 1.0.0
+<https://polyformproject.org/licenses/noncommercial/1.0.0>
+
+Copyright © 2026 Nyx contributors
+
+# Acceptance
+
+In order to get any rights under this license, you must agree to its terms.
+If you do not agree to all of the terms below, then no rights are granted
+to you.
+
+# License Grant
+
+The licensor grants you a worldwide, royalty-free, non-exclusive,
+non-transferable license to use, copy, modify, and distribute the Software,
+subject to the terms and conditions of this license.
+
+# Noncommercial Purposes
+
+This license only grants you rights to use the Software for Noncommercial
+Purposes.
+
+**Noncommercial Purposes** means use of the Software that is not primarily
+intended for or directed toward commercial advantage or monetary
+compensation. Examples of Noncommercial Purposes include: personal use,
+academic research, education, and evaluation by prospective users or
+customers.
+
+**Commercial Purposes** include any use of the Software that is primarily
+intended for or directed toward commercial advantage or monetary
+compensation, including but not limited to: selling the Software;
+incorporating the Software into a product or service offered for a fee;
+using the Software to provide paid services; and using the Software to
+operate infrastructure that generates revenue.
+
+# Restrictions
+
+In addition to the Noncommercial Purposes restriction above, the following
+are expressly prohibited:
+
+1. **No AI / ML training use.** You may not use, copy, modify, or distribute
+   the Software, in whole or in part, for the purpose of training,
+   fine-tuning, evaluating, benchmarking, or otherwise developing any
+   artificial intelligence, machine learning, or similar model or system.
+   This restriction applies regardless of whether the resulting model or
+   system is made available publicly or commercially.
+
+2. **No redistribution under a different license.** You may not sublicense
+   or redistribute the Software under terms that grant broader rights than
+   this license.
+
+3. **No trademark or attribution removal.** You may not use the names,
+   trademarks, or logos of the licensor or contributors to endorse or
+   promote derivative works without prior written permission.
+
+4. **No removal of notices.** You may not remove or alter any copyright,
+   license, or attribution notices contained in the Software.
+
+# No Other Rights
+
+No other rights are granted by this license. Rights that are not expressly
+granted are reserved by the licensor.
+
+# Disclaimer
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE, AND NONINFRINGEMENT. IN NO EVENT SHALL
+THE LICENSOR OR CONTRIBUTORS BE LIABLE FOR ANY CLAIM, DAMAGES, OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT, OR OTHERWISE, ARISING
+FROM, OUT OF, OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+DEALINGS IN THE SOFTWARE.
+
+# Limitation of Liability
+
+EXCEPT TO THE EXTENT PROHIBITED BY APPLICABLE LAW, IN NO EVENT SHALL THE
+LICENSOR OR CONTRIBUTORS BE LIABLE FOR ANY INDIRECT, INCIDENTAL, SPECIAL,
+EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO,
+PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR
+PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF
+LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING
+NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
+SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
+# Interpretation
+
+If any provision of this license is held to be unenforceable, the remaining
+provisions shall continue in full force and effect. This license is the
+entire agreement between the parties with respect to the Software and
+supersedes any prior or contemporaneous understandings.

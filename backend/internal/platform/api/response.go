@@ -1,39 +1,71 @@
+// Package api holds cross-cutting HTTP response shapes. The ErrorResponse
+// envelope is the canonical JSON shape for every error returned by the
+// Nyx API. Handlers, middleware, and huma operations all funnel their
+// errors through WriteError or by returning *ErrorResponse directly so
+// the envelope stays identical across the codebase.
+//
+// ErrorResponse also implements huma.StatusError, so huma operations
+// can `return nil, &api.ErrorResponse{...}` and huma will write the
+// JSON body using these tags. The legacy envelope is preserved
+// end-to-end because OverrideHumaErrors routes huma's own error
+// constructors through the same struct.
 package api
 
 import (
-	"github.com/gin-gonic/gin"
+	"context"
+	"encoding/json"
+	"io"
+	"net/http"
+
+	"nyx/internal/reqctx"
 )
 
-// ErrorResponse defines the standard JSON structure for all API errors
+// ErrorResponse defines the standard JSON structure for all API errors.
+// It also implements huma.StatusError, so handlers can return a
+// pointer to it directly and huma will marshal the same JSON shape.
+//
+// The Go field name is `Message` rather than `Error` because Go does
+// not permit a struct field and a method to share a name; the JSON tag
+// keeps the on-wire key as `"error"` so the wire contract is unchanged.
 type ErrorResponse struct {
-	Error     string      `json:"error"`
+	Message   string      `json:"error"`
 	Code      int         `json:"code"`
 	RequestID string      `json:"request_id,omitempty"`
 	Details   interface{} `json:"details,omitempty"`
 }
 
-// AbortWithError is a helper to send a standardized error response and abort the request
-func AbortWithError(c *gin.Context, statusCode int, message string, details interface{}) {
-	requestID, _ := c.Get("requestID")
-	rid, _ := requestID.(string)
+// Error makes ErrorResponse satisfy the standard error interface.
+// It returns the user-facing message, which is what huma's default
+// error logging uses.
+func (e *ErrorResponse) Error() string { return e.Message }
 
-	c.AbortWithStatusJSON(statusCode, ErrorResponse{
-		Error:     message,
-		Code:      statusCode,
-		RequestID: rid,
-		Details:   details,
-	})
+// GetStatus makes ErrorResponse satisfy huma.StatusError so huma
+// writes the supplied HTTP status instead of its default 500.
+func (e *ErrorResponse) GetStatus() int { return e.Code }
+
+// WriteError serializes an ErrorResponse to w with the given status
+// code. The request ID is read from r.Context() so middleware-produced
+// errors carry the same correlation ID as the corresponding log line.
+//
+// Returns immediately after writing; callers should `return` afterwards.
+func WriteError(w http.ResponseWriter, r *http.Request, statusCode int, message string, details interface{}) {
+	e := newErrorResponse(statusCode, message, details, reqctx.RequestIDFromContext(r.Context()))
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	w.WriteHeader(statusCode)
+	_ = json.NewEncoder(w).Encode(e)
 }
 
-// SendError is a helper to send a standardized error response without aborting (if needed)
-func SendError(c *gin.Context, statusCode int, message string, details interface{}) {
-	requestID, _ := c.Get("requestID")
-	rid, _ := requestID.(string)
+// NewErrorResponseFromContext builds an ErrorResponse with the request
+// ID stamped from ctx. Used by huma middleware that has only a
+// context.Context (no http.Request).
+func NewErrorResponseFromContext(ctx context.Context, status int, message string, details interface{}) *ErrorResponse {
+	return newErrorResponse(status, message, details, reqctx.RequestIDFromContext(ctx))
+}
 
-	c.JSON(statusCode, ErrorResponse{
-		Error:     message,
-		Code:      statusCode,
-		RequestID: rid,
-		Details:   details,
-	})
+// EncodeError writes an ErrorResponse as JSON to w. Kept as a
+// package-level helper so huma middleware (which has only
+// io.Writer-shaped BodyWriter) can reuse the same encoding path
+// without reaching for encoding/json directly.
+func EncodeError(w io.Writer, e *ErrorResponse) error {
+	return json.NewEncoder(w).Encode(e)
 }

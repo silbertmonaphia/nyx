@@ -10,29 +10,20 @@ import (
 
 	"nyx/internal/middleware"
 	"nyx/internal/movie"
+	"nyx/internal/platform/api"
+	"nyx/internal/platform/cache"
 	"nyx/internal/platform/config"
 	"nyx/internal/platform/database"
 	"nyx/internal/user"
+	userdb "nyx/internal/user/db"
 
-	_ "nyx/docs"
-	swaggerFiles "github.com/swaggo/files"
-	ginSwagger "github.com/swaggo/gin-swagger"
-	"github.com/zsais/go-gin-prometheus"
-
-	"github.com/gin-gonic/gin"
+	"github.com/danielgtaylor/huma/v2"
+	"github.com/danielgtaylor/huma/v2/adapters/humachi"
+	"github.com/go-chi/chi/v5"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 )
-
-// @title Nyx API
-// @version 1.0
-// @description Minimalist media rating application API.
-// @host localhost:8080
-// @BasePath /api
-
-// @securityDefinitions.apikey ApiKeyAuth
-// @in header
-// @name Authorization
 
 func main() {
 	// Configure zerolog
@@ -59,57 +50,94 @@ func main() {
 	// Run migrations
 	database.RunMigrations(cfg.DBURL)
 
+	// Initialize cache. Disabled by default; when enabled we wait up to
+	// 10s for Redis to come up so we fail fast on misconfiguration rather
+	// than serving cache errors on every request.
+	var cacheClient cache.Cache = cache.NewNoop()
+	if cfg.RedisEnabled {
+		var err error
+		cacheClient, err = connectRedisWithRetry(cfg.RedisURL, 10)
+		if err != nil {
+			log.Fatal().Err(err).Msg("Could not connect to Redis")
+		}
+		defer func() { _ = cacheClient.Close() }()
+		log.Info().Str("url", cfg.RedisURL).Msg("Cache enabled")
+	} else {
+		log.Info().Msg("Cache disabled (REDIS_ENABLED=false); using no-op cache")
+	}
+
+	cacheTTL, err := time.ParseDuration(cfg.CacheTTL)
+	if err != nil {
+		log.Fatal().Err(err).Msg("Invalid CACHE_TTL")
+	}
+
 	// Initialize Movie domain
 	movieRepo := movie.NewRepository(db)
-	movieService := movie.NewService(movieRepo)
+	movieService := movie.NewService(movieRepo, cacheClient, cacheTTL)
 	movieHandler := movie.NewHandler(movieService)
 
 	// Initialize User domain
-	userRepo := user.NewRepository(db)
+	userRepo := user.NewRepository(userdb.New(db))
 	userService := user.NewService(userRepo)
 	userHandler := user.NewHandler(userService)
 
-	// Set up Gin
-	gin.SetMode(cfg.GinMode)
-	router := gin.New()
-
-	// Metrics
-	p := ginprometheus.NewPrometheus("gin")
-	p.Use(router)
-
-	// Middleware
-	router.Use(gin.Recovery())
-	router.Use(middleware.RequestID())
-	router.Use(middleware.Logging())
-	router.Use(middleware.CORS())
+	// Build chi router. Middleware order (outermost first):
+	//   RequestID → Recoverer → Prometheus → Logging → CORS → RateLimit
+	// CORS sits inside logging so OPTIONS preflight failures still get
+	// logged; rate-limit sits inside CORS so a throttled request still
+	// returns CORS headers.
+	router := chi.NewRouter()
+	router.Use(middleware.RequestID)
+	router.Use(middleware.RealIP)
+	router.Use(middleware.Recoverer)
+	router.Use(middleware.Prometheus)
+	router.Use(middleware.Logging)
+	router.Use(middleware.CORS)
 	router.Use(middleware.DefaultRateLimit())
+	router.Use(maxBodyBytes(maxBodyBytesLimit))
 
-	// API Routes
-	api := router.Group("/api")
-	{
-		api.GET("/health", movieHandler.HealthHandler)
-		url := ginSwagger.URL("/api/swagger/doc.json")
-		api.GET("/swagger/*any", ginSwagger.WrapHandler(swaggerFiles.Handler, url))
+	// Mount /metrics at the router root, BEFORE huma wraps it. Prometheus
+	// scrapers do not speak our error envelope and don't carry a JWT, so
+	// they must skip huma's request processing entirely.
+	router.Handle("/metrics", promhttp.Handler())
 
-		// Auth routes
-		api.POST("/register", userHandler.Register)
-		api.POST("/login", userHandler.Login)
+	// Override huma's package-level error constructors so every error
+	// (validation failures, panic recovery, the prebuilt 4xx/5xx helpers,
+	// handler-returned errors) flows through the legacy {error, code,
+	// request_id, details} envelope the frontend already parses.
+	api.OverrideHumaErrors()
 
-		// Movie routes
-		movies := api.Group("/movies")
-		{
-			movies.GET("", movieHandler.GetMoviesHandler)
-			
-			// Protected routes
-			protected := movies.Group("")
-			protected.Use(middleware.Auth())
-			{
-				protected.POST("", movieHandler.CreateMovieHandler)
-				protected.PUT("/:id", movieHandler.UpdateMovieHandler)
-				protected.DELETE("/:id", movieHandler.DeleteMovieHandler)
-			}
-		}
-	}
+	// Build the huma API on top of chi. humachi adapts chi's URL params
+	// into huma.Operation.Path params and lets huma use chi's router for
+	// dispatch. Order matters: routes are registered against the chi
+	// router and the huma API is built on top of it via NewAdapter.
+	humaAPI := humachi.New(router, huma.Config{
+		OpenAPI: &huma.OpenAPI{
+			OpenAPI: "3.1.0",
+			Info: &huma.Info{
+				Title:       "Nyx API",
+				Version:     "1.0.0",
+				Description: "Minimalist media rating application API.",
+			},
+			Components: &huma.Components{
+				SecuritySchemes: map[string]*huma.SecurityScheme{
+					"BearerAuth": {
+						Type:         "http",
+						Scheme:       "bearer",
+						BearerFormat: "JWT",
+						Description:  "JWT bearer token issued by POST /api/login or POST /api/register.",
+					},
+				},
+			},
+		},
+		OpenAPIPath:   "/api/swagger/doc.json",
+		DocsPath:      "/api/swagger",
+		Formats:       huma.DefaultFormats,
+		DefaultFormat: "application/json",
+	})
+
+	movie.RegisterMovieOps(humaAPI, movieHandler)
+	user.RegisterUserOps(humaAPI, userHandler)
 
 	port := ":" + cfg.Port
 	server := &http.Server{
@@ -142,4 +170,39 @@ func main() {
 	}
 
 	log.Info().Msg("Server exited properly")
+}
+
+// maxBodyBytesLimit caps request bodies at 1 MiB. huma parses the body
+// BEFORE per-operation Middlewares run, so a 100 MB POST could trigger
+// work before being rejected by Auth. http.MaxBytesReader enforces the
+// cap at the io.Reader level — huma's JSON decoder sees io.ErrUnexpectedEOF
+// when the limit is hit and surfaces a 400.
+const maxBodyBytesLimit = 1 << 20
+
+// maxBodyBytes returns a middleware that wraps r.Body in an
+// http.MaxBytesReader so oversized payloads fail fast.
+func maxBodyBytes(limit int64) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.Body != nil && r.ContentLength != 0 {
+				r.Body = http.MaxBytesReader(w, r.Body, limit)
+			}
+			next.ServeHTTP(w, r)
+		})
+	}
+}
+
+// connectRedisWithRetry mirrors database.New's startup retry pattern so
+// the API tolerates a Redis container that is still booting.
+func connectRedisWithRetry(url string, attempts int) (cache.Cache, error) {
+	var lastErr error
+	for i := 0; i < attempts; i++ {
+		c, err := cache.NewRedis(url)
+		if err == nil {
+			return c, nil
+		}
+		lastErr = err
+		time.Sleep(1 * time.Second)
+	}
+	return nil, lastErr
 }

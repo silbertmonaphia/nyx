@@ -7,10 +7,11 @@ import (
 	"testing"
 	"time"
 
+	"nyx/internal/movie/db"
+	"nyx/internal/platform/api"
 	"nyx/test"
 
-	"github.com/jmoiron/sqlx"
-	_ "github.com/lib/pq"
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -21,63 +22,97 @@ var (
 )
 
 func TestMain(m *testing.M) {
+	// Install the huma error override before any huma-using test
+	// (handler_test.go) builds its router. This keeps the on-wire
+	// error envelope identical to the gin-era contract that the
+	// Vite frontend and the e2e suite expect.
+	api.OverrideHumaErrors()
+
+	// Allow skipping container-based tests locally. The unit tests
+	// (service_test.go, handler_test.go) still run in this mode; only
+	// the Postgres-backed integration tests are skipped.
+	skipContainers := os.Getenv("SKIP_CONTAINERS") == "true"
+
 	// Set up the database container once for all tests in this package
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 
-	var err error
-	testDB, err = test.StartPostgres(ctx)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Failed to start PostgreSQL container: %v\n", err)
-		os.Exit(1)
-	}
-	dbURL = testDB.DBURL
+	if !skipContainers {
+		// CI path: if DB_URL is set, use the externally-provided
+		// Postgres (e.g. a service container) directly instead of
+		// spinning up a testcontainer.
+		if url := os.Getenv("DB_URL"); url != "" {
+			dbURL = url
+			if err := test.RunMigrationsForURL(ctx, dbURL); err != nil {
+				fmt.Fprintf(os.Stderr, "Failed to run migrations: %v\n", err)
+				os.Exit(1)
+			}
+		} else {
+			var err error
+			testDB, err = test.StartPostgres(ctx)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "Failed to start PostgreSQL container: %v\n", err)
+				os.Exit(1)
+			}
+			dbURL = testDB.DBURL
 
-	// Run migrations
-	if err := testDB.RunMigrationsWithContext(ctx); err != nil {
-		fmt.Fprintf(os.Stderr, "Failed to run migrations: %v\n", err)
-		if testDB.Container != nil {
-			_ = testDB.Container.Terminate(context.Background())
+			// Run migrations
+			if err := testDB.RunMigrationsWithContext(ctx); err != nil {
+				fmt.Fprintf(os.Stderr, "Failed to run migrations: %v\n", err)
+				if testDB.Container != nil {
+					_ = testDB.Container.Terminate(context.Background())
+				}
+				os.Exit(1)
+			}
 		}
-		os.Exit(1)
+	} else {
+		fmt.Println("Skipping container-based integration tests")
 	}
 
-	// Run tests
+	// Run all tests; integration tests in this file self-skip when
+	// dbURL == "".
 	code := m.Run()
 
-	// Cleanup
-	if testDB.Container != nil {
+	if !skipContainers && testDB != nil && testDB.Container != nil {
 		_ = testDB.Container.Terminate(context.Background())
 	}
 
 	os.Exit(code)
 }
 
-func setupIntegrationTest(t *testing.T) (*sqlx.DB, Repository) {
+func setupIntegrationTest(t *testing.T) (*pgxpool.Pool, Repository) {
 	t.Helper()
 
-	// Create database connection using the shared container
-	db, err := sqlx.Open("postgres", dbURL)
+	// Skip when the container-backed TestMain decided not to start one
+	// (e.g. SKIP_CONTAINERS=true).
+	if dbURL == "" {
+		t.Skip("PostgreSQL container not available; set SKIP_CONTAINERS=false to run integration tests")
+	}
+
+	// Open a pgxpool for the test. Cap the pool small so a single
+	// test process never starves the local Postgres.
+	poolCfg, err := pgxpool.ParseConfig(dbURL)
+	require.NoError(t, err)
+	poolCfg.MaxConns = 5
+	poolCfg.MinConns = 2
+	poolCfg.MaxConnLifetime = 2 * time.Minute
+	pool, err := pgxpool.NewWithConfig(context.Background(), poolCfg)
 	require.NoError(t, err)
 
-	// Clean up tables before each test to ensure isolation
-	_, err = db.Exec("DELETE FROM movies")
+	// Clean up tables before each test to ensure isolation.
+	_, err = pool.Exec(context.Background(), "DELETE FROM movies")
 	require.NoError(t, err)
 
-	// Configure connection pool for tests
-	db.SetMaxOpenConns(5)
-	db.SetMaxIdleConns(2)
-	db.SetConnMaxLifetime(2 * time.Minute)
+	t.Cleanup(func() { pool.Close() })
 
-	t.Cleanup(func() {
-		db.Close()
-	})
-
-	repo := NewRepository(db)
-	return db, repo
+	repo := NewRepository(pool)
+	return pool, repo
 }
 
 func TestRepositoryIntegration(t *testing.T) {
+	if dbURL == "" {
+		t.Skip("PostgreSQL container not available; set SKIP_CONTAINERS=false to run integration tests")
+	}
 	ctx := context.Background()
 
 	t.Run("CreateMovie", func(t *testing.T) {
@@ -112,9 +147,10 @@ func TestRepositoryIntegration(t *testing.T) {
 		}
 
 		// Get all movies
-		allMovies, err := repo.GetAll(ctx, "")
+		allMovies, err := repo.GetAll(ctx, "", 1, 100)
 		require.NoError(t, err)
-		assert.Len(t, allMovies, 3)
+		assert.Len(t, allMovies.Items, 3)
+		assert.Equal(t, 3, allMovies.Total)
 	})
 
 	t.Run("SearchMovies", func(t *testing.T) {
@@ -133,21 +169,21 @@ func TestRepositoryIntegration(t *testing.T) {
 		}
 
 		// Search by title
-		results, err := repo.GetAll(ctx, "matrix")
+		results, err := repo.GetAll(ctx, "matrix", 1, 20)
 		require.NoError(t, err)
-		assert.Len(t, results, 1)
-		assert.Equal(t, "The Matrix", results[0].Title)
+		assert.Len(t, results.Items, 1)
+		assert.Equal(t, "The Matrix", results.Items[0].Title)
 
 		// Search by description
-		results, err = repo.GetAll(ctx, "thriller")
+		results, err = repo.GetAll(ctx, "thriller", 1, 20)
 		require.NoError(t, err)
-		assert.Len(t, results, 1)
-		assert.Equal(t, "Inception", results[0].Title)
+		assert.Len(t, results.Items, 1)
+		assert.Equal(t, "Inception", results.Items[0].Title)
 
 		// Search with no matches
-		results, err = repo.GetAll(ctx, "nonexistent")
+		results, err = repo.GetAll(ctx, "nonexistent", 1, 20)
 		require.NoError(t, err)
-		assert.Empty(t, results)
+		assert.Empty(t, results.Items)
 	})
 
 	t.Run("UpdateMovie", func(t *testing.T) {
@@ -174,12 +210,12 @@ func TestRepositoryIntegration(t *testing.T) {
 		require.NoError(t, err)
 
 		// Verify update
-		allMovies, err := repo.GetAll(ctx, "")
+		allMovies, err := repo.GetAll(ctx, "", 1, 100)
 		require.NoError(t, err)
-		assert.Len(t, allMovies, 1)
-		assert.Equal(t, "Updated Title", allMovies[0].Title)
-		assert.Equal(t, "Updated description", allMovies[0].Description)
-		assert.Equal(t, 9.5, allMovies[0].Rating)
+		assert.Len(t, allMovies.Items, 1)
+		assert.Equal(t, "Updated Title", allMovies.Items[0].Title)
+		assert.Equal(t, "Updated description", allMovies.Items[0].Description)
+		assert.Equal(t, 9.5, allMovies.Items[0].Rating)
 	})
 
 	t.Run("UpdateMovieNotFound", func(t *testing.T) {
@@ -192,7 +228,7 @@ func TestRepositoryIntegration(t *testing.T) {
 
 		err := repo.Update(ctx, 999, movie)
 		assert.Error(t, err)
-		assert.Equal(t, "movie not found", err.Error())
+		assert.ErrorIs(t, err, ErrNotFound)
 	})
 
 	t.Run("DeleteMovie", func(t *testing.T) {
@@ -211,9 +247,9 @@ func TestRepositoryIntegration(t *testing.T) {
 		require.NoError(t, err)
 
 		// Verify soft delete (movie should not appear in results)
-		allMovies, err := repo.GetAll(ctx, "")
+		allMovies, err := repo.GetAll(ctx, "", 1, 100)
 		require.NoError(t, err)
-		assert.Empty(t, allMovies)
+		assert.Empty(t, allMovies.Items)
 	})
 
 	t.Run("DeleteMovieNotFound", func(t *testing.T) {
@@ -221,32 +257,36 @@ func TestRepositoryIntegration(t *testing.T) {
 
 		err := repo.Delete(ctx, 999)
 		assert.Error(t, err)
-		assert.Equal(t, "movie not found", err.Error())
+		assert.ErrorIs(t, err, ErrNotFound)
 	})
 
 	t.Run("Ping", func(t *testing.T) {
-		db, repo := setupIntegrationTest(t)
+		_, repo := setupIntegrationTest(t)
 
 		err := repo.Ping(ctx)
 		require.NoError(t, err)
-
-		// Verify it's the actual database connection
-		assert.NotNil(t, db)
 	})
 }
 
+// TestRepositoryWithTransactions exercises the new
+// NewRepositoryFromQuerier constructor. A tx-bound *db.Queries is
+// built via db.New(pool).WithTx(tx), so the same Repository
+// interface works for non-tx and tx-scoped operations.
 func TestRepositoryWithTransactions(t *testing.T) {
+	if dbURL == "" {
+		t.Skip("PostgreSQL container not available; set SKIP_CONTAINERS=false to run integration tests")
+	}
 	ctx := context.Background()
 
 	t.Run("TransactionRollback", func(t *testing.T) {
-		db, repo := setupIntegrationTest(t)
+		pool, repo := setupIntegrationTest(t)
 
 		// Start transaction
-		tx, err := db.BeginTxx(ctx, nil)
+		tx, err := pool.Begin(ctx)
 		require.NoError(t, err)
 
 		// Get repository with transaction
-		txRepo := repo.WithTx(tx)
+		txRepo := NewRepositoryFromQuerier(db.New(pool).WithTx(tx))
 
 		// Create a movie in transaction
 		movie := &Movie{
@@ -257,23 +297,23 @@ func TestRepositoryWithTransactions(t *testing.T) {
 		require.NoError(t, err)
 
 		// Rollback
-		tx.Rollback()
+		require.NoError(t, tx.Rollback(ctx))
 
 		// Verify movie was not created
-		allMovies, err := repo.GetAll(ctx, "")
+		allMovies, err := repo.GetAll(ctx, "", 1, 100)
 		require.NoError(t, err)
-		assert.Empty(t, allMovies)
+		assert.Empty(t, allMovies.Items)
 	})
 
 	t.Run("TransactionCommit", func(t *testing.T) {
-		db, repo := setupIntegrationTest(t)
+		pool, repo := setupIntegrationTest(t)
 
 		// Start transaction
-		tx, err := db.BeginTxx(ctx, nil)
+		tx, err := pool.Begin(ctx)
 		require.NoError(t, err)
 
 		// Get repository with transaction
-		txRepo := repo.WithTx(tx)
+		txRepo := NewRepositoryFromQuerier(db.New(pool).WithTx(tx))
 
 		// Create a movie in transaction
 		movie := &Movie{
@@ -284,12 +324,12 @@ func TestRepositoryWithTransactions(t *testing.T) {
 		require.NoError(t, err)
 
 		// Commit
-		tx.Commit()
+		require.NoError(t, tx.Commit(ctx))
 
 		// Verify movie was created
-		allMovies, err := repo.GetAll(ctx, "")
+		allMovies, err := repo.GetAll(ctx, "", 1, 100)
 		require.NoError(t, err)
-		assert.Len(t, allMovies, 1)
-		assert.Equal(t, "Transaction Commit Test", allMovies[0].Title)
+		assert.Len(t, allMovies.Items, 1)
+		assert.Equal(t, "Transaction Commit Test", allMovies.Items[0].Title)
 	})
 }

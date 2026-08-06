@@ -17,3 +17,12 @@ export interface Movie extends MovieFormData {
 }
 
 export type NewMovie = MovieFormData;
+
+// Paginated response envelope from the backend (snake_case matches the API).
+export interface PaginatedMovies {
+  data: Movie[];
+  page: number;
+  page_size: number;
+  total: number;
+  has_more: boolean;
+}

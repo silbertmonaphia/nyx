@@ -4,7 +4,7 @@ A minimalist media rating application with a Go backend and a React frontend.
 
 ## Project Structure
 
-- `backend/`: Go 1.26.1 API server (Gin-ready)
+- `backend/`: Go 1.26.1 API server (chi + huma)
 - `frontend/`: React 19 + Vite 8 SPA (TanStack Query + Tailwind CSS)
 - `docker-compose.yml`: General service orchestration
 - `docker-compose.prod.yml`: Production-specific configuration
@@ -14,6 +14,8 @@ A minimalist media rating application with a Go backend and a React frontend.
 - **Advanced UI**: Modern React frontend with Tailwind CSS and TanStack Query.
 - **Search**: Case-insensitive search by movie title.
 - **Backend API**: Robust Go backend with PostgreSQL and auto-migrations.
+- **Cache**: Redis-backed cache-aside layer for the read-heavy `GET /movies` endpoint (opt-in via `REDIS_ENABLED=true`).
+- **Pagination**: `GET /movies` returns a paginated envelope (`page`, `page_size`, `total`, `has_more`); defaults to 20 items per page, max 100.
 - **TypeScript**: Full-stack type safety with TypeScript in the frontend.
 - **Validation**: Runtime validation with Zod (frontend) and Go structs (backend).
 - **Containerized**: Production-ready Docker builds with pre-compiled binaries.
@@ -58,7 +60,7 @@ A minimalist media rating application with a Go backend and a React frontend.
 4. Access the application:
    - Frontend: `http://localhost:5173` (with HMR)
    - API: `http://localhost:8080/api/movies`
-   - Swagger UI: `http://localhost:8080/api/swagger/index.html`
+   - Swagger UI: `http://localhost:8080/api/swagger`
 
 5. Access the database:
    ```bash
@@ -67,6 +69,11 @@ A minimalist media rating application with a Go backend and a React frontend.
    
    # Or via Docker container
    sudo docker compose exec db psql -U postgres -d nyx
+   ```
+
+6. (Optional) Inspect the cache:
+   ```bash
+   sudo docker compose exec redis redis-cli KEYS 'movies:*'
    ```
 
 ### Production Deployment
@@ -113,3 +120,9 @@ For Kubernetes environments, manifests are provided in the `k8s/` directory.
    ```
 
 See individual `.yaml` files in `k8s/` for detailed configuration.
+
+## License
+
+[PolyForm Noncommercial License 1.0.0](LICENSE), adapted with an additional restriction prohibiting use of this software for training, fine-tuning, evaluating, or developing any artificial intelligence / machine learning model or system.
+
+In short: free for personal, academic, educational, and evaluation use. **Commercial use and AI training use are not permitted.** See [`LICENSE`](LICENSE) for the full terms.

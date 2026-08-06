@@ -1,0 +1,226 @@
+# Huma workflow
+
+This document explains how to add or change an HTTP endpoint in the Nyx
+backend. The router is built on [chi][chi] and the API surface (paths,
+methods, validation, OpenAPI generation) is provided by [huma][huma] v2.
+
+[chi]: https://github.com/go-chi/chi
+[huma]: https://huma.rocks/
+
+## TL;DR
+
+```bash
+# 1. Edit (or add) the huma operations in
+#      internal/<feature>/huma_handler.go
+# 2. Register them in cmd/api/main.go (one line per feature).
+# 3. Run the tests.
+cd backend && SKIP_CONTAINERS=true go test ./...
+```
+
+The OpenAPI 3.1 spec is generated at runtime by huma from the struct tags
+on your `*Input` / `*Output` types. There is no codegen step, no
+annotation comment to remember, and no drift between handlers and the
+spec — if the build compiles, the spec is correct.
+
+## Layout
+
+| Path | Role |
+|---|---|
+| `internal/middleware/` | stdlib-shaped middleware: RequestID, RealIP, Recoverer, Prometheus, Logging, CORS, RateLimit, Auth. |
+| `internal/middleware/huma_adapter.go` | `HumaAuth()` — the huma-shape variant of `Auth` for use as `Operation.Middlewares`. |
+| `internal/platform/api/response.go` | `ErrorResponse` struct: `{error, code, request_id, details}` envelope. Implements `huma.StatusError` so handlers can return it directly. `WriteError` is the stdlib equivalent for middleware. |
+| `internal/platform/api/humaerror.go` | `OverrideHumaErrors()` — replaces `huma.NewError` / `huma.NewErrorWithContext` so every error produced by huma (validation, panic, the prebuilt 4xx helpers, handler-returned errors) flows through the legacy envelope. |
+| `internal/reqctx/` | Typed context keys (`RequestIDFromContext`, `UserIDFromContext`, `UsernameFromContext`, `ClientIPFromContext`). Leaf package — both middleware and api import it to break an import cycle. |
+| `internal/<feature>/huma_handler.go` | One file per feature: operation registration, input/output structs, handler functions. |
+| `cmd/api/main.go` | Router bootstrap (chi + humachi.New), middleware wiring, operation registration, graceful shutdown. |
+
+## Adding an endpoint
+
+Operations are declared once and registered against the huma API. Each
+operation carries its inputs/outputs via struct tags; huma reads those
+tags to drive request parsing, validation, and OpenAPI generation.
+
+```go
+// internal/movie/huma_handler.go
+type getMovieInput struct {
+    ID int `path:"id" required:"true" minimum:"1"`
+}
+
+type getMovieOutput struct{ Body Movie }
+
+func RegisterMovieOps(api huma.API, h *Handler) {
+    // ... existing operations ...
+
+    huma.Register(api, huma.Operation{
+        OperationID: "get-movie",
+        Method:      http.MethodGet,
+        Path:        "/api/movies/{id}",
+        Summary:     "Get a movie",
+        Description: "Returns a single movie by ID.",
+        Tags:        []string{"movies"},
+    }, h.GetMovie)
+}
+
+func (h *Handler) GetMovie(ctx context.Context, in *getMovieInput) (*getMovieOutput, error) {
+    m, err := h.service.GetMovie(ctx, in.ID)
+    if err != nil {
+        return nil, &api.ErrorResponse{
+            Message: "Movie not found",
+            Code:    http.StatusNotFound,
+        }
+    }
+    return &getMovieOutput{Body: *m}, nil
+}
+```
+
+Rules:
+
+- **Paths are full URLs.** Register at `/api/movies/{id}`, not `/movies/{id}`.
+  The OpenAPI spec paths match the URL paths exactly, so no `Servers`
+  override is needed.
+- **Path params** use `chi`'s `{name}` syntax. Huma reads them from
+  `chi.RouteContext` automatically. The matching struct field uses
+  `path:"id"`.
+- **Query params** use `query:"name"`. Add `required:"true"` if the
+  request must include them.
+- **Body params** are placed in a `Body` field (`struct { Body Movie }`).
+  Huma parses the JSON body into the field's type and validates against
+  the type's struct tags.
+- **Validation tags** follow huma's dialect — see
+  <https://huma.rocks/docs/features/request-validation>. The short list:
+  `required`, `minLength`, `maxLength`, `minimum`, `maximum`,
+  `format`, `pattern`, `enum`. Validation fires before the handler is
+  called; failures come back as `400 Bad Request` via `OverrideHumaErrors`.
+- **Status codes** for successful responses are set via a `Status int
+  \`status:"201"\`` field on the output struct. Huma picks the field by
+  the `status` tag; the literal value is what gets written.
+- **Operation IDs** must be unique across the API. Convention:
+  `<verb>-<resource>` (`get-movie`, `create-movie`, etc.).
+- **Tags** group operations in the docs UI.
+
+## Protected operations
+
+Attach `middleware.HumaAuth()` via `Operation.Middlewares` for endpoints
+that require a JWT. Huma parses the body BEFORE running Middlewares — see
+the "Body parsed before auth" note in `cmd/api/main.go` for why a
+`http.MaxBytesReader` cap is installed at the router level.
+
+```go
+huma.Register(api, huma.Operation{
+    OperationID: "delete-movie",
+    Method:      http.MethodDelete,
+    Path:        "/api/movies/{id}",
+    Tags:        []string{"movies"},
+    Security:    []map[string][]string{{"BearerAuth": {}}},
+    Middlewares: huma.Middlewares{middleware.HumaAuth()},
+}, h.DeleteMovie)
+```
+
+`HumaAuth()` validates the `Authorization: Bearer <token>` header and
+stamps the resolved user on the request context. Handlers read the
+authenticated user via `reqctx.UserIDFromContext(ctx)`.
+
+## Errors
+
+The error envelope is preserved end-to-end. Two ways to emit an error:
+
+1. **From a handler** — return a pointer to `api.ErrorResponse`. It
+   implements `huma.StatusError` (Error() and GetStatus()), so huma
+   writes it as the response body via its JSON marshaller, respecting
+   our struct tags.
+
+   ```go
+   return nil, &api.ErrorResponse{
+       Message: "Movie not found",
+       Code:    http.StatusNotFound,
+   }
+   ```
+
+2. **From middleware** — call `api.WriteError(w, r, statusCode, message, details)`.
+   Used by `Auth` and `RateLimit` to short-circuit the chain.
+
+`api.OverrideHumaErrors()` must be called once at process startup before
+any `huma.Register` call. Tests that build their own huma API install it
+in their `TestMain` (see `internal/movie/repository_integration_test.go`).
+
+## OpenAPI / docs
+
+- Spec JSON: `GET /api/swagger/doc.json`
+- Docs UI:    `GET /api/swagger` (Stoplight Elements by default)
+
+Both paths are configured on `huma.Config` in `cmd/api/main.go`. The
+`Components.SecuritySchemes` map registers `BearerAuth` (HTTP bearer
+with JWT format) so protected operations declare the correct security
+scheme in the spec without per-operation duplication.
+
+## Middleware order
+
+`cmd/api/main.go` installs the chain in this order (outermost first):
+
+```
+RequestID → RealIP → Recoverer → Prometheus → Logging → CORS → RateLimit → maxBodyBytes → (huma router)
+```
+
+- `RequestID` first so every downstream log line carries a correlation ID.
+- `RealIP` second so the IP is resolved before logging reads it.
+- `Recoverer` after RealIP so panic logs include the resolved IP.
+- `Prometheus` after Recoverer so panics don't double-count.
+- `Logging` after Prometheus so the response status is available.
+- `CORS` inside logging so preflight failures are still logged.
+- `RateLimit` inside CORS so a throttled request still gets CORS headers.
+- `maxBodyBytes` closest to huma so the cap applies to every operation.
+
+## Testing
+
+Each feature has a `*_test.go` file that builds a lean chi + huma stack
+(no Prometheus, no logging, no rate limit). The protected operations
+have a test-only registration variant that lets you skip the JWT
+middleware:
+
+```go
+// internal/movie/huma_handler.go
+func RegisterMovieOpsTest(api huma.API, h *Handler, withAuth bool) { ... }
+
+// internal/movie/handler_test.go
+router := setupTestRouter(h, true) // true = withAuth
+req.Header.Set("Authorization", testJWTAuthHeader(t))
+```
+
+Tests that exercise validation can pass `auth=false` and intentionally
+omit the Authorization header — validation runs before auth, so 400 is
+returned before auth gets a chance to reject.
+
+## CI
+
+No CI changes needed — `go build ./...` compiles the wiring, `go test
+./...` runs the handler tests against the real chi + huma stack. The
+generated OpenAPI spec lives only in memory; there is no committed
+artifact to drift.
+
+## Troubleshooting
+
+**"unknown content type: application/json"** — your `huma.Config` is
+missing `Formats: huma.DefaultFormats`. Add it to both the production
+config (`cmd/api/main.go`) and any test setup that builds its own API.
+
+**Status code wrong (e.g. 200 instead of 201)** — add a
+`Status int \`status:"201"\`` field to your output struct, and set the
+field on the return value. Huma reads the field by tag and writes the
+literal as the response status.
+
+**Validation rejects valid input** — check the struct tag on the input
+field. Huma uses its own validation dialect (not gin's `binding:` tags);
+remove any leftover `binding:"required,..."` tags when migrating.
+
+**`http.MaxBytesReader` errors look like 400 with a generic message** —
+the JSON decoder returns `io.ErrUnexpectedEOF` when the body cap is hit.
+Huma surfaces that as a validation error; the envelope's `error` field
+will say "validation failed" with the detail in `details`.
+
+**Test gets 401 on a protected endpoint** — your `setupTestRouter` was
+called with `auth=true` but the test forgot to call
+`testJWTAuthHeader(t)`. Either set the header or pass `auth=false` for
+tests that don't exercise auth.
+
+**Spec path doesn't match URL** — operation paths are full URLs
+(`/api/movies`), not relative. Don't add an `api.Group("/api")` prefix.
