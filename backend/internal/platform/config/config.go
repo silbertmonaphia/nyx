@@ -12,7 +12,6 @@ type Config struct {
 	DBURL          string `mapstructure:"DB_URL"`
 	JWTSecret      string `mapstructure:"JWT_SECRET"`
 	Port           string `mapstructure:"PORT"`
-	GinMode        string `mapstructure:"GIN_MODE"`
 	MigrationPath  string `mapstructure:"MIGRATION_PATH"`
 
 	// Database Connection Pool
@@ -29,7 +28,6 @@ type Config struct {
 
 func Load() (*Config, error) {
 	viper.SetDefault("PORT", "8080")
-	viper.SetDefault("GIN_MODE", "release")
 	viper.SetDefault("MIGRATION_PATH", "file://migrations")
 	viper.SetDefault("JWT_SECRET", "your-default-secret-key-change-it-in-prod")
 
@@ -52,7 +50,7 @@ func Load() (*Config, error) {
 	// binary, so without BindEnv the env vars are silently ignored and
 	// DB_URL comes back empty.
 	for _, key := range []string{
-		"DB_URL", "JWT_SECRET", "PORT", "GIN_MODE", "MIGRATION_PATH",
+		"DB_URL", "JWT_SECRET", "PORT", "MIGRATION_PATH",
 		"DB_MAX_OPEN_CONNS", "DB_MAX_IDLE_CONNS",
 		"DB_CONN_MAX_LIFETIME", "DB_CONN_MAX_IDLE_TIME",
 		"REDIS_URL", "REDIS_ENABLED", "CACHE_TTL",

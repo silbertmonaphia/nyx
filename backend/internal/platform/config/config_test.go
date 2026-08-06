@@ -53,7 +53,6 @@ func TestLoadAppliesDefaults(t *testing.T) {
 	t.Setenv("JWT_SECRET", "x")
 	t.Setenv("REDIS_ENABLED", "")
 	t.Setenv("PORT", "")
-	t.Setenv("GIN_MODE", "")
 	t.Setenv("DB_MAX_OPEN_CONNS", "")
 	t.Setenv("DB_MAX_IDLE_CONNS", "")
 	t.Setenv("DB_CONN_MAX_LIFETIME", "")
@@ -68,9 +67,6 @@ func TestLoadAppliesDefaults(t *testing.T) {
 
 	if cfg.Port != "8080" {
 		t.Errorf("Port default = %q, want %q", cfg.Port, "8080")
-	}
-	if cfg.GinMode != "release" {
-		t.Errorf("GinMode default = %q, want %q", cfg.GinMode, "release")
 	}
 	if cfg.DBMaxOpenConns != 25 {
 		t.Errorf("DBMaxOpenConns default = %d, want 25", cfg.DBMaxOpenConns)
