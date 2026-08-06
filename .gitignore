@@ -29,14 +29,18 @@ backend/coverage.out
 # Docker
 .docker/
 db_data/
+k8s/secrets.yaml
+!k8s/secrets.yaml.example
 
 # Logs
 *.log
 .env
-k8s/secrets.yaml
-!k8s/secrets.yaml.example
+
+# AI Agents
 .gemini/
-commit_message.txt
 .qwen/
-QWEN.md
+.geminiignore
 .qwenignore
+GEMINI.md
+QWEN.md
+commit_message.txt
