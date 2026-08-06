@@ -44,3 +44,4 @@ k8s/secrets.yaml
 GEMINI.md
 QWEN.md
 commit_message.txt
+.claude/settings.local.json
