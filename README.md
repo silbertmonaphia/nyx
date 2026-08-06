@@ -120,3 +120,9 @@ For Kubernetes environments, manifests are provided in the `k8s/` directory.
    ```
 
 See individual `.yaml` files in `k8s/` for detailed configuration.
+
+## License
+
+[PolyForm Noncommercial License 1.0.0](LICENSE), adapted with an additional restriction prohibiting use of this software for training, fine-tuning, evaluating, or developing any artificial intelligence / machine learning model or system.
+
+In short: free for personal, academic, educational, and evaluation use. **Commercial use and AI training use are not permitted.** See [`LICENSE`](LICENSE) for the full terms.
