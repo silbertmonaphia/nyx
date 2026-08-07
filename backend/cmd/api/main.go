@@ -101,7 +101,7 @@ func main() {
 	router.Use(middleware.Recoverer)
 	router.Use(middleware.Prometheus)
 	router.Use(middleware.Logging)
-	router.Use(middleware.CORS)
+	router.Use(middleware.NewCORS(middleware.SplitNonEmpty(cfg.CORSAllowedOrigins)))
 	router.Use(middleware.DefaultRateLimit())
 	router.Use(maxBodyBytes(maxBodyBytesLimit))
 

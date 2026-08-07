@@ -1,29 +1,88 @@
 package middleware
 
-import "net/http"
+import (
+	"net/http"
+	"strings"
+)
 
-// CORS returns a middleware that sets a permissive cross-origin policy
-// matching the previous gin-era configuration (Access-Control-Allow-Origin:
-// *). It is intentionally minimal — the Vite frontend talks to the API
-// from the same Docker network and we do not need credentials, custom
-// headers, or origin validation. If you ever add cookie auth, replace
-// this with go-chi/cors and tighten the policy.
+// NewCORS returns a middleware that sets a configurable cross-origin
+// policy. Behaviour depends on whether "*" is in the allowlist:
 //
-// OPTIONS preflight requests are short-circuited with 200 + headers and
-// never reach downstream middleware (so they never appear as "route not
-// matched" in Prometheus). This must remain the case so CORS preflight
-// keeps working as a router-level middleware rather than a per-route
-// handler.
-func CORS(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Access-Control-Allow-Origin", "*")
-		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
-		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
-
-		if r.Method == http.MethodOptions {
-			w.WriteHeader(http.StatusOK)
-			return
+//   - "*" in allowedOrigins → permissive, Access-Control-Allow-Origin: *.
+//     No Vary header, no per-request echo, no credentials. Matches the
+//     gin-era behaviour the frontend was built against and is the right
+//     default for local dev / a public API.
+//
+//   - otherwise → the slice is an explicit allowlist of origins. On
+//     each request, if r.Header.Get("Origin") is in the list, the
+//     header is echoed back (Access-Control-Allow-Origin: <origin>)
+//     and Vary: Origin is set so caches don't conflate responses
+//     across different origins. If the Origin is missing or not in
+//     the list, NO Access-Control-Allow-Origin header is sent — the
+//     browser will block the response.
+//
+// In both modes Access-Control-Allow-Methods / Allow-Headers carry the
+// same values as before (the gin-era defaults; credentialed / custom
+// header support is out of scope).
+//
+// OPTIONS preflight short-circuits with 200 + headers so the request
+// never reaches downstream middleware. This must remain the case so
+// CORS preflight keeps working as a router-level middleware rather
+// than a per-route handler (otherwise OPTIONS would surface as a
+// confusing 404 in browser devtools).
+func NewCORS(allowedOrigins []string) func(http.Handler) http.Handler {
+	wildcard := false
+	for _, o := range allowedOrigins {
+		if o == "*" {
+			wildcard = true
+			break
 		}
-		next.ServeHTTP(w, r)
-	})
+	}
+	allow := make(map[string]struct{}, len(allowedOrigins))
+	for _, o := range allowedOrigins {
+		if o == "" || o == "*" {
+			continue
+		}
+		allow[o] = struct{}{}
+	}
+
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			switch {
+			case wildcard:
+				w.Header().Set("Access-Control-Allow-Origin", "*")
+			case r.Header.Get("Origin") != "":
+				if _, ok := allow[r.Header.Get("Origin")]; ok {
+					w.Header().Set("Access-Control-Allow-Origin", r.Header.Get("Origin"))
+					w.Header().Add("Vary", "Origin")
+				}
+			}
+			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
+			w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
+
+			if r.Method == http.MethodOptions {
+				w.WriteHeader(http.StatusOK)
+				return
+			}
+			next.ServeHTTP(w, r)
+		})
+	}
+}
+
+// SplitNonEmpty splits a comma-separated allowlist (e.g. an env var
+// value) into trimmed, non-empty entries. Empty inputs and items
+// composed solely of whitespace are dropped. The result is suitable
+// for passing straight to NewCORS.
+func SplitNonEmpty(raw string) []string {
+	if raw == "" {
+		return nil
+	}
+	parts := strings.Split(raw, ",")
+	out := make([]string, 0, len(parts))
+	for _, p := range parts {
+		if p = strings.TrimSpace(p); p != "" {
+			out = append(out, p)
+		}
+	}
+	return out
 }

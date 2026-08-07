@@ -24,6 +24,12 @@ type Config struct {
 	RedisURL     string `mapstructure:"REDIS_URL"`
 	RedisEnabled bool   `mapstructure:"REDIS_ENABLED"`
 	CacheTTL     string `mapstructure:"CACHE_TTL"`
+
+	// CORS — comma-separated allowlist. Default "*" preserves the
+	// gin-era permissive policy for local dev. Production should set
+	// this to the explicit list of frontend origins (e.g.
+	// "https://app.example.com,https://staging.example.com").
+	CORSAllowedOrigins string `mapstructure:"CORS_ALLOWED_ORIGINS"`
 }
 
 func Load() (*Config, error) {
@@ -44,6 +50,11 @@ func Load() (*Config, error) {
 	viper.SetDefault("REDIS_ENABLED", false)
 	viper.SetDefault("CACHE_TTL", "5m")
 
+	// CORS allowlist default: "*" preserves the gin-era permissive policy
+	// for local dev. Production must set CORS_ALLOWED_ORIGINS to a
+	// comma-separated list of explicit origins.
+	viper.SetDefault("CORS_ALLOWED_ORIGINS", "*")
+
 	// Explicitly bind every env-sourced key. viper.AutomaticEnv() only checks
 	// env vars for keys already known to viper (via SetDefault, BindEnv, or a
 	// successful ReadInConfig). In Docker there's no .env file next to the
@@ -54,6 +65,7 @@ func Load() (*Config, error) {
 		"DB_MAX_OPEN_CONNS", "DB_MAX_IDLE_CONNS",
 		"DB_CONN_MAX_LIFETIME", "DB_CONN_MAX_IDLE_TIME",
 		"REDIS_URL", "REDIS_ENABLED", "CACHE_TTL",
+		"CORS_ALLOWED_ORIGINS",
 	} {
 		_ = viper.BindEnv(key)
 	}
