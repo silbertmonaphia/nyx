@@ -21,8 +21,6 @@
       "Bash(git status*)",
       "Bash(git diff*)",
       "Bash(git log*)",
-      "Bash(git add *)",
-      "Bash(git commit -m *)",
       "Bash(ls *)",
       "Bash(pwd)",
       "Bash(mkdir -p *)",
