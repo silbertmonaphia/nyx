@@ -46,12 +46,14 @@ func setupTestRouter(h *Handler, auth bool) *chi.Mux {
 	return router
 }
 
-// testJWTAuthHeader mints a fresh JWT signed with whatever secret the
-// auth package will use to validate it (it reads JWT_SECRET from the
-// environment, falling back to the package default). The header value
-// can be dropped straight into an Authorization field.
+// testJWTAuthHeader mints a fresh JWT signed with the secret the auth
+// package will use to validate it. The secret is process-wide state set
+// via auth.SetSecret (main.go does this from cfg.JWTSecret); pinning it
+// here keeps the test independent of any ambient configuration. The
+// header value can be dropped straight into an Authorization field.
 func testJWTAuthHeader(t *testing.T) string {
 	t.Helper()
+	auth.SetSecret("test-secret-do-not-use-in-prod")
 	tok, err := auth.GenerateToken(1, "tester")
 	if err != nil {
 		t.Fatalf("mint test JWT: %v", err)

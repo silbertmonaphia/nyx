@@ -26,6 +26,16 @@ func NewHandler(service Service) *Handler {
 // register/login routes are public — no Middlewares — so the existing
 // rate-limit cap is the only upstream gate.
 func RegisterUserOps(api huma.API, h *Handler) {
+	RegisterUserOpsTest(api, h)
+}
+
+// RegisterUserOpsTest registers the same operations as RegisterUserOps.
+// It exists so handler tests can build a lean chi + huma stack against
+// the exact production operation set (mirroring movie's
+// RegisterMovieOpsTest). Unlike movie there is no `withAuth` flag:
+// register and login are public by design, so there is no JWT
+// middleware to toggle.
+func RegisterUserOpsTest(api huma.API, h *Handler) {
 	huma.Register(api, huma.Operation{
 		OperationID: "register",
 		Method:      http.MethodPost,

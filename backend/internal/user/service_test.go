@@ -1,20 +1,11 @@
 package user
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
 	"errors"
-	"net/http"
-	"net/http/httptest"
 	"testing"
 	"time"
 
-	platapi "nyx/internal/platform/api"
-
-	"github.com/danielgtaylor/huma/v2"
-	"github.com/danielgtaylor/huma/v2/adapters/humachi"
-	"github.com/go-chi/chi/v5"
 	"golang.org/x/crypto/bcrypt"
 )
 
@@ -216,91 +207,5 @@ func TestLogin_NonNotFoundRepoErrorPropagates(t *testing.T) {
 	}
 	if !errors.Is(err, other) {
 		t.Errorf("expected original error to propagate, got %v", err)
-	}
-}
-
-// TestRegisterHandler_DuplicateUsernameReturns409 drives the HTTP
-// path end-to-end through humachi. This is the regression test for
-// "did the handler actually wire up the 409 branch?" — the unit test
-// for the service stops short of HTTP. Together they pin both the
-// contract (service returns the sentinel) and the wiring (handler
-// translates it).
-func TestRegisterHandler_DuplicateUsernameReturns409(t *testing.T) {
-	repo := &stubRepo{
-		createFn: func(_ context.Context, _ *User) error {
-			return ErrUserAlreadyExists
-		},
-	}
-	svc := NewService(repo)
-	h := NewHandler(svc)
-
-	router := chi.NewMux()
-	api := humachi.New(router, huma.Config{
-		OpenAPI:       &huma.OpenAPI{OpenAPI: "3.1.0", Info: &huma.Info{Title: "test", Version: "0"}},
-		Formats:       huma.DefaultFormats,
-		DefaultFormat: "application/json",
-	})
-	RegisterUserOps(api, h)
-
-	rr := httptest.NewRecorder()
-	body, _ := json.Marshal(RegisterRequest{
-		Username: "alice",
-		Email:    "alice@example.com",
-		Password: "hunter2",
-	})
-	req := httptest.NewRequest(http.MethodPost, "/api/register", bytes.NewReader(body))
-	req.Header.Set("Content-Type", "application/json")
-	router.ServeHTTP(rr, req)
-
-	if rr.Code != http.StatusConflict {
-		t.Errorf("status = %d, want 409; body=%s", rr.Code, rr.Body.String())
-	}
-	var env platapi.ErrorResponse
-	if err := json.Unmarshal(rr.Body.Bytes(), &env); err != nil {
-		t.Fatalf("unmarshal envelope: %v", err)
-	}
-	if env.Code != http.StatusConflict {
-		t.Errorf("envelope.code = %d, want 409", env.Code)
-	}
-	if env.Message != "User already exists" {
-		t.Errorf("envelope.error = %q, want %q", env.Message, "User already exists")
-	}
-}
-
-// TestLoginHandler_BadCredentialsReturns401 is the symmetric test for
-// the Login side. Combined with the happy-path integration covered by
-// the e2e suite, this is the wire-contract regression guard.
-func TestLoginHandler_BadCredentialsReturns401(t *testing.T) {
-	repo := &stubRepo{
-		getByUsernameFn: func(_ context.Context, _ string) (*User, error) {
-			return nil, ErrUserNotFound
-		},
-	}
-	svc := NewService(repo)
-	h := NewHandler(svc)
-
-	router := chi.NewMux()
-	api := humachi.New(router, huma.Config{
-		OpenAPI:       &huma.OpenAPI{OpenAPI: "3.1.0", Info: &huma.Info{Title: "test", Version: "0"}},
-		Formats:       huma.DefaultFormats,
-		DefaultFormat: "application/json",
-	})
-	RegisterUserOps(api, h)
-
-	rr := httptest.NewRecorder()
-	body, _ := json.Marshal(LoginRequest{Username: "alice", Password: "x"})
-	req := httptest.NewRequest(http.MethodPost, "/api/login", bytes.NewReader(body))
-	req.Header.Set("Content-Type", "application/json")
-	router.ServeHTTP(rr, req)
-
-	if rr.Code != http.StatusUnauthorized {
-		t.Errorf("status = %d, want 401; body=%s", rr.Code, rr.Body.String())
-	}
-	var env platapi.ErrorResponse
-	if err := json.Unmarshal(rr.Body.Bytes(), &env); err != nil {
-		t.Fatalf("unmarshal envelope: %v", err)
-	}
-	if env.Message != "Invalid credentials" {
-		t.Errorf("envelope.error = %q, want %q", env.Message, "Invalid credentials")
 	}
 }

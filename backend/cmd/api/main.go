@@ -11,6 +11,7 @@ import (
 	"nyx/internal/middleware"
 	"nyx/internal/movie"
 	"nyx/internal/platform/api"
+	"nyx/internal/platform/auth"
 	"nyx/internal/platform/cache"
 	"nyx/internal/platform/config"
 	"nyx/internal/platform/database"
@@ -38,6 +39,14 @@ func main() {
 
 	if cfg.DBURL == "" {
 		log.Fatal().Msg("DB_URL environment variable is required")
+	}
+
+	// Hand the JWT signing key to the auth package once, here, so the
+	// secret has a single source of truth (viper) instead of being read
+	// from the environment on every token operation.
+	auth.SetSecret(cfg.JWTSecret)
+	if cfg.JWTSecret == auth.DefaultSecret {
+		log.Warn().Msg("JWT_SECRET is the built-in development placeholder; set it to a unique value in production")
 	}
 
 	// Initialize database
