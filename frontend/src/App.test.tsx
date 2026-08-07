@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from '@testing-library/react';
+import { render, screen, waitFor, act, fireEvent } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import App from './App';
 import { vi, describe, it, expect, beforeEach } from 'vitest';
@@ -166,5 +166,40 @@ describe('App', () => {
     await userEvent.click(cancelButton);
 
     expect(deleteMovieMock).not.toHaveBeenCalled();
+  });
+
+  it('does not refetch on every keystroke — only after the debounce settles', async () => {
+    // Fake timers so the setTimeout inside useDebounce is under our
+    // control and doesn't fire on its own between assertions.
+    vi.useFakeTimers();
+
+    render(<App />);
+
+    const input = screen.getByPlaceholderText('Search for movies...');
+
+    // The first argument to useMovies is the search term it will key
+    // its query on. If the bug were present, every keystroke would
+    // surface a new value here, which is what triggers a refetch.
+    // With the debounce, the value stays at '' until the timer fires.
+    fireEvent.change(input, { target: { value: 'm' } });
+    fireEvent.change(input, { target: { value: 'ma' } });
+    fireEvent.change(input, { target: { value: 'mat' } });
+    fireEvent.change(input, { target: { value: 'matr' } });
+    fireEvent.change(input, { target: { value: 'matri' } });
+    fireEvent.change(input, { target: { value: 'matrix' } });
+
+    const lastCallArg = mockUseMovies.mock.calls.at(-1)?.[0];
+    expect(lastCallArg).toBe('');
+
+    // Drain the debounce window. After it elapses, App should have
+    // re-rendered with the debounced value and called useMovies with
+    // the settled string.
+    await act(async () => {
+      vi.advanceTimersByTime(300);
+    });
+
+    expect(mockUseMovies.mock.calls.at(-1)?.[0]).toBe('matrix');
+
+    vi.useRealTimers();
   });
 });

@@ -5,6 +5,7 @@ import { useMovies } from './features/movies/hooks/useMovies';
 import { MovieList } from './features/movies/components/MovieList';
 import { MovieForm } from './features/movies/components/MovieForm';
 import { useMovieUiStore } from './features/movies/store/movieUiStore';
+import { useDebounce } from './hooks/useDebounce';
 import { ToastContainer } from './components/ui/ToastContainer';
 import { useUiStore } from './store/uiStore';
 import { useAuthStore } from './store/authStore';
@@ -36,6 +37,13 @@ function App() {
   const [showAuthForm, setShowAuthForm] = useState(false);
   const [confirmDeleteId, setConfirmDeleteId] = useState<number | null>(null);
 
+  // The input stays fully controlled by `searchTerm` (instant typing),
+  // but the network query only fires once the user has paused for
+  // 300ms. Driving `useMovies` off the debounced value keeps the
+  // query key in sync with what we actually fetched, so the empty-state
+  // qualifier and the loaded list agree.
+  const debouncedSearchTerm = useDebounce(searchTerm, 300);
+
   const {
     movies,
     isLoading,
@@ -45,7 +53,7 @@ function App() {
     addMovie,
     updateMovie,
     deleteMovie,
-  } = useMovies(searchTerm);
+  } = useMovies(debouncedSearchTerm);
 
   const handleAddOrUpdateMovie = async (movieData: NewMovie | Movie) => {
     try {
