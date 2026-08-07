@@ -6,8 +6,21 @@ import (
 	"testing"
 	"time"
 
+	"nyx/internal/platform/auth"
+
 	"golang.org/x/crypto/bcrypt"
 )
+
+// newTestTokens builds a per-test TokenService so each test signs and
+// validates against its own captured key.
+func newTestTokens(t *testing.T) auth.TokenService {
+	t.Helper()
+	tokens, err := auth.NewTokenService([]byte(auth.TestSecret))
+	if err != nil {
+		t.Fatalf("auth.NewTokenService: %v", err)
+	}
+	return tokens
+}
 
 // stubRepo is a hand-rolled mock of the Repository interface. The
 // service tests don't need pgxmock — they exercise the bcrypt and JWT
@@ -45,7 +58,7 @@ func (s *stubRepo) GetUserByID(ctx context.Context, id int) (*User, error) {
 //   - PasswordHash is bcrypt-formatted (cost-prefixed, $ starts the hash)
 //   - The plaintext password from the request never leaks into the hash
 //   - The returned User.ID matches what the repo stamped
-//   - The token is non-empty (round-trips through auth.ValidateToken)
+//   - The token is non-empty (round-trips through tokens.ValidateToken)
 func TestRegister_HappyPath(t *testing.T) {
 	repo := &stubRepo{
 		createFn: func(_ context.Context, u *User) error {
@@ -53,7 +66,7 @@ func TestRegister_HappyPath(t *testing.T) {
 			return nil
 		},
 	}
-	svc := NewService(repo)
+	svc := NewService(repo, newTestTokens(t))
 
 	res, err := svc.Register(context.Background(), RegisterRequest{
 		Username: "alice",
@@ -74,7 +87,7 @@ func TestRegister_HappyPath(t *testing.T) {
 		t.Errorf("PasswordHash doesn't look like a bcrypt hash: %q", res.User.PasswordHash)
 	}
 	if res.Token == "" {
-		t.Error("Token is empty; auth.GenerateToken returned an empty string")
+		t.Error("Token is empty; tokens.GenerateToken returned an empty string")
 	}
 }
 
@@ -88,7 +101,7 @@ func TestRegister_RepoUniqueViolationBubbles(t *testing.T) {
 			return ErrUserAlreadyExists
 		},
 	}
-	svc := NewService(repo)
+	svc := NewService(repo, newTestTokens(t))
 
 	_, err := svc.Register(context.Background(), RegisterRequest{
 		Username: "alice",
@@ -125,7 +138,7 @@ func TestLogin_HappyPath(t *testing.T) {
 			}, nil
 		},
 	}
-	svc := NewService(repo)
+	svc := NewService(repo, newTestTokens(t))
 
 	res, err := svc.Login(context.Background(), LoginRequest{
 		Username: "alice",
@@ -153,7 +166,7 @@ func TestLogin_UnknownUsernameReturnsInvalidCredentials(t *testing.T) {
 			return nil, ErrUserNotFound
 		},
 	}
-	svc := NewService(repo)
+	svc := NewService(repo, newTestTokens(t))
 
 	_, err := svc.Login(context.Background(), LoginRequest{
 		Username: "ghost",
@@ -177,7 +190,7 @@ func TestLogin_WrongPasswordReturnsInvalidCredentials(t *testing.T) {
 			return &User{ID: 1, Username: username, PasswordHash: string(hash)}, nil
 		},
 	}
-	svc := NewService(repo)
+	svc := NewService(repo, newTestTokens(t))
 
 	_, err = svc.Login(context.Background(), LoginRequest{
 		Username: "alice",
@@ -199,7 +212,7 @@ func TestLogin_NonNotFoundRepoErrorPropagates(t *testing.T) {
 			return nil, other
 		},
 	}
-	svc := NewService(repo)
+	svc := NewService(repo, newTestTokens(t))
 
 	_, err := svc.Login(context.Background(), LoginRequest{Username: "alice", Password: "x"})
 	if errors.Is(err, ErrInvalidCredentials) {

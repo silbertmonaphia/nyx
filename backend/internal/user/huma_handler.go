@@ -83,7 +83,7 @@ func (h *Handler) Register(ctx context.Context, in *registerInput) (*registerOut
 		return nil, &api.ErrorResponse{
 			Message: "Failed to register user",
 			Code:    http.StatusInternalServerError,
-			Details: err.Error(),
+			Details: api.ClassifyAndLog(ctx, err, "Failed to register user"),
 		}
 	}
 	return &registerOutput{Status: http.StatusCreated, Body: *res}, nil
@@ -99,7 +99,7 @@ func (h *Handler) Login(ctx context.Context, in *loginInput) (*loginOutput, erro
 		return nil, &api.ErrorResponse{
 			Message: "Failed to login",
 			Code:    http.StatusInternalServerError,
-			Details: err.Error(),
+			Details: api.ClassifyAndLog(ctx, err, "Failed to login"),
 		}
 	}
 	return &loginOutput{Body: *res}, nil

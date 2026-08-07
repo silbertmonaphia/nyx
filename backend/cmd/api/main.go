@@ -41,12 +41,14 @@ func main() {
 		log.Fatal().Msg("DB_URL environment variable is required")
 	}
 
-	// Hand the JWT signing key to the auth package once, here, so the
-	// secret has a single source of truth (viper) instead of being read
-	// from the environment on every token operation.
-	auth.SetSecret(cfg.JWTSecret)
-	if cfg.JWTSecret == auth.DefaultSecret {
-		log.Warn().Msg("JWT_SECRET is the built-in development placeholder; set it to a unique value in production")
+	// Build the JWT TokenService. config.Load already validated that
+	// cfg.JWTSecret is non-default and at least MinSecretBytes long;
+	// NewTokenService repeats the check so a future config drift can't
+	// sign tokens with a weak key. Fails closed at startup, not silently
+	// in prod.
+	tokens, err := auth.NewTokenService([]byte(cfg.JWTSecret))
+	if err != nil {
+		log.Fatal().Err(err).Msg("invalid JWT secret")
 	}
 
 	// Initialize database
@@ -56,8 +58,12 @@ func main() {
 	}
 	defer db.Close()
 
-	// Run migrations
-	database.RunMigrations(cfg.DBURL)
+	// Run migrations. golang-migrate's API is synchronous and does not
+	// accept a context — RunMigrations therefore takes no ctx. Failures
+	// are fatal at the caller; RunMigrations only returns errors.
+	if migErr := database.RunMigrations(cfg.DBURL, cfg.MigrationPath); migErr != nil {
+		log.Fatal().Err(migErr).Msg("migrations failed")
+	}
 
 	// Initialize cache. Disabled by default; when enabled we wait up to
 	// 10s for Redis to come up so we fail fast on misconfiguration rather
@@ -87,7 +93,7 @@ func main() {
 
 	// Initialize User domain
 	userRepo := user.NewRepository(userdb.New(db))
-	userService := user.NewService(userRepo)
+	userService := user.NewService(userRepo, tokens)
 	userHandler := user.NewHandler(userService)
 
 	// Build chi router. Middleware order (outermost first):
@@ -145,7 +151,7 @@ func main() {
 		DefaultFormat: "application/json",
 	})
 
-	movie.RegisterMovieOps(humaAPI, movieHandler)
+	movie.RegisterMovieOps(humaAPI, movieHandler, tokens)
 	user.RegisterUserOps(humaAPI, userHandler)
 
 	port := ":" + cfg.Port

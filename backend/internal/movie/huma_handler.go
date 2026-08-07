@@ -10,6 +10,7 @@ import (
 
 	"nyx/internal/middleware"
 	"nyx/internal/platform/api"
+	"nyx/internal/platform/auth"
 )
 
 // Handler exposes movie domain operations. It is constructed in main.go
@@ -26,9 +27,11 @@ func NewHandler(service Service) *Handler {
 // operation declares its inputs/outputs via huma struct tags so the
 // generated OpenAPI 3.1 doc stays in sync with the wire contract. The
 // mutating operations carry the Auth middleware in Operation.Middlewares
-// — huma parses the body first, then runs Middlewares, then the handler.
-func RegisterMovieOps(api huma.API, h *Handler) {
-	RegisterMovieOpsTest(api, h, true)
+// — huma parses the body first, then runs Middlewares, then the
+// handler. tokens supplies the JWT signing key to the per-operation
+// middleware.
+func RegisterMovieOps(api huma.API, h *Handler, tokens auth.TokenService) {
+	RegisterMovieOpsTest(api, h, tokens, true)
 }
 
 // RegisterMovieOpsTest is the test-friendly variant of RegisterMovieOps.
@@ -36,7 +39,7 @@ func RegisterMovieOps(api huma.API, h *Handler) {
 // without the JWT middleware so tests can exercise the handler logic
 // without minting tokens. Production code should always call
 // RegisterMovieOps (which forces withAuth=true).
-func RegisterMovieOpsTest(api huma.API, h *Handler, withAuth bool) {
+func RegisterMovieOpsTest(api huma.API, h *Handler, tokens auth.TokenService, withAuth bool) {
 	huma.Register(api, huma.Operation{
 		OperationID: "health",
 		Method:      http.MethodGet,
@@ -63,7 +66,7 @@ func RegisterMovieOpsTest(api huma.API, h *Handler, withAuth bool) {
 		Description: "Creates a new movie record. Requires a valid JWT in the Authorization header.",
 		Tags:        []string{"movies"},
 		Security:    []map[string][]string{{"BearerAuth": {}}},
-		Middlewares: protectedMiddlewares(withAuth),
+		Middlewares: protectedMiddlewares(tokens, withAuth),
 	}, h.CreateMovie)
 
 	huma.Register(api, huma.Operation{
@@ -74,7 +77,7 @@ func RegisterMovieOpsTest(api huma.API, h *Handler, withAuth bool) {
 		Description: "Updates the title, description, or rating of an existing movie. Requires a valid JWT.",
 		Tags:        []string{"movies"},
 		Security:    []map[string][]string{{"BearerAuth": {}}},
-		Middlewares: protectedMiddlewares(withAuth),
+		Middlewares: protectedMiddlewares(tokens, withAuth),
 	}, h.UpdateMovie)
 
 	huma.Register(api, huma.Operation{
@@ -85,19 +88,19 @@ func RegisterMovieOpsTest(api huma.API, h *Handler, withAuth bool) {
 		Description: "Soft-deletes a movie record. Requires a valid JWT.",
 		Tags:        []string{"movies"},
 		Security:    []map[string][]string{{"BearerAuth": {}}},
-		Middlewares: protectedMiddlewares(withAuth),
+		Middlewares: protectedMiddlewares(tokens, withAuth),
 	}, h.DeleteMovie)
 }
 
 // protectedMiddlewares returns the per-operation middleware list for
-// the protected movie operations. With withAuth=true it includes the
-// JWT validator; otherwise the list is empty so tests can exercise the
-// handler without minting tokens.
-func protectedMiddlewares(withAuth bool) huma.Middlewares {
+// the protected movie operations. With withAuth=true it builds the JWT
+// validator middleware from tokens; otherwise the list is empty so
+// tests can exercise the handler without minting tokens.
+func protectedMiddlewares(tokens auth.TokenService, withAuth bool) huma.Middlewares {
 	if !withAuth {
 		return nil
 	}
-	return huma.Middlewares{middleware.HumaAuth()}
+	return huma.Middlewares{middleware.NewHumaAuth(tokens)}
 }
 
 // ---- Operation input / output structs ----
@@ -138,7 +141,7 @@ type createMovieOutput struct {
 }
 
 type updateMovieInput struct {
-	ID   int   `path:"id" required:"true" minimum:"1"`
+	ID   int `path:"id" required:"true" minimum:"1"`
 	Body Movie
 }
 
@@ -202,7 +205,7 @@ func (h *Handler) GetMovies(ctx context.Context, in *getMoviesInput) (*getMovies
 		return nil, &api.ErrorResponse{
 			Message: "Failed to retrieve movies",
 			Code:    http.StatusInternalServerError,
-			Details: err.Error(),
+			Details: api.ClassifyAndLog(ctx, err, "Failed to retrieve movies"),
 		}
 	}
 	return &getMoviesOutput{Body: NewMoviesPage(result)}, nil
@@ -214,7 +217,7 @@ func (h *Handler) CreateMovie(ctx context.Context, in *createMovieInput) (*creat
 		return nil, &api.ErrorResponse{
 			Message: "Database error",
 			Code:    http.StatusInternalServerError,
-			Details: err.Error(),
+			Details: api.ClassifyAndLog(ctx, err, "Failed to create movie"),
 		}
 	}
 	return &createMovieOutput{Status: http.StatusCreated, Body: in.Body}, nil
@@ -229,7 +232,7 @@ func (h *Handler) UpdateMovie(ctx context.Context, in *updateMovieInput) (*updat
 		return nil, &api.ErrorResponse{
 			Message: "Database error",
 			Code:    http.StatusInternalServerError,
-			Details: err.Error(),
+			Details: api.ClassifyAndLog(ctx, err, "Failed to update movie"),
 		}
 	}
 	in.Body.ID = in.ID
@@ -245,7 +248,7 @@ func (h *Handler) DeleteMovie(ctx context.Context, in *deleteMovieInput) (*delet
 		return nil, &api.ErrorResponse{
 			Message: "Database error",
 			Code:    http.StatusInternalServerError,
-			Details: err.Error(),
+			Details: api.ClassifyAndLog(ctx, err, "Failed to delete movie"),
 		}
 	}
 	return &deleteMovieOutput{}, nil

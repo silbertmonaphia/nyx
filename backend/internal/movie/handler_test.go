@@ -7,9 +7,11 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
+	"nyx/internal/platform/api"
 	"nyx/internal/platform/auth"
 	"nyx/internal/platform/cache"
 
@@ -28,11 +30,13 @@ import (
 // via TestMain in handler_test.go so validation errors also come back
 // in the legacy shape.
 //
-// The `auth` flag toggles whether the protected operations (POST/PUT/
+// The `withAuth` flag toggles whether the protected operations (POST/PUT/
 // DELETE) carry the JWT middleware. Tests that don't exercise auth pass
 // false; tests that want a 401 pass false and skip the header; tests
 // that want a 200 pass true and mint a token via testJWTAuthHeader.
-func setupTestRouter(h *Handler, auth bool) *chi.Mux {
+// tokens is the per-test TokenService used to validate tokens minted
+// by testJWTAuthHeader.
+func setupTestRouter(h *Handler, tokens auth.TokenService, withAuth bool) *chi.Mux {
 	router := chi.NewMux()
 	hapi := humachi.New(router, huma.Config{
 		OpenAPI: &huma.OpenAPI{
@@ -42,19 +46,16 @@ func setupTestRouter(h *Handler, auth bool) *chi.Mux {
 		Formats:       huma.DefaultFormats,
 		DefaultFormat: "application/json",
 	})
-	RegisterMovieOpsTest(hapi, h, auth)
+	RegisterMovieOpsTest(hapi, h, tokens, withAuth)
 	return router
 }
 
-// testJWTAuthHeader mints a fresh JWT signed with the secret the auth
-// package will use to validate it. The secret is process-wide state set
-// via auth.SetSecret (main.go does this from cfg.JWTSecret); pinning it
-// here keeps the test independent of any ambient configuration. The
-// header value can be dropped straight into an Authorization field.
-func testJWTAuthHeader(t *testing.T) string {
+// testJWTAuthHeader mints a fresh JWT signed with the secret bound to
+// the supplied TokenService. The header value can be dropped straight
+// into an Authorization field.
+func testJWTAuthHeader(t *testing.T, tokens auth.TokenService) string {
 	t.Helper()
-	auth.SetSecret("test-secret-do-not-use-in-prod")
-	tok, err := auth.GenerateToken(1, "tester")
+	tok, err := tokens.GenerateToken(1, "tester")
 	if err != nil {
 		t.Fatalf("mint test JWT: %v", err)
 	}
@@ -76,6 +77,17 @@ func newMockRepo(t *testing.T) (Repository, pgxmock.PgxPoolIface) {
 	return NewRepository(mock), mock
 }
 
+// newTestTokens builds a per-test TokenService. The service holds its
+// own copy of the secret, so nothing process-wide is mutated.
+func newTestTokens(t *testing.T) auth.TokenService {
+	t.Helper()
+	tokens, err := auth.NewTokenService([]byte(auth.TestSecret))
+	if err != nil {
+		t.Fatalf("auth.NewTokenService: %v", err)
+	}
+	return tokens
+}
+
 // api.OverrideHumaErrors() is installed once via TestMain in
 // repository_integration_test.go (Go allows only one TestMain per
 // package; that file already owns the test bootstrap).
@@ -87,7 +99,7 @@ func TestHealthHandler(t *testing.T) {
 
 	mock.ExpectPing()
 
-	router := setupTestRouter(h, false)
+	router := setupTestRouter(h, newTestTokens(t), false)
 	req, _ := http.NewRequest("GET", "/api/health", nil)
 	rr := httptest.NewRecorder()
 	router.ServeHTTP(rr, req)
@@ -115,7 +127,7 @@ func TestHealthHandlerError(t *testing.T) {
 
 	mock.ExpectPing().WillReturnError(fmt.Errorf("db connection failed"))
 
-	router := setupTestRouter(h, false)
+	router := setupTestRouter(h, newTestTokens(t), false)
 	req, _ := http.NewRequest("GET", "/api/health", nil)
 	rr := httptest.NewRecorder()
 	router.ServeHTTP(rr, req)
@@ -156,7 +168,7 @@ func TestGetMoviesHandler(t *testing.T) {
 		WillReturnRows(pgxmock.NewRows([]string{"count"}).AddRow(int64(25)))
 	mock.ExpectCommit()
 
-	router := setupTestRouter(h, false)
+	router := setupTestRouter(h, newTestTokens(t), false)
 	req, _ := http.NewRequest("GET", "/api/movies", nil)
 	rr := httptest.NewRecorder()
 	router.ServeHTTP(rr, req)
@@ -199,7 +211,7 @@ func TestGetMoviesHandlerPaginationParams(t *testing.T) {
 		WillReturnRows(pgxmock.NewRows([]string{"count"}).AddRow(int64(0)))
 	mock.ExpectCommit()
 
-	router := setupTestRouter(h, false)
+	router := setupTestRouter(h, newTestTokens(t), false)
 	req, _ := http.NewRequest("GET", "/api/movies?page=3&page_size=5", nil)
 	rr := httptest.NewRecorder()
 	router.ServeHTTP(rr, req)
@@ -239,7 +251,7 @@ func TestGetMoviesHandlerPageSizeClamped(t *testing.T) {
 		WillReturnRows(pgxmock.NewRows([]string{"count"}).AddRow(int64(0)))
 	mock.ExpectCommit()
 
-	router := setupTestRouter(h, false)
+	router := setupTestRouter(h, newTestTokens(t), false)
 	req, _ := http.NewRequest("GET", "/api/movies?page_size=500", nil)
 	rr := httptest.NewRecorder()
 	router.ServeHTTP(rr, req)
@@ -284,7 +296,7 @@ func TestGetMoviesHandlerSearch(t *testing.T) {
 		WillReturnRows(pgxmock.NewRows([]string{"count"}).AddRow(int64(1)))
 	mock.ExpectCommit()
 
-	router := setupTestRouter(h, false)
+	router := setupTestRouter(h, newTestTokens(t), false)
 	req, _ := http.NewRequest("GET", "/api/movies?q=matrix", nil)
 	rr := httptest.NewRecorder()
 	router.ServeHTTP(rr, req)
@@ -331,9 +343,10 @@ func TestCreateMovieHandler(t *testing.T) {
 		WillReturnRows(pgxmock.NewRows([]string{"id", "title", "description", "rating", "created_at", "updated_at", "deleted_at"}).
 			AddRow(int32(1), newMovie.Title, newMovie.Description, newMovie.Rating, now, now, nil))
 
-	router := setupTestRouter(h, true)
+	tokens := newTestTokens(t)
+	router := setupTestRouter(h, tokens, true)
 	req, _ := http.NewRequest("POST", "/api/movies", bytes.NewBuffer(body))
-	req.Header.Set("Authorization", testJWTAuthHeader(t))
+	req.Header.Set("Authorization", testJWTAuthHeader(t, tokens))
 	rr := httptest.NewRecorder()
 	router.ServeHTTP(rr, req)
 
@@ -355,7 +368,7 @@ func TestCreateMovieHandler(t *testing.T) {
 
 func TestCreateMovieHandlerValidation(t *testing.T) {
 	h := NewHandler(nil) // service not needed; validation rejects before the repo is called
-	router := setupTestRouter(h, false)
+	router := setupTestRouter(h, newTestTokens(t), false)
 
 	// Case 1: Empty Title (Required)
 	body, _ := json.Marshal(map[string]interface{}{
@@ -405,9 +418,10 @@ func TestUpdateMovieHandler(t *testing.T) {
 		WillReturnRows(pgxmock.NewRows([]string{"id", "title", "description", "rating", "created_at", "updated_at", "deleted_at"}).
 			AddRow(int32(1), updatedMovie.Title, updatedMovie.Description, updatedMovie.Rating, now, now, nil))
 
-	router := setupTestRouter(h, true)
+	tokens := newTestTokens(t)
+	router := setupTestRouter(h, tokens, true)
 	req, _ := http.NewRequest("PUT", "/api/movies/1", bytes.NewBuffer(body))
-	req.Header.Set("Authorization", testJWTAuthHeader(t))
+	req.Header.Set("Authorization", testJWTAuthHeader(t, tokens))
 	rr := httptest.NewRecorder()
 	router.ServeHTTP(rr, req)
 
@@ -436,9 +450,10 @@ func TestDeleteMovieHandler(t *testing.T) {
 		WithArgs(int32(1)).
 		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
 
-	router := setupTestRouter(h, true)
+	tokens := newTestTokens(t)
+	router := setupTestRouter(h, tokens, true)
 	req, _ := http.NewRequest("DELETE", "/api/movies/1", nil)
-	req.Header.Set("Authorization", testJWTAuthHeader(t))
+	req.Header.Set("Authorization", testJWTAuthHeader(t, tokens))
 	rr := httptest.NewRecorder()
 	router.ServeHTTP(rr, req)
 
@@ -466,9 +481,10 @@ func TestUpdateMovieHandlerNotFound(t *testing.T) {
 		WithArgs(updatedMovie.Title, pgxmock.AnyArg(), pgxmock.AnyArg(), int32(999)).
 		WillReturnError(pgx.ErrNoRows)
 
-	router := setupTestRouter(h, true)
+	tokens := newTestTokens(t)
+	router := setupTestRouter(h, tokens, true)
 	req, _ := http.NewRequest("PUT", "/api/movies/999", bytes.NewBuffer(body))
-	req.Header.Set("Authorization", testJWTAuthHeader(t))
+	req.Header.Set("Authorization", testJWTAuthHeader(t, tokens))
 	rr := httptest.NewRecorder()
 	router.ServeHTTP(rr, req)
 
@@ -491,9 +507,10 @@ func TestDeleteMovieHandlerNotFound(t *testing.T) {
 		WithArgs(int32(999)).
 		WillReturnResult(pgxmock.NewResult("UPDATE", 0))
 
-	router := setupTestRouter(h, true)
+	tokens := newTestTokens(t)
+	router := setupTestRouter(h, tokens, true)
 	req, _ := http.NewRequest("DELETE", "/api/movies/999", nil)
-	req.Header.Set("Authorization", testJWTAuthHeader(t))
+	req.Header.Set("Authorization", testJWTAuthHeader(t, tokens))
 	rr := httptest.NewRecorder()
 	router.ServeHTTP(rr, req)
 
@@ -509,5 +526,120 @@ func TestDeleteMovieHandlerNotFound(t *testing.T) {
 func TestErrNotFoundIsError(t *testing.T) {
 	if !errors.Is(ErrNotFound, ErrNotFound) {
 		t.Error("ErrNotFound should be comparable via errors.Is")
+	}
+}
+
+// TestCreateMovieHandler_InternalErrorHidesInternalDetails pins the
+// safe-detail guarantee of commit 4: when the repo returns a non-
+// sentinel error, the response body must carry the static "Failed to
+// create movie" string and must NOT echo the underlying pgx error.
+func TestCreateMovieHandler_InternalErrorHidesInternalDetails(t *testing.T) {
+	repo, mock := newMockRepo(t)
+	service := NewService(repo, cache.NewNoop(), time.Minute)
+	h := NewHandler(service)
+
+	body, _ := json.Marshal(Movie{Title: "X", Rating: 5})
+	// pgx-style error text — contains SQL fragment & driver internals
+	// we explicitly must not leak to the client.
+	pgxLeak := fmt.Errorf("ERROR: relation %q does not exist (SQLSTATE 42P01)", "movies")
+	mock.ExpectQuery(`INSERT INTO movies`).
+		WithArgs("X", pgxmock.AnyArg(), pgxmock.AnyArg()).
+		WillReturnError(pgxLeak)
+
+	tokens := newTestTokens(t)
+	router := setupTestRouter(h, tokens, true)
+	req, _ := http.NewRequest("POST", "/api/movies", bytes.NewBuffer(body))
+	req.Header.Set("Authorization", testJWTAuthHeader(t, tokens))
+	rr := httptest.NewRecorder()
+	router.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want 500; body=%s", rr.Code, rr.Body.String())
+	}
+
+	var env api.ErrorResponse
+	if err := json.Unmarshal(rr.Body.Bytes(), &env); err != nil {
+		t.Fatalf("unmarshal envelope: %v; body=%s", err, rr.Body.String())
+	}
+	if env.Message != "Database error" {
+		t.Errorf("envelope.error = %q, want %q", env.Message, "Database error")
+	}
+	if env.Details != "Failed to create movie" {
+		t.Errorf("envelope.details = %v, want %q", env.Details, "Failed to create movie")
+	}
+	if strings.Contains(rr.Body.String(), "42P01") || strings.Contains(rr.Body.String(), "SQLSTATE") {
+		t.Errorf("response leaks pgx internals: %s", rr.Body.String())
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Errorf("unmet pgxmock expectations: %v", err)
+	}
+}
+
+// TestUpdateMovieHandler_InternalErrorHidesInternalDetails covers the
+// non-sentinel update branch — same wire contract as create.
+func TestUpdateMovieHandler_InternalErrorHidesInternalDetails(t *testing.T) {
+	repo, mock := newMockRepo(t)
+	service := NewService(repo, cache.NewNoop(), time.Minute)
+	h := NewHandler(service)
+
+	body, _ := json.Marshal(Movie{Title: "X", Rating: 5})
+	mock.ExpectQuery(`UPDATE movies SET title`).
+		WithArgs("X", pgxmock.AnyArg(), pgxmock.AnyArg(), int32(1)).
+		WillReturnError(errors.New("pq: SSL connection has been closed unexpectedly"))
+
+	tokens := newTestTokens(t)
+	router := setupTestRouter(h, tokens, true)
+	req, _ := http.NewRequest("PUT", "/api/movies/1", bytes.NewBuffer(body))
+	req.Header.Set("Authorization", testJWTAuthHeader(t, tokens))
+	rr := httptest.NewRecorder()
+	router.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want 500; body=%s", rr.Code, rr.Body.String())
+	}
+
+	var env api.ErrorResponse
+	if err := json.Unmarshal(rr.Body.Bytes(), &env); err != nil {
+		t.Fatalf("unmarshal envelope: %v", err)
+	}
+	if env.Details != "Failed to update movie" {
+		t.Errorf("envelope.details = %v, want %q", env.Details, "Failed to update movie")
+	}
+	if strings.Contains(rr.Body.String(), "SSL connection") {
+		t.Errorf("response leaks pgx/SSL error text: %s", rr.Body.String())
+	}
+}
+
+// TestDeleteMovieHandler_InternalErrorHidesInternalDetails covers the
+// non-sentinel delete branch.
+func TestDeleteMovieHandler_InternalErrorHidesInternalDetails(t *testing.T) {
+	repo, mock := newMockRepo(t)
+	service := NewService(repo, cache.NewNoop(), time.Minute)
+	h := NewHandler(service)
+
+	mock.ExpectExec(`UPDATE movies SET deleted_at`).
+		WithArgs(int32(1)).
+		WillReturnError(errors.New("bcrypt: secret mismatch"))
+
+	tokens := newTestTokens(t)
+	router := setupTestRouter(h, tokens, true)
+	req, _ := http.NewRequest("DELETE", "/api/movies/1", nil)
+	req.Header.Set("Authorization", testJWTAuthHeader(t, tokens))
+	rr := httptest.NewRecorder()
+	router.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want 500; body=%s", rr.Code, rr.Body.String())
+	}
+
+	var env api.ErrorResponse
+	if err := json.Unmarshal(rr.Body.Bytes(), &env); err != nil {
+		t.Fatalf("unmarshal envelope: %v", err)
+	}
+	if env.Details != "Failed to delete movie" {
+		t.Errorf("envelope.details = %v, want %q", env.Details, "Failed to delete movie")
+	}
+	if strings.Contains(rr.Body.String(), "bcrypt") {
+		t.Errorf("response leaks library internals: %s", rr.Body.String())
 	}
 }

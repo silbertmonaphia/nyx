@@ -8,27 +8,50 @@ import (
 	"github.com/golang-jwt/jwt/v5"
 )
 
-// useSecret sets the process-wide signing key for the duration of a
-// single test and restores the package default afterwards. It replaces
-// the old t.Setenv("JWT_SECRET", ...) calls: the secret is now injected
-// once at startup from viper rather than read from the environment on
-// every token operation.
-func useSecret(t *testing.T, s string) {
+// newTestTokenService builds a per-test TokenService. The service
+// captures its own copy of the secret, so no cleanup is required —
+// nothing process-wide is mutated.
+func newTestTokenService(t *testing.T) TokenService {
 	t.Helper()
-	SetSecret(s)
-	t.Cleanup(func() { SetSecret("") })
+	tokens, err := NewTokenService([]byte(TestSecret))
+	if err != nil {
+		t.Fatalf("NewTokenService: %v", err)
+	}
+	return tokens
 }
 
-// TestRoundTrip_Claims verifies GenerateToken + ValidateToken
-// preserves the user_id and username claims. This is the smoke
-// test every JWT-based auth integration leans on.
-func TestRoundTrip_Claims(t *testing.T) {
-	// Pin the secret so an ambient config can't change the test
-	// outcome. The package holds the key in a process-wide variable,
-	// so it must be set BEFORE GenerateToken runs.
-	useSecret(t, "test-secret-do-not-use-in-prod")
+func TestIsDefault(t *testing.T) {
+	if !IsDefault("your-default-secret-key-change-it-in-prod") {
+		t.Error("IsDefault should return true for the development placeholder")
+	}
+	if IsDefault("some-other-secret") {
+		t.Error("IsDefault should return false for other strings")
+	}
+}
 
-	tok, err := GenerateToken(42, "alice")
+func TestMinSecretBytesIs32(t *testing.T) {
+	if MinSecretBytes != 32 {
+		t.Errorf("MinSecretBytes = %d, want 32", MinSecretBytes)
+	}
+}
+
+func TestNewTokenService_RejectsDefaultAndShort(t *testing.T) {
+	// defaultSecret is now unexported. Use the literal directly — it's a build-time constant.
+	if _, err := NewTokenService([]byte("your-default-secret-key-change-it-in-prod")); err == nil {
+		t.Error("default placeholder should be rejected")
+	}
+	if _, err := NewTokenService([]byte("short")); err == nil {
+		t.Error("short key should be rejected")
+	}
+	if _, err := NewTokenService([]byte(TestSecret)); err != nil {
+		t.Errorf("32-byte key rejected: %v", err)
+	}
+}
+
+func TestRoundTrip_Claims(t *testing.T) {
+	tokens := newTestTokenService(t)
+
+	tok, err := tokens.GenerateToken(42, "alice")
 	if err != nil {
 		t.Fatalf("GenerateToken: %v", err)
 	}
@@ -36,7 +59,7 @@ func TestRoundTrip_Claims(t *testing.T) {
 		t.Fatal("GenerateToken returned empty string")
 	}
 
-	claims, err := ValidateToken(tok)
+	claims, err := tokens.ValidateToken(tok)
 	if err != nil {
 		t.Fatalf("ValidateToken: %v", err)
 	}
@@ -56,9 +79,9 @@ func TestRoundTrip_Claims(t *testing.T) {
 // Without this guard, an attacker could forge tokens by flipping
 // bytes and observing which ones the server accepts.
 func TestValidateToken_TamperedSignature(t *testing.T) {
-	useSecret(t, "test-secret")
+	tokens := newTestTokenService(t)
 
-	tok, err := GenerateToken(1, "alice")
+	tok, err := tokens.GenerateToken(1, "alice")
 	if err != nil {
 		t.Fatalf("GenerateToken: %v", err)
 	}
@@ -66,7 +89,7 @@ func TestValidateToken_TamperedSignature(t *testing.T) {
 	// part). Any change should invalidate the HMAC.
 	tampered := tok[:len(tok)-2] + "AA"
 
-	_, err = ValidateToken(tampered)
+	_, err = tokens.ValidateToken(tampered)
 	if !errors.Is(err, ErrInvalidToken) {
 		t.Errorf("tampered token: err = %v, want ErrInvalidToken", err)
 	}
@@ -77,7 +100,7 @@ func TestValidateToken_TamperedSignature(t *testing.T) {
 // middleware distinguish "old token, ask user to re-login" (401) from
 // "bad token, possibly attacker" (401 + log).
 func TestValidateToken_ExpiredToken(t *testing.T) {
-	useSecret(t, "test-secret")
+	tokens := newTestTokenService(t)
 
 	// Mint a token with an ExpiresAt one hour in the past. We
 	// construct it directly rather than calling GenerateToken so
@@ -90,12 +113,12 @@ func TestValidateToken_ExpiredToken(t *testing.T) {
 			IssuedAt:  jwt.NewNumericDate(time.Now().Add(-2 * time.Hour)),
 		},
 	}
-	tok, err := jwt.NewWithClaims(jwt.SigningMethodHS256, claims).SignedString([]byte("test-secret"))
+	tok, err := jwt.NewWithClaims(jwt.SigningMethodHS256, claims).SignedString([]byte(TestSecret))
 	if err != nil {
 		t.Fatalf("sign: %v", err)
 	}
 
-	_, err = ValidateToken(tok)
+	_, err = tokens.ValidateToken(tok)
 	if !errors.Is(err, ErrExpiredToken) {
 		t.Errorf("expired token: err = %v, want ErrExpiredToken", err)
 	}
@@ -105,7 +128,7 @@ func TestValidateToken_ExpiredToken(t *testing.T) {
 // different secret. Combined with TestValidateToken_TamperedSignature
 // this pins the "only the issuer's secret works" property.
 func TestValidateToken_WrongSecret(t *testing.T) {
-	useSecret(t, "test-secret")
+	tokens := newTestTokenService(t)
 
 	tok, err := jwt.NewWithClaims(jwt.SigningMethodHS256, Claims{
 		UserID:   1,
@@ -118,7 +141,7 @@ func TestValidateToken_WrongSecret(t *testing.T) {
 		t.Fatalf("sign: %v", err)
 	}
 
-	_, err = ValidateToken(tok)
+	_, err = tokens.ValidateToken(tok)
 	if !errors.Is(err, ErrInvalidToken) {
 		t.Errorf("wrong-secret token: err = %v, want ErrInvalidToken", err)
 	}
@@ -127,36 +150,9 @@ func TestValidateToken_WrongSecret(t *testing.T) {
 // TestValidateToken_Malformed confirms the parser returns
 // ErrInvalidToken (not a panic) for a garbage input string.
 func TestValidateToken_Malformed(t *testing.T) {
-	_, err := ValidateToken("not-a-jwt")
+	tokens := newTestTokenService(t)
+	_, err := tokens.ValidateToken("not-a-jwt")
 	if !errors.Is(err, ErrInvalidToken) {
 		t.Errorf("malformed token: err = %v, want ErrInvalidToken", err)
-	}
-}
-
-// TestGenerateToken_EmptySecretUsesDefault guards the fallback to the
-// placeholder secret when SetSecret is handed an empty string (viper
-// only yields one if JWT_SECRET is explicitly set to ""). We document
-// this in config.go as a development convenience that must be
-// overridden in production; the test pins the behavior so an accidental
-// refactor doesn't start failing closed (refusing to sign) without
-// anyone noticing.
-func TestGenerateToken_EmptySecretUsesDefault(t *testing.T) {
-	useSecret(t, "")
-
-	tok, err := GenerateToken(1, "alice")
-	if err != nil {
-		t.Fatalf("GenerateToken with empty secret: %v", err)
-	}
-	if tok == "" {
-		t.Fatal("GenerateToken returned empty string with empty secret")
-	}
-
-	// Sanity: validate with the same package default.
-	claims, err := ValidateToken(tok)
-	if err != nil {
-		t.Errorf("ValidateToken of default-secret token: %v", err)
-	}
-	if claims != nil && claims.UserID != 1 {
-		t.Errorf("claims.UserID = %d, want 1", claims.UserID)
 	}
 }

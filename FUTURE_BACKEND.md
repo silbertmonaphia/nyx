@@ -24,6 +24,7 @@ The history and design decisions behind the current backend. For the high-level 
 - [x] **Struct-based validation** — `go-playground/validator` driven by struct tags on huma input/output types.
 - [x] **Standardized JSON errors** — uniform envelope across handlers; central mapper in `internal/platform/api`.
 - [x] **Domain error sentinels** — `movie.ErrNotFound`, `user.ErrInvalidCredentials`, `auth.ErrInvalidToken`, `auth.ErrExpiredToken`. Handlers translate to HTTP status; never string-compare in tests or call sites.
+- [x] **Internal error messages never echo to clients** — `api.ClassifyAndLog(ctx, err, safeDetail)` logs the wrapped error with the request ID at `Warn` and returns the static `safeDetail`. Handlers and auth middleware call it instead of writing `err.Error()` into the response `details` field, so SQL fragments, bcrypt strings, and JWT parser errors stay off the wire.
 - [ ] **Semantic API Error Translators** — map DB constraint errors (duplicate username, foreign key on delete, etc.) to clean client-facing messages.
 
 ## 3. Security & Authentication
@@ -33,7 +34,9 @@ The history and design decisions behind the current backend. For the high-level 
 - [x] **Auth middleware** — write/delete routes require a valid token; read routes are public.
 - [x] **Rate limiting** — token bucket middleware (`middleware/ratelimit.go`).
 - [x] **CORS Hardening** — `middleware.NewCORS` reads `CORS_ALLOWED_ORIGINS` (default `*`); set a comma-separated origin list in production. Wildcard and explicit-allowlist modes are both supported and unit-tested.
-- [x] **JWT Secret via Viper Config** — `auth.SetSecret(cfg.JWTSecret)` is called once in `main.go`; `auth/jwt.go` no longer reads `os.Getenv`.
+- [x] **JWT Secret via Viper Config** — `auth.SetSecret(cfg.JWTSecret)` is called once in `main.go`; `auth/jwt.go` no longer reads `os.Getenv`. (Superseded by constructor injection — see below.)
+- [x] **Constructor-injected JWT signing** — `auth.TokenService` interface + `auth.NewTokenService(secret []byte)` constructor hold the signing key in a private field. `main.go` builds one and threads it through the user service and auth middleware; the package-level `secret` / `SetSecret` are gone.
+- [x] **Enforce non-default JWT secret at startup** — `config.Load()` and `auth.NewTokenService` both refuse the built-in default placeholder and any key shorter than `auth.MinSecretBytes` (32 bytes). Misconfiguration fails closed before the HTTP server starts.
 - [ ] **JWT Refresh Tokens** — current tokens expire in 24h with no refresh flow. Add a refresh endpoint and short-lived access tokens.
 
 ## 4. Database Layer

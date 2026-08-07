@@ -45,14 +45,15 @@ Full stack: `cp .env.example .env && sudo docker compose up --build -d`. DB host
 
 - **Commits**: Conventional Commits.
 - **Errors**: domain sentinels (`movie.ErrNotFound`, `user.ErrInvalidCredentials`, `auth.ErrInvalidToken`, `auth.ErrExpiredToken`). Handlers translate to HTTP status via the central error mapper. Never string-compare error messages.
+- **Response details must be safe to ship**: handlers/middleware never copy `err.Error()` into the response `details` field. Use `api.ClassifyAndLog(ctx, err, "Operation failed")` — it logs the wrapped error with the request ID at `Warn` and returns the static `safeDetail` you pass in. SQL fragments, bcrypt strings, and JWT parser errors must never reach the wire.
 - **Cache is best-effort**: every cache call swallows errors with `log.Warn` and never fails the request.
 - **Pagination**: `GET /api/movies?page=N&page_size=M` → `{data, page, page_size, total, has_more}`. Default 20, max 100.
 - **Cache keys**: `movies:q={query}:p={page}:s={size}`. Mutations call `DeletePrefix("movies:")` (SCAN + UNLINK, non-blocking).
 - **Migrations**: `backend/migrations/00000N_description.{up,down}.sql`. Applied on every backend boot.
-- **Config**: env vars via viper (`internal/platform/config/config.go`). `.env` auto-loaded if present. Production must set `JWT_SECRET` off the default placeholder.
+- **Config**: env vars via viper (`internal/platform/config/config.go`). `.env` auto-loaded if present. `JWT_SECRET` is validated at startup: `config.Load()` refuses the built-in default and any key shorter than `auth.MinSecretBytes` (32 bytes, RFC 7518 §3.2). `auth.NewTokenService` repeats the check so the constructor is independently safe.
 - **Test infra**: `backend/internal/movie/repository_integration_test.go` boots a Postgres testcontainer; integration tests self-skip via `t.Skip()` when `dbURL == ""`. Never reintroduce an early `os.Exit(0)` in `TestMain` — it silently skips unit tests.
 - **Pre-commit** (`.husky/pre-commit`): `lint-staged` → `eslint --fix` + `vitest related --run --passWithNoTests`. Note: vitest v4's `related` is a subcommand, not a flag.
-- **Tests**: backend uses pgxmock (handler/repo) + miniredis (cache); frontend uses vitest + RTL; e2e uses Playwright (auto-starts `vite dev`).
+- **Tests**: backend uses pgxmock (haqndler/repo) + miniredis (cache); frontend uses vitest + RTL; e2e uses Playwright (auto-starts `vite dev`).
 - **sqlc drift**: CI runs `make sqlc-diff` and fails if generated code is out of sync with `queries/*.sql` or migrations. Regenerate locally and commit before pushing.
 
 ---

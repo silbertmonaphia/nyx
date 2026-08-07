@@ -1,8 +1,11 @@
 package config
 
 import (
+	"strings"
 	"testing"
 	"time"
+
+	"nyx/internal/platform/auth"
 )
 
 // TestLoadFromEnv verifies that Load() reads every required env var.
@@ -12,7 +15,7 @@ import (
 // vars are dropped on the floor.
 func TestLoadFromEnv(t *testing.T) {
 	t.Setenv("DB_URL", "postgres://user:pass@db:5432/nyx?sslmode=disable")
-	t.Setenv("JWT_SECRET", "test-secret")
+	t.Setenv("JWT_SECRET", auth.TestSecret)
 	t.Setenv("REDIS_ENABLED", "true")
 	t.Setenv("REDIS_URL", "redis://redis:6379")
 	t.Setenv("CACHE_TTL", "10m")
@@ -27,8 +30,8 @@ func TestLoadFromEnv(t *testing.T) {
 	if cfg.DBURL != "postgres://user:pass@db:5432/nyx?sslmode=disable" {
 		t.Errorf("DBURL = %q, want from env", cfg.DBURL)
 	}
-	if cfg.JWTSecret != "test-secret" {
-		t.Errorf("JWTSecret = %q, want %q", cfg.JWTSecret, "test-secret")
+	if cfg.JWTSecret != auth.TestSecret {
+		t.Errorf("JWTSecret = %q, want %q", cfg.JWTSecret, auth.TestSecret)
 	}
 	if !cfg.RedisEnabled {
 		t.Error("RedisEnabled = false, want true from env")
@@ -50,7 +53,7 @@ func TestLoadFromEnv(t *testing.T) {
 func TestLoadAppliesDefaults(t *testing.T) {
 	// Isolate the test from any ambient env vars.
 	t.Setenv("DB_URL", "postgres://x")
-	t.Setenv("JWT_SECRET", "x")
+	t.Setenv("JWT_SECRET", auth.TestSecret)
 	t.Setenv("REDIS_ENABLED", "")
 	t.Setenv("PORT", "")
 	t.Setenv("DB_MAX_OPEN_CONNS", "")
@@ -84,7 +87,7 @@ func TestLoadAppliesDefaults(t *testing.T) {
 
 func TestLoadRejectsRedisEnabledWithoutURL(t *testing.T) {
 	t.Setenv("DB_URL", "postgres://x")
-	t.Setenv("JWT_SECRET", "x")
+	t.Setenv("JWT_SECRET", auth.TestSecret)
 	t.Setenv("REDIS_ENABLED", "true")
 	t.Setenv("REDIS_URL", "")
 
@@ -96,7 +99,7 @@ func TestLoadRejectsRedisEnabledWithoutURL(t *testing.T) {
 
 func TestLoadRejectsBadDurations(t *testing.T) {
 	t.Setenv("DB_URL", "postgres://x")
-	t.Setenv("JWT_SECRET", "x")
+	t.Setenv("JWT_SECRET", auth.TestSecret)
 	t.Setenv("DB_CONN_MAX_LIFETIME", "not-a-duration")
 
 	_, err := Load()
@@ -110,7 +113,7 @@ func TestLoadRejectsBadDurations(t *testing.T) {
 // instead of a runtime DB connection tuning surprise.
 func TestLoadDurationsAreValid(t *testing.T) {
 	t.Setenv("DB_URL", "postgres://x")
-	t.Setenv("JWT_SECRET", "x")
+	t.Setenv("JWT_SECRET", auth.TestSecret)
 
 	cfg, err := Load()
 	if err != nil {
@@ -120,5 +123,31 @@ func TestLoadDurationsAreValid(t *testing.T) {
 		if _, err := time.ParseDuration(d); err != nil {
 			t.Errorf("duration %q failed to parse: %v", d, err)
 		}
+	}
+}
+
+func TestLoadRejectsDefaultJWTSecret(t *testing.T) {
+	t.Setenv("DB_URL", "postgres://x")
+	t.Setenv("JWT_SECRET", "your-default-secret-key-change-it-in-prod")
+
+	_, err := Load()
+	if err == nil {
+		t.Fatal("Load() error = nil, want JWT_SECRET default-placeholder rejection")
+	}
+	if !strings.Contains(err.Error(), "JWT_SECRET") {
+		t.Errorf("Load() error = %v, want it to mention JWT_SECRET", err)
+	}
+}
+
+func TestLoadRejectsShortJWTSecret(t *testing.T) {
+	t.Setenv("DB_URL", "postgres://x")
+	t.Setenv("JWT_SECRET", "tooshort")
+
+	_, err := Load()
+	if err == nil {
+		t.Fatal("Load() error = nil, want short-JWT_SECRET rejection")
+	}
+	if !strings.Contains(err.Error(), "JWT_SECRET") {
+		t.Errorf("Load() error = %v, want it to mention JWT_SECRET", err)
 	}
 }

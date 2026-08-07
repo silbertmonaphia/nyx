@@ -7,7 +7,6 @@ package database
 import (
 	"context"
 	"fmt"
-	"os"
 	"time"
 
 	"nyx/internal/platform/config"
@@ -72,23 +71,38 @@ func New(cfg *config.Config) (*pgxpool.Pool, error) {
 	return nil, fmt.Errorf("connect to db after retries: %w", lastErr)
 }
 
-// RunMigrations applies the SQL migrations under migrations/. It is
-// independent of the application's DB driver: golang-migrate opens its
-// own short-lived connection using the same URL.
-func RunMigrations(dbURL string) {
-	migrationPath := os.Getenv("MIGRATION_PATH")
+// RunMigrations applies SQL migrations from migrationPath to the database
+// at dbURL. The path is supplied by the caller (typically
+// cfg.MigrationPath from main.go) — RunMigrations no longer reads
+// MIGRATION_PATH from the environment. Returns errors instead of
+// exiting the process, so the caller can decide startup-failure
+// handling (fail fast at startup, retry, etc.).
+//
+// It is independent of the application's DB driver: golang-migrate
+// opens its own short-lived connection using dbURL.
+func RunMigrations(dbURL, migrationPath string) error {
 	if migrationPath == "" {
-		migrationPath = "file://migrations"
+		return fmt.Errorf("migrations: migration path is required")
 	}
 
 	m, err := migrate.New(migrationPath, dbURL)
 	if err != nil {
-		log.Fatal().Err(err).Msg("Could not create migration instance")
+		return fmt.Errorf("migrations: create instance: %w", err)
 	}
+	defer func() {
+		serr, derr := m.Close()
+		if serr != nil {
+			log.Warn().Err(serr).Msg("migration source close error")
+		}
+		if derr != nil {
+			log.Warn().Err(derr).Msg("migration db close error")
+		}
+	}()
 
 	if err := m.Up(); err != nil && err != migrate.ErrNoChange {
-		log.Fatal().Err(err).Msg("An error occurred while running migrations")
+		return fmt.Errorf("migrations: apply: %w", err)
 	}
 
-	log.Info().Msg("Database migrations applied successfully")
+	log.Info().Str("path", migrationPath).Msg("Database migrations applied successfully")
+	return nil
 }

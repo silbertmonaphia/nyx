@@ -5,6 +5,7 @@ import (
 	"strings"
 	"time"
 
+	"nyx/internal/platform/auth"
 	"github.com/spf13/viper"
 )
 
@@ -100,6 +101,13 @@ func Load() (*Config, error) {
 	// Cross-field validation: enabling the cache requires a URL to connect to.
 	if cfg.RedisEnabled && cfg.RedisURL == "" {
 		return nil, fmt.Errorf("REDIS_URL is required when REDIS_ENABLED=true")
+	}
+
+	if auth.IsDefault(cfg.JWTSecret) {
+		return nil, fmt.Errorf("JWT_SECRET must not be the default placeholder")
+	}
+	if len(cfg.JWTSecret) < auth.MinSecretBytes {
+		return nil, fmt.Errorf("JWT_SECRET must be at least %d bytes", auth.MinSecretBytes)
 	}
 
 	return &cfg, nil

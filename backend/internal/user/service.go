@@ -18,11 +18,12 @@ type Service interface {
 }
 
 type service struct {
-	repo Repository
+	repo   Repository
+	tokens auth.TokenService
 }
 
-func NewService(repo Repository) Service {
-	return &service{repo: repo}
+func NewService(repo Repository, tokens auth.TokenService) Service {
+	return &service{repo: repo, tokens: tokens}
 }
 
 func (s *service) Register(ctx context.Context, req RegisterRequest) (*AuthResponse, error) {
@@ -41,7 +42,7 @@ func (s *service) Register(ctx context.Context, req RegisterRequest) (*AuthRespo
 		return nil, err
 	}
 
-	token, err := auth.GenerateToken(u.ID, u.Username)
+	token, err := s.tokens.GenerateToken(u.ID, u.Username)
 	if err != nil {
 		return nil, err
 	}
@@ -65,7 +66,7 @@ func (s *service) Login(ctx context.Context, req LoginRequest) (*AuthResponse, e
 		return nil, ErrInvalidCredentials
 	}
 
-	token, err := auth.GenerateToken(u.ID, u.Username)
+	token, err := s.tokens.GenerateToken(u.ID, u.Username)
 	if err != nil {
 		return nil, err
 	}

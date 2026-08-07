@@ -4,9 +4,14 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
+
+	"github.com/rs/zerolog"
+	"github.com/rs/zerolog/log"
 
 	"nyx/internal/reqctx"
 )
@@ -131,5 +136,100 @@ func TestWriteError_NoRequestIDOmitsField(t *testing.T) {
 	body := rr.Body.String()
 	if bytes.Contains([]byte(body), []byte("request_id")) {
 		t.Errorf("body should not contain request_id when none was set: %s", body)
+	}
+}
+
+// captureLogger swaps the global zerolog logger out for one that writes
+// into the returned buffer, and registers a t.Cleanup to restore the
+// previous logger. Tests must call this serially because zerolog.Logger
+// is a process-wide singleton; the helper also guards against accidental
+// concurrent capture with a panic.
+func captureLogger(t *testing.T) *bytes.Buffer {
+	t.Helper()
+	buf := &bytes.Buffer{}
+	prev := log.Logger
+	log.Logger = zerolog.New(buf).Level(zerolog.WarnLevel)
+	t.Cleanup(func() { log.Logger = prev })
+	return buf
+}
+
+// TestClassifyAndLog_NilErrorReturnsSafeDetail pins the nil-error
+// passthrough: when the caller has nothing to log, the supplied safe
+// detail must be returned verbatim with no log output produced.
+//
+// captureLogger swaps the global zerolog.Logger; tests that use it
+// must NOT call t.Parallel(). Adding parallelism here would race the
+// captured buffer against sibling tests' log writes.
+//
+//nolint:paralleltest
+func TestClassifyAndLog_NilErrorReturnsSafeDetail(t *testing.T) {
+	buf := captureLogger(t)
+
+	got := ClassifyAndLog(context.Background(), nil, "safe message")
+	if got != "safe message" {
+		t.Errorf("returned %v, want %q", got, "safe message")
+	}
+	if buf.Len() != 0 {
+		t.Errorf("expected no log output on nil error, got: %s", buf.String())
+	}
+}
+
+// TestClassifyAndLog_HidesErrorDetails is the wire-level guarantee of
+// commit 4: raw err.Error() must NEVER reach the response payload. The
+// caller asks for a static safe string and the helper returns exactly
+// that, while logging the raw error with the request ID for operators.
+//
+// captureLogger swaps the global zerolog.Logger; tests that use it
+// must NOT call t.Parallel(). Adding parallelism here would race the
+// captured buffer against sibling tests' log writes.
+//
+//nolint:paralleltest
+func TestClassifyAndLog_HidesErrorDetails(t *testing.T) {
+	buf := captureLogger(t)
+
+	rawErr := errors.New("pgx: SQLSTATE 42P01 relation does not exist")
+	ctx := reqctx.WithRequestID(context.Background(), "req-abc")
+
+	got := ClassifyAndLog(ctx, rawErr, "Operation failed")
+
+	if got != "Operation failed" {
+		t.Errorf("returned %v, want %q (raw error must not be echoed)", got, "Operation failed")
+	}
+
+	logged := buf.String()
+	if !strings.Contains(logged, "pgx: SQLSTATE 42P01 relation does not exist") {
+		t.Errorf("expected underlying error logged for operators, got: %s", logged)
+	}
+	if !strings.Contains(logged, "req-abc") {
+		t.Errorf("expected request_id req-abc in log output, got: %s", logged)
+	}
+}
+
+// TestClassifyAndLog_IncludesRequestID exercises the helper with a
+// caller-supplied request ID; the warn-level log line must carry it so
+// operators can correlate the suppressed error with the request that
+// triggered it.
+//
+// captureLogger swaps the global zerolog.Logger; tests that use it
+// must NOT call t.Parallel(). Adding parallelism here would race the
+// captured buffer against sibling tests' log writes.
+//
+//nolint:paralleltest
+func TestClassifyAndLog_IncludesRequestID(t *testing.T) {
+	buf := captureLogger(t)
+
+	ctx := reqctx.WithRequestID(context.Background(), "test-req-123")
+
+	got := ClassifyAndLog(ctx, errors.New("internal boom"), "ok")
+
+	if got != "ok" {
+		t.Errorf("returned %v, want %q", got, "ok")
+	}
+	logged := buf.String()
+	if !strings.Contains(logged, "test-req-123") {
+		t.Errorf("expected request_id test-req-123 in log, got: %s", logged)
+	}
+	if !strings.Contains(logged, "internal boom") {
+		t.Errorf("expected underlying error string in log, got: %s", logged)
 	}
 }

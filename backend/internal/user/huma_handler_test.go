@@ -11,6 +11,7 @@ import (
 	"time"
 
 	platapi "nyx/internal/platform/api"
+	"nyx/internal/platform/auth"
 
 	"github.com/danielgtaylor/huma/v2"
 	"github.com/danielgtaylor/huma/v2/adapters/humachi"
@@ -50,7 +51,11 @@ func setupTestRouter(h *Handler) *chi.Mux {
 // newTestRouterWithRepo is the common three-line arrangement of every
 // test below: stub repo → real service → handler → router.
 func newTestRouterWithRepo(repo Repository) *chi.Mux {
-	return setupTestRouter(NewHandler(NewService(repo)))
+	tokens, err := auth.NewTokenService([]byte(auth.TestSecret))
+	if err != nil {
+		panic(err) // test setup; never expected to fail
+	}
+	return setupTestRouter(NewHandler(NewService(repo, tokens)))
 }
 
 // testHash bcrypt-hashes plain at MinCost. The default cost is ~60ms
@@ -255,6 +260,12 @@ func TestRegisterHandler_InternalErrorReturns500(t *testing.T) {
 	if env.Message != "Failed to register user" {
 		t.Errorf("envelope.error = %q, want %q", env.Message, "Failed to register user")
 	}
+	if env.Details != "Failed to register user" {
+		t.Errorf("envelope.details = %v, want %q", env.Details, "Failed to register user")
+	}
+	if bytes.Contains(rr.Body.Bytes(), []byte("context deadline exceeded")) {
+		t.Errorf("response leaks internal error text: %s", rr.Body.String())
+	}
 }
 
 // ---- Login ----
@@ -369,5 +380,11 @@ func TestLoginHandler_InternalErrorReturns500(t *testing.T) {
 	env := decodeEnvelope(t, rr, http.StatusInternalServerError)
 	if env.Message != "Failed to login" {
 		t.Errorf("envelope.error = %q, want %q", env.Message, "Failed to login")
+	}
+	if env.Details != "Failed to login" {
+		t.Errorf("envelope.details = %v, want %q", env.Details, "Failed to login")
+	}
+	if bytes.Contains(rr.Body.Bytes(), []byte("context deadline exceeded")) {
+		t.Errorf("response leaks internal error text: %s", rr.Body.String())
 	}
 }

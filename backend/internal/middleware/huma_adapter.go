@@ -11,9 +11,10 @@ import (
 	"github.com/danielgtaylor/huma/v2"
 )
 
-// HumaAuth returns a huma.Middleware that performs the same JWT
-// validation as the stdlib-shaped Auth function, but in huma's
-// middleware shape (func(huma.Context, next func(huma.Context))).
+// NewHumaAuth returns a huma.Middleware that performs the same JWT
+// validation as NewAuth, but in huma's middleware shape
+// (func(huma.Context, next func(huma.Context))). tokens carries the
+// signing key captured at startup.
 //
 // Huma parses the request body BEFORE running per-operation
 // Middlewares, which means a malicious 100 MB POST could trigger
@@ -23,11 +24,11 @@ import (
 // huma's body parser will refuse oversize payloads before this
 // middleware runs.
 //
-// We don't reuse Auth directly because huma.Context doesn't expose a
+// We don't reuse NewAuth directly because huma.Context doesn't expose a
 // plain http.ResponseWriter for short-circuit responses. Instead, we
 // stamp the response via huma.Context's SetStatus / SetHeader /
 // BodyWriter helpers, then return without calling next.
-func HumaAuth() func(huma.Context, func(huma.Context)) {
+func NewHumaAuth(tokens auth.TokenService) func(huma.Context, func(huma.Context)) {
 	return func(ctx huma.Context, next func(huma.Context)) {
 		authHeader := ctx.Header("Authorization")
 		if authHeader == "" {
@@ -41,9 +42,9 @@ func HumaAuth() func(huma.Context, func(huma.Context)) {
 			return
 		}
 
-		claims, err := auth.ValidateToken(parts[1])
+		claims, err := tokens.ValidateToken(parts[1])
 		if err != nil {
-			writeHumaError(ctx, http.StatusUnauthorized, "Invalid or expired token", err.Error())
+			writeHumaError(ctx, http.StatusUnauthorized, "Invalid or expired token", api.ClassifyAndLog(ctx.Context(), err, "invalid token"))
 			return
 		}
 
@@ -59,8 +60,8 @@ func HumaAuth() func(huma.Context, func(huma.Context)) {
 }
 
 // writeHumaError writes the canonical {error, code, request_id, details}
-// envelope via huma's response helpers. The request ID is read from
-// the context so the correlation ID matches the log line.
+// envelope via huma's response helpers. The request ID is read from the
+// context so the correlation ID matches the log line.
 func writeHumaError(ctx huma.Context, status int, message string, details interface{}) {
 	body := api.NewErrorResponseFromContext(ctx.Context(), status, message, details)
 	ctx.SetStatus(status)

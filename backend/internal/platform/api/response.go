@@ -17,8 +17,29 @@ import (
 	"io"
 	"net/http"
 
+	"github.com/rs/zerolog/log"
+
 	"nyx/internal/reqctx"
 )
+
+// ClassifyAndLog returns safeDetail for inclusion in the API response
+// `details` field, and logs the underlying err with the request ID at
+// Warn level so operators can correlate. Callers MUST pass a static
+// safeDetail — never err.Error() — to avoid leaking SQL, connection
+// strings, or library internals to clients.
+//
+// nil-safe: when err is nil, safeDetail is returned unchanged.
+func ClassifyAndLog(ctx context.Context, err error, safeDetail any) any {
+	if err == nil {
+		return safeDetail
+	}
+	reqID := reqctx.RequestIDFromContext(ctx)
+	log.Warn().
+		Str("request_id", reqID).
+		Err(err).
+		Msg("internal error suppressed from response details")
+	return safeDetail
+}
 
 // ErrorResponse defines the standard JSON structure for all API errors.
 // It also implements huma.StatusError, so handlers can return a
