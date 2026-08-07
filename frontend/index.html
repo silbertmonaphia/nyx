@@ -4,10 +4,68 @@
     <meta charset="UTF-8" />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="description" content="Nyx — a minimalist movie guide for discovering, tracking, and curating the films you love." />
     <title>Nyx</title>
+    <!--
+      No <link rel="preconnect"> to an API origin: in production the SPA is
+      served and proxied by the same nginx host as the API (same-origin), so
+      preconnect would only help in dev. In dev, VITE_API_URL points at
+      http://localhost:8080 which is on the same loopback host and gains
+      nothing from preconnect either.
+    -->
+    <style>
+      /* Inline so it paints before the stylesheet loads. createRoot replaces
+         #root on mount. Mirrors the Tailwind bg-background tone so there is
+         no jarring flash once the real stylesheet takes over. */
+      html, body { margin: 0; padding: 0; background: #f8fafc; }
+      body { font: 18px/145% system-ui, 'Segoe UI', Roboto, sans-serif; letter-spacing: 0.18px; color: #0f172a; }
+      #root { min-height: 100svh; display: flex; flex-direction: column; }
+      #nyx-skeleton {
+        flex: 1;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        gap: 1rem;
+        padding: 2rem;
+      }
+      #nyx-skeleton .title {
+        font-size: 2.5rem;
+        font-weight: 800;
+        letter-spacing: -0.02em;
+        background: linear-gradient(90deg, #7c3aed, #aa3bff);
+        -webkit-background-clip: text;
+        background-clip: text;
+        color: transparent;
+      }
+      #nyx-skeleton .bar {
+        width: min(32rem, 80vw);
+        height: 0.75rem;
+        border-radius: 9999px;
+        background: linear-gradient(90deg, #e5e7eb 0%, #d1d5db 50%, #e5e7eb 100%);
+        background-size: 200% 100%;
+        animation: nyx-shimmer 1.4s ease-in-out infinite;
+      }
+      #nyx-skeleton .bar.short { width: min(20rem, 60vw); opacity: 0.6; }
+      @keyframes nyx-shimmer {
+        0%   { background-position: 200% 0; }
+        100% { background-position: -200% 0; }
+      }
+      @media (prefers-color-scheme: dark) {
+        html, body { background: #0b0b10; }
+        body { color: #e5e7eb; }
+        #nyx-skeleton .bar { background: linear-gradient(90deg, #1f2937 0%, #374151 50%, #1f2937 100%); background-size: 200% 100%; }
+      }
+    </style>
   </head>
   <body>
-    <div id="root"></div>
+    <div id="root">
+      <div id="nyx-skeleton" aria-hidden="true">
+        <div class="title">Nyx</div>
+        <div class="bar"></div>
+        <div class="bar short"></div>
+      </div>
+    </div>
     <script type="module" src="/src/main.jsx"></script>
   </body>
 </html>

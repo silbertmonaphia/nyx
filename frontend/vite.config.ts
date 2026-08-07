@@ -10,6 +10,34 @@ export default defineConfig({
       '~': path.resolve(__dirname, './src'),
     },
   },
+  build: {
+    rollupOptions: {
+      output: {
+        // Vite 8 / rolldown requires manualChunks as a function rather than
+        // the Rollup-style object map. Split stable vendor code into its own
+        // cacheable chunks so app code changes don't bust the cache.
+        manualChunks(id) {
+          if (!id.includes('node_modules')) return undefined;
+          if (id.includes('/node_modules/react/') || id.includes('/node_modules/react-dom/') || id.includes('/node_modules/scheduler/')) {
+            return 'vendor-react';
+          }
+          if (id.includes('/node_modules/@tanstack/')) {
+            return 'vendor-react-query';
+          }
+          if (id.includes('/node_modules/axios/') || id.includes('/node_modules/form-data/') || id.includes('/node_modules/proxy-from-env/')) {
+            return 'vendor-axios';
+          }
+          if (id.includes('/node_modules/zod/')) {
+            return 'vendor-zod';
+          }
+          if (id.includes('/node_modules/lucide-react/')) {
+            return 'vendor-lucide';
+          }
+          return undefined;
+        },
+      },
+    },
+  },
   test: {
     globals: true,
     environment: 'jsdom',
