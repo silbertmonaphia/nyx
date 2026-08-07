@@ -60,9 +60,7 @@ Full stack: `cp .env.example .env && sudo docker compose up --build -d`. DB host
 
 # Open roadmap (next candidates)
 
-- Search Debounce — `App.tsx` fires an API request on every keystroke.
 - Distributed Tracing (OTel) — `go.opentelemetry.io/otel` is in `go.mod`; no exporter wired in `main.go` yet.
 - Container Version Conflict Guardrail — script checks for Postgres major-version volume upgrades.
-- Dynamic Metadata (SEO) — per-page `<title>` and meta description.
 - JWT Refresh Tokens — current tokens expire in 24h, no refresh flow.
 - Persist Auth Token Securely — JWT is in `localStorage` via Zustand `persist`. httpOnly cookies (or a documented XSS caveat) pending.
