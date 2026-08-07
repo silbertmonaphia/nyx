@@ -20,8 +20,8 @@ Single source of truth for "what's done / what's next" across the stack. Tick an
 - [x] Standardized JSON error envelopes.
 - [x] Domain error sentinels — `movie.ErrNotFound`, `user.ErrInvalidCredentials`, `auth.ErrInvalidToken`, `auth.ErrExpiredToken`. Handlers translate to HTTP status; never string-compare.
 - [ ] Semantic API Error Translators — map DB constraint errors (e.g. duplicate username) to clean client-facing messages.
-- [ ] CORS Hardening — `cors.go` uses `Access-Control-Allow-Origin: *`. Restrict to a configurable allowlist for production.
-- [ ] JWT Secret via Viper Config — `auth/jwt.go` reads via `os.Getenv`; consolidate to the central viper config struct.
+- [x] CORS Hardening — `cors.go` now reads `CORS_ALLOWED_ORIGINS` (default `*`); set a comma-separated origin list in production.
+- [x] JWT Secret via Viper Config — `auth.SetSecret(cfg.JWTSecret)` is called once in `main.go`; `auth/jwt.go` no longer reads `os.Getenv`.
 - [ ] JWT Refresh Tokens — current tokens expire in 24h, no refresh flow.
 
 ## 3. Database Lifecycle
@@ -61,7 +61,7 @@ Single source of truth for "what's done / what's next" across the stack. Tick an
 - [x] E2E — Playwright in `frontend/tests/e2e`.
 - [x] Backend lint — `golangci-lint` in CI.
 - [x] Frontend lint — `eslint` + `husky` pre-commit + `lint-staged`.
-- [ ] User Domain Handler Test Coverage — `user/huma_handler.go` lacks a `huma_handler_test.go`. (`service_test.go` and `repository_test.go` exist.)
+- [x] User Domain Handler Test Coverage — `user/huma_handler_test.go` covers register/login happy paths, validation rejections (missing/short username, invalid email, short password), duplicate 409, unknown user 401, bad password 401, and 500 paths.
 - [x] Kubernetes manifests — `Deployment`, `Service`, `Ingress`, `Secrets`, `StatefulSet` (Postgres), `Deployment` (Redis) in `k8s/`.
 - [x] Viper config — multi-source (env + `.env` + defaults).
 

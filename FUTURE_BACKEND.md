@@ -32,8 +32,8 @@ The history and design decisions behind the current backend. For the high-level 
 - [x] **User management** — `users` table with bcrypt-hashed passwords.
 - [x] **Auth middleware** — write/delete routes require a valid token; read routes are public.
 - [x] **Rate limiting** — token bucket middleware (`middleware/ratelimit.go`).
-- [ ] **CORS Hardening** — `cors.go` uses `Access-Control-Allow-Origin: *`. Restrict to a configurable allowlist for production.
-- [ ] **JWT Secret via Viper Config** — `auth/jwt.go` reads the secret via `os.Getenv` directly. Consolidate to the central viper config struct.
+- [x] **CORS Hardening** — `middleware.NewCORS` reads `CORS_ALLOWED_ORIGINS` (default `*`); set a comma-separated origin list in production. Wildcard and explicit-allowlist modes are both supported and unit-tested.
+- [x] **JWT Secret via Viper Config** — `auth.SetSecret(cfg.JWTSecret)` is called once in `main.go`; `auth/jwt.go` no longer reads `os.Getenv`.
 - [ ] **JWT Refresh Tokens** — current tokens expire in 24h with no refresh flow. Add a refresh endpoint and short-lived access tokens.
 
 ## 4. Database Layer
@@ -63,4 +63,4 @@ The history and design decisions behind the current backend. For the high-level 
 - [x] **Integration tests** — `testcontainers-go` boots a real Postgres. Self-skip via `t.Skip()` when `dbURL == ""`. Never reintroduce an early `os.Exit(0)` in `TestMain` — it silently skips unit tests.
 - [x] **golangci-lint** — strict pipeline (revive, gosec, staticcheck, …) in CI.
 - [x] **CI service container** — `postgres:17-alpine` in `backend-test` and `e2e-test` jobs so `testcontainers-go` tests run.
-- [ ] **User huma_handler test coverage** — `user/huma_handler.go` lacks a `huma_handler_test.go`. (`service_test.go` and `repository_test.go` exist.) Add tests for `Register` and `Login` through the chi + huma stack.
+- [x] **User huma_handler test coverage** — `user/huma_handler_test.go` covers register/login happy paths, validation rejections (missing/short username, invalid email, short password), duplicate 409, unknown user 401, bad password 401, and 500 paths.
