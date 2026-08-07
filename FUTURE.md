@@ -49,8 +49,8 @@ Single source of truth for "what's done / what's next" across the stack. Tick an
 - [x] Confirm dialog — `Dialog` (Radix) replaces `window.confirm()` in `App.tsx`.
 - [x] Toast notifications — `ToastContainer` + `uiStore`.
 - [x] Axios interceptors — auth header injection + global 401 handling.
-- [ ] Search Debounce — `App.tsx` fires an API request on every keystroke. Add a 300ms debounce.
-- [ ] Dynamic Metadata (SEO) — per-page `<title>` and meta description.
+- [x] Search Debounce — `App.tsx` fires an API request on every keystroke. Add a 300ms debounce.
+- [x] Dynamic Metadata (SEO) — per-page `<title>` and meta description.
 - [ ] Persist Auth Token Securely — JWT in `localStorage` via Zustand `persist`. httpOnly cookies (or a documented XSS caveat) pending.
 - [ ] Token Refresh — `api.ts` logs out on 401; pair with the backend refresh-token endpoint once it lands.
 

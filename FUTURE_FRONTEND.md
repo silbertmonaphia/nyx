@@ -26,7 +26,7 @@ The history and design decisions behind the current frontend. For the high-level
 - [x] **Axios client** — `services/api.ts` with request interceptor (auth header) and response interceptor (global 401 → logout, error message extraction).
 - [x] **Optimistic updates** — `useMovies.ts` uses `onMutate` / `onError` / `onSettled` for create / update / delete. Placeholders use negative IDs and are swapped when the server response arrives.
 - [x] **Pagination** — `useMovies` exposes `page`, `pageSize`, `total`, `hasMore`, `isLoadingMore`, `loadMore`.
-- [ ] **Search Debounce** — `App.tsx` passes `searchTerm` directly to `useMovies(searchTerm)` on every keystroke. Add a 300ms debounce (custom hook or `use-debounce`) to cut request volume.
+- [x] **Search Debounce** — `App.tsx` now feeds `useMovies` a 300ms-debounced term via the generic `useDebounce` hook in `src/hooks/`. The input stays bound to the raw value so typing is instant.
 
 ## 3. Form Management & Validation
 
@@ -62,7 +62,7 @@ The history and design decisions behind the current frontend. For the high-level
 
 ## 8. SEO
 
-- [ ] **Dynamic Metadata** — per-page `<title>` and meta description (`react-helmet-async` or standard DOM updates). Currently only a static title in `index.html`.
+- [x] **Dynamic Metadata** — per-view `<title>` and meta description via React 19's native metadata hoisting (`<PageMeta>` wrapper in `src/components/ui/`). `index.html` retains a static title + description as the pre-JS crawler fallback.
 
 ## 9. Developer Experience
 

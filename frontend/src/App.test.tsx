@@ -4,6 +4,7 @@ import App from './App';
 import { vi, describe, it, expect, beforeEach } from 'vitest';
 import { useMovies } from './features/movies/hooks/useMovies';
 import { useAuthStore } from './store/authStore';
+import { useMovieUiStore } from './features/movies/store/movieUiStore';
 
 vi.mock('./features/movies/hooks/useMovies');
 vi.mock('./store/authStore');
@@ -31,6 +32,13 @@ describe('App', () => {
       isAuthenticated: false,
       user: null,
       logout: vi.fn(),
+    });
+    // Reset the Zustand UI store so search/auth/edit state from a previous
+    // test doesn't leak into the next one.
+    useMovieUiStore.setState({
+      searchTerm: '',
+      showAddForm: false,
+      editingMovie: null,
     });
   });
 
@@ -201,5 +209,83 @@ describe('App', () => {
     expect(mockUseMovies.mock.calls.at(-1)?.[0]).toBe('matrix');
 
     vi.useRealTimers();
+  });
+
+  describe('SEO metadata (document.title)', () => {
+    beforeEach(() => {
+      // Each test asserts on document.title, which persists across renders.
+      document.title = '';
+    });
+
+    it('uses the default Nyx title when nothing else is going on', () => {
+      render(<App />);
+      expect(document.title).toBe('Nyx — Your minimalist movie guide');
+    });
+
+    it('reflects the debounced search term, not the raw input', async () => {
+      vi.useFakeTimers();
+      render(<App />);
+
+      const input = screen.getByPlaceholderText('Search for movies...');
+
+      // Type "matrix" one char at a time. The title should NOT update
+      // mid-typing — that's what the debounce is for.
+      fireEvent.change(input, { target: { value: 'm' } });
+      fireEvent.change(input, { target: { value: 'ma' } });
+      fireEvent.change(input, { target: { value: 'mat' } });
+      fireEvent.change(input, { target: { value: 'matr' } });
+      fireEvent.change(input, { target: { value: 'matri' } });
+      fireEvent.change(input, { target: { value: 'matrix' } });
+
+      expect(document.title).toBe('Nyx — Your minimalist movie guide');
+
+      await act(async () => {
+        vi.advanceTimersByTime(300);
+      });
+
+      expect(document.title).toBe('"matrix" — Search — Nyx');
+
+      vi.useRealTimers();
+    });
+
+    it('uses the sign-in title when the auth form is open (logged out)', async () => {
+      render(<App />);
+      await userEvent.click(screen.getByText('Login / Register'));
+      expect(document.title).toBe('Sign in — Nyx');
+    });
+
+    it('uses the add-movie title when the add form is open (authenticated)', () => {
+      mockUseAuthStore.mockReturnValue({
+        isAuthenticated: true,
+        user: { id: 1, username: 'testuser' },
+        logout: vi.fn(),
+      });
+      render(<App />);
+      // The "Add Movie" button toggles showAddForm in the UI store.
+      fireEvent.click(screen.getByText('Add Movie'));
+      expect(document.title).toBe('Add a movie — Nyx');
+    });
+
+    it('uses the edit-movie title when editing', () => {
+      mockUseAuthStore.mockReturnValue({
+        isAuthenticated: true,
+        user: { id: 1, username: 'testuser' },
+        logout: vi.fn(),
+      });
+      const movies = [
+        { id: 1, title: 'Movie to Edit', description: 'Desc', rating: 5 },
+      ];
+      mockUseMovies.mockReturnValue({ ...baseMovies, movies });
+
+      render(<App />);
+
+      // Drive editing via the UI store directly — same effect as clicking
+      // the row's edit button, but skips MovieList's internal handlers.
+      act(() => {
+        useMovieUiStore.getState().setEditingMovie(movies[0]);
+      });
+
+      expect(document.title).toBe('Edit "Movie to Edit" — Nyx');
+    });
   });
 });

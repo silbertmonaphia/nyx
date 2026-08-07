@@ -21,6 +21,11 @@ import {
   DialogTitle,
 } from './components/ui/Dialog';
 import { Plus, X, Search, LogOut, User as UserIcon } from 'lucide-react';
+import { PageMeta } from './components/ui/PageMeta';
+
+const DEFAULT_TITLE = 'Nyx — Your minimalist movie guide';
+const DEFAULT_DESCRIPTION =
+  'A minimalist movie guide for discovering, tracking, and curating the films you love.';
 
 function App() {
   const {
@@ -83,8 +88,33 @@ function App() {
     }
   };
 
+  // Per-view SEO metadata. Driven by `debouncedSearchTerm` (not the raw
+  // input) so the title doesn't churn on every keystroke. Priority order:
+  // edit > add > auth > search > default — a modal that opens over a search
+  // should still announce itself in the title.
+  const trimmedSearch = debouncedSearchTerm.trim();
+  const pageTitle = editingMovie
+    ? `Edit "${editingMovie.title}" — Nyx`
+    : showAddForm && isAuthenticated
+    ? 'Add a movie — Nyx'
+    : showAuthForm && !isAuthenticated
+    ? 'Sign in — Nyx'
+    : trimmedSearch
+    ? `"${trimmedSearch}" — Search — Nyx`
+    : DEFAULT_TITLE;
+  const pageDescription = editingMovie
+    ? `Edit the details of "${editingMovie.title}" in your Nyx movie collection.`
+    : showAddForm && isAuthenticated
+    ? 'Add a new movie to your Nyx collection.'
+    : showAuthForm && !isAuthenticated
+    ? 'Sign in or create a Nyx account to curate your movie list.'
+    : trimmedSearch
+    ? `Search Nyx for "${trimmedSearch}".`
+    : DEFAULT_DESCRIPTION;
+
   return (
     <div className="app-root">
+      <PageMeta title={pageTitle} description={pageDescription} />
       <ToastContainer />
       <nav className="sticky top-0 z-50 w-full border-b bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60">
         <div className="container mx-auto px-4 h-16 flex items-center justify-between">
