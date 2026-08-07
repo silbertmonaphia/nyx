@@ -46,6 +46,9 @@ jobs:
     - name: Verify sqlc generated code is up to date
       working-directory: backend
       run: make sqlc-diff
+    - name: Verify committed OpenAPI spec is up to date
+      working-directory: backend
+      run: make openapi-diff
     - name: Test
       run: cd backend && go test -v ./...
 
