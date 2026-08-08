@@ -35,7 +35,7 @@ export const useMovies = (searchTerm: string) => {
     queryKey,
     queryFn: ({ pageParam }) => movieService.getMovies(searchTerm, pageParam, PAGE_SIZE),
     initialPageParam: 1,
-    getNextPageParam: (last) => (last.has_more ? last.page + 1 : undefined),
+    getNextPageParam: (last) => (last ? (last.has_more ? last.page + 1 : undefined) : undefined),
     staleTime: 30_000,
     // Keep the cache around long enough to make back-navigation feel
     // instant; the default 5 min is too eager for this dataset.
