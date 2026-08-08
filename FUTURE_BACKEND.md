@@ -49,7 +49,7 @@ The history and design decisions behind the current backend. For the high-level 
 
 ## 5. Observability & Documentation
 
-- [x] **OpenAPI 3.1** — generated at runtime from huma struct tags on each operation's Input/Output. UI at `/api/swagger` (Stoplight Elements); raw spec at `/api/swagger/doc.json`. See `backend/HUMA.md`.
+- [x] **OpenAPI 3.1** — generated from huma struct tags on each operation's Input/Output. UI at `/api/swagger` (Stoplight Elements); raw spec at `/api/swagger/doc.json` (and `doc.yaml`). Also committed as `api/openapi.json`, regenerated database-free via `cd backend && make openapi` and drift-checked in CI via `make openapi-diff`. See `backend/HUMA.md`.
 - [x] **Prometheus metrics** — `/metrics` endpoint + `prometheus` middleware (request count, latency, status, in-flight).
 - [x] **Contextual logging** — `context` threaded through every layer; request ID propagated from the `RequestID` middleware through `Logging` → services → repositories.
 - [ ] **Distributed Tracing (OTel)** — `go.opentelemetry.io/otel` is in `go.mod`; no exporter wired in `main.go` yet. Goal: span router → middleware → service → repository → SQL.
