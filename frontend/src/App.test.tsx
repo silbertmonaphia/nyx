@@ -273,7 +273,7 @@ describe('App', () => {
         logout: vi.fn(),
       });
       const movies = [
-        { id: 1, title: 'Movie to Edit', description: 'Desc', rating: 5 },
+        { id: 1, title: 'Movie to Edit', description: 'Desc', rating: 5, created_at: '2024-01-01T00:00:00Z', updated_at: '2024-01-01T00:00:00Z' },
       ];
       mockUseMovies.mockReturnValue({ ...baseMovies, movies });
 

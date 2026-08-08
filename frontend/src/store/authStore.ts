@@ -1,11 +1,11 @@
 import { create } from 'zustand';
 import { persist, createJSONStorage } from 'zustand/middleware';
+import type { User as ApiUser } from '~/api/openapi';
 
-export interface User {
-  id: number;
-  username: string;
-  email: string;
-}
+// Wire type — sourced from the generated OpenAPI schema so the frontend
+// stays in lockstep with the backend. The server also returns
+// `created_at`/`updated_at`, which we ignore here.
+export type User = ApiUser;
 
 interface AuthState {
   user: User | null;

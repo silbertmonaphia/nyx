@@ -16,6 +16,14 @@ const PAGE_SIZE = 20;
 // must never be sent to the API.
 const isOptimisticId = (id: number) => id < 0;
 
+// The generated OpenAPI types declare `MoviesPage.data` as `Movie[] | null`
+// because huma emits `"type": ["array", "null"]` for the slice. The backend
+// always sends a non-null array (`NewMoviesPage` coerces nil to []), so the
+// nullable type is a schema artefact rather than something the wire
+// actually carries. Coerce at the boundary so the optimistic-update
+// callbacks can keep working with plain arrays.
+const pageData = (page: PaginatedMovies): Movie[] => page.data ?? [];
+
 interface MoviesContext {
   previous: Array<[readonly unknown[], unknown]> | undefined;
 }
@@ -43,11 +51,14 @@ export const useMovies = (searchTerm: string) => {
   });
 
   const movies = useMemo<Movie[]>(
-    () => data?.pages.flatMap((p) => p.data) ?? [],
+    // `data` is `Movie[] | null` in the OpenAPI schema; the backend always
+    // emits a non-null array (see NewMoviesPage in model.go), but the spec
+    // doesn't pin that down, so we coalesce defensively.
+    () => data?.pages?.flatMap((p) => p.data ?? []) ?? [],
     [data],
   );
 
-  const totalCount = data?.pages[0]?.total ?? 0;
+  const totalCount = data?.pages?.[0]?.total ?? 0;
 
   // ---- Mutations with optimistic updates ----------------------------------
 
@@ -70,7 +81,7 @@ export const useMovies = (searchTerm: string) => {
           return {
             ...old,
             pages: [
-              { ...first, data: [optimistic, ...first.data], total: first.total + 1 },
+              { ...first, data: [optimistic, ...pageData(first)], total: first.total + 1 },
               ...old.pages.slice(1),
             ],
           };
@@ -90,7 +101,7 @@ export const useMovies = (searchTerm: string) => {
             ...old,
             pages: old.pages.map((page) => ({
               ...page,
-              data: page.data.map((m) => (isOptimisticId(m.id) ? created : m)),
+              data: pageData(page).map((m) => (isOptimisticId(m.id) ? created : m)),
             })),
           };
         },
@@ -127,7 +138,7 @@ export const useMovies = (searchTerm: string) => {
             ...old,
             pages: old.pages.map((page) => ({
               ...page,
-              data: page.data.map((m) => (m.id === updated.id ? { ...m, ...updated } : m)),
+              data: pageData(page).map((m) => (m.id === updated.id ? { ...m, ...updated } : m)),
             })),
           };
         },
@@ -165,7 +176,7 @@ export const useMovies = (searchTerm: string) => {
             ...old,
             pages: old.pages.map((page) => ({
               ...page,
-              data: page.data.filter((m) => m.id !== id),
+              data: pageData(page).filter((m) => m.id !== id),
               total: Math.max(0, page.total - 1),
             })),
           };
