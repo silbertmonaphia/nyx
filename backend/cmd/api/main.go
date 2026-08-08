@@ -18,7 +18,6 @@ import (
 	"nyx/internal/user"
 	userdb "nyx/internal/user/db"
 
-	"github.com/danielgtaylor/huma/v2"
 	"github.com/danielgtaylor/huma/v2/adapters/humachi"
 	"github.com/go-chi/chi/v5"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
@@ -126,30 +125,9 @@ func main() {
 	// into huma.Operation.Path params and lets huma use chi's router for
 	// dispatch. Order matters: routes are registered against the chi
 	// router and the huma API is built on top of it via NewAdapter.
-	humaAPI := humachi.New(router, huma.Config{
-		OpenAPI: &huma.OpenAPI{
-			OpenAPI: "3.1.0",
-			Info: &huma.Info{
-				Title:       "Nyx API",
-				Version:     "1.0.0",
-				Description: "Minimalist media rating application API.",
-			},
-			Components: &huma.Components{
-				SecuritySchemes: map[string]*huma.SecurityScheme{
-					"BearerAuth": {
-						Type:         "http",
-						Scheme:       "bearer",
-						BearerFormat: "JWT",
-						Description:  "JWT bearer token issued by POST /api/login or POST /api/register.",
-					},
-				},
-			},
-		},
-		OpenAPIPath:   "/api/swagger/doc.json",
-		DocsPath:      "/api/swagger",
-		Formats:       huma.DefaultFormats,
-		DefaultFormat: "application/json",
-	})
+	// api.HumaConfig() is shared with cmd/openapi so the committed spec
+	// artifact cannot drift from what the server serves.
+	humaAPI := humachi.New(router, api.HumaConfig())
 
 	movie.RegisterMovieOps(humaAPI, movieHandler, tokens)
 	user.RegisterUserOps(humaAPI, userHandler)

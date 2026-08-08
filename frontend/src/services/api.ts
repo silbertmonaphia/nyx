@@ -1,6 +1,7 @@
 import axios from 'axios';
 import { useUiStore } from '../store/uiStore';
 import { useAuthStore } from '../store/authStore';
+import type { ApiError } from '~/api/openapi';
 
 const api = axios.create({
   baseURL: import.meta.env.VITE_API_URL || 'http://localhost:8080/api',
@@ -35,8 +36,8 @@ api.interceptors.response.use(
         useAuthStore.getState().logout();
         message = 'Session expired. Please login again.';
       } else {
-        const backendError = error.response.data;
-        if (backendError && backendError.error) {
+        const backendError = error.response.data as ApiError | undefined;
+        if (backendError?.error) {
           message = backendError.error;
         } else {
           message = `Server error: ${error.response.status}`;

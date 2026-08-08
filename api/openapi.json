@@ -1,0 +1,607 @@
+{
+  "components": {
+    "schemas": {
+      "AuthResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "token": {
+            "type": "string"
+          },
+          "user": {
+            "$ref": "#/components/schemas/User"
+          }
+        },
+        "required": [
+          "token",
+          "user"
+        ],
+        "type": "object"
+      },
+      "ErrorResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "code": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "details": {},
+          "error": {
+            "type": "string"
+          },
+          "request_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "error",
+          "code"
+        ],
+        "type": "object"
+      },
+      "HealthResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "services": {
+            "$ref": "#/components/schemas/HealthServices"
+          },
+          "status": {
+            "description": "Overall status: 'ok' when the database is reachable, 'error' otherwise.",
+            "examples": [
+              "ok"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "status",
+          "services"
+        ],
+        "type": "object"
+      },
+      "HealthServices": {
+        "additionalProperties": false,
+        "properties": {
+          "api": {
+            "examples": [
+              "up"
+            ],
+            "type": "string"
+          },
+          "cache": {
+            "examples": [
+              "up"
+            ],
+            "type": "string"
+          },
+          "database": {
+            "examples": [
+              "up"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "api",
+          "database",
+          "cache"
+        ],
+        "type": "object"
+      },
+      "LoginRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "password": {
+            "type": "string"
+          },
+          "username": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "username",
+          "password"
+        ],
+        "type": "object"
+      },
+      "Movie": {
+        "additionalProperties": false,
+        "properties": {
+          "created_at": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "deleted_at": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "description": {
+            "maxLength": 1000,
+            "type": "string"
+          },
+          "id": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "rating": {
+            "format": "double",
+            "maximum": 10,
+            "minimum": 0,
+            "type": "number"
+          },
+          "title": {
+            "maxLength": 100,
+            "minLength": 1,
+            "type": "string"
+          },
+          "updated_at": {
+            "format": "date-time",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "title",
+          "description",
+          "rating",
+          "created_at",
+          "updated_at"
+        ],
+        "type": "object"
+      },
+      "MoviesPage": {
+        "additionalProperties": false,
+        "properties": {
+          "data": {
+            "items": {
+              "$ref": "#/components/schemas/Movie"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "has_more": {
+            "examples": [
+              true
+            ],
+            "type": "boolean"
+          },
+          "page": {
+            "examples": [
+              1
+            ],
+            "format": "int64",
+            "type": "integer"
+          },
+          "page_size": {
+            "examples": [
+              20
+            ],
+            "format": "int64",
+            "type": "integer"
+          },
+          "total": {
+            "examples": [
+              42
+            ],
+            "format": "int64",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "data",
+          "page",
+          "page_size",
+          "total",
+          "has_more"
+        ],
+        "type": "object"
+      },
+      "RegisterRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "email": {
+            "format": "email",
+            "type": "string"
+          },
+          "password": {
+            "minLength": 6,
+            "type": "string"
+          },
+          "username": {
+            "maxLength": 50,
+            "minLength": 3,
+            "type": "string"
+          }
+        },
+        "required": [
+          "username",
+          "email",
+          "password"
+        ],
+        "type": "object"
+      },
+      "User": {
+        "additionalProperties": false,
+        "properties": {
+          "created_at": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "deleted_at": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "email": {
+            "type": "string"
+          },
+          "id": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "updated_at": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "username": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "username",
+          "email",
+          "created_at",
+          "updated_at"
+        ],
+        "type": "object"
+      }
+    },
+    "securitySchemes": {
+      "BearerAuth": {
+        "bearerFormat": "JWT",
+        "description": "JWT bearer token issued by POST /api/login or POST /api/register.",
+        "scheme": "bearer",
+        "type": "http"
+      }
+    }
+  },
+  "info": {
+    "description": "Minimalist media rating application API.",
+    "title": "Nyx API",
+    "version": "1.0.0"
+  },
+  "openapi": "3.1.0",
+  "paths": {
+    "/api/health": {
+      "get": {
+        "description": "Reports the status of the API, the database connection, and the cache.",
+        "operationId": "health",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HealthResponse"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Health check",
+        "tags": [
+          "health"
+        ]
+      }
+    },
+    "/api/login": {
+      "post": {
+        "description": "Authenticate a user by username + password and receive a JWT.",
+        "operationId": "login",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LoginRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuthResponse"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Login a user",
+        "tags": [
+          "auth"
+        ]
+      }
+    },
+    "/api/movies": {
+      "get": {
+        "description": "Returns a paginated list of movies, optionally filtered by a search term matched against title and description.",
+        "operationId": "get-movies",
+        "parameters": [
+          {
+            "description": "Case-insensitive search term matched against title and description.",
+            "explode": false,
+            "in": "query",
+            "name": "q",
+            "schema": {
+              "description": "Case-insensitive search term matched against title and description.",
+              "type": "string"
+            }
+          },
+          {
+            "description": "1-based page index.",
+            "explode": false,
+            "in": "query",
+            "name": "page",
+            "schema": {
+              "default": 1,
+              "description": "1-based page index.",
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Items per page; clamped to a server-side maximum of 100.",
+            "explode": false,
+            "in": "query",
+            "name": "page_size",
+            "schema": {
+              "default": 20,
+              "description": "Items per page; clamped to a server-side maximum of 100.",
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoviesPage"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "List movies",
+        "tags": [
+          "movies"
+        ]
+      },
+      "post": {
+        "description": "Creates a new movie record. Requires a valid JWT in the Authorization header.",
+        "operationId": "create-movie",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Movie"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Movie"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Create a movie",
+        "tags": [
+          "movies"
+        ]
+      }
+    },
+    "/api/movies/{id}": {
+      "delete": {
+        "description": "Soft-deletes a movie record. Requires a valid JWT.",
+        "operationId": "delete-movie",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "No Content"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Delete a movie",
+        "tags": [
+          "movies"
+        ]
+      },
+      "put": {
+        "description": "Updates the title, description, or rating of an existing movie. Requires a valid JWT.",
+        "operationId": "update-movie",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Movie"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Movie"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Update a movie",
+        "tags": [
+          "movies"
+        ]
+      }
+    },
+    "/api/register": {
+      "post": {
+        "description": "Create a new user account. Returns 409 when the username is already taken.",
+        "operationId": "register",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RegisterRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuthResponse"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Register a user",
+        "tags": [
+          "auth"
+        ]
+      }
+    }
+  }
+}

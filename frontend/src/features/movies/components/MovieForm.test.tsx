@@ -12,7 +12,7 @@ describe('MovieForm', () => {
   });
 
   it('renders correctly for editing an existing movie', () => {
-    const movie: Movie = { id: 1, title: 'Existing Movie', description: 'Existing Desc', rating: 7 };
+    const movie: Movie = { id: 1, title: 'Existing Movie', description: 'Existing Desc', rating: 7, created_at: '2024-01-01T00:00:00Z', updated_at: '2024-01-01T00:00:00Z' };
     render(<MovieForm title="Edit Movie" movie={movie} onSubmit={vi.fn()} onCancel={vi.fn()} />);
     expect(screen.getByText('Edit Movie')).toBeInTheDocument();
     expect(screen.getByPlaceholderText('Movie title')).toHaveValue('Existing Movie');

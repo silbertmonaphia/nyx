@@ -1,6 +1,6 @@
 import React from 'react';
 import { useUiStore } from '../../store/uiStore';
-import { Button } from './Button';
+import { Button } from '../ui/Button';
 import { X, CheckCircle, AlertCircle, Info } from 'lucide-react';
 import { cn } from '~/utils/cn';
 

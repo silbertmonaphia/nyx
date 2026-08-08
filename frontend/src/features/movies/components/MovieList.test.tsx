@@ -5,8 +5,8 @@ import { vi } from 'vitest';
 
 describe('MovieList', () => {
   const movies: Movie[] = [
-    { id: 1, title: 'Movie 1', description: 'Desc 1', rating: 8 },
-    { id: 2, title: 'Movie 2', description: 'Desc 2', rating: 9 },
+    { id: 1, title: 'Movie 1', description: 'Desc 1', rating: 8, created_at: '2024-01-01T00:00:00Z', updated_at: '2024-01-01T00:00:00Z' },
+    { id: 2, title: 'Movie 2', description: 'Desc 2', rating: 9, created_at: '2024-01-01T00:00:00Z', updated_at: '2024-01-01T00:00:00Z' },
   ];
 
   it('renders a list of movies', () => {

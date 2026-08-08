@@ -6,7 +6,7 @@ import { MovieList } from './features/movies/components/MovieList';
 import { MovieForm } from './features/movies/components/MovieForm';
 import { useMovieUiStore } from './features/movies/store/movieUiStore';
 import { useDebounce } from './hooks/useDebounce';
-import { ToastContainer } from './components/ui/ToastContainer';
+import { ToastContainer } from './components/app/ToastContainer';
 import { useUiStore } from './store/uiStore';
 import { useAuthStore } from './store/authStore';
 import { AuthForm } from './features/auth/components/AuthForm';
@@ -21,7 +21,7 @@ import {
   DialogTitle,
 } from './components/ui/Dialog';
 import { Plus, X, Search, LogOut, User as UserIcon } from 'lucide-react';
-import { PageMeta } from './components/ui/PageMeta';
+import { PageMeta } from './components/app/PageMeta';
 
 const DEFAULT_TITLE = 'Nyx — Your minimalist movie guide';
 const DEFAULT_DESCRIPTION =

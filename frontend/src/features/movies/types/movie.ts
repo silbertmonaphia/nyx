@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import type { Movie as ApiMovie, MoviesPage as ApiMoviesPage } from '~/api/openapi';
 
 // Define the validation schema for a movie
 export const movieSchema = z.object({
@@ -10,19 +11,11 @@ export const movieSchema = z.object({
 // Derive TypeScript types from the schema
 export type MovieFormData = z.infer<typeof movieSchema>;
 
-export interface Movie extends MovieFormData {
-  id: number;
-  created_at?: string;
-  updated_at?: string;
-}
-
 export type NewMovie = MovieFormData;
 
-// Paginated response envelope from the backend (snake_case matches the API).
-export interface PaginatedMovies {
-  data: Movie[];
-  page: number;
-  page_size: number;
-  total: number;
-  has_more: boolean;
-}
+// Wire types — sourced from the generated OpenAPI schema so the frontend
+// stays in lockstep with the backend. `Movie` is huma's response shape
+// (id + timestamps are server-controlled); `MoviesPage` is the pagination
+// envelope returned by GET /api/movies.
+export type Movie = ApiMovie;
+export type PaginatedMovies = ApiMoviesPage;

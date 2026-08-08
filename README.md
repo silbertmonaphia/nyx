@@ -127,7 +127,9 @@ See `k8s/*.yaml` for per-resource config.
 | PUT | `/api/movies/{id}` | JWT | |
 | DELETE | `/api/movies/{id}` | JWT | |
 
-Full schema: `http://localhost:8080/api/swagger/doc.json`.
+Full schema: `http://localhost:8080/api/swagger/doc.json` (interactive docs at `/api/swagger`).
+The same spec is committed at `api/openapi.json` and regenerated offline with
+`cd backend && make openapi`; CI runs `make openapi-diff` to catch drift.
 
 ## Conventions
 
