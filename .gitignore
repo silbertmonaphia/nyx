@@ -37,6 +37,7 @@ k8s/secrets.yaml
 .env
 
 # AI Agents
+.claude/worktrees/
 .gemini/
 .geminiignore
 GEMINI.md
