@@ -45,7 +45,7 @@ export const AuthForm: React.FC<AuthFormProps> = ({ onSuccess, onCancel }) => {
     try {
       const endpoint = isLogin ? '/login' : '/register';
       const response = await api.post(endpoint, data);
-      setAuth(response.data.user, response.data.token);
+      setAuth(response.data);
       addToast(isLogin ? 'Successfully logged in!' : 'Successfully registered!', 'success');
       onSuccess();
     } catch (err) {
