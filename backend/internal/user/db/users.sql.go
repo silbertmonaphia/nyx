@@ -7,7 +7,68 @@ package db
 
 import (
 	"context"
+
+	"github.com/jackc/pgx/v5/pgtype"
 )
+
+const createRefreshToken = `-- name: CreateRefreshToken :one
+WITH inserted AS (
+    INSERT INTO refresh_tokens (user_id, token_hash, family_id, expires_at)
+    VALUES ($1, $2, 0, $3)
+    RETURNING id, user_id, token_hash, family_id, replaced_by_id, expires_at, revoked_at, created_at
+)
+UPDATE refresh_tokens
+SET family_id = inserted.id
+FROM inserted
+WHERE refresh_tokens.id = inserted.id
+RETURNING refresh_tokens.id, refresh_tokens.user_id, refresh_tokens.token_hash, refresh_tokens.family_id, refresh_tokens.replaced_by_id, refresh_tokens.expires_at, refresh_tokens.revoked_at, refresh_tokens.created_at
+`
+
+type CreateRefreshTokenParams struct {
+	UserID    int32
+	TokenHash []byte
+	ExpiresAt pgtype.Timestamptz
+}
+
+// Atomic self-stamping: insert with family_id=0 placeholder, then update
+// family_id to the inserted row's id. Returns the full row.
+func (q *Queries) CreateRefreshToken(ctx context.Context, arg CreateRefreshTokenParams) (RefreshToken, error) {
+	row := q.db.QueryRow(ctx, createRefreshToken, arg.UserID, arg.TokenHash, arg.ExpiresAt)
+	var i RefreshToken
+	err := row.Scan(
+		&i.ID,
+		&i.UserID,
+		&i.TokenHash,
+		&i.FamilyID,
+		&i.ReplacedByID,
+		&i.ExpiresAt,
+		&i.RevokedAt,
+		&i.CreatedAt,
+	)
+	return i, err
+}
+
+const getRefreshTokenByHash = `-- name: GetRefreshTokenByHash :one
+SELECT id, user_id, token_hash, family_id, replaced_by_id, expires_at, revoked_at, created_at
+FROM refresh_tokens
+WHERE token_hash = $1
+`
+
+func (q *Queries) GetRefreshTokenByHash(ctx context.Context, tokenHash []byte) (RefreshToken, error) {
+	row := q.db.QueryRow(ctx, getRefreshTokenByHash, tokenHash)
+	var i RefreshToken
+	err := row.Scan(
+		&i.ID,
+		&i.UserID,
+		&i.TokenHash,
+		&i.FamilyID,
+		&i.ReplacedByID,
+		&i.ExpiresAt,
+		&i.RevokedAt,
+		&i.CreatedAt,
+	)
+	return i, err
+}
 
 const getUserByID = `-- name: GetUserByID :one
 SELECT id, username, email, password_hash, created_at, updated_at, deleted_at
@@ -79,6 +140,96 @@ func (q *Queries) InsertUser(ctx context.Context, arg InsertUserParams) (User, e
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.DeletedAt,
+	)
+	return i, err
+}
+
+const revokeRefreshTokenByID = `-- name: RevokeRefreshTokenByID :exec
+UPDATE refresh_tokens
+SET revoked_at = COALESCE(revoked_at, now())
+WHERE id = $1 AND revoked_at IS NULL
+`
+
+func (q *Queries) RevokeRefreshTokenByID(ctx context.Context, id int64) error {
+	_, err := q.db.Exec(ctx, revokeRefreshTokenByID, id)
+	return err
+}
+
+const revokeRefreshTokenFamily = `-- name: RevokeRefreshTokenFamily :execrows
+UPDATE refresh_tokens
+SET revoked_at = COALESCE(revoked_at, now())
+WHERE family_id = $1 AND revoked_at IS NULL
+`
+
+func (q *Queries) RevokeRefreshTokenFamily(ctx context.Context, familyID int64) (int64, error) {
+	result, err := q.db.Exec(ctx, revokeRefreshTokenFamily, familyID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const rotateRefreshToken = `-- name: RotateRefreshToken :one
+WITH new_row AS (
+    INSERT INTO refresh_tokens (user_id, token_hash, family_id, replaced_by_id, expires_at)
+    VALUES (
+        $2,
+        $3,
+        $4,
+        $1,
+        $5
+    )
+    RETURNING id, user_id, token_hash, family_id, replaced_by_id, expires_at, revoked_at, created_at
+)
+UPDATE refresh_tokens
+SET replaced_by_id = new_row.id,
+    revoked_at     = COALESCE(refresh_tokens.revoked_at, now())
+FROM new_row
+WHERE refresh_tokens.id = $1
+RETURNING new_row.id, new_row.user_id, new_row.token_hash, new_row.family_id, new_row.replaced_by_id, new_row.expires_at, new_row.revoked_at, new_row.created_at
+`
+
+type RotateRefreshTokenParams struct {
+	OldID     int64
+	UserID    int32
+	TokenHash []byte
+	FamilyID  int64
+	ExpiresAt pgtype.Timestamptz
+}
+
+type RotateRefreshTokenRow struct {
+	ID           int64
+	UserID       int32
+	TokenHash    []byte
+	FamilyID     int64
+	ReplacedByID pgtype.Int8
+	ExpiresAt    pgtype.Timestamptz
+	RevokedAt    pgtype.Timestamptz
+	CreatedAt    pgtype.Timestamptz
+}
+
+// Single CTE: insert new row tied to old via replaced_by_id, then mark
+// the old row revoked and link it back. Atomic — concurrent rotations
+// will see the second one with revoked_at NOT NULL and trigger reuse
+// detection at the service layer.
+func (q *Queries) RotateRefreshToken(ctx context.Context, arg RotateRefreshTokenParams) (RotateRefreshTokenRow, error) {
+	row := q.db.QueryRow(ctx, rotateRefreshToken,
+		arg.OldID,
+		arg.UserID,
+		arg.TokenHash,
+		arg.FamilyID,
+		arg.ExpiresAt,
+	)
+	var i RotateRefreshTokenRow
+	err := row.Scan(
+		&i.ID,
+		&i.UserID,
+		&i.TokenHash,
+		&i.FamilyID,
+		&i.ReplacedByID,
+		&i.ExpiresAt,
+		&i.RevokedAt,
+		&i.CreatedAt,
 	)
 	return i, err
 }

@@ -31,6 +31,15 @@ type stubRepo struct {
 	createFn        func(ctx context.Context, u *User) error
 	getByUsernameFn func(ctx context.Context, username string) (*User, error)
 	getByIDFn       func(ctx context.Context, id int) (*User, error)
+
+	// Refresh-token methods. Same "default error if unset" pattern as
+	// the user CRUD stubs above: any test path that hits an unstubbed
+	// refresh method fails loudly rather than silently passing.
+	createRefreshFn func(ctx context.Context, userID int, tokenHash []byte, expiresAt time.Time) (*RefreshTokenRow, error)
+	getRefreshFn    func(ctx context.Context, tokenHash []byte) (*RefreshTokenRow, error)
+	rotateFn        func(ctx context.Context, oldID int64, userID int, tokenHash []byte, familyID int64, expiresAt time.Time) (*RefreshTokenRow, error)
+	revokeFamilyFn  func(ctx context.Context, familyID int64) (int64, error)
+	revokeByIDFn    func(ctx context.Context, id int64) error
 }
 
 func (s *stubRepo) CreateUser(ctx context.Context, u *User) error {
@@ -50,6 +59,36 @@ func (s *stubRepo) GetUserByID(ctx context.Context, id int) (*User, error) {
 		return nil, errors.New("GetUserByID not stubbed")
 	}
 	return s.getByIDFn(ctx, id)
+}
+func (s *stubRepo) CreateRefreshToken(ctx context.Context, userID int, tokenHash []byte, expiresAt time.Time) (*RefreshTokenRow, error) {
+	if s.createRefreshFn == nil {
+		return nil, errors.New("CreateRefreshToken not stubbed")
+	}
+	return s.createRefreshFn(ctx, userID, tokenHash, expiresAt)
+}
+func (s *stubRepo) GetRefreshTokenByHash(ctx context.Context, tokenHash []byte) (*RefreshTokenRow, error) {
+	if s.getRefreshFn == nil {
+		return nil, errors.New("GetRefreshTokenByHash not stubbed")
+	}
+	return s.getRefreshFn(ctx, tokenHash)
+}
+func (s *stubRepo) RotateRefreshToken(ctx context.Context, oldID int64, userID int, tokenHash []byte, familyID int64, expiresAt time.Time) (*RefreshTokenRow, error) {
+	if s.rotateFn == nil {
+		return nil, errors.New("RotateRefreshToken not stubbed")
+	}
+	return s.rotateFn(ctx, oldID, userID, tokenHash, familyID, expiresAt)
+}
+func (s *stubRepo) RevokeRefreshTokenFamily(ctx context.Context, familyID int64) (int64, error) {
+	if s.revokeFamilyFn == nil {
+		return 0, errors.New("RevokeRefreshTokenFamily not stubbed")
+	}
+	return s.revokeFamilyFn(ctx, familyID)
+}
+func (s *stubRepo) RevokeRefreshTokenByID(ctx context.Context, id int64) error {
+	if s.revokeByIDFn == nil {
+		return errors.New("RevokeRefreshTokenByID not stubbed")
+	}
+	return s.revokeByIDFn(ctx, id)
 }
 
 // TestRegister_HappyPath covers the full Register pipeline: bcrypt

@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
-	"os"
 	"testing"
 	"time"
 
@@ -19,16 +18,10 @@ import (
 	"golang.org/x/crypto/bcrypt"
 )
 
-// TestMain installs the huma error override once for the whole package
-// so validation failures come back in the legacy {error, code,
-// request_id, details} envelope rather than huma's RFC 9457 shape.
-// Go allows a single TestMain per package and no other _test.go file in
-// `user` owns one, so it lives here alongside the handler tests that
-// depend on it.
-func TestMain(m *testing.M) {
-	platapi.OverrideHumaErrors()
-	os.Exit(m.Run())
-}
+// TestMain lives in repository_integration_test.go — it both installs
+// the huma error override (needed by handler tests below) and boots
+// the integration-test Postgres container (skipped under
+// SKIP_CONTAINERS=true). Go only allows one TestMain per package.
 
 // setupTestRouter builds a chi + huma router carrying the same user
 // operations as the real API. Prometheus, RequestID, Logging, CORS, and
