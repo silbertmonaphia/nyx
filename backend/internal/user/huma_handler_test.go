@@ -26,8 +26,10 @@ import (
 // setupTestRouter builds a chi + huma router carrying the same user
 // operations as the real API. Prometheus, RequestID, Logging, CORS, and
 // RateLimit are deliberately skipped — they have their own tests and
-// only add noise (and a goroutine, in RateLimit's case) here.
-func setupTestRouter(h *Handler) *chi.Mux {
+// only add noise (and a goroutine, in RateLimit's case) here. tokens
+// is threaded through so the /api/logout route can attach the JWT
+// middleware in tests the same way it does in production.
+func setupTestRouter(h *Handler, tokens auth.TokenService) *chi.Mux {
 	router := chi.NewMux()
 	hapi := humachi.New(router, huma.Config{
 		OpenAPI: &huma.OpenAPI{
@@ -37,7 +39,7 @@ func setupTestRouter(h *Handler) *chi.Mux {
 		Formats:       huma.DefaultFormats,
 		DefaultFormat: "application/json",
 	})
-	RegisterUserOpsTest(hapi, h)
+	RegisterUserOpsTest(hapi, h, tokens)
 	return router
 }
 
@@ -48,7 +50,7 @@ func newTestRouterWithRepo(repo Repository) *chi.Mux {
 	if err != nil {
 		panic(err) // test setup; never expected to fail
 	}
-	return setupTestRouter(NewHandler(NewService(repo, tokens, 15*time.Minute, 7*24*time.Hour)))
+	return setupTestRouter(NewHandler(NewService(repo, tokens, 15*time.Minute, 7*24*time.Hour)), tokens)
 }
 
 // testHash bcrypt-hashes plain at MinCost. The default cost is ~60ms
@@ -380,4 +382,238 @@ func TestLoginHandler_InternalErrorReturns500(t *testing.T) {
 	if bytes.Contains(rr.Body.Bytes(), []byte("context deadline exceeded")) {
 		t.Errorf("response leaks internal error text: %s", rr.Body.String())
 	}
+}
+
+// ---- Refresh ----
+
+// TestRefreshHandler_OK covers the happy path of /api/refresh: a
+// valid (non-expired, non-revoked) refresh token comes back as a
+// fresh AuthResponse with a new access token and a new refresh token.
+// The new refresh_token MUST differ from the supplied one — that's
+// what rotation means at the wire.
+func TestRefreshHandler_OK(t *testing.T) {
+	now := time.Now()
+
+	suppliedRaw, _, err := newRefreshToken()
+	if err != nil {
+		t.Fatalf("newRefreshToken: %v", err)
+	}
+	suppliedHash := sha256Sum(suppliedRaw)
+
+	repo := &stubRepo{
+		getRefreshFn: func(_ context.Context, hash []byte) (*RefreshTokenRow, error) {
+			if !bytes.Equal(hash, suppliedHash) {
+				t.Errorf("lookup hash mismatch: got %x, want %x", hash, suppliedHash)
+			}
+			return &RefreshTokenRow{
+				ID:        42,
+				UserID:    7,
+				FamilyID:  42,
+				ExpiresAt: now.Add(time.Hour),
+			}, nil
+		},
+		rotateFn: func(_ context.Context, _ int64, userID int, _ []byte, familyID int64, expiresAt time.Time) (*RefreshTokenRow, error) {
+			return &RefreshTokenRow{
+				ID:        100,
+				UserID:    userID,
+				FamilyID:  familyID,
+				ExpiresAt: expiresAt,
+			}, nil
+		},
+		getByIDFn: func(_ context.Context, id int) (*User, error) {
+			return &User{ID: id, Username: "alice", Email: "a@x.com"}, nil
+		},
+	}
+
+	rr := postJSON(t, newTestRouterWithRepo(repo), "/api/refresh", RefreshRequest{
+		RefreshToken: suppliedRaw,
+	})
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", rr.Code, rr.Body.String())
+	}
+	var res AuthResponse
+	if err := json.Unmarshal(rr.Body.Bytes(), &res); err != nil {
+		t.Fatalf("unmarshal AuthResponse: %v; body=%s", err, rr.Body.String())
+	}
+	if res.Token == "" {
+		t.Error("Token empty on successful refresh")
+	}
+	if res.RefreshToken == "" {
+		t.Error("RefreshToken empty on successful refresh")
+	}
+	if res.RefreshToken == suppliedRaw {
+		t.Error("RefreshToken unchanged after rotation; rotation didn't mint a new one")
+	}
+	if res.ExpiresAt.IsZero() {
+		t.Error("ExpiresAt zero on successful refresh")
+	}
+}
+
+// TestRefreshHandler_ReuseReturns401 pins the reuse path: a refresh
+// token that was already rotated surfaces as 401 with a static
+// "Refresh token revoked" message. The wire must NOT echo the
+// underlying service error.
+func TestRefreshHandler_ReuseReturns401(t *testing.T) {
+	past := time.Now().Add(-time.Hour)
+	repo := &stubRepo{
+		getRefreshFn: func(_ context.Context, _ []byte) (*RefreshTokenRow, error) {
+			return &RefreshTokenRow{
+				ID:        42,
+				UserID:    7,
+				FamilyID:  42,
+				ExpiresAt: past,
+				RevokedAt: &past,
+			}, nil
+		},
+	}
+	raw, _, _ := newRefreshToken()
+	rr := postJSON(t, newTestRouterWithRepo(repo), "/api/refresh", RefreshRequest{RefreshToken: raw})
+
+	env := decodeEnvelope(t, rr, http.StatusUnauthorized)
+	if env.Message != "Refresh token revoked" {
+		t.Errorf("envelope.error = %q, want %q", env.Message, "Refresh token revoked")
+	}
+}
+
+// TestRefreshHandler_ExpiredReturns401 covers the timeout path: a
+// non-revoked refresh token whose expires_at is in the past. The
+// service layer distinguishes this from reuse (no family revoke),
+// but the handler still maps it to 401 with a distinct static
+// message.
+func TestRefreshHandler_ExpiredReturns401(t *testing.T) {
+	past := time.Now().Add(-time.Hour)
+	repo := &stubRepo{
+		getRefreshFn: func(_ context.Context, _ []byte) (*RefreshTokenRow, error) {
+			return &RefreshTokenRow{
+				ID:        42,
+				UserID:    7,
+				FamilyID:  42,
+				ExpiresAt: past,
+				// RevokedAt intentionally nil — purely expired.
+			}, nil
+		},
+	}
+	raw, _, _ := newRefreshToken()
+	rr := postJSON(t, newTestRouterWithRepo(repo), "/api/refresh", RefreshRequest{RefreshToken: raw})
+
+	env := decodeEnvelope(t, rr, http.StatusUnauthorized)
+	if env.Message != "Refresh token expired" {
+		t.Errorf("envelope.error = %q, want %q", env.Message, "Refresh token expired")
+	}
+}
+
+// TestRefreshHandler_MissingFieldReturns400 — body omits refresh_token
+// entirely. huma's required:"true" tag rejects it before the service
+// runs, so no RefreshTokenNotFound lookup occurs.
+func TestRefreshHandler_MissingFieldReturns400(t *testing.T) {
+	repo := &stubRepo{
+		getRefreshFn: func(_ context.Context, _ []byte) (*RefreshTokenRow, error) {
+			t.Error("repo.GetRefreshTokenByHash must not be reached when validation fails")
+			return nil, nil
+		},
+	}
+	rr := postJSON(t, newTestRouterWithRepo(repo), "/api/refresh", map[string]any{})
+
+	decodeEnvelope(t, rr, http.StatusBadRequest)
+}
+
+// ---- Logout ----
+
+// TestLogoutHandler_NoContent covers the auth-required logout happy
+// path. The caller must present a valid access token (validated by
+// the per-operation middleware); the body's refresh_token is what
+// gets revoked. Returns 204 with empty body.
+func TestLogoutHandler_NoContent(t *testing.T) {
+	tokens, err := auth.NewTokenService([]byte(auth.TestSecret), 15*time.Minute)
+	if err != nil {
+		t.Fatalf("auth.NewTokenService: %v", err)
+	}
+	accessToken, err := tokens.GenerateToken(7, "alice")
+	if err != nil {
+		t.Fatalf("GenerateToken: %v", err)
+	}
+
+	now := time.Now()
+	var revokedFamily int64
+	repo := &stubRepo{
+		getRefreshFn: func(_ context.Context, _ []byte) (*RefreshTokenRow, error) {
+			return &RefreshTokenRow{ID: 1, UserID: 7, FamilyID: 99, ExpiresAt: now.Add(time.Hour)}, nil
+		},
+		revokeFamilyFn: func(_ context.Context, familyID int64) (int64, error) {
+			revokedFamily = familyID
+			return 1, nil
+		},
+	}
+
+	raw, _, _ := newRefreshToken()
+	body, _ := json.Marshal(LogoutRequest{RefreshToken: raw})
+	req := httptest.NewRequest(http.MethodPost, "/api/logout", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+accessToken)
+	rr := httptest.NewRecorder()
+	newTestRouterWithRepo(repo).ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusNoContent {
+		t.Fatalf("status = %d, want 204; body=%s", rr.Code, rr.Body.String())
+	}
+	if rr.Body.Len() != 0 {
+		t.Errorf("204 body should be empty, got %q", rr.Body.String())
+	}
+	if revokedFamily != 99 {
+		t.Errorf("expected family 99 to be revoked, got %d", revokedFamily)
+	}
+}
+
+// TestLogoutHandler_RequiresAuth confirms /api/logout is gated by the
+// JWT middleware: a request with no Authorization header returns 401
+// without ever reaching the handler.
+func TestLogoutHandler_RequiresAuth(t *testing.T) {
+	repo := &stubRepo{
+		getRefreshFn: func(_ context.Context, _ []byte) (*RefreshTokenRow, error) {
+			t.Error("repo.GetRefreshTokenByHash must not be reached when auth fails")
+			return nil, nil
+		},
+	}
+	raw, _, _ := newRefreshToken()
+	rr := postJSON(t, newTestRouterWithRepo(repo), "/api/logout", LogoutRequest{RefreshToken: raw})
+
+	env := decodeEnvelope(t, rr, http.StatusUnauthorized)
+	if env.Message != "Authorization header is required" {
+		t.Errorf("envelope.error = %q, want %q", env.Message, "Authorization header is required")
+	}
+}
+
+// TestLogoutHandler_MissingFieldReturns400 — body omits refresh_token.
+// huma's required:"true" tag rejects before the auth-gated handler
+// runs (validation order: huma body parse, then middleware, then
+// handler).
+func TestLogoutHandler_MissingFieldReturns400(t *testing.T) {
+	repo := &stubRepo{
+		getRefreshFn: func(_ context.Context, _ []byte) (*RefreshTokenRow, error) {
+			t.Error("repo.GetRefreshTokenByHash must not be reached when validation fails")
+			return nil, nil
+		},
+		revokeFamilyFn: func(_ context.Context, _ int64) (int64, error) {
+			t.Error("RevokeRefreshTokenFamily must not be reached when validation fails")
+			return 0, nil
+		},
+	}
+	tokens, err := auth.NewTokenService([]byte(auth.TestSecret), 15*time.Minute)
+	if err != nil {
+		t.Fatalf("auth.NewTokenService: %v", err)
+	}
+	accessToken, err := tokens.GenerateToken(7, "alice")
+	if err != nil {
+		t.Fatalf("GenerateToken: %v", err)
+	}
+
+	body, _ := json.Marshal(map[string]any{})
+	req := httptest.NewRequest(http.MethodPost, "/api/logout", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+accessToken)
+	rr := httptest.NewRecorder()
+	newTestRouterWithRepo(repo).ServeHTTP(rr, req)
+
+	decodeEnvelope(t, rr, http.StatusBadRequest)
 }

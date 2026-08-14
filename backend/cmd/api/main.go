@@ -142,7 +142,7 @@ func main() {
 	humaAPI := humachi.New(router, api.HumaConfig())
 
 	movie.RegisterMovieOps(humaAPI, movieHandler, tokens)
-	user.RegisterUserOps(humaAPI, userHandler)
+	user.RegisterUserOps(humaAPI, userHandler, tokens)
 
 	port := ":" + cfg.Port
 	server := &http.Server{

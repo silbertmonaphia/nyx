@@ -83,7 +83,7 @@ func generateSpec() ([]byte, error) {
 	// nil services: registration only reads struct tags, the handler
 	// funcs are never called.
 	movie.RegisterMovieOps(humaAPI, movie.NewHandler(nil), tokens)
-	user.RegisterUserOps(humaAPI, user.NewHandler(nil))
+	user.RegisterUserOps(humaAPI, user.NewHandler(nil), tokens)
 
 	b, err := json.MarshalIndent(humaAPI.OpenAPI(), "", "  ")
 	if err != nil {
