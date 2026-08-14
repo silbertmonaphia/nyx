@@ -44,7 +44,7 @@ func setupTestRouter(h *Handler) *chi.Mux {
 // newTestRouterWithRepo is the common three-line arrangement of every
 // test below: stub repo → real service → handler → router.
 func newTestRouterWithRepo(repo Repository) *chi.Mux {
-	tokens, err := auth.NewTokenService([]byte(auth.TestSecret))
+	tokens, err := auth.NewTokenService([]byte(auth.TestSecret), 15*time.Minute)
 	if err != nil {
 		panic(err) // test setup; never expected to fail
 	}

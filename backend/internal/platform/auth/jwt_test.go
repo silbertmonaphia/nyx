@@ -8,12 +8,13 @@ import (
 	"github.com/golang-jwt/jwt/v5"
 )
 
-// newTestTokenService builds a per-test TokenService. The service
-// captures its own copy of the secret, so no cleanup is required —
-// nothing process-wide is mutated.
+// newTestTokenService builds a per-test TokenService with a 15-minute
+// access TTL (mirrors JWT_ACCESS_TTL's production default). The
+// service captures its own copy of the secret, so no cleanup is
+// required — nothing process-wide is mutated.
 func newTestTokenService(t *testing.T) TokenService {
 	t.Helper()
-	tokens, err := NewTokenService([]byte(TestSecret))
+	tokens, err := NewTokenService([]byte(TestSecret), 15*time.Minute)
 	if err != nil {
 		t.Fatalf("NewTokenService: %v", err)
 	}
@@ -37,14 +38,20 @@ func TestMinSecretBytesIs32(t *testing.T) {
 
 func TestNewTokenService_RejectsDefaultAndShort(t *testing.T) {
 	// defaultSecret is now unexported. Use the literal directly — it's a build-time constant.
-	if _, err := NewTokenService([]byte("your-default-secret-key-change-it-in-prod")); err == nil {
+	if _, err := NewTokenService([]byte("your-default-secret-key-change-it-in-prod"), 15*time.Minute); err == nil {
 		t.Error("default placeholder should be rejected")
 	}
-	if _, err := NewTokenService([]byte("short")); err == nil {
+	if _, err := NewTokenService([]byte("short"), 15*time.Minute); err == nil {
 		t.Error("short key should be rejected")
 	}
-	if _, err := NewTokenService([]byte(TestSecret)); err != nil {
-		t.Errorf("32-byte key rejected: %v", err)
+	if _, err := NewTokenService([]byte(TestSecret), 0); err == nil {
+		t.Error("zero access TTL should be rejected")
+	}
+	if _, err := NewTokenService([]byte(TestSecret), -time.Minute); err == nil {
+		t.Error("negative access TTL should be rejected")
+	}
+	if _, err := NewTokenService([]byte(TestSecret), 15*time.Minute); err != nil {
+		t.Errorf("32-byte key with positive TTL rejected: %v", err)
 	}
 }
 
@@ -154,5 +161,67 @@ func TestValidateToken_Malformed(t *testing.T) {
 	_, err := tokens.ValidateToken("not-a-jwt")
 	if !errors.Is(err, ErrInvalidToken) {
 		t.Errorf("malformed token: err = %v, want ErrInvalidToken", err)
+	}
+}
+
+// TestJWT_TypeClaimRequired is the refresh-token defense-in-depth:
+// a JWT minted with Type != "access" must be rejected by
+// ValidateToken, even when the signature is otherwise valid. Refresh
+// tokens are opaque and never minted as JWTs today, but this guard
+// stops a future code path that accidentally hands out a refresh
+// JWT from being usable as a Bearer credential.
+func TestJWT_TypeClaimRequired(t *testing.T) {
+	// Sign a token with Type: "refresh" directly, bypassing the
+	// TokenService's GenerateToken (which always sets Type: "access").
+	claims := Claims{
+		UserID:   1,
+		Username: "alice",
+		Type:     "refresh",
+		RegisteredClaims: jwt.RegisteredClaims{
+			ExpiresAt: jwt.NewNumericDate(time.Now().Add(time.Hour)),
+		},
+	}
+	tok, err := jwt.NewWithClaims(jwt.SigningMethodHS256, claims).SignedString([]byte(TestSecret))
+	if err != nil {
+		t.Fatalf("sign: %v", err)
+	}
+
+	tokens := newTestTokenService(t)
+	_, err = tokens.ValidateToken(tok)
+	if !errors.Is(err, ErrInvalidToken) {
+		t.Errorf("refresh-typed token: err = %v, want ErrInvalidToken", err)
+	}
+}
+
+// TestJWT_GenerateSetsAccessTTL pins the configured TTL on
+// GenerateToken's output. We allow a small skew to absorb the
+// sub-second difference between time.Now() in GenerateToken and the
+// test's readback; the assertion only needs to confirm the TTL is
+// applied (not the hard-coded 24h).
+func TestJWT_GenerateSetsAccessTTL(t *testing.T) {
+	tokens, err := NewTokenService([]byte(TestSecret), 15*time.Minute)
+	if err != nil {
+		t.Fatalf("NewTokenService: %v", err)
+	}
+	tok, err := tokens.GenerateToken(1, "alice")
+	if err != nil {
+		t.Fatalf("GenerateToken: %v", err)
+	}
+	claims, err := tokens.ValidateToken(tok)
+	if err != nil {
+		t.Fatalf("ValidateToken: %v", err)
+	}
+	if claims.Type != "access" {
+		t.Errorf("claims.Type = %q, want \"access\"", claims.Type)
+	}
+	if claims.ExpiresAt == nil {
+		t.Fatal("claims.ExpiresAt is nil")
+	}
+	// 15m ± 30s skew (test runtime between generate and validate).
+	want := 15 * time.Minute
+	got := time.Until(claims.ExpiresAt.Time)
+	diff := got - want
+	if diff < -30*time.Second || diff > 30*time.Second {
+		t.Errorf("ExpiresAt in %v, want %v (±30s)", got, want)
 	}
 }

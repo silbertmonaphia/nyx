@@ -12,6 +12,8 @@ import (
 type Config struct {
 	DBURL          string `mapstructure:"DB_URL"`
 	JWTSecret      string `mapstructure:"JWT_SECRET"`
+	JWTAccessTTL   string `mapstructure:"JWT_ACCESS_TTL"`
+	JWTRefreshTTL  string `mapstructure:"JWT_REFRESH_TTL"`
 	Port           string `mapstructure:"PORT"`
 	MigrationPath  string `mapstructure:"MIGRATION_PATH"`
 
@@ -38,6 +40,13 @@ func Load() (*Config, error) {
 	viper.SetDefault("MIGRATION_PATH", "file://migrations")
 	viper.SetDefault("JWT_SECRET", "your-default-secret-key-change-it-in-prod")
 
+	// JWT TTLs. Access is intentionally short (15m default) so a
+	// stolen access token is replaced within one rotation cycle of
+	// any active refresh token; refresh is the long-lived bearer
+	// (168h = 7d default).
+	viper.SetDefault("JWT_ACCESS_TTL", "15m")
+	viper.SetDefault("JWT_REFRESH_TTL", "168h")
+
 	// Database Connection Pool Defaults
 	viper.SetDefault("DB_MAX_OPEN_CONNS", 25)
 	viper.SetDefault("DB_MAX_IDLE_CONNS", 10)
@@ -62,7 +71,8 @@ func Load() (*Config, error) {
 	// binary, so without BindEnv the env vars are silently ignored and
 	// DB_URL comes back empty.
 	for _, key := range []string{
-		"DB_URL", "JWT_SECRET", "PORT", "MIGRATION_PATH",
+		"DB_URL", "JWT_SECRET", "JWT_ACCESS_TTL", "JWT_REFRESH_TTL",
+		"PORT", "MIGRATION_PATH",
 		"DB_MAX_OPEN_CONNS", "DB_MAX_IDLE_CONNS",
 		"DB_CONN_MAX_LIFETIME", "DB_CONN_MAX_IDLE_TIME",
 		"REDIS_URL", "REDIS_ENABLED", "CACHE_TTL",
@@ -96,6 +106,27 @@ func Load() (*Config, error) {
 	}
 	if _, err := time.ParseDuration(cfg.CacheTTL); err != nil {
 		return nil, fmt.Errorf("invalid CACHE_TTL: %w", err)
+	}
+
+	accessDur, err := time.ParseDuration(cfg.JWTAccessTTL)
+	if err != nil {
+		return nil, fmt.Errorf("invalid JWT_ACCESS_TTL: %w", err)
+	}
+	if accessDur <= 0 {
+		return nil, fmt.Errorf("JWT_ACCESS_TTL must be positive, got %v", accessDur)
+	}
+	refreshDur, err := time.ParseDuration(cfg.JWTRefreshTTL)
+	if err != nil {
+		return nil, fmt.Errorf("invalid JWT_REFRESH_TTL: %w", err)
+	}
+	if refreshDur <= 0 {
+		return nil, fmt.Errorf("JWT_REFRESH_TTL must be positive, got %v", refreshDur)
+	}
+	if refreshDur <= accessDur {
+		return nil, fmt.Errorf(
+			"JWT_REFRESH_TTL (%v) must be greater than JWT_ACCESS_TTL (%v)",
+			refreshDur, accessDur,
+		)
 	}
 
 	// Cross-field validation: enabling the cache requires a URL to connect to.

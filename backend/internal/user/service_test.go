@@ -12,10 +12,11 @@ import (
 )
 
 // newTestTokens builds a per-test TokenService so each test signs and
-// validates against its own captured key.
+// validates against its own captured key. The TTL is hard-coded —
+// service tests don't care about TTL, only the JWT round-trip.
 func newTestTokens(t *testing.T) auth.TokenService {
 	t.Helper()
-	tokens, err := auth.NewTokenService([]byte(auth.TestSecret))
+	tokens, err := auth.NewTokenService([]byte(auth.TestSecret), 15*time.Minute)
 	if err != nil {
 		t.Fatalf("auth.NewTokenService: %v", err)
 	}

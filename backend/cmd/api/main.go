@@ -44,8 +44,18 @@ func main() {
 	// cfg.JWTSecret is non-default and at least MinSecretBytes long;
 	// NewTokenService repeats the check so a future config drift can't
 	// sign tokens with a weak key. Fails closed at startup, not silently
-	// in prod.
-	tokens, err := auth.NewTokenService([]byte(cfg.JWTSecret))
+	// in prod. accessTTL is captured here so the configured TTL
+	// (JWT_ACCESS_TTL, default 15m) is the only lifetime the service
+	// ever mints with.
+	accessTTL, err := time.ParseDuration(cfg.JWTAccessTTL)
+	if err != nil {
+		log.Fatal().Err(err).Msg("invalid JWT_ACCESS_TTL")
+	}
+	refreshTTL, err := time.ParseDuration(cfg.JWTRefreshTTL)
+	if err != nil {
+		log.Fatal().Err(err).Msg("invalid JWT_REFRESH_TTL")
+	}
+	tokens, err := auth.NewTokenService([]byte(cfg.JWTSecret), accessTTL)
 	if err != nil {
 		log.Fatal().Err(err).Msg("invalid JWT secret")
 	}
@@ -90,11 +100,9 @@ func main() {
 	movieService := movie.NewService(movieRepo, cacheClient, cacheTTL)
 	movieHandler := movie.NewHandler(movieService)
 
-	// Initialize User domain. accessTTL / refreshTTL are hard-coded
-	// for now (commit 2 of the JWT refresh feature); commit 3 wires
-	// them through viper config (JWT_ACCESS_TTL / JWT_REFRESH_TTL).
-	accessTTL := 15 * time.Minute
-	refreshTTL := 168 * time.Hour
+	// Initialize User domain. accessTTL / refreshTTL come from viper
+	// (JWT_ACCESS_TTL / JWT_REFRESH_TTL); config.Load has already
+	// validated them as positive durations and refresh > access.
 	userRepo := user.NewRepository(userdb.New(db))
 	userService := user.NewService(userRepo, tokens, accessTTL, refreshTTL)
 	userHandler := user.NewHandler(userService)

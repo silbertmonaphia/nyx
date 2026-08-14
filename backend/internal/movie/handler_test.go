@@ -78,10 +78,11 @@ func newMockRepo(t *testing.T) (Repository, pgxmock.PgxPoolIface) {
 }
 
 // newTestTokens builds a per-test TokenService. The service holds its
-// own copy of the secret, so nothing process-wide is mutated.
+// own copy of the secret, so nothing process-wide is mutated. The TTL
+// is irrelevant to handler tests — they only need a valid JWT.
 func newTestTokens(t *testing.T) auth.TokenService {
 	t.Helper()
-	tokens, err := auth.NewTokenService([]byte(auth.TestSecret))
+	tokens, err := auth.NewTokenService([]byte(auth.TestSecret), 15*time.Minute)
 	if err != nil {
 		t.Fatalf("auth.NewTokenService: %v", err)
 	}
