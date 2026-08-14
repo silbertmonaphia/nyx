@@ -80,6 +80,14 @@ func (s *service) mintRefreshToken(ctx context.Context, userID int) (string, tim
 	return raw, expires, nil
 }
 
+// accessExpires is the wall-clock time the freshly-minted access JWT
+// will expire. It is stamped on AuthResponse so clients can
+// pre-emptively refresh before a 401 round-trip (the WWW-Authenticate
+// header is the reactive trigger; this is the proactive one).
+func (s *service) accessExpires() time.Time {
+	return time.Now().Add(s.accessTTL)
+}
+
 func (s *service) Register(ctx context.Context, req RegisterRequest) (*AuthResponse, error) {
 	hashedPassword, err := bcrypt.GenerateFromPassword([]byte(req.Password), bcrypt.DefaultCost)
 	if err != nil {
@@ -101,7 +109,7 @@ func (s *service) Register(ctx context.Context, req RegisterRequest) (*AuthRespo
 		return nil, err
 	}
 
-	refresh, expiresAt, err := s.mintRefreshToken(ctx, u.ID)
+	refresh, _, err := s.mintRefreshToken(ctx, u.ID)
 	if err != nil {
 		return nil, err
 	}
@@ -109,7 +117,7 @@ func (s *service) Register(ctx context.Context, req RegisterRequest) (*AuthRespo
 	return &AuthResponse{
 		Token:        token,
 		RefreshToken: refresh,
-		ExpiresAt:    expiresAt,
+		ExpiresAt:    s.accessExpires(),
 		User:         *u,
 	}, nil
 }
@@ -132,7 +140,7 @@ func (s *service) Login(ctx context.Context, req LoginRequest) (*AuthResponse, e
 		return nil, err
 	}
 
-	refresh, expiresAt, err := s.mintRefreshToken(ctx, u.ID)
+	refresh, _, err := s.mintRefreshToken(ctx, u.ID)
 	if err != nil {
 		return nil, err
 	}
@@ -140,7 +148,7 @@ func (s *service) Login(ctx context.Context, req LoginRequest) (*AuthResponse, e
 	return &AuthResponse{
 		Token:        token,
 		RefreshToken: refresh,
-		ExpiresAt:    expiresAt,
+		ExpiresAt:    s.accessExpires(),
 		User:         *u,
 	}, nil
 }
@@ -209,7 +217,7 @@ func (s *service) Refresh(ctx context.Context, req RefreshRequest) (*AuthRespons
 	return &AuthResponse{
 		Token:        accessToken,
 		RefreshToken: newRaw,
-		ExpiresAt:    newExpires,
+		ExpiresAt:    s.accessExpires(),
 		User:         *user,
 	}, nil
 }

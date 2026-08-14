@@ -110,10 +110,6 @@
         ],
         "type": "object"
       },
-      "LogoutOutputBody": {
-        "additionalProperties": false,
-        "type": "object"
-      },
       "LogoutRequest": {
         "additionalProperties": false,
         "properties": {
@@ -397,15 +393,8 @@
           "required": true
         },
         "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/LogoutOutputBody"
-                }
-              }
-            },
-            "description": "OK"
+          "204": {
+            "description": "No Content"
           },
           "default": {
             "content": {

@@ -121,9 +121,13 @@ type logoutInput struct {
 	Body LogoutRequest
 }
 
+// logoutOutput intentionally has no Body field. With only the Status
+// field present, huma generates a 204 response with no content
+// schema in the OpenAPI spec (instead of the 200 + body shape the
+// previous version emitted, which lied to consumers). Mirrors
+// deleteMovieOutput in internal/movie/huma_handler.go.
 type logoutOutput struct {
-	Status int  `status:"204"`
-	Body   struct{} `body:""`
+	Status int `status:"204"`
 }
 
 // ---- Handler functions ----
