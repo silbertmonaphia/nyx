@@ -44,6 +44,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/logout": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Logout a user
+         * @description Revoke the supplied refresh token's entire family. Requires a valid access token in the Authorization header. Returns 204.
+         */
+        post: operations["logout"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/movies": {
         parameters: {
             query?: never;
@@ -92,6 +112,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/refresh": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Refresh access token
+         * @description Exchange a valid refresh token for a fresh access + refresh pair. Returns 401 on invalid / expired / reused tokens; reuse triggers family-wide revocation.
+         */
+        post: operations["refresh"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/register": {
         parameters: {
             query?: never;
@@ -117,6 +157,9 @@ export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
         AuthResponse: {
+            /** Format: date-time */
+            expires_at?: string;
+            refresh_token?: string;
             token: string;
             user: components["schemas"]["User"];
         };
@@ -146,6 +189,10 @@ export interface components {
         LoginRequest: {
             password: string;
             username: string;
+        };
+        LogoutOutputBody: Record<string, never>;
+        LogoutRequest: {
+            refresh_token: string;
         };
         Movie: {
             /** Format: date-time */
@@ -180,6 +227,9 @@ export interface components {
              * @example 42
              */
             total: number;
+        };
+        RefreshRequest: {
+            refresh_token: string;
         };
         RegisterRequest: {
             /** Format: email */
@@ -257,6 +307,39 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["AuthResponse"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    logout: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["LogoutRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LogoutOutputBody"];
                 };
             };
             /** @description Error */
@@ -391,6 +474,39 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    refresh: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RefreshRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AuthResponse"];
+                };
             };
             /** @description Error */
             default: {
