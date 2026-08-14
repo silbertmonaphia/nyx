@@ -19,18 +19,25 @@ FROM users
 WHERE id = @id AND deleted_at IS NULL;
 
 -- name: CreateRefreshToken :one
--- Atomic self-stamping: insert with family_id=0 placeholder, then update
--- family_id to the inserted row's id. Returns the full row.
+-- Atomic self-stamping: insert with family_id=0 placeholder, then
+-- update family_id to the inserted row's id, then SELECT out the
+-- updated row. The two-CTE shape (rather than UPDATE … RETURNING
+-- directly off the inserted CTE) avoids a same-table update snapshot
+-- issue that left the outer RETURNING with zero rows under real
+-- Postgres — the unit tests passed because they stubbed the query.
 WITH inserted AS (
     INSERT INTO refresh_tokens (user_id, token_hash, family_id, expires_at)
     VALUES (@user_id, @token_hash, 0, @expires_at)
-    RETURNING *
+    RETURNING id
+),
+updated AS (
+    UPDATE refresh_tokens
+    SET family_id = inserted.id
+    FROM inserted
+    WHERE refresh_tokens.id = inserted.id
+    RETURNING refresh_tokens.*
 )
-UPDATE refresh_tokens
-SET family_id = inserted.id
-FROM inserted
-WHERE refresh_tokens.id = inserted.id
-RETURNING refresh_tokens.*;
+SELECT * FROM updated;
 
 -- name: GetRefreshTokenByHash :one
 SELECT id, user_id, token_hash, family_id, replaced_by_id, expires_at, revoked_at, created_at

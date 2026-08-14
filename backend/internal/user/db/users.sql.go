@@ -15,13 +15,16 @@ const createRefreshToken = `-- name: CreateRefreshToken :one
 WITH inserted AS (
     INSERT INTO refresh_tokens (user_id, token_hash, family_id, expires_at)
     VALUES ($1, $2, 0, $3)
-    RETURNING id, user_id, token_hash, family_id, replaced_by_id, expires_at, revoked_at, created_at
+    RETURNING id
+),
+updated AS (
+    UPDATE refresh_tokens
+    SET family_id = inserted.id
+    FROM inserted
+    WHERE refresh_tokens.id = inserted.id
+    RETURNING refresh_tokens.id, refresh_tokens.user_id, refresh_tokens.token_hash, refresh_tokens.family_id, refresh_tokens.replaced_by_id, refresh_tokens.expires_at, refresh_tokens.revoked_at, refresh_tokens.created_at
 )
-UPDATE refresh_tokens
-SET family_id = inserted.id
-FROM inserted
-WHERE refresh_tokens.id = inserted.id
-RETURNING refresh_tokens.id, refresh_tokens.user_id, refresh_tokens.token_hash, refresh_tokens.family_id, refresh_tokens.replaced_by_id, refresh_tokens.expires_at, refresh_tokens.revoked_at, refresh_tokens.created_at
+SELECT id, user_id, token_hash, family_id, replaced_by_id, expires_at, revoked_at, created_at FROM updated
 `
 
 type CreateRefreshTokenParams struct {
@@ -30,11 +33,26 @@ type CreateRefreshTokenParams struct {
 	ExpiresAt pgtype.Timestamptz
 }
 
-// Atomic self-stamping: insert with family_id=0 placeholder, then update
-// family_id to the inserted row's id. Returns the full row.
-func (q *Queries) CreateRefreshToken(ctx context.Context, arg CreateRefreshTokenParams) (RefreshToken, error) {
+type CreateRefreshTokenRow struct {
+	ID           int64
+	UserID       int32
+	TokenHash    []byte
+	FamilyID     int64
+	ReplacedByID pgtype.Int8
+	ExpiresAt    pgtype.Timestamptz
+	RevokedAt    pgtype.Timestamptz
+	CreatedAt    pgtype.Timestamptz
+}
+
+// Atomic self-stamping: insert with family_id=0 placeholder, then
+// update family_id to the inserted row's id, then SELECT out the
+// updated row. The two-CTE shape (rather than UPDATE … RETURNING
+// directly off the inserted CTE) avoids a same-table update snapshot
+// issue that left the outer RETURNING with zero rows under real
+// Postgres — the unit tests passed because they stubbed the query.
+func (q *Queries) CreateRefreshToken(ctx context.Context, arg CreateRefreshTokenParams) (CreateRefreshTokenRow, error) {
 	row := q.db.QueryRow(ctx, createRefreshToken, arg.UserID, arg.TokenHash, arg.ExpiresAt)
-	var i RefreshToken
+	var i CreateRefreshTokenRow
 	err := row.Scan(
 		&i.ID,
 		&i.UserID,

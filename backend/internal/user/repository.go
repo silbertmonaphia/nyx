@@ -33,8 +33,11 @@ type Querier interface {
 
 	// Refresh-token queries — see backend/queries/users.sql for the
 	// SQL bodies. Method names mirror the @name annotations verbatim
-	// so a service-layer mock can stub each one by name.
-	CreateRefreshToken(ctx context.Context, arg db.CreateRefreshTokenParams) (db.RefreshToken, error)
+	// so a service-layer mock can stub each one by name. The
+	// CTE-shaped queries (CreateRefreshToken, RotateRefreshToken) get
+	// their own generated row types; GetRefreshTokenByHash queries the
+	// table directly so it gets db.RefreshToken.
+	CreateRefreshToken(ctx context.Context, arg db.CreateRefreshTokenParams) (db.CreateRefreshTokenRow, error)
 	GetRefreshTokenByHash(ctx context.Context, tokenHash []byte) (db.RefreshToken, error)
 	RotateRefreshToken(ctx context.Context, arg db.RotateRefreshTokenParams) (db.RotateRefreshTokenRow, error)
 	RevokeRefreshTokenFamily(ctx context.Context, familyID int64) (int64, error)
@@ -175,7 +178,7 @@ func (r *sqlRepository) CreateRefreshToken(ctx context.Context, userID int, toke
 	if err != nil {
 		return nil, err
 	}
-	out := toRefreshTokenRow(row)
+	out := toRefreshTokenRowFromCreate(row)
 	return &out, nil
 }
 
@@ -237,10 +240,35 @@ func toRefreshTokenRow(d db.RefreshToken) RefreshTokenRow {
 	return out
 }
 
-// toRefreshTokenRowFromRotation is the same projection but operates on
-// the sqlc-generated RotateRefreshTokenRow, which has identical field
-// shape to db.RefreshToken. Kept as a separate function so future
-// schema divergence (e.g. a different return shape) is a one-line fix.
+// toRefreshTokenRowFromCreate is the projection for the CTE-shaped
+// CreateRefreshTokenRow that CreateRefreshToken returns. Structurally
+// identical to db.RefreshToken (same columns, same pgtype fields) —
+// kept as a separate function so future schema divergence is a
+// one-line fix.
+func toRefreshTokenRowFromCreate(d db.CreateRefreshTokenRow) RefreshTokenRow {
+	out := RefreshTokenRow{
+		ID:        d.ID,
+		UserID:    int(d.UserID),
+		FamilyID:  d.FamilyID,
+		ExpiresAt: d.ExpiresAt.Time,
+		CreatedAt: d.CreatedAt.Time,
+	}
+	if d.ReplacedByID.Valid {
+		v := d.ReplacedByID.Int64
+		out.ReplacedByID = &v
+	}
+	if d.RevokedAt.Valid {
+		t := d.RevokedAt.Time
+		out.RevokedAt = &t
+	}
+	return out
+}
+
+// toRefreshTokenRowFromRotation is the projection for the CTE-shaped
+// RotateRefreshTokenRow that RotateRefreshToken returns. Structurally
+// identical to db.RefreshToken and to CreateRefreshTokenRow — kept
+// as a separate function so future schema divergence is a one-line
+// fix.
 func toRefreshTokenRowFromRotation(d db.RotateRefreshTokenRow) RefreshTokenRow {
 	out := RefreshTokenRow{
 		ID:        d.ID,

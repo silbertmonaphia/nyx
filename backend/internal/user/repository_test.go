@@ -25,7 +25,7 @@ type stubQuerier struct {
 	insertErr   error
 	insertCalls int
 
-	createRefreshResp  db.RefreshToken
+	createRefreshResp  db.CreateRefreshTokenRow
 	createRefreshErr   error
 	getRefreshResp     db.RefreshToken
 	getRefreshErr      error
@@ -47,7 +47,7 @@ func (s *stubQuerier) GetUserByUsername(context.Context, string) (db.User, error
 func (s *stubQuerier) GetUserByID(context.Context, int32) (db.User, error) {
 	return db.User{}, errors.New("GetUserByID: not implemented in stub")
 }
-func (s *stubQuerier) CreateRefreshToken(_ context.Context, _ db.CreateRefreshTokenParams) (db.RefreshToken, error) {
+func (s *stubQuerier) CreateRefreshToken(_ context.Context, _ db.CreateRefreshTokenParams) (db.CreateRefreshTokenRow, error) {
 	return s.createRefreshResp, s.createRefreshErr
 }
 func (s *stubQuerier) GetRefreshTokenByHash(_ context.Context, _ []byte) (db.RefreshToken, error) {
@@ -133,7 +133,7 @@ func TestCreateUser_HappyPath(t *testing.T) {
 func TestCreateRefreshToken_SetsFamilyToSelfID(t *testing.T) {
 	now := time.Now()
 	stub := &stubQuerier{
-		createRefreshResp: db.RefreshToken{
+		createRefreshResp: db.CreateRefreshTokenRow{
 			ID:        99,
 			UserID:    7,
 			TokenHash: []byte("hash"),
