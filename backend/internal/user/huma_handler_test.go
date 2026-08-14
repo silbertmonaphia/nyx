@@ -48,7 +48,7 @@ func newTestRouterWithRepo(repo Repository) *chi.Mux {
 	if err != nil {
 		panic(err) // test setup; never expected to fail
 	}
-	return setupTestRouter(NewHandler(NewService(repo, tokens)))
+	return setupTestRouter(NewHandler(NewService(repo, tokens, 15*time.Minute, 7*24*time.Hour)))
 }
 
 // testHash bcrypt-hashes plain at MinCost. The default cost is ~60ms

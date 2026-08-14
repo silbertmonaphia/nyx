@@ -90,9 +90,13 @@ func main() {
 	movieService := movie.NewService(movieRepo, cacheClient, cacheTTL)
 	movieHandler := movie.NewHandler(movieService)
 
-	// Initialize User domain
+	// Initialize User domain. accessTTL / refreshTTL are hard-coded
+	// for now (commit 2 of the JWT refresh feature); commit 3 wires
+	// them through viper config (JWT_ACCESS_TTL / JWT_REFRESH_TTL).
+	accessTTL := 15 * time.Minute
+	refreshTTL := 168 * time.Hour
 	userRepo := user.NewRepository(userdb.New(db))
-	userService := user.NewService(userRepo, tokens)
+	userService := user.NewService(userRepo, tokens, accessTTL, refreshTTL)
 	userHandler := user.NewHandler(userService)
 
 	// Build chi router. Middleware order (outermost first):
