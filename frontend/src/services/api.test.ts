@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest';
 import axios from 'axios';
 import api from './api';
 import { useAuthStore } from '../store/authStore';
@@ -23,24 +23,55 @@ const mockedUiStore = useUiStore as unknown as {
  * directly — that's exactly the pattern axios's own interceptor chain
  * uses internally.
  */
-function getResponseErrorHandler(): (error: unknown) => Promise<never> {
-  const handlers = (api.interceptors.response as unknown as { handlers: Array<{ rejected: (error: unknown) => Promise<never> }> }).handlers;
+function getResponseErrorHandler(): (error: unknown) => Promise<unknown> {
+  const handlers = (api.interceptors.response as unknown as { handlers: Array<{ rejected: (error: unknown) => Promise<unknown> }> }).handlers;
   expect(handlers.length).toBeGreaterThan(0);
   return handlers[0].rejected;
+}
+
+/**
+ * Construct a 401-shaped axios error with the given www-authenticate
+ * challenge (or `undefined` for a header-less response).
+ */
+function make401(opts: { wwwAuthenticate?: string; retried?: boolean; skipAuthRefresh?: boolean } = {}) {
+  const headers: Record<string, string> = {};
+  if (opts.wwwAuthenticate !== undefined) {
+    headers['www-authenticate'] = opts.wwwAuthenticate;
+  }
+  const config: Record<string, unknown> = {};
+  if (opts.retried) config._retried = true;
+  if (opts.skipAuthRefresh) config.skipAuthRefresh = true;
+
+  const error = Object.assign(new Error('Request failed'), {
+    response: {
+      status: 401,
+      data: {},
+      headers,
+    },
+    config,
+  });
+  return error;
 }
 
 describe('api response interceptor', () => {
   let addToast: ReturnType<typeof vi.fn>;
   let logout: ReturnType<typeof vi.fn>;
-  let rejected: (error: unknown) => Promise<never>;
+  let setAuth: ReturnType<typeof vi.fn>;
+  let rejected: (error: unknown) => Promise<unknown>;
 
   beforeEach(() => {
     addToast = vi.fn();
     logout = vi.fn();
+    setAuth = vi.fn();
     // The interceptor calls `useAuthStore.getState().logout()` and
     // `useUiStore.getState().addToast(msg, 'error')`. Wire those
     // methods through the mocked `getState` accessors.
-    mockedAuthStore.getState = vi.fn().mockReturnValue({ logout });
+    mockedAuthStore.getState = vi.fn().mockReturnValue({
+      logout,
+      setAuth,
+      refreshToken: 'refresh-stub',
+      token: 'access-stub',
+    });
     mockedUiStore.getState = vi.fn().mockReturnValue({ addToast });
     rejected = getResponseErrorHandler();
   });
@@ -54,10 +85,27 @@ describe('api response interceptor', () => {
     expect(fulfilled(response)).toBe(response);
   });
 
-  it('logs out + toasts on 401', async () => {
-    const error = Object.assign(new Error('Request failed'), {
-      response: { status: 401, data: {} },
-      config: {},
+  it('logs out + toasts on 401 with no www-authenticate challenge', async () => {
+    // A bare 401 — neither `error_description="expired"` nor any other
+    // challenge. Today's behaviour (no refresh attempt, hard logout)
+    // applies.
+    const error = make401();
+
+    await expect(rejected(error)).rejects.toBe(error);
+
+    expect(logout).toHaveBeenCalledTimes(1);
+    expect(addToast).toHaveBeenCalledWith(
+      'Session expired. Please login again.',
+      'error',
+    );
+  });
+
+  it('logs out + toasts on 401 with bare "invalid_token" challenge (no "expired")', async () => {
+    // The backend sends `Bearer error="invalid_token"` when the token
+    // is malformed/forged (vs. expired). Same hard-logout branch as
+    // no header at all.
+    const error = make401({
+      wwwAuthenticate: 'Bearer error="invalid_token"',
     });
 
     await expect(rejected(error)).rejects.toBe(error);
@@ -121,5 +169,186 @@ describe('api response interceptor', () => {
   it('has a registered response interceptor', () => {
     const handlers = (axios.interceptors.response as unknown as { handlers: unknown }).handlers;
     expect(Array.isArray(handlers)).toBe(true);
+  });
+});
+
+/**
+ * Refresh-on-401 behaviour: when the backend's middleware sets
+ * `WWW-Authenticate: Bearer error="invalid_token", error_description="expired"`,
+ * the response interceptor must kick off a single-flight refresh, swap
+ * in the new access token, and replay the original request — without
+ * logging the user out.
+ */
+describe('refresh-on-401', () => {
+  let addToast: ReturnType<typeof vi.fn>;
+  let logout: ReturnType<typeof vi.fn>;
+  let setAuth: ReturnType<typeof vi.fn>;
+  let rejected: (error: unknown) => Promise<unknown>;
+  let requestSpy: ReturnType<typeof vi.spyOn>;
+  let postSpy: ReturnType<typeof vi.spyOn>;
+
+  beforeEach(() => {
+    addToast = vi.fn();
+    logout = vi.fn();
+    setAuth = vi.fn();
+    mockedAuthStore.getState = vi.fn().mockReturnValue({
+      logout,
+      setAuth,
+      refreshToken: 'refresh-stub',
+      token: 'access-stub',
+    });
+    mockedUiStore.getState = vi.fn().mockReturnValue({ addToast });
+    rejected = getResponseErrorHandler();
+
+    // Spy on the wrapped instance's `request` so the retry path can
+    // resolve without recursing into the real interceptor chain.
+    requestSpy = vi.spyOn(api, 'request').mockResolvedValue({
+      data: { ok: true },
+      status: 200,
+    } as never);
+
+    // The refresh request itself goes through raw `axios.post`, NOT
+    // the wrapped `api` instance. `axios` here is the real module —
+    // we replace its `post` so each test can dictate the outcome.
+    postSpy = vi.spyOn(axios, 'post');
+  });
+
+  afterEach(() => {
+    requestSpy.mockRestore();
+    postSpy.mockRestore();
+  });
+
+  it('refresh + retry succeeds on an "expired" challenge (no logout)', async () => {
+    const newToken = 'access-rotated';
+    postSpy.mockResolvedValueOnce({
+      data: {
+        token: newToken,
+        refresh_token: 'refresh-rotated',
+        expires_at: '2024-02-01T00:15:00Z',
+        user: { id: 1, username: 'tester' },
+      },
+    });
+
+    const error = make401({
+      wwwAuthenticate: 'Bearer error="invalid_token", error_description="expired"',
+    });
+    // The interceptor mutates `config` in place to mark `_retried`
+    // and inject the fresh token — give the test its own handle so
+    // we can assert the mutation afterwards.
+    error.config = { ...(error.config as object) };
+
+    await expect(rejected(error)).resolves.toBeDefined();
+
+    // Single refresh was attempted.
+    expect(postSpy).toHaveBeenCalledTimes(1);
+    expect(postSpy).toHaveBeenCalledWith(
+      expect.stringContaining('/refresh'),
+      expect.objectContaining({ refresh_token: 'refresh-stub' }),
+    );
+
+    // Store was updated with the new envelope.
+    expect(setAuth).toHaveBeenCalledTimes(1);
+    expect(setAuth).toHaveBeenCalledWith(
+      expect.objectContaining({ token: newToken }),
+    );
+
+    // Original request was replayed with the fresh token.
+    expect(requestSpy).toHaveBeenCalledTimes(1);
+    const replayConfig = requestSpy.mock.calls[0][0] as { _retried?: boolean; headers: Record<string, string> };
+    expect(replayConfig._retried).toBe(true);
+    expect(replayConfig.headers.Authorization).toBe(`Bearer ${newToken}`);
+
+    // No logout, no toast — the refresh was transparent.
+    expect(logout).not.toHaveBeenCalled();
+    expect(addToast).not.toHaveBeenCalled();
+  });
+
+  it('logs out + toasts when refresh itself fails', async () => {
+    postSpy.mockRejectedValueOnce(new Error('refresh expired'));
+
+    const error = make401({
+      wwwAuthenticate: 'Bearer error="invalid_token", error_description="expired"',
+    });
+    error.config = { ...(error.config as object) };
+
+    await expect(rejected(error)).rejects.toBe(error);
+
+    expect(postSpy).toHaveBeenCalledTimes(1);
+    expect(setAuth).not.toHaveBeenCalled();
+    // No successful refresh → no replay.
+    expect(requestSpy).not.toHaveBeenCalled();
+    // Hard logout path, matching the bare-401 behaviour.
+    expect(logout).toHaveBeenCalledTimes(1);
+    expect(addToast).toHaveBeenCalledWith(
+      'Session expired. Please login again.',
+      'error',
+    );
+  });
+
+  it('collapses concurrent 401s into a single refresh', async () => {
+    // Hold the refresh open so both 401 handlers are awaiting it at
+    // once — that's the condition single-flight guards against.
+    let resolveRefresh!: (value: unknown) => void;
+    postSpy.mockReturnValueOnce(
+      new Promise((resolve) => {
+        resolveRefresh = resolve;
+      }),
+    );
+
+    const err1 = make401({
+      wwwAuthenticate: 'Bearer error="invalid_token", error_description="expired"',
+    });
+    err1.config = { ...(err1.config as object) };
+    const err2 = make401({
+      wwwAuthenticate: 'Bearer error="invalid_token", error_description="expired"',
+    });
+    err2.config = { ...(err2.config as object) };
+
+    // Fire both rejected handlers without awaiting the first yet.
+    const p1 = rejected(err1);
+    const p2 = rejected(err2);
+
+    // Both 401s have hit the interceptor; only one refresh POST
+    // should have been issued.
+    expect(postSpy).toHaveBeenCalledTimes(1);
+
+    // Settle the refresh so both handlers resume.
+    resolveRefresh({
+      data: {
+        token: 'access-rotated',
+        refresh_token: 'refresh-rotated',
+        expires_at: '2024-02-01T00:15:00Z',
+        user: { id: 1, username: 'tester' },
+      },
+    });
+
+    await Promise.all([p1, p2]);
+
+    // Still exactly one refresh POST — the second 401 waited on the
+    // first's in-flight promise instead of triggering its own.
+    expect(postSpy).toHaveBeenCalledTimes(1);
+    // Both original requests were replayed with the fresh token.
+    expect(requestSpy).toHaveBeenCalledTimes(2);
+    expect(logout).not.toHaveBeenCalled();
+  });
+
+  it('skips refresh when the request is flagged skipAuthRefresh', async () => {
+    // The retry path stamps `_retried` on the config it replays, so
+    // a follow-up 401 on the replayed request must fall straight
+    // through to the logout branch — otherwise we'd loop forever.
+    const error = make401({
+      wwwAuthenticate: 'Bearer error="invalid_token", error_description="expired"',
+      retried: true,
+    });
+
+    await expect(rejected(error)).rejects.toBe(error);
+
+    expect(postSpy).not.toHaveBeenCalled();
+    expect(requestSpy).not.toHaveBeenCalled();
+    expect(logout).toHaveBeenCalledTimes(1);
+    expect(addToast).toHaveBeenCalledWith(
+      'Session expired. Please login again.',
+      'error',
+    );
   });
 });

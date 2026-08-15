@@ -43,7 +43,7 @@ The history and design decisions behind the current frontend. For the high-level
 
 - [x] **Zustand** — `authStore` (token, login, logout, register), `uiStore` (toasts), `movieUiStore` (filter UI). Lightweight, no provider boilerplate.
 - [ ] **Persist Auth Token Securely** — `authStore.ts` uses Zustand `persist` which writes the JWT to `localStorage`. Consider httpOnly cookies, or at minimum document the XSS risk in the README.
-- [ ] **Token Refresh** — `api.ts` logs out on 401 but does not attempt a refresh. Pair with the backend refresh-token endpoint once §2 (JWT Refresh Tokens) lands in `FUTURE_BACKEND.md`.
+- [x] **Token Refresh** — `api.ts` single-flight refresh-on-401 driven by the backend's `WWW-Authenticate: Bearer error="invalid_token", error_description="expired"` signal. Bare `error="invalid_token"` (no `expired`) keeps the immediate-logout path so a tampered token never silently retries. Refresh tokens persist alongside access tokens in the `authStore` (Zustand `persist`, key `nyx-auth-storage`).
 
 ## 6. Testing & Quality
 

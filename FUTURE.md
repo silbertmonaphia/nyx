@@ -22,7 +22,7 @@ Single source of truth for "what's done / what's next" across the stack. Tick an
 - [ ] Semantic API Error Translators — map DB constraint errors (e.g. duplicate username) to clean client-facing messages.
 - [x] CORS Hardening — `cors.go` now reads `CORS_ALLOWED_ORIGINS` (default `*`); set a comma-separated origin list in production.
 - [x] JWT Secret via Viper Config — `auth.SetSecret(cfg.JWTSecret)` is called once in `main.go`; `auth/jwt.go` no longer reads `os.Getenv`.
-- [ ] JWT Refresh Tokens — current tokens expire in 24h, no refresh flow.
+- [x] JWT Refresh Tokens — short-lived access tokens (default 15m, configurable via `JWT_ACCESS_TTL`) paired with opaque rotated refresh tokens (default 7d, `JWT_REFRESH_TTL`) and family-level reuse detection. Frontend refreshes on `WWW-Authenticate: Bearer error="invalid_token", error_description="expired"`.
 
 ## 3. Database Lifecycle
 
@@ -52,7 +52,7 @@ Single source of truth for "what's done / what's next" across the stack. Tick an
 - [x] Search Debounce — `App.tsx` fires an API request on every keystroke. Add a 300ms debounce.
 - [x] Dynamic Metadata (SEO) — per-page `<title>` and meta description.
 - [ ] Persist Auth Token Securely — JWT in `localStorage` via Zustand `persist`. httpOnly cookies (or a documented XSS caveat) pending.
-- [ ] Token Refresh — `api.ts` logs out on 401; pair with the backend refresh-token endpoint once it lands.
+- [x] Token Refresh — single-flight refresh-on-401 in `api.ts`, driven by the `WWW-Authenticate` challenge from the auth middleware. Refresh tokens persist in the auth store alongside the access token.
 
 ## 5. Developer Experience & CI/CD
 

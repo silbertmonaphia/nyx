@@ -28,6 +28,21 @@ type LoginRequest struct {
 }
 
 type AuthResponse struct {
-	Token string `json:"token"`
-	User  User   `json:"user"`
+	Token        string    `json:"token"`
+	RefreshToken string    `json:"refresh_token,omitempty"`
+	ExpiresAt    time.Time `json:"expires_at,omitempty"`
+	User         User      `json:"user"`
+}
+
+// RefreshRequest / LogoutRequest carry the opaque refresh token the
+// client received from a prior login/refresh. huma validates the
+// "required" tag before the body reaches the service, so a missing
+// field surfaces as a 400 envelope (per backend/HUMA.md) rather than
+// bubbling up as ErrInvalidRefreshToken from the service layer.
+type RefreshRequest struct {
+	RefreshToken string `json:"refresh_token" required:"true"`
+}
+
+type LogoutRequest struct {
+	RefreshToken string `json:"refresh_token" required:"true"`
 }

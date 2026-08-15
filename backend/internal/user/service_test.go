@@ -12,10 +12,11 @@ import (
 )
 
 // newTestTokens builds a per-test TokenService so each test signs and
-// validates against its own captured key.
+// validates against its own captured key. The TTL is hard-coded —
+// service tests don't care about TTL, only the JWT round-trip.
 func newTestTokens(t *testing.T) auth.TokenService {
 	t.Helper()
-	tokens, err := auth.NewTokenService([]byte(auth.TestSecret))
+	tokens, err := auth.NewTokenService([]byte(auth.TestSecret), 15*time.Minute)
 	if err != nil {
 		t.Fatalf("auth.NewTokenService: %v", err)
 	}
@@ -31,6 +32,15 @@ type stubRepo struct {
 	createFn        func(ctx context.Context, u *User) error
 	getByUsernameFn func(ctx context.Context, username string) (*User, error)
 	getByIDFn       func(ctx context.Context, id int) (*User, error)
+
+	// Refresh-token methods. Same "default error if unset" pattern as
+	// the user CRUD stubs above: any test path that hits an unstubbed
+	// refresh method fails loudly rather than silently passing.
+	createRefreshFn func(ctx context.Context, userID int, tokenHash []byte, expiresAt time.Time) (*RefreshTokenRow, error)
+	getRefreshFn    func(ctx context.Context, tokenHash []byte) (*RefreshTokenRow, error)
+	rotateFn        func(ctx context.Context, oldID int64, userID int, tokenHash []byte, familyID int64, expiresAt time.Time) (*RefreshTokenRow, error)
+	revokeFamilyFn  func(ctx context.Context, familyID int64) (int64, error)
+	revokeByIDFn    func(ctx context.Context, id int64) error
 }
 
 func (s *stubRepo) CreateUser(ctx context.Context, u *User) error {
@@ -51,6 +61,46 @@ func (s *stubRepo) GetUserByID(ctx context.Context, id int) (*User, error) {
 	}
 	return s.getByIDFn(ctx, id)
 }
+func (s *stubRepo) CreateRefreshToken(ctx context.Context, userID int, tokenHash []byte, expiresAt time.Time) (*RefreshTokenRow, error) {
+	if s.createRefreshFn == nil {
+		// Default: succeed with a fabricated row keyed to the supplied
+		// hash so tests that don't care about refresh tokens can keep
+		// focusing on the user/auth flows. Refresh-specific tests
+		// override this stub to assert on the precise projection.
+		return &RefreshTokenRow{
+			ID:        1,
+			UserID:    userID,
+			FamilyID:  1,
+			ExpiresAt: expiresAt,
+			CreatedAt: time.Now(),
+		}, nil
+	}
+	return s.createRefreshFn(ctx, userID, tokenHash, expiresAt)
+}
+func (s *stubRepo) GetRefreshTokenByHash(ctx context.Context, tokenHash []byte) (*RefreshTokenRow, error) {
+	if s.getRefreshFn == nil {
+		return nil, errors.New("GetRefreshTokenByHash not stubbed")
+	}
+	return s.getRefreshFn(ctx, tokenHash)
+}
+func (s *stubRepo) RotateRefreshToken(ctx context.Context, oldID int64, userID int, tokenHash []byte, familyID int64, expiresAt time.Time) (*RefreshTokenRow, error) {
+	if s.rotateFn == nil {
+		return nil, errors.New("RotateRefreshToken not stubbed")
+	}
+	return s.rotateFn(ctx, oldID, userID, tokenHash, familyID, expiresAt)
+}
+func (s *stubRepo) RevokeRefreshTokenFamily(ctx context.Context, familyID int64) (int64, error) {
+	if s.revokeFamilyFn == nil {
+		return 0, errors.New("RevokeRefreshTokenFamily not stubbed")
+	}
+	return s.revokeFamilyFn(ctx, familyID)
+}
+func (s *stubRepo) RevokeRefreshTokenByID(ctx context.Context, id int64) error {
+	if s.revokeByIDFn == nil {
+		return errors.New("RevokeRefreshTokenByID not stubbed")
+	}
+	return s.revokeByIDFn(ctx, id)
+}
 
 // TestRegister_HappyPath covers the full Register pipeline: bcrypt
 // hashing, repo.CreateUser, JWT mint, AuthResponse assembly. The
@@ -66,7 +116,7 @@ func TestRegister_HappyPath(t *testing.T) {
 			return nil
 		},
 	}
-	svc := NewService(repo, newTestTokens(t))
+	svc := NewService(repo, newTestTokens(t), 15*time.Minute, 7*24*time.Hour)
 
 	res, err := svc.Register(context.Background(), RegisterRequest{
 		Username: "alice",
@@ -101,7 +151,7 @@ func TestRegister_RepoUniqueViolationBubbles(t *testing.T) {
 			return ErrUserAlreadyExists
 		},
 	}
-	svc := NewService(repo, newTestTokens(t))
+	svc := NewService(repo, newTestTokens(t), 15*time.Minute, 7*24*time.Hour)
 
 	_, err := svc.Register(context.Background(), RegisterRequest{
 		Username: "alice",
@@ -138,7 +188,7 @@ func TestLogin_HappyPath(t *testing.T) {
 			}, nil
 		},
 	}
-	svc := NewService(repo, newTestTokens(t))
+	svc := NewService(repo, newTestTokens(t), 15*time.Minute, 7*24*time.Hour)
 
 	res, err := svc.Login(context.Background(), LoginRequest{
 		Username: "alice",
@@ -166,7 +216,7 @@ func TestLogin_UnknownUsernameReturnsInvalidCredentials(t *testing.T) {
 			return nil, ErrUserNotFound
 		},
 	}
-	svc := NewService(repo, newTestTokens(t))
+	svc := NewService(repo, newTestTokens(t), 15*time.Minute, 7*24*time.Hour)
 
 	_, err := svc.Login(context.Background(), LoginRequest{
 		Username: "ghost",
@@ -190,7 +240,7 @@ func TestLogin_WrongPasswordReturnsInvalidCredentials(t *testing.T) {
 			return &User{ID: 1, Username: username, PasswordHash: string(hash)}, nil
 		},
 	}
-	svc := NewService(repo, newTestTokens(t))
+	svc := NewService(repo, newTestTokens(t), 15*time.Minute, 7*24*time.Hour)
 
 	_, err = svc.Login(context.Background(), LoginRequest{
 		Username: "alice",
@@ -212,7 +262,7 @@ func TestLogin_NonNotFoundRepoErrorPropagates(t *testing.T) {
 			return nil, other
 		},
 	}
-	svc := NewService(repo, newTestTokens(t))
+	svc := NewService(repo, newTestTokens(t), 15*time.Minute, 7*24*time.Hour)
 
 	_, err := svc.Login(context.Background(), LoginRequest{Username: "alice", Password: "x"})
 	if errors.Is(err, ErrInvalidCredentials) {
@@ -220,5 +270,266 @@ func TestLogin_NonNotFoundRepoErrorPropagates(t *testing.T) {
 	}
 	if !errors.Is(err, other) {
 		t.Errorf("expected original error to propagate, got %v", err)
+	}
+}
+
+// ---- Refresh tests ----
+
+// TestRefresh_HappyPath covers the full Refresh pipeline: hash
+// supplied raw token, fetch the row, mint a new access + refresh
+// pair, and verify both the new access token is a valid JWT and the
+// raw refresh token is non-empty.
+func TestRefresh_HappyPath(t *testing.T) {
+	now := time.Now()
+	row := &RefreshTokenRow{
+		ID:        42,
+		UserID:    7,
+		FamilyID:  42,
+		ExpiresAt: now.Add(time.Hour),
+	}
+	repo := &stubRepo{
+		getRefreshFn: func(_ context.Context, hash []byte) (*RefreshTokenRow, error) {
+			return row, nil
+		},
+		rotateFn: func(_ context.Context, oldID int64, userID int, hash []byte, familyID int64, expiresAt time.Time) (*RefreshTokenRow, error) {
+			return &RefreshTokenRow{
+				ID:        99,
+				UserID:    userID,
+				FamilyID:  familyID,
+				ExpiresAt: expiresAt,
+			}, nil
+		},
+		getByIDFn: func(_ context.Context, id int) (*User, error) {
+			return &User{ID: id, Username: "alice", Email: "a@x.com"}, nil
+		},
+	}
+	tokens := newTestTokens(t)
+	svc := NewService(repo, tokens, 15*time.Minute, 7*24*time.Hour)
+
+	// Use a real refresh token raw value so the SHA256 hash path
+	// actually exercises the hashing helper.
+	raw, _, err := newRefreshToken()
+	if err != nil {
+		t.Fatalf("newRefreshToken: %v", err)
+	}
+	res, err := svc.Refresh(context.Background(), RefreshRequest{RefreshToken: raw})
+	if err != nil {
+		t.Fatalf("Refresh: %v", err)
+	}
+	if res.Token == "" {
+		t.Error("res.Token is empty after successful refresh")
+	}
+	if res.RefreshToken == "" {
+		t.Error("res.RefreshToken is empty after successful refresh")
+	}
+	if res.RefreshToken == raw {
+		t.Error("refresh returned the same token; rotation didn't mint a new one")
+	}
+	if _, err := tokens.ValidateToken(res.Token); err != nil {
+		t.Errorf("new access token failed ValidateToken: %v", err)
+	}
+}
+
+// TestRefresh_ReuseDetectedRevokesFamily confirms the RFC 9700 path:
+// presenting a refresh token that's already been rotated triggers
+// RevokeRefreshTokenFamily and surfaces ErrRefreshTokenReuse. The
+// family revoke is the important security property; without it a
+// stolen old token could keep being replayed even after the user
+// already rotated.
+func TestRefresh_ReuseDetectedRevokesFamily(t *testing.T) {
+	now := time.Now()
+	var revokedFamily int64
+	repo := &stubRepo{
+		getRefreshFn: func(_ context.Context, _ []byte) (*RefreshTokenRow, error) {
+			return &RefreshTokenRow{
+				ID:        42,
+				UserID:    7,
+				FamilyID:  42,
+				ExpiresAt: now.Add(time.Hour),
+				RevokedAt: &now, // already revoked — reuse signal
+			}, nil
+		},
+		revokeFamilyFn: func(_ context.Context, familyID int64) (int64, error) {
+			revokedFamily = familyID
+			return 1, nil
+		},
+	}
+	svc := NewService(repo, newTestTokens(t), 15*time.Minute, 7*24*time.Hour)
+
+	raw, _, _ := newRefreshToken()
+	_, err := svc.Refresh(context.Background(), RefreshRequest{RefreshToken: raw})
+	if !errors.Is(err, ErrRefreshTokenReuse) {
+		t.Fatalf("expected ErrRefreshTokenReuse, got %v", err)
+	}
+	if revokedFamily != 42 {
+		t.Errorf("expected family 42 to be revoked, got %d", revokedFamily)
+	}
+}
+
+// TestRefresh_ExpiredReturnsErrExpired — a token past its expires_at
+// surfaces as ErrRefreshTokenExpired (not ErrRefreshTokenReuse). The
+// family is NOT revoked: a legitimate timeout is not a theft signal.
+func TestRefresh_ExpiredReturnsErrExpired(t *testing.T) {
+	past := time.Now().Add(-time.Hour)
+	repo := &stubRepo{
+		getRefreshFn: func(_ context.Context, _ []byte) (*RefreshTokenRow, error) {
+			return &RefreshTokenRow{
+				ID:        42,
+				UserID:    7,
+				FamilyID:  42,
+				ExpiresAt: past,
+			}, nil
+		},
+		revokeFamilyFn: func(_ context.Context, _ int64) (int64, error) {
+			t.Error("family must NOT be revoked on a legitimate expiry")
+			return 0, nil
+		},
+	}
+	svc := NewService(repo, newTestTokens(t), 15*time.Minute, 7*24*time.Hour)
+
+	raw, _, _ := newRefreshToken()
+	_, err := svc.Refresh(context.Background(), RefreshRequest{RefreshToken: raw})
+	if !errors.Is(err, ErrRefreshTokenExpired) {
+		t.Errorf("expected ErrRefreshTokenExpired, got %v", err)
+	}
+}
+
+// TestRefresh_InvalidHashReturnsErrInvalid — a token whose hash is
+// not in the DB surfaces as ErrInvalidRefreshToken. The lookup
+// happens before any state mutation, so no row is created or
+// revoked.
+func TestRefresh_InvalidHashReturnsErrInvalid(t *testing.T) {
+	repo := &stubRepo{
+		getRefreshFn: func(_ context.Context, _ []byte) (*RefreshTokenRow, error) {
+			return nil, ErrRefreshTokenNotFound
+		},
+	}
+	svc := NewService(repo, newTestTokens(t), 15*time.Minute, 7*24*time.Hour)
+
+	raw, _, _ := newRefreshToken()
+	_, err := svc.Refresh(context.Background(), RefreshRequest{RefreshToken: raw})
+	if !errors.Is(err, ErrInvalidRefreshToken) {
+		t.Errorf("expected ErrInvalidRefreshToken, got %v", err)
+	}
+}
+
+// TestRefresh_ConcurrentRotationSecondCallWins models the
+// concurrent-rotation race: the first call sees revoked_at=NULL and
+// proceeds; the second call (running in parallel, simulating two
+// devices refreshing simultaneously) sees revoked_at != NULL because
+// the first call's CTE stamped the old row.
+//
+// We can't run a real concurrent test here without a real DB, so we
+// model the race sequentially: two calls share one stubbed
+// RotateRefreshToken that flips the row state to revoked between
+// calls. The service's reuse detection must catch the second.
+func TestRefresh_ConcurrentRotationSecondCallWins(t *testing.T) {
+	now := time.Now()
+	var calls int
+	var revoked bool
+	repo := &stubRepo{
+		getRefreshFn: func(_ context.Context, _ []byte) (*RefreshTokenRow, error) {
+			row := &RefreshTokenRow{
+				ID:        42,
+				UserID:    7,
+				FamilyID:  42,
+				ExpiresAt: now.Add(time.Hour),
+			}
+			if revoked {
+				t := now
+				row.RevokedAt = &t
+			}
+			return row, nil
+		},
+		rotateFn: func(_ context.Context, oldID int64, userID int, _ []byte, familyID int64, expiresAt time.Time) (*RefreshTokenRow, error) {
+			// First rotation wins; second call observes revoked.
+			revoked = true
+			calls++
+			return &RefreshTokenRow{ID: int64(100 + calls), UserID: userID, FamilyID: familyID, ExpiresAt: expiresAt}, nil
+		},
+		getByIDFn: func(_ context.Context, id int) (*User, error) {
+			return &User{ID: id, Username: "alice"}, nil
+		},
+	}
+	svc := NewService(repo, newTestTokens(t), 15*time.Minute, 7*24*time.Hour)
+
+	raw1, _, _ := newRefreshToken()
+	_, err := svc.Refresh(context.Background(), RefreshRequest{RefreshToken: raw1})
+	if err != nil {
+		t.Fatalf("first Refresh: %v", err)
+	}
+
+	// Second call uses the SAME raw token. Service must take the
+	// reuse branch because the first call's RotateRefreshToken
+	// stamped revoked_at on the old row.
+	_, err = svc.Refresh(context.Background(), RefreshRequest{RefreshToken: raw1})
+	if !errors.Is(err, ErrRefreshTokenReuse) {
+		t.Errorf("second Refresh: expected ErrRefreshTokenReuse, got %v", err)
+	}
+}
+
+// ---- Logout tests ----
+
+// TestLogout_Idempotent — calling Logout with a token that's not in
+// the DB returns nil, not an error. This is the design choice
+// (per plan §service): Logout is idempotent so the frontend can call
+// it without first checking whether the session is still alive.
+func TestLogout_Idempotent(t *testing.T) {
+	repo := &stubRepo{
+		getRefreshFn: func(_ context.Context, _ []byte) (*RefreshTokenRow, error) {
+			return nil, ErrRefreshTokenNotFound
+		},
+	}
+	svc := NewService(repo, newTestTokens(t), 15*time.Minute, 7*24*time.Hour)
+
+	raw, _, _ := newRefreshToken()
+	if err := svc.Logout(context.Background(), LogoutRequest{RefreshToken: raw}); err != nil {
+		t.Errorf("Logout on unknown token should be nil, got %v", err)
+	}
+}
+
+// TestLogout_RevokesFamily — the supplied token's family is the unit
+// of revocation. We confirm RevokeRefreshTokenFamily is called with
+// the row's family_id, not the row's id.
+func TestLogout_RevokesFamily(t *testing.T) {
+	now := time.Now()
+	var revokedFamily int64
+	repo := &stubRepo{
+		getRefreshFn: func(_ context.Context, _ []byte) (*RefreshTokenRow, error) {
+			return &RefreshTokenRow{ID: 1, UserID: 7, FamilyID: 99, ExpiresAt: now.Add(time.Hour)}, nil
+		},
+		revokeFamilyFn: func(_ context.Context, familyID int64) (int64, error) {
+			revokedFamily = familyID
+			return 3, nil
+		},
+	}
+	svc := NewService(repo, newTestTokens(t), 15*time.Minute, 7*24*time.Hour)
+
+	raw, _, _ := newRefreshToken()
+	if err := svc.Logout(context.Background(), LogoutRequest{RefreshToken: raw}); err != nil {
+		t.Fatalf("Logout: %v", err)
+	}
+	if revokedFamily != 99 {
+		t.Errorf("expected family 99 to be revoked, got %d", revokedFamily)
+	}
+}
+
+// TestLogout_RequiresRefreshToken — huma's `required:"true"` tag
+// rejects an empty token before it reaches the service. We can't
+// easily exercise that path in service_test.go (it's a huma
+// validator), so this test instead pins the service's
+// no-panic-on-empty-token behavior. An empty string hashes to a
+// deterministic value, the lookup misses, and Logout returns nil
+// (idempotent). The actual 400 surface happens at the handler.
+func TestLogout_RequiresRefreshToken(t *testing.T) {
+	repo := &stubRepo{
+		getRefreshFn: func(_ context.Context, _ []byte) (*RefreshTokenRow, error) {
+			return nil, ErrRefreshTokenNotFound
+		},
+	}
+	svc := NewService(repo, newTestTokens(t), 15*time.Minute, 7*24*time.Hour)
+
+	if err := svc.Logout(context.Background(), LogoutRequest{RefreshToken: ""}); err != nil {
+		t.Errorf("Logout with empty token should be nil (idempotent), got %v", err)
 	}
 }

@@ -37,7 +37,7 @@ The history and design decisions behind the current backend. For the high-level 
 - [x] **JWT Secret via Viper Config** — `auth.SetSecret(cfg.JWTSecret)` is called once in `main.go`; `auth/jwt.go` no longer reads `os.Getenv`. (Superseded by constructor injection — see below.)
 - [x] **Constructor-injected JWT signing** — `auth.TokenService` interface + `auth.NewTokenService(secret []byte)` constructor hold the signing key in a private field. `main.go` builds one and threads it through the user service and auth middleware; the package-level `secret` / `SetSecret` are gone.
 - [x] **Enforce non-default JWT secret at startup** — `config.Load()` and `auth.NewTokenService` both refuse the built-in default placeholder and any key shorter than `auth.MinSecretBytes` (32 bytes). Misconfiguration fails closed before the HTTP server starts.
-- [ ] **JWT Refresh Tokens** — current tokens expire in 24h with no refresh flow. Add a refresh endpoint and short-lived access tokens.
+- [x] **JWT Refresh Tokens** — opaque `refresh_tokens` table (`BIGSERIAL id`, `BYTEA token_hash` from `sha256`, `BIGINT family_id` self-referencing the original row, `replaced_by_id` self-FK). `crypto/rand` 32-byte tokens, base64url-encoded. Atomic rotation via a two-CTE statement; reuse of a revoked token revokes the entire family. `JWT_ACCESS_TTL` / `JWT_REFRESH_TTL` (defaults 15m / 168h). `POST /api/refresh` issues a new pair; `POST /api/logout` (auth-required) revokes the supplied token's family. `WWW-Authenticate: Bearer error="invalid_token", error_description="expired"` on the access-expired path so the frontend can reactively refresh without string-comparing error messages.
 
 ## 4. Database Layer
 

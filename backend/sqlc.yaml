@@ -26,6 +26,7 @@ sql:
     schema:
       - "migrations/000004_create_users_table.up.sql"
       - "migrations/000005_add_deleted_at_to_users_table.up.sql"
+      - "migrations/000008_create_refresh_tokens.up.sql"
     gen:
       go:
         package: "db"
@@ -37,9 +38,15 @@ sql:
         emit_empty_slices: true
         rename:
           id: "ID"
+          user_id: "UserID"
           username: "Username"
           email: "Email"
           password_hash: "PasswordHash"
+          token_hash: "TokenHash"
+          family_id: "FamilyID"
+          replaced_by_id: "ReplacedByID"
+          expires_at: "ExpiresAt"
+          revoked_at: "RevokedAt"
           created_at: "CreatedAt"
           updated_at: "UpdatedAt"
           deleted_at: "DeletedAt"

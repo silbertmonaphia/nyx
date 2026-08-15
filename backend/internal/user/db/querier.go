@@ -9,6 +9,14 @@ import (
 )
 
 type Querier interface {
+	// Atomic self-stamping: insert with family_id=0 placeholder, then
+	// update family_id to the inserted row's id, then SELECT out the
+	// updated row. The two-CTE shape (rather than UPDATE … RETURNING
+	// directly off the inserted CTE) avoids a same-table update snapshot
+	// issue that left the outer RETURNING with zero rows under real
+	// Postgres — the unit tests passed because they stubbed the query.
+	CreateRefreshToken(ctx context.Context, arg CreateRefreshTokenParams) (CreateRefreshTokenRow, error)
+	GetRefreshTokenByHash(ctx context.Context, tokenHash []byte) (RefreshToken, error)
 	GetUserByID(ctx context.Context, id int32) (User, error)
 	GetUserByUsername(ctx context.Context, username string) (User, error)
 	// SQL queries for the user feature. Each block becomes a method on the
@@ -16,6 +24,13 @@ type Querier interface {
 	// block is the @name annotation (which becomes the method name) and the
 	// query type (`:one`, `:many`, `:exec`, `:execrows`).
 	InsertUser(ctx context.Context, arg InsertUserParams) (User, error)
+	RevokeRefreshTokenByID(ctx context.Context, id int64) error
+	RevokeRefreshTokenFamily(ctx context.Context, familyID int64) (int64, error)
+	// Single CTE: insert new row tied to old via replaced_by_id, then mark
+	// the old row revoked and link it back. Atomic — concurrent rotations
+	// will see the second one with revoked_at NOT NULL and trigger reuse
+	// detection at the service layer.
+	RotateRefreshToken(ctx context.Context, arg RotateRefreshTokenParams) (RotateRefreshTokenRow, error)
 }
 
 var _ Querier = (*Queries)(nil)

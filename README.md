@@ -120,8 +120,10 @@ See `k8s/*.yaml` for per-resource config.
 | Method | Path | Auth | Notes |
 |---|---|---|---|
 | GET | `/api/health` | — | Liveness + DB status |
-| POST | `/api/register` | — | `{username, password}` |
-| POST | `/api/login` | — | Returns `{token}` |
+| POST | `/api/register` | — | Body `{username, email, password}`. Returns `{token, refresh_token, expires_at, user}` |
+| POST | `/api/login` | — | Body `{username, password}`. Returns `{token, refresh_token, expires_at, user}` |
+| POST | `/api/refresh` | — | Body `{refresh_token}`. Rotates the refresh token; reuse revokes the entire family. Returns `{token, refresh_token, expires_at, user}` |
+| POST | `/api/logout` | JWT | Body `{refresh_token}`. Revokes the supplied token's family. Returns 204 |
 | GET | `/api/movies` | — | `?q=`, `?page=`, `?page_size=` |
 | POST | `/api/movies` | JWT | |
 | PUT | `/api/movies/{id}` | JWT | |

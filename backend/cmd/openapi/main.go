@@ -18,6 +18,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"time"
 
 	"nyx/internal/movie"
 	"nyx/internal/platform/api"
@@ -72,7 +73,7 @@ func generateSpec() ([]byte, error) {
 	// schema is api.ErrorResponse rather than huma's RFC 9457 model.
 	api.OverrideHumaErrors()
 
-	tokens, err := auth.NewTokenService([]byte(specSigningKey))
+	tokens, err := auth.NewTokenService([]byte(specSigningKey), 15*time.Minute)
 	if err != nil {
 		return nil, fmt.Errorf("building token service: %w", err)
 	}
@@ -82,7 +83,7 @@ func generateSpec() ([]byte, error) {
 	// nil services: registration only reads struct tags, the handler
 	// funcs are never called.
 	movie.RegisterMovieOps(humaAPI, movie.NewHandler(nil), tokens)
-	user.RegisterUserOps(humaAPI, user.NewHandler(nil))
+	user.RegisterUserOps(humaAPI, user.NewHandler(nil), tokens)
 
 	b, err := json.MarshalIndent(humaAPI.OpenAPI(), "", "  ")
 	if err != nil {

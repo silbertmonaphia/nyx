@@ -4,6 +4,13 @@
       "AuthResponse": {
         "additionalProperties": false,
         "properties": {
+          "expires_at": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "refresh_token": {
+            "type": "string"
+          },
           "token": {
             "type": "string"
           },
@@ -103,6 +110,18 @@
         ],
         "type": "object"
       },
+      "LogoutRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "refresh_token": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "refresh_token"
+        ],
+        "type": "object"
+      },
       "Movie": {
         "additionalProperties": false,
         "properties": {
@@ -194,6 +213,18 @@
           "page_size",
           "total",
           "has_more"
+        ],
+        "type": "object"
+      },
+      "RefreshRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "refresh_token": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "refresh_token"
         ],
         "type": "object"
       },
@@ -342,6 +373,46 @@
           }
         },
         "summary": "Login a user",
+        "tags": [
+          "auth"
+        ]
+      }
+    },
+    "/api/logout": {
+      "post": {
+        "description": "Revoke the supplied refresh token's entire family. Requires a valid access token in the Authorization header. Returns 204.",
+        "operationId": "logout",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LogoutRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "No Content"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Logout a user",
         "tags": [
           "auth"
         ]
@@ -558,6 +629,48 @@
         "summary": "Update a movie",
         "tags": [
           "movies"
+        ]
+      }
+    },
+    "/api/refresh": {
+      "post": {
+        "description": "Exchange a valid refresh token for a fresh access + refresh pair. Returns 401 on invalid / expired / reused tokens; reuse triggers family-wide revocation.",
+        "operationId": "refresh",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RefreshRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuthResponse"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Refresh access token",
+        "tags": [
+          "auth"
         ]
       }
     },
