@@ -68,16 +68,16 @@ func NewService(repo Repository, tokens auth.TokenService, accessTTL, refreshTTL
 // mintRefreshToken is a small helper: generate raw bytes, hash them,
 // persist the row, return the raw bytes for the response. Lives here
 // so Register, Login, and Refresh all build the row identically.
-func (s *service) mintRefreshToken(ctx context.Context, userID int) (string, time.Time, error) {
+func (s *service) mintRefreshToken(ctx context.Context, userID int) (string, error) {
 	raw, hash, err := newRefreshToken()
 	if err != nil {
-		return "", time.Time{}, err
+		return "", err
 	}
 	expires := time.Now().Add(s.refreshTTL)
 	if _, err := s.repo.CreateRefreshToken(ctx, userID, hash, expires); err != nil {
-		return "", time.Time{}, err
+		return "", err
 	}
-	return raw, expires, nil
+	return raw, nil
 }
 
 // accessExpires is the wall-clock time the freshly-minted access JWT
@@ -109,7 +109,7 @@ func (s *service) Register(ctx context.Context, req RegisterRequest) (*AuthRespo
 		return nil, err
 	}
 
-	refresh, _, err := s.mintRefreshToken(ctx, u.ID)
+	refresh, err := s.mintRefreshToken(ctx, u.ID)
 	if err != nil {
 		return nil, err
 	}
@@ -140,7 +140,7 @@ func (s *service) Login(ctx context.Context, req LoginRequest) (*AuthResponse, e
 		return nil, err
 	}
 
-	refresh, _, err := s.mintRefreshToken(ctx, u.ID)
+	refresh, err := s.mintRefreshToken(ctx, u.ID)
 	if err != nil {
 		return nil, err
 	}
