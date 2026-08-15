@@ -3,7 +3,7 @@
 # a worktree qualifies only if its tree is clean AND its branch is already an
 # ancestor of a base branch. Anything else is left alone and reported.
 #
-# Run manually, or via the SessionStart hook in .claude/settings.json.
+# Run manually, or via the `/prune-worktrees` skill.
 # Pass --dry-run to report without deleting.
 #
 # SAFETY: no -e so a per-worktree failure doesn't abort the whole sweep.
