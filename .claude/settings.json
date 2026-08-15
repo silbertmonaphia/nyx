@@ -1,5 +1,17 @@
 {
+  "preferredNotifChannel": "terminal_bell",
   "hooks": {
+    "Notification": [
+      {
+        "matcher": "permission_prompt|idle_prompt",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "powershell.exe -NoProfile -Command \"(New-Object -ComObject WScript.Shell).Popup('Claude Code needs your attention', 10, 'Claude Code', 64)\" 2>/dev/null || true"
+          }
+        ]
+      }
+    ],
     "SessionStart": [
       {
         "matcher": "startup|resume",
