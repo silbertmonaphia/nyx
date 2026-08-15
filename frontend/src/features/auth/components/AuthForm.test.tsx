@@ -85,6 +85,11 @@ describe('AuthForm', () => {
 
       expect(onSuccess).toHaveBeenCalledTimes(1);
       expect(onCancel).not.toHaveBeenCalled();
+      // A successful login must NOT trigger logout. The form only
+      // calls logout on the error branch; pinning this here guards
+      // against a future refactor that accidentally wires logout
+      // into the success path.
+      expect(logout).not.toHaveBeenCalled();
     });
   });
 
@@ -116,6 +121,7 @@ describe('AuthForm', () => {
       });
 
       expect(onSuccess).toHaveBeenCalledTimes(1);
+      expect(logout).not.toHaveBeenCalled();
     });
   });
 

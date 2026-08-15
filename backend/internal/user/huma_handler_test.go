@@ -518,6 +518,26 @@ func TestRefreshHandler_MissingFieldReturns400(t *testing.T) {
 	decodeEnvelope(t, rr, http.StatusBadRequest)
 }
 
+// TestRefreshHandler_UnknownTokenReturns401 covers the
+// ErrInvalidRefreshToken wire path: a refresh token whose hash is not
+// in the DB. Distinct from TestRefresh_InvalidHashReturnsErrInvalid at
+// the service layer — this pins the handler-level mapping to 401 with
+// the static "Invalid refresh token" message (no err.Error() echo).
+func TestRefreshHandler_UnknownTokenReturns401(t *testing.T) {
+	repo := &stubRepo{
+		getRefreshFn: func(_ context.Context, _ []byte) (*RefreshTokenRow, error) {
+			return nil, ErrRefreshTokenNotFound
+		},
+	}
+	raw, _, _ := newRefreshToken()
+	rr := postJSON(t, newTestRouterWithRepo(repo), "/api/refresh", RefreshRequest{RefreshToken: raw})
+
+	env := decodeEnvelope(t, rr, http.StatusUnauthorized)
+	if env.Message != "Invalid refresh token" {
+		t.Errorf("envelope.error = %q, want %q", env.Message, "Invalid refresh token")
+	}
+}
+
 // ---- Logout ----
 
 // TestLogoutHandler_NoContent covers the auth-required logout happy
