@@ -86,6 +86,13 @@
     ],
     "deny": [
       "Bash(rm *)",
+      "Bash(unlink *)",
+      "Bash(rmdir *)",
+      "Bash(\\rm *)",
+      "Bash(command rm *)",
+      "Bash(/bin/rm *)",
+      "Bash(/usr/bin/rm *)",
+      "Bash(/usr/bin/unlink *)",
       "Bash(chmod 777 *)",
       "Bash(env)",
       "Bash(printenv*)",
