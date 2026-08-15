@@ -7,7 +7,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "powershell.exe -NoProfile -Command \"(New-Object -ComObject WScript.Shell).Popup('Claude Code needs your attention', 10, 'Claude Code', 64)\" 2>/dev/null || true"
+            "command": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File \"$(wslpath -w \"$CLAUDE_PROJECT_DIR/scripts/notify.ps1\")\" 2>/dev/null || true"
           }
         ]
       }
