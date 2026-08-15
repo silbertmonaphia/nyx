@@ -6,7 +6,7 @@ A minimalist media rating application — Go 1.26.1 API, React 19 SPA, PostgreSQ
 
 - **Clean-arch backend** — `chi v5` router + `huma v2` for declarative, OpenAPI 3.1-emitting HTTP handlers. SQL is type-safe via `sqlc` + `pgx/v5` + `pgxpool`.
 - **Modern frontend** — React 19 + Vite 8 + TypeScript, Tailwind CSS v4, Radix UI primitives (shadcn-style), TanStack Query, Zustand, React Hook Form + Zod, axios.
-- **Auth** — JWT-protected write endpoints; bcrypt-hashed passwords.
+- **Auth** — JWT access tokens (default 15m) paired with rotated refresh tokens (default 7d, opaque, sha256-hashed, family-level reuse detection). `POST /api/refresh` + `POST /api/logout`. Bcrypt-hashed passwords.
 - **Pagination** — `GET /api/movies` returns `{data, page, page_size, total, has_more}`. Default 20, max 100.
 - **Cache-aside** — Redis opt-in for `GET /api/movies` (`REDIS_ENABLED=true`). Cache is best-effort; failures never fail the request.
 - **Observability** — `/metrics` (Prometheus), structured JSON logging via `zerolog`, graceful shutdown.

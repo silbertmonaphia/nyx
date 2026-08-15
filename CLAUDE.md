@@ -62,7 +62,7 @@ Full stack: `cp .env.example .env && sudo docker compose up --build -d`. DB host
 
 - Distributed Tracing (OTel) — `go.opentelemetry.io/otel` is in `go.mod`; no exporter wired in `main.go` yet.
 - Container Version Conflict Guardrail — script checks for Postgres major-version volume upgrades.
-- JWT Refresh Tokens — current tokens expire in 24h, no refresh flow.
+- Semantic API Error Translators — map DB constraint errors (e.g. duplicate username) to clean client-facing messages via a shared helper.
 - Persist Auth Token Securely — JWT is in `localStorage` via Zustand `persist`. httpOnly cookies (or a documented XSS caveat) pending.
 
 # Communication
