@@ -64,3 +64,6 @@ Full stack: `cp .env.example .env && sudo docker compose up --build -d`. DB host
 - Container Version Conflict Guardrail — script checks for Postgres major-version volume upgrades.
 - JWT Refresh Tokens — current tokens expire in 24h, no refresh flow.
 - Persist Auth Token Securely — JWT is in `localStorage` via Zustand `persist`. httpOnly cookies (or a documented XSS caveat) pending.
+
+# Communication
+Keep replies and commit messages terse. No preamble, no restating the diff, no trailing pleasantries. Skip a commit body if the subject already says it.
