@@ -66,5 +66,6 @@ The history and design decisions behind the current frontend. For the high-level
 
 ## 9. Developer Experience
 
-- [x] **ESLint + Prettier** — `eslint.config.js` (flat config), React + hooks plugins.
+- [x] **ESLint** — `eslint.config.js` (flat config), React + hooks plugins.
+- [ ] **Prettier** — not yet introduced. Formatting relies on ESLint autofix and editor defaults.
 - [x] **Husky + lint-staged** — pre-commit runs `eslint --fix` + `vitest related --run --passWithNoTests` on staged files.
