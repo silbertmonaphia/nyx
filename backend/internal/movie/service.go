@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/rs/zerolog/log"
+	"go.opentelemetry.io/otel/trace"
 
 	"nyx/internal/platform/cache"
 )
@@ -20,16 +21,19 @@ type Service interface {
 }
 
 type movieService struct {
-	repo  Repository
-	cache cache.Cache
-	ttl   time.Duration
+	repo   Repository
+	cache  cache.Cache
+	ttl    time.Duration
+	tracer trace.Tracer
 }
 
 // NewService wires the movie domain. The cache parameter may be a no-op
 // (cache.NewNoop()) when caching is disabled — the service treats both
-// implementations uniformly.
-func NewService(repo Repository, c cache.Cache, ttl time.Duration) Service {
-	return &movieService{repo: repo, cache: c, ttl: ttl}
+// implementations uniformly. tracer emits one OTel span per public
+// method; pass the noop tracer (otel.Tracer("…") with the global
+// noop provider) when tracing is disabled — Start becomes free.
+func NewService(repo Repository, c cache.Cache, ttl time.Duration, tracer trace.Tracer) Service {
+	return &movieService{repo: repo, cache: c, ttl: ttl, tracer: tracer}
 }
 
 // GetMovies is a cache-aside read. On miss it falls through to the
@@ -41,6 +45,9 @@ func NewService(repo Repository, c cache.Cache, ttl time.Duration) Service {
 // on TTL expiry as the eventual safety net rather than synchronising
 // the read and write paths.
 func (s *movieService) GetMovies(ctx context.Context, query string, page, pageSize int) (*Page, error) {
+	ctx, span := s.tracer.Start(ctx, "movie.GetMovies", trace.WithSpanKind(trace.SpanKindInternal))
+	defer span.End()
+
 	key := cacheKey(query, page, pageSize)
 
 	var cached Page
@@ -61,6 +68,9 @@ func (s *movieService) GetMovies(ctx context.Context, query string, page, pageSi
 
 // CreateMovie persists the movie then invalidates every cached page.
 func (s *movieService) CreateMovie(ctx context.Context, m *Movie) error {
+	ctx, span := s.tracer.Start(ctx, "movie.CreateMovie", trace.WithSpanKind(trace.SpanKindInternal))
+	defer span.End()
+
 	if err := s.repo.Create(ctx, m); err != nil {
 		return err
 	}
@@ -70,6 +80,9 @@ func (s *movieService) CreateMovie(ctx context.Context, m *Movie) error {
 
 // UpdateMovie persists the changes then invalidates every cached page.
 func (s *movieService) UpdateMovie(ctx context.Context, id int, m *Movie) error {
+	ctx, span := s.tracer.Start(ctx, "movie.UpdateMovie", trace.WithSpanKind(trace.SpanKindInternal))
+	defer span.End()
+
 	if err := s.repo.Update(ctx, id, m); err != nil {
 		return err
 	}
@@ -79,6 +92,9 @@ func (s *movieService) UpdateMovie(ctx context.Context, id int, m *Movie) error 
 
 // DeleteMovie soft-deletes the row then invalidates every cached page.
 func (s *movieService) DeleteMovie(ctx context.Context, id int) error {
+	ctx, span := s.tracer.Start(ctx, "movie.DeleteMovie", trace.WithSpanKind(trace.SpanKindInternal))
+	defer span.End()
+
 	if err := s.repo.Delete(ctx, id); err != nil {
 		return err
 	}
@@ -87,10 +103,14 @@ func (s *movieService) DeleteMovie(ctx context.Context, id int) error {
 }
 
 func (s *movieService) CheckHealth(ctx context.Context) error {
+	ctx, span := s.tracer.Start(ctx, "movie.CheckHealth", trace.WithSpanKind(trace.SpanKindInternal))
+	defer span.End()
 	return s.repo.Ping(ctx)
 }
 
 func (s *movieService) CheckCacheHealth(ctx context.Context) error {
+	ctx, span := s.tracer.Start(ctx, "movie.CheckCacheHealth", trace.WithSpanKind(trace.SpanKindInternal))
+	defer span.End()
 	return s.cache.Ping(ctx)
 }
 

@@ -8,6 +8,7 @@ import (
 
 	"nyx/internal/platform/auth"
 
+	"go.opentelemetry.io/otel/trace/noop"
 	"golang.org/x/crypto/bcrypt"
 )
 
@@ -116,7 +117,7 @@ func TestRegister_HappyPath(t *testing.T) {
 			return nil
 		},
 	}
-	svc := NewService(repo, newTestTokens(t), 15*time.Minute, 7*24*time.Hour)
+	svc := NewService(repo, newTestTokens(t), 15*time.Minute, 7*24*time.Hour, noop.NewTracerProvider().Tracer("test"))
 
 	res, err := svc.Register(context.Background(), RegisterRequest{
 		Username: "alice",
@@ -161,7 +162,7 @@ func TestRegister_RepoUniqueViolationBubbles(t *testing.T) {
 					return want
 				},
 			}
-			svc := NewService(repo, newTestTokens(t), 15*time.Minute, 7*24*time.Hour)
+			svc := NewService(repo, newTestTokens(t), 15*time.Minute, 7*24*time.Hour, noop.NewTracerProvider().Tracer("test"))
 
 			_, err := svc.Register(context.Background(), RegisterRequest{
 				Username: "alice",
@@ -200,7 +201,7 @@ func TestLogin_HappyPath(t *testing.T) {
 			}, nil
 		},
 	}
-	svc := NewService(repo, newTestTokens(t), 15*time.Minute, 7*24*time.Hour)
+	svc := NewService(repo, newTestTokens(t), 15*time.Minute, 7*24*time.Hour, noop.NewTracerProvider().Tracer("test"))
 
 	res, err := svc.Login(context.Background(), LoginRequest{
 		Username: "alice",
@@ -228,7 +229,7 @@ func TestLogin_UnknownUsernameReturnsInvalidCredentials(t *testing.T) {
 			return nil, ErrUserNotFound
 		},
 	}
-	svc := NewService(repo, newTestTokens(t), 15*time.Minute, 7*24*time.Hour)
+	svc := NewService(repo, newTestTokens(t), 15*time.Minute, 7*24*time.Hour, noop.NewTracerProvider().Tracer("test"))
 
 	_, err := svc.Login(context.Background(), LoginRequest{
 		Username: "ghost",
@@ -252,7 +253,7 @@ func TestLogin_WrongPasswordReturnsInvalidCredentials(t *testing.T) {
 			return &User{ID: 1, Username: username, PasswordHash: string(hash)}, nil
 		},
 	}
-	svc := NewService(repo, newTestTokens(t), 15*time.Minute, 7*24*time.Hour)
+	svc := NewService(repo, newTestTokens(t), 15*time.Minute, 7*24*time.Hour, noop.NewTracerProvider().Tracer("test"))
 
 	_, err = svc.Login(context.Background(), LoginRequest{
 		Username: "alice",
@@ -274,7 +275,7 @@ func TestLogin_NonNotFoundRepoErrorPropagates(t *testing.T) {
 			return nil, other
 		},
 	}
-	svc := NewService(repo, newTestTokens(t), 15*time.Minute, 7*24*time.Hour)
+	svc := NewService(repo, newTestTokens(t), 15*time.Minute, 7*24*time.Hour, noop.NewTracerProvider().Tracer("test"))
 
 	_, err := svc.Login(context.Background(), LoginRequest{Username: "alice", Password: "x"})
 	if errors.Is(err, ErrInvalidCredentials) {
@@ -316,7 +317,7 @@ func TestRefresh_HappyPath(t *testing.T) {
 		},
 	}
 	tokens := newTestTokens(t)
-	svc := NewService(repo, tokens, 15*time.Minute, 7*24*time.Hour)
+	svc := NewService(repo, tokens, 15*time.Minute, 7*24*time.Hour, noop.NewTracerProvider().Tracer("test"))
 
 	// Use a real refresh token raw value so the SHA256 hash path
 	// actually exercises the hashing helper.
@@ -366,7 +367,7 @@ func TestRefresh_ReuseDetectedRevokesFamily(t *testing.T) {
 			return 1, nil
 		},
 	}
-	svc := NewService(repo, newTestTokens(t), 15*time.Minute, 7*24*time.Hour)
+	svc := NewService(repo, newTestTokens(t), 15*time.Minute, 7*24*time.Hour, noop.NewTracerProvider().Tracer("test"))
 
 	raw, _, _ := newRefreshToken()
 	_, err := svc.Refresh(context.Background(), RefreshRequest{RefreshToken: raw})
@@ -397,7 +398,7 @@ func TestRefresh_ExpiredReturnsErrExpired(t *testing.T) {
 			return 0, nil
 		},
 	}
-	svc := NewService(repo, newTestTokens(t), 15*time.Minute, 7*24*time.Hour)
+	svc := NewService(repo, newTestTokens(t), 15*time.Minute, 7*24*time.Hour, noop.NewTracerProvider().Tracer("test"))
 
 	raw, _, _ := newRefreshToken()
 	_, err := svc.Refresh(context.Background(), RefreshRequest{RefreshToken: raw})
@@ -416,7 +417,7 @@ func TestRefresh_InvalidHashReturnsErrInvalid(t *testing.T) {
 			return nil, ErrRefreshTokenNotFound
 		},
 	}
-	svc := NewService(repo, newTestTokens(t), 15*time.Minute, 7*24*time.Hour)
+	svc := NewService(repo, newTestTokens(t), 15*time.Minute, 7*24*time.Hour, noop.NewTracerProvider().Tracer("test"))
 
 	raw, _, _ := newRefreshToken()
 	_, err := svc.Refresh(context.Background(), RefreshRequest{RefreshToken: raw})
@@ -463,7 +464,7 @@ func TestRefresh_ConcurrentRotationSecondCallWins(t *testing.T) {
 			return &User{ID: id, Username: "alice"}, nil
 		},
 	}
-	svc := NewService(repo, newTestTokens(t), 15*time.Minute, 7*24*time.Hour)
+	svc := NewService(repo, newTestTokens(t), 15*time.Minute, 7*24*time.Hour, noop.NewTracerProvider().Tracer("test"))
 
 	raw1, _, _ := newRefreshToken()
 	_, err := svc.Refresh(context.Background(), RefreshRequest{RefreshToken: raw1})
@@ -492,7 +493,7 @@ func TestLogout_Idempotent(t *testing.T) {
 			return nil, ErrRefreshTokenNotFound
 		},
 	}
-	svc := NewService(repo, newTestTokens(t), 15*time.Minute, 7*24*time.Hour)
+	svc := NewService(repo, newTestTokens(t), 15*time.Minute, 7*24*time.Hour, noop.NewTracerProvider().Tracer("test"))
 
 	raw, _, _ := newRefreshToken()
 	if err := svc.Logout(context.Background(), LogoutRequest{RefreshToken: raw}); err != nil {
@@ -515,7 +516,7 @@ func TestLogout_RevokesFamily(t *testing.T) {
 			return 3, nil
 		},
 	}
-	svc := NewService(repo, newTestTokens(t), 15*time.Minute, 7*24*time.Hour)
+	svc := NewService(repo, newTestTokens(t), 15*time.Minute, 7*24*time.Hour, noop.NewTracerProvider().Tracer("test"))
 
 	raw, _, _ := newRefreshToken()
 	if err := svc.Logout(context.Background(), LogoutRequest{RefreshToken: raw}); err != nil {
@@ -539,7 +540,7 @@ func TestLogout_RequiresRefreshToken(t *testing.T) {
 			return nil, ErrRefreshTokenNotFound
 		},
 	}
-	svc := NewService(repo, newTestTokens(t), 15*time.Minute, 7*24*time.Hour)
+	svc := NewService(repo, newTestTokens(t), 15*time.Minute, 7*24*time.Hour, noop.NewTracerProvider().Tracer("test"))
 
 	if err := svc.Logout(context.Background(), LogoutRequest{RefreshToken: ""}); err != nil {
 		t.Errorf("Logout with empty token should be nil (idempotent), got %v", err)

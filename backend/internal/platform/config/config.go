@@ -33,6 +33,29 @@ type Config struct {
 	// this to the explicit list of frontend origins (e.g.
 	// "https://app.example.com,https://staging.example.com").
 	CORSAllowedOrigins string `mapstructure:"CORS_ALLOWED_ORIGINS"`
+
+	// OpenTelemetry — distributed tracing.
+	//
+	// OTEL_ENABLED is the master switch. When false (default) the SDK
+	// is replaced with a noop provider so every tracer.Start call is a
+	// free no-op and there is zero export overhead. Production /
+	// staging flips this on.
+	//
+	// OTEL_EXPORTER_OTLP_ENDPOINT is a full URL (e.g.
+	// "http://localhost:4318" or "https://collector.example.com:4318").
+	// Whether the client uses plaintext or TLS is derived from the URL
+	// scheme — passing "http://" forces plaintext, "https://" forces
+	// TLS. Mixing in a separate insecure flag would let a misconfigured
+	// env pair downgrade an https URL to plaintext (the last option
+	// applied wins), so we don't expose that knob.
+	//
+	// OTEL_TRACES_SAMPLER / OTEL_TRACES_SAMPLER_ARG are read directly
+	// by the OTel SDK (see https://opentelemetry.io/docs/specs/otel/
+	// configuration/sdk-environment-variables/) and intentionally not
+	// surfaced here.
+	OTelEnabled              bool   `mapstructure:"OTEL_ENABLED"`
+	OTelServiceName          string `mapstructure:"OTEL_SERVICE_NAME"`
+	OTelExporterOTLPEndpoint string `mapstructure:"OTEL_EXPORTER_OTLP_ENDPOINT"`
 }
 
 func Load() (*Config, error) {
@@ -65,6 +88,15 @@ func Load() (*Config, error) {
 	// comma-separated list of explicit origins.
 	viper.SetDefault("CORS_ALLOWED_ORIGINS", "*")
 
+	// OpenTelemetry tracing defaults. Disabled by default — every
+	// tracer.Start becomes a no-op and unit tests / testcontainers
+	// pay nothing. OTLP endpoint default points at the host loopback
+	// so a developer running `jaegertracing/all-in-one` locally can
+	// flip OTEL_ENABLED=true without further config.
+	viper.SetDefault("OTEL_ENABLED", false)
+	viper.SetDefault("OTEL_SERVICE_NAME", "nyx-backend")
+	viper.SetDefault("OTEL_EXPORTER_OTLP_ENDPOINT", "http://localhost:4318")
+
 	// Explicitly bind every env-sourced key. viper.AutomaticEnv() only checks
 	// env vars for keys already known to viper (via SetDefault, BindEnv, or a
 	// successful ReadInConfig). In Docker there's no .env file next to the
@@ -77,6 +109,8 @@ func Load() (*Config, error) {
 		"DB_CONN_MAX_LIFETIME", "DB_CONN_MAX_IDLE_TIME",
 		"REDIS_URL", "REDIS_ENABLED", "CACHE_TTL",
 		"CORS_ALLOWED_ORIGINS",
+		"OTEL_ENABLED", "OTEL_SERVICE_NAME",
+		"OTEL_EXPORTER_OTLP_ENDPOINT",
 	} {
 		_ = viper.BindEnv(key)
 	}

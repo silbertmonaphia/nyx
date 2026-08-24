@@ -14,6 +14,7 @@ import (
 	"github.com/golang-migrate/migrate/v4"
 	_ "github.com/golang-migrate/migrate/v4/database/postgres"
 	_ "github.com/golang-migrate/migrate/v4/source/file"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/rs/zerolog/log"
 )
@@ -22,13 +23,17 @@ import (
 // retry loop tolerates a Postgres container that is still booting
 // during local development; the first successful ping returns.
 //
+// tracer is an optional pgx.QueryTracer that emits one OTel span per
+// Query / QueryRow / Exec call. Pass nil when tracing is disabled —
+// pgxpool takes its existing fast path with zero overhead.
+//
 // Pool tuning fields:
 //   - DBMaxOpenConns    -> MaxConns
 //   - DBMaxIdleConns    -> MinConns (pgxpool has no MaxIdleConns equivalent;
 //     MinConns is the closest fit and keeps that many connections warm)
 //   - DBConnMaxLifetime -> MaxConnLifetime
 //   - DBConnMaxIdleTime -> MaxConnIdleTime
-func New(cfg *config.Config) (*pgxpool.Pool, error) {
+func New(ctx context.Context, cfg *config.Config, tracer pgx.QueryTracer) (*pgxpool.Pool, error) {
 	maxLifetime, err := time.ParseDuration(cfg.DBConnMaxLifetime)
 	if err != nil {
 		return nil, fmt.Errorf("invalid DB_CONN_MAX_LIFETIME: %w", err)
@@ -48,11 +53,12 @@ func New(cfg *config.Config) (*pgxpool.Pool, error) {
 			poolCfg.MinConns = int32(cfg.DBMaxIdleConns)
 			poolCfg.MaxConnLifetime = maxLifetime
 			poolCfg.MaxConnIdleTime = maxIdleTime
+			poolCfg.ConnConfig.Tracer = tracer
 
-			pool, err := pgxpool.NewWithConfig(context.Background(), poolCfg)
+			pool, err := pgxpool.NewWithConfig(ctx, poolCfg)
 			if err != nil {
 				lastErr = err
-			} else if err := pool.Ping(context.Background()); err == nil {
+			} else if err := pool.Ping(ctx); err == nil {
 				log.Info().Msg("Successfully connected to the database")
 				return pool, nil
 			} else {

@@ -31,6 +31,25 @@ services:
       timeout: 3s
       retries: 10
 
+  # OpenTelemetry tracing — Jaeger v1.62+ ingests OTLP/HTTP directly
+  # (no sidecar collector needed). COLLECTOR_OTLP_ENABLED turns the
+  # OTLP receiver on; the default UI lives on :16686 and the OTLP
+  # HTTP receiver on :4318. healthcheck uses the admin port (14269)
+  # so backend can wait for it via depends_on.
+  jaeger:
+    image: jaegertracing/all-in-one:1.62
+    restart: always
+    environment:
+      - COLLECTOR_OTLP_ENABLED=true
+    ports:
+      - "16686:16686" # UI
+      - "4318:4318"   # OTLP HTTP
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:14269/status"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
   backend:
     build:
       context: ./backend
@@ -48,10 +67,18 @@ services:
       - REDIS_ENABLED=${REDIS_ENABLED:-true}
       - CACHE_TTL=${CACHE_TTL:-5m}
       - JWT_SECRET=${JWT_SECRET}
+      # OpenTelemetry — on by default in compose so spans flow into
+      # the local Jaeger UI without extra env-var setup. Override
+      # OTEL_ENABLED=false in .env to disable.
+      - OTEL_ENABLED=${OTEL_ENABLED:-true}
+      - OTEL_EXPORTER_OTLP_ENDPOINT=http://jaeger:4318
+      - OTEL_SERVICE_NAME=${OTEL_SERVICE_NAME:-nyx-backend}
     depends_on:
       db:
         condition: service_healthy
       redis:
+        condition: service_healthy
+      jaeger:
         condition: service_healthy
 
   frontend:

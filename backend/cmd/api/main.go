@@ -15,6 +15,7 @@ import (
 	"nyx/internal/platform/cache"
 	"nyx/internal/platform/config"
 	"nyx/internal/platform/database"
+	"nyx/internal/platform/observability"
 	"nyx/internal/user"
 	userdb "nyx/internal/user/db"
 
@@ -23,6 +24,8 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/propagation"
 )
 
 func main() {
@@ -60,8 +63,24 @@ func main() {
 		log.Fatal().Err(err).Msg("invalid JWT secret")
 	}
 
+	// Initialise OpenTelemetry tracing. When OTEL_ENABLED is false
+	// (the default) this returns a noop provider + no-op shutdown —
+	// every tracer.Start becomes free and pgx skips its tracer
+	// callback entirely. When enabled, the OTLP/HTTP exporter
+	// buffers spans and flushes every 5s; the deferred Shutdown
+	// flushes any remainder on SIGTERM (3s deadline, separate ctx
+	// so server.Shutdown's deadline doesn't truncate it).
+	tracing := setupTracing(cfg)
+	defer func() {
+		sctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
+		if shutdownErr := tracing.Shutdown(sctx); shutdownErr != nil {
+			log.Warn().Err(shutdownErr).Msg("tracer shutdown error")
+		}
+	}()
+
 	// Initialize database
-	db, err := database.New(cfg)
+	db, err := database.New(context.Background(), cfg, observability.NewPgxTracer(tracing.Provider))
 	if err != nil {
 		log.Fatal().Err(err).Msg("Could not connect to database")
 	}
@@ -97,22 +116,26 @@ func main() {
 
 	// Initialize Movie domain
 	movieRepo := movie.NewRepository(db)
-	movieService := movie.NewService(movieRepo, cacheClient, cacheTTL)
+	movieService := movie.NewService(movieRepo, cacheClient, cacheTTL, tracing.Provider.Tracer("nyx.movie"))
 	movieHandler := movie.NewHandler(movieService)
 
 	// Initialize User domain. accessTTL / refreshTTL come from viper
 	// (JWT_ACCESS_TTL / JWT_REFRESH_TTL); config.Load has already
 	// validated them as positive durations and refresh > access.
 	userRepo := user.NewRepository(userdb.New(db))
-	userService := user.NewService(userRepo, tokens, accessTTL, refreshTTL)
+	userService := user.NewService(userRepo, tokens, accessTTL, refreshTTL, tracing.Provider.Tracer("nyx.user"))
 	userHandler := user.NewHandler(userService)
 
 	// Build chi router. Middleware order (outermost first):
-	//   RequestID → Recoverer → Prometheus → Logging → CORS → RateLimit
-	// CORS sits inside logging so OPTIONS preflight failures still get
-	// logged; rate-limit sits inside CORS so a throttled request still
-	// returns CORS headers.
+	//   Tracing → RequestID → RealIP → Recoverer → Prometheus
+	//     → Logging → CORS → RateLimit → maxBodyBytes
+	// Tracing sits first so the OTel server span is the parent of
+	// every child span the application opens (service, pgx). CORS
+	// sits inside logging so OPTIONS preflight failures still get
+	// logged; rate-limit sits inside CORS so a throttled request
+	// still returns CORS headers.
 	router := chi.NewRouter()
+	router.Use(middleware.Tracing(cfg.OTelServiceName))
 	router.Use(middleware.RequestID)
 	router.Use(middleware.RealIP)
 	router.Use(middleware.Recoverer)
@@ -183,6 +206,29 @@ func main() {
 // cap at the io.Reader level — huma's JSON decoder sees io.ErrUnexpectedEOF
 // when the limit is hit and surfaces a 400.
 const maxBodyBytesLimit = 1 << 20
+
+// setupTracing initialises the OTel tracer provider and installs the
+// W3C TraceContext + Baggage composite propagator on the global. On
+// OTEL_ENABLED=false this is a noop setup; on enabled it returns a
+// live Tracing whose Shutdown must be deferred by the caller.
+//
+// Extracted from main() to keep the wiring function under the
+// project's cyclomatic-complexity budget.
+func setupTracing(cfg *config.Config) *observability.Tracing {
+	tracing, err := observability.Setup(context.Background(), cfg)
+	if err != nil {
+		log.Fatal().Err(err).Msg("tracing setup failed")
+	}
+	otel.SetTracerProvider(tracing.Provider)
+	// Composite propagator: W3C TraceContext + Baggage. Without
+	// these, inbound `traceparent` headers from upstream calls are
+	// silently dropped and we never join the upstream trace.
+	otel.SetTextMapPropagator(propagation.NewCompositeTextMapPropagator(
+		propagation.TraceContext{},
+		propagation.Baggage{},
+	))
+	return tracing
+}
 
 // maxBodyBytes returns a middleware that wraps r.Body in an
 // http.MaxBytesReader so oversized payloads fail fast.

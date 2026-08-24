@@ -8,6 +8,7 @@ import (
 	"nyx/internal/platform/cache"
 
 	"github.com/alicebob/miniredis/v2"
+	"go.opentelemetry.io/otel/trace/noop"
 )
 
 // stubRepo captures arguments and returns canned values. It avoids
@@ -36,7 +37,7 @@ func newServiceWithCache(t *testing.T) (Service, *stubRepo, *miniredis.Miniredis
 	}
 	t.Cleanup(func() { _ = c.Close() })
 	repo := &stubRepo{}
-	svc := NewService(repo, c, time.Minute)
+	svc := NewService(repo, c, time.Minute, noop.NewTracerProvider().Tracer("test"))
 	return svc, repo, mr
 }
 

@@ -20,6 +20,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5"
 	"github.com/pashagolub/pgxmock/v3"
+	"go.opentelemetry.io/otel/trace/noop"
 )
 
 // setupTestRouter builds a chi + huma router wired with the same movie
@@ -95,7 +96,7 @@ func newTestTokens(t *testing.T) auth.TokenService {
 
 func TestHealthHandler(t *testing.T) {
 	repo, mock := newMockRepo(t)
-	service := NewService(repo, cache.NewNoop(), time.Minute)
+	service := NewService(repo, cache.NewNoop(), time.Minute, noop.NewTracerProvider().Tracer("test"))
 	h := NewHandler(service)
 
 	mock.ExpectPing()
@@ -123,7 +124,7 @@ func TestHealthHandler(t *testing.T) {
 
 func TestHealthHandlerError(t *testing.T) {
 	repo, mock := newMockRepo(t)
-	service := NewService(repo, cache.NewNoop(), time.Minute)
+	service := NewService(repo, cache.NewNoop(), time.Minute, noop.NewTracerProvider().Tracer("test"))
 	h := NewHandler(service)
 
 	mock.ExpectPing().WillReturnError(fmt.Errorf("db connection failed"))
@@ -151,7 +152,7 @@ func TestHealthHandlerError(t *testing.T) {
 
 func TestGetMoviesHandler(t *testing.T) {
 	repo, mock := newMockRepo(t)
-	service := NewService(repo, cache.NewNoop(), time.Minute)
+	service := NewService(repo, cache.NewNoop(), time.Minute, noop.NewTracerProvider().Tracer("test"))
 	h := NewHandler(service)
 
 	now := time.Now()
@@ -198,7 +199,7 @@ func TestGetMoviesHandler(t *testing.T) {
 
 func TestGetMoviesHandlerPaginationParams(t *testing.T) {
 	repo, mock := newMockRepo(t)
-	service := NewService(repo, cache.NewNoop(), time.Minute)
+	service := NewService(repo, cache.NewNoop(), time.Minute, noop.NewTracerProvider().Tracer("test"))
 	h := NewHandler(service)
 
 	rows := pgxmock.NewRows([]string{"id", "title", "description", "rating", "created_at", "updated_at", "deleted_at"})
@@ -238,7 +239,7 @@ func TestGetMoviesHandlerPaginationParams(t *testing.T) {
 
 func TestGetMoviesHandlerPageSizeClamped(t *testing.T) {
 	repo, mock := newMockRepo(t)
-	service := NewService(repo, cache.NewNoop(), time.Minute)
+	service := NewService(repo, cache.NewNoop(), time.Minute, noop.NewTracerProvider().Tracer("test"))
 	h := NewHandler(service)
 
 	rows := pgxmock.NewRows([]string{"id", "title", "description", "rating", "created_at", "updated_at", "deleted_at"})
@@ -275,7 +276,7 @@ func TestGetMoviesHandlerPageSizeClamped(t *testing.T) {
 
 func TestGetMoviesHandlerSearch(t *testing.T) {
 	repo, mock := newMockRepo(t)
-	service := NewService(repo, cache.NewNoop(), time.Minute)
+	service := NewService(repo, cache.NewNoop(), time.Minute, noop.NewTracerProvider().Tracer("test"))
 	h := NewHandler(service)
 
 	now := time.Now()
@@ -323,7 +324,7 @@ func TestGetMoviesHandlerSearch(t *testing.T) {
 
 func TestCreateMovieHandler(t *testing.T) {
 	repo, mock := newMockRepo(t)
-	service := NewService(repo, cache.NewNoop(), time.Minute)
+	service := NewService(repo, cache.NewNoop(), time.Minute, noop.NewTracerProvider().Tracer("test"))
 	h := NewHandler(service)
 
 	newMovie := Movie{
@@ -398,7 +399,7 @@ func TestCreateMovieHandlerValidation(t *testing.T) {
 
 func TestUpdateMovieHandler(t *testing.T) {
 	repo, mock := newMockRepo(t)
-	service := NewService(repo, cache.NewNoop(), time.Minute)
+	service := NewService(repo, cache.NewNoop(), time.Minute, noop.NewTracerProvider().Tracer("test"))
 	h := NewHandler(service)
 
 	updatedMovie := Movie{
@@ -444,7 +445,7 @@ func TestUpdateMovieHandler(t *testing.T) {
 
 func TestDeleteMovieHandler(t *testing.T) {
 	repo, mock := newMockRepo(t)
-	service := NewService(repo, cache.NewNoop(), time.Minute)
+	service := NewService(repo, cache.NewNoop(), time.Minute, noop.NewTracerProvider().Tracer("test"))
 	h := NewHandler(service)
 
 	mock.ExpectExec(`UPDATE movies SET deleted_at`).
@@ -472,7 +473,7 @@ func TestDeleteMovieHandler(t *testing.T) {
 // handler maps that to HTTP 404.
 func TestUpdateMovieHandlerNotFound(t *testing.T) {
 	repo, mock := newMockRepo(t)
-	service := NewService(repo, cache.NewNoop(), time.Minute)
+	service := NewService(repo, cache.NewNoop(), time.Minute, noop.NewTracerProvider().Tracer("test"))
 	h := NewHandler(service)
 
 	updatedMovie := Movie{Title: "Anything", Rating: 5.0}
@@ -501,7 +502,7 @@ func TestUpdateMovieHandlerNotFound(t *testing.T) {
 // path in the repo. The handler maps ErrNotFound to HTTP 404.
 func TestDeleteMovieHandlerNotFound(t *testing.T) {
 	repo, mock := newMockRepo(t)
-	service := NewService(repo, cache.NewNoop(), time.Minute)
+	service := NewService(repo, cache.NewNoop(), time.Minute, noop.NewTracerProvider().Tracer("test"))
 	h := NewHandler(service)
 
 	mock.ExpectExec(`UPDATE movies SET deleted_at`).
@@ -537,7 +538,7 @@ func TestErrNotFoundIsError(t *testing.T) {
 // underlying pgx error.
 func TestCreateMovieHandler_InternalErrorHidesInternalDetails(t *testing.T) {
 	repo, mock := newMockRepo(t)
-	service := NewService(repo, cache.NewNoop(), time.Minute)
+	service := NewService(repo, cache.NewNoop(), time.Minute, noop.NewTracerProvider().Tracer("test"))
 	h := NewHandler(service)
 
 	body, _ := json.Marshal(Movie{Title: "X", Rating: 5})
@@ -582,7 +583,7 @@ func TestCreateMovieHandler_InternalErrorHidesInternalDetails(t *testing.T) {
 // through MapError.
 func TestUpdateMovieHandler_InternalErrorHidesInternalDetails(t *testing.T) {
 	repo, mock := newMockRepo(t)
-	service := NewService(repo, cache.NewNoop(), time.Minute)
+	service := NewService(repo, cache.NewNoop(), time.Minute, noop.NewTracerProvider().Tracer("test"))
 	h := NewHandler(service)
 
 	body, _ := json.Marshal(Movie{Title: "X", Rating: 5})
@@ -617,7 +618,7 @@ func TestUpdateMovieHandler_InternalErrorHidesInternalDetails(t *testing.T) {
 // non-sentinel delete branch, funneled through MapError.
 func TestDeleteMovieHandler_InternalErrorHidesInternalDetails(t *testing.T) {
 	repo, mock := newMockRepo(t)
-	service := NewService(repo, cache.NewNoop(), time.Minute)
+	service := NewService(repo, cache.NewNoop(), time.Minute, noop.NewTracerProvider().Tracer("test"))
 	h := NewHandler(service)
 
 	mock.ExpectExec(`UPDATE movies SET deleted_at`).

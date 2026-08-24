@@ -15,6 +15,7 @@ import (
 	"github.com/danielgtaylor/huma/v2"
 	"github.com/danielgtaylor/huma/v2/adapters/humachi"
 	"github.com/go-chi/chi/v5"
+	"go.opentelemetry.io/otel/trace/noop"
 	"golang.org/x/crypto/bcrypt"
 )
 
@@ -50,7 +51,7 @@ func newTestRouterWithRepo(repo Repository) *chi.Mux {
 	if err != nil {
 		panic(err) // test setup; never expected to fail
 	}
-	return setupTestRouter(NewHandler(NewService(repo, tokens, 15*time.Minute, 7*24*time.Hour)), tokens)
+	return setupTestRouter(NewHandler(NewService(repo, tokens, 15*time.Minute, 7*24*time.Hour, noop.NewTracerProvider().Tracer("test"))), tokens)
 }
 
 // testHash bcrypt-hashes plain at MinCost. The default cost is ~60ms

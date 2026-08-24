@@ -7,6 +7,7 @@ import (
 
 	"nyx/internal/platform/auth"
 
+	"go.opentelemetry.io/otel/trace"
 	"golang.org/x/crypto/bcrypt"
 )
 
@@ -49,6 +50,7 @@ type service struct {
 	tokens     auth.TokenService
 	accessTTL  time.Duration
 	refreshTTL time.Duration
+	tracer     trace.Tracer
 }
 
 // NewService builds the user/auth service. The two TTLs feed both
@@ -56,12 +58,15 @@ type service struct {
 // refresh-token row expiry (refreshTTL is stamped onto the row when
 // CreateRefreshToken runs). They MUST be positive; the cmd/api wiring
 // parses them once at startup and refuses to boot on a zero value.
-func NewService(repo Repository, tokens auth.TokenService, accessTTL, refreshTTL time.Duration) Service {
+// tracer emits one OTel span per public method; pass the noop tracer
+// when tracing is disabled — Start becomes free.
+func NewService(repo Repository, tokens auth.TokenService, accessTTL, refreshTTL time.Duration, tracer trace.Tracer) Service {
 	return &service{
 		repo:       repo,
 		tokens:     tokens,
 		accessTTL:  accessTTL,
 		refreshTTL: refreshTTL,
+		tracer:     tracer,
 	}
 }
 
@@ -89,6 +94,9 @@ func (s *service) accessExpires() time.Time {
 }
 
 func (s *service) Register(ctx context.Context, req RegisterRequest) (*AuthResponse, error) {
+	ctx, span := s.tracer.Start(ctx, "user.Register", trace.WithSpanKind(trace.SpanKindInternal))
+	defer span.End()
+
 	hashedPassword, err := bcrypt.GenerateFromPassword([]byte(req.Password), bcrypt.DefaultCost)
 	if err != nil {
 		return nil, err
@@ -123,6 +131,9 @@ func (s *service) Register(ctx context.Context, req RegisterRequest) (*AuthRespo
 }
 
 func (s *service) Login(ctx context.Context, req LoginRequest) (*AuthResponse, error) {
+	ctx, span := s.tracer.Start(ctx, "user.Login", trace.WithSpanKind(trace.SpanKindInternal))
+	defer span.End()
+
 	u, err := s.repo.GetUserByUsername(ctx, req.Username)
 	if err != nil {
 		if errors.Is(err, ErrUserNotFound) {
@@ -166,6 +177,9 @@ func (s *service) Login(ctx context.Context, req LoginRequest) (*AuthResponse, e
 // the second caller observes the new revoked_at on the old row and
 // takes the reuse branch above.
 func (s *service) Refresh(ctx context.Context, req RefreshRequest) (*AuthResponse, error) {
+	ctx, span := s.tracer.Start(ctx, "user.Refresh", trace.WithSpanKind(trace.SpanKindInternal))
+	defer span.End()
+
 	suppliedHash := sha256Sum(req.RefreshToken)
 
 	row, err := s.repo.GetRefreshTokenByHash(ctx, suppliedHash)
@@ -229,6 +243,9 @@ func (s *service) Refresh(ctx context.Context, req RefreshRequest) (*AuthRespons
 // phone also logs out the laptop) — per-device logout is a deliberate
 // follow-up tracked in FUTURE.md.
 func (s *service) Logout(ctx context.Context, req LogoutRequest) error {
+	ctx, span := s.tracer.Start(ctx, "user.Logout", trace.WithSpanKind(trace.SpanKindInternal))
+	defer span.End()
+
 	suppliedHash := sha256Sum(req.RefreshToken)
 	row, err := s.repo.GetRefreshTokenByHash(ctx, suppliedHash)
 	if err != nil {

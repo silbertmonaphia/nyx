@@ -60,7 +60,7 @@ Full stack: `cp .env.example .env && sudo docker compose up --build -d`. DB host
 
 # Open roadmap (next candidates)
 
-- Distributed Tracing (OTel) — `go.opentelemetry.io/otel` is in `go.mod`; no exporter wired in `main.go` yet.
+- Distributed Tracing (OTel) — landed. `OTEL_ENABLED=false` by default. Set `OTEL_ENABLED=true` + `OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318` to send spans to a local Jaeger all-in-one (`docker compose up jaeger`; UI on `http://localhost:16686`). Compose runs Jaeger + backend with `OTEL_ENABLED=true` by default. See `FUTURE_BACKEND.md` §5.
 - Container Version Conflict Guardrail — script checks for Postgres major-version volume upgrades.
 - Persist Auth Token Securely — JWT is in `localStorage` via Zustand `persist`. httpOnly cookies (or a documented XSS caveat) pending.
 
