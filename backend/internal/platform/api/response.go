@@ -1,8 +1,15 @@
 // Package api holds cross-cutting HTTP response shapes. The ErrorResponse
 // envelope is the canonical JSON shape for every error returned by the
 // Nyx API. Handlers, middleware, and huma operations all funnel their
-// errors through WriteError or by returning *ErrorResponse directly so
-// the envelope stays identical across the codebase.
+// errors through WriteError, MapError, or by returning *ErrorResponse
+// directly so the envelope stays identical across the codebase.
+//
+// MapError is the standard funnel for handler-layer errors: callers
+// register their domain sentinels once (typically from each domain's
+// init() block) and every handler shrinks to a single
+// `return nil, api.MapError(ctx, err, "safe detail")` line. The
+// unknown-error path reuses ClassifyAndLog so internal error text
+// never reaches the wire.
 //
 // ErrorResponse also implements huma.StatusError, so huma operations
 // can `return nil, &api.ErrorResponse{...}` and huma will write the

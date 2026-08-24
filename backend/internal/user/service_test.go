@@ -142,24 +142,36 @@ func TestRegister_HappyPath(t *testing.T) {
 }
 
 // TestRegister_RepoUniqueViolationBubbles confirms the service does
-// not silently swallow ErrUserAlreadyExists — the handler maps it to
-// HTTP 409. Anything else leaking through would mask the real cause
-// from the client.
+// not silently swallow a unique-violation sentinel — the handler maps
+// each one to HTTP 409 with a distinct wire message. Anything else
+// leaking through would mask the real cause from the client.
 func TestRegister_RepoUniqueViolationBubbles(t *testing.T) {
-	repo := &stubRepo{
-		createFn: func(_ context.Context, _ *User) error {
-			return ErrUserAlreadyExists
-		},
+	cases := []struct {
+		name     string
+		sentinel error
+	}{
+		{"UsernameTaken", ErrUsernameTaken},
+		{"EmailTaken", ErrEmailTaken},
 	}
-	svc := NewService(repo, newTestTokens(t), 15*time.Minute, 7*24*time.Hour)
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			want := tc.sentinel
+			repo := &stubRepo{
+				createFn: func(_ context.Context, _ *User) error {
+					return want
+				},
+			}
+			svc := NewService(repo, newTestTokens(t), 15*time.Minute, 7*24*time.Hour)
 
-	_, err := svc.Register(context.Background(), RegisterRequest{
-		Username: "alice",
-		Email:    "alice@example.com",
-		Password: "hunter2",
-	})
-	if !errors.Is(err, ErrUserAlreadyExists) {
-		t.Errorf("expected ErrUserAlreadyExists to surface, got %v", err)
+			_, err := svc.Register(context.Background(), RegisterRequest{
+				Username: "alice",
+				Email:    "alice@example.com",
+				Password: "hunter2",
+			})
+			if !errors.Is(err, want) {
+				t.Errorf("expected %v to surface, got %v", want, err)
+			}
+		})
 	}
 }
 

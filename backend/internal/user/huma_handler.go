@@ -2,11 +2,9 @@ package user
 
 import (
 	"context"
-	"errors"
 	"net/http"
 
 	"github.com/danielgtaylor/huma/v2"
-	"github.com/rs/zerolog/log"
 
 	"nyx/internal/middleware"
 	"nyx/internal/platform/api"
@@ -49,7 +47,7 @@ func RegisterUserOpsTest(api huma.API, h *Handler, tokens auth.TokenService) {
 		Method:      http.MethodPost,
 		Path:        "/api/register",
 		Summary:     "Register a user",
-		Description: "Create a new user account. Returns 409 when the username is already taken.",
+		Description: "Create a new user account. Returns 409 when the username or email is already taken.",
 		Tags:        []string{"auth"},
 	}, h.Register)
 
@@ -135,15 +133,7 @@ type logoutOutput struct {
 func (h *Handler) Register(ctx context.Context, in *registerInput) (*registerOutput, error) {
 	res, err := h.service.Register(ctx, in.Body)
 	if err != nil {
-		if errors.Is(err, ErrUserAlreadyExists) {
-			return nil, &api.ErrorResponse{Message: "User already exists", Code: http.StatusConflict}
-		}
-		log.Error().Err(err).Msg("Error registering user")
-		return nil, &api.ErrorResponse{
-			Message: "Failed to register user",
-			Code:    http.StatusInternalServerError,
-			Details: api.ClassifyAndLog(ctx, err, "Failed to register user"),
-		}
+		return nil, api.MapError(ctx, err, "Failed to register user")
 	}
 	return &registerOutput{Status: http.StatusCreated, Body: *res}, nil
 }
@@ -151,42 +141,21 @@ func (h *Handler) Register(ctx context.Context, in *registerInput) (*registerOut
 func (h *Handler) Login(ctx context.Context, in *loginInput) (*loginOutput, error) {
 	res, err := h.service.Login(ctx, in.Body)
 	if err != nil {
-		if errors.Is(err, ErrInvalidCredentials) {
-			return nil, &api.ErrorResponse{Message: "Invalid credentials", Code: http.StatusUnauthorized}
-		}
-		log.Error().Err(err).Msg("Error logging in user")
-		return nil, &api.ErrorResponse{
-			Message: "Failed to login",
-			Code:    http.StatusInternalServerError,
-			Details: api.ClassifyAndLog(ctx, err, "Failed to login"),
-		}
+		return nil, api.MapError(ctx, err, "Failed to login")
 	}
 	return &loginOutput{Body: *res}, nil
 }
 
 // Refresh handler. The three sentinel errors all map to 401 with
-// distinct static messages — the wire must never echo err.Error()
-// (per the api.ClassifyAndLog contract). Reuse vs. expired are
-// distinguishable for clients that care (reuse = "your token was
-// already used, please re-login"; expired = "your session timed
-// out, please re-login") but a defensive client can collapse them.
+// distinct static messages; reuse vs. expired are distinguishable for
+// clients that care (reuse = "your token was already used, please
+// re-login"; expired = "your session timed out, please re-login") but
+// a defensive client can collapse them. MapError is the only error
+// path.
 func (h *Handler) Refresh(ctx context.Context, in *refreshInput) (*refreshOutput, error) {
 	res, err := h.service.Refresh(ctx, in.Body)
 	if err != nil {
-		switch {
-		case errors.Is(err, ErrInvalidRefreshToken):
-			return nil, &api.ErrorResponse{Message: "Invalid refresh token", Code: http.StatusUnauthorized}
-		case errors.Is(err, ErrRefreshTokenReuse):
-			return nil, &api.ErrorResponse{Message: "Refresh token revoked", Code: http.StatusUnauthorized}
-		case errors.Is(err, ErrRefreshTokenExpired):
-			return nil, &api.ErrorResponse{Message: "Refresh token expired", Code: http.StatusUnauthorized}
-		}
-		log.Error().Err(err).Msg("Error refreshing token")
-		return nil, &api.ErrorResponse{
-			Message: "Failed to refresh token",
-			Code:    http.StatusInternalServerError,
-			Details: api.ClassifyAndLog(ctx, err, "Failed to refresh token"),
-		}
+		return nil, api.MapError(ctx, err, "Failed to refresh token")
 	}
 	return &refreshOutput{Body: *res}, nil
 }
@@ -197,12 +166,7 @@ func (h *Handler) Refresh(ctx context.Context, in *refreshInput) (*refreshOutput
 // matching the gin-era contract the frontend already expects.
 func (h *Handler) Logout(ctx context.Context, in *logoutInput) (*logoutOutput, error) {
 	if err := h.service.Logout(ctx, in.Body); err != nil {
-		log.Error().Err(err).Msg("Error logging out")
-		return nil, &api.ErrorResponse{
-			Message: "Failed to logout",
-			Code:    http.StatusInternalServerError,
-			Details: api.ClassifyAndLog(ctx, err, "Failed to logout"),
-		}
+		return nil, api.MapError(ctx, err, "Failed to logout")
 	}
 	return &logoutOutput{Status: http.StatusNoContent}, nil
 }

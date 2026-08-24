@@ -64,20 +64,45 @@ func (s *stubQuerier) RevokeRefreshTokenByID(_ context.Context, _ int64) error {
 	return s.revokeByIDErr
 }
 
-func TestCreateUser_MapsUniqueViolationToSentinel(t *testing.T) {
+func TestCreateUser_UsernameUniqueViolationMapsToErrUsernameTaken(t *testing.T) {
 	stub := &stubQuerier{
-		insertErr: &pgconn.PgError{Code: "23505", Message: "duplicate key value violates unique constraint"},
+		insertErr: &pgconn.PgError{
+			Code:           "23505",
+			ConstraintName: "users_username_key",
+			Message:        "duplicate key value violates unique constraint",
+		},
 	}
 	repo := NewRepository(stub)
 
 	u := &User{Username: "alice", Email: "alice@example.com", PasswordHash: "hash"}
 	err := repo.CreateUser(context.Background(), u)
 
-	if !errors.Is(err, ErrUserAlreadyExists) {
-		t.Errorf("expected ErrUserAlreadyExists, got %v", err)
+	if !errors.Is(err, ErrUsernameTaken) {
+		t.Errorf("expected ErrUsernameTaken, got %v", err)
 	}
 	if stub.insertCalls != 1 {
 		t.Errorf("expected 1 InsertUser call, got %d", stub.insertCalls)
+	}
+}
+
+func TestCreateUser_EmailUniqueViolationMapsToErrEmailTaken(t *testing.T) {
+	stub := &stubQuerier{
+		insertErr: &pgconn.PgError{
+			Code:           "23505",
+			ConstraintName: "users_email_key",
+			Message:        "duplicate key value violates unique constraint",
+		},
+	}
+	repo := NewRepository(stub)
+
+	u := &User{Username: "bob", Email: "alice@example.com", PasswordHash: "hash"}
+	err := repo.CreateUser(context.Background(), u)
+
+	if !errors.Is(err, ErrEmailTaken) {
+		t.Errorf("expected ErrEmailTaken, got %v", err)
+	}
+	if errors.Is(err, ErrUsernameTaken) {
+		t.Errorf("email collision must not surface as ErrUsernameTaken")
 	}
 }
 
@@ -89,11 +114,35 @@ func TestCreateUser_PropagatesNonUniqueErrors(t *testing.T) {
 	u := &User{Username: "alice"}
 	err := repo.CreateUser(context.Background(), u)
 
-	if errors.Is(err, ErrUserAlreadyExists) {
-		t.Errorf("non-unique error must not map to ErrUserAlreadyExists")
+	if errors.Is(err, ErrUsernameTaken) || errors.Is(err, ErrEmailTaken) {
+		t.Errorf("non-unique error must not map to a user-collision sentinel")
 	}
 	if !errors.Is(err, other) {
 		t.Errorf("expected original error to propagate, got %v", err)
+	}
+}
+
+// TestCreateRefreshToken_TokenHashUniqueViolationMapsToErrRefreshTokenCollision
+// covers the new constraint-name-aware path: the
+// idx_refresh_tokens_token_hash unique-index collision (defense-in-depth
+// against a sha256 hash collision; ~10^-38 per row) maps to the
+// ErrRefreshTokenCollision sentinel, not a raw pgconn.PgError bubbling
+// up to the 500 branch.
+func TestCreateRefreshToken_TokenHashUniqueViolationMapsToErrRefreshTokenCollision(t *testing.T) {
+	stub := &stubQuerier{
+		createRefreshErr: &pgconn.PgError{
+			Code:           "23505",
+			ConstraintName: "idx_refresh_tokens_token_hash",
+			Message:        "duplicate key value violates unique constraint",
+		},
+	}
+	repo := NewRepository(stub)
+
+	expires := time.Now().Add(time.Hour)
+	_, err := repo.CreateRefreshToken(context.Background(), 1, []byte("hash"), expires)
+
+	if !errors.Is(err, ErrRefreshTokenCollision) {
+		t.Errorf("expected ErrRefreshTokenCollision, got %v", err)
 	}
 }
 

@@ -532,8 +532,9 @@ func TestErrNotFoundIsError(t *testing.T) {
 
 // TestCreateMovieHandler_InternalErrorHidesInternalDetails pins the
 // safe-detail guarantee of commit 4: when the repo returns a non-
-// sentinel error, the response body must carry the static "Failed to
-// create movie" string and must NOT echo the underlying pgx error.
+// sentinel error, the response body must carry a static wire message
+// (now "Internal server error" via MapError) and must NOT echo the
+// underlying pgx error.
 func TestCreateMovieHandler_InternalErrorHidesInternalDetails(t *testing.T) {
 	repo, mock := newMockRepo(t)
 	service := NewService(repo, cache.NewNoop(), time.Minute)
@@ -562,8 +563,8 @@ func TestCreateMovieHandler_InternalErrorHidesInternalDetails(t *testing.T) {
 	if err := json.Unmarshal(rr.Body.Bytes(), &env); err != nil {
 		t.Fatalf("unmarshal envelope: %v; body=%s", err, rr.Body.String())
 	}
-	if env.Message != "Database error" {
-		t.Errorf("envelope.error = %q, want %q", env.Message, "Database error")
+	if env.Message != "Internal server error" {
+		t.Errorf("envelope.error = %q, want %q", env.Message, "Internal server error")
 	}
 	if env.Details != "Failed to create movie" {
 		t.Errorf("envelope.details = %v, want %q", env.Details, "Failed to create movie")
@@ -577,7 +578,8 @@ func TestCreateMovieHandler_InternalErrorHidesInternalDetails(t *testing.T) {
 }
 
 // TestUpdateMovieHandler_InternalErrorHidesInternalDetails covers the
-// non-sentinel update branch — same wire contract as create.
+// non-sentinel update branch — same wire contract as create, funneled
+// through MapError.
 func TestUpdateMovieHandler_InternalErrorHidesInternalDetails(t *testing.T) {
 	repo, mock := newMockRepo(t)
 	service := NewService(repo, cache.NewNoop(), time.Minute)
@@ -612,7 +614,7 @@ func TestUpdateMovieHandler_InternalErrorHidesInternalDetails(t *testing.T) {
 }
 
 // TestDeleteMovieHandler_InternalErrorHidesInternalDetails covers the
-// non-sentinel delete branch.
+// non-sentinel delete branch, funneled through MapError.
 func TestDeleteMovieHandler_InternalErrorHidesInternalDetails(t *testing.T) {
 	repo, mock := newMockRepo(t)
 	service := NewService(repo, cache.NewNoop(), time.Minute)

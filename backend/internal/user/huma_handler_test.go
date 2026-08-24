@@ -137,12 +137,14 @@ func TestRegisterHandler_Created(t *testing.T) {
 	}
 }
 
-// TestRegisterHandler_DuplicateUsernameReturns409 pins the wiring of the
-// ErrUserAlreadyExists branch. The service test covers the sentinel
-// bubbling up; this covers the handler translating it to HTTP 409.
-func TestRegisterHandler_DuplicateUsernameReturns409(t *testing.T) {
+// TestRegisterHandler_UsernameTakenReturns409 pins the wiring of the
+// ErrUsernameTaken branch. The service test covers the sentinel
+// bubbling up; this covers the handler translating it to HTTP 409
+// with the static "Username already taken" message (no err.Error()
+// echo).
+func TestRegisterHandler_UsernameTakenReturns409(t *testing.T) {
 	repo := &stubRepo{
-		createFn: func(_ context.Context, _ *User) error { return ErrUserAlreadyExists },
+		createFn: func(_ context.Context, _ *User) error { return ErrUsernameTaken },
 	}
 	rr := postJSON(t, newTestRouterWithRepo(repo), "/api/register", RegisterRequest{
 		Username: "alice",
@@ -151,8 +153,27 @@ func TestRegisterHandler_DuplicateUsernameReturns409(t *testing.T) {
 	})
 
 	env := decodeEnvelope(t, rr, http.StatusConflict)
-	if env.Message != "User already exists" {
-		t.Errorf("envelope.error = %q, want %q", env.Message, "User already exists")
+	if env.Message != "Username already taken" {
+		t.Errorf("envelope.error = %q, want %q", env.Message, "Username already taken")
+	}
+}
+
+// TestRegisterHandler_EmailTakenReturns409 pins the wiring of the
+// ErrEmailTaken branch — separate from the username case above so the
+// wire message and 409 mapping are both verified.
+func TestRegisterHandler_EmailTakenReturns409(t *testing.T) {
+	repo := &stubRepo{
+		createFn: func(_ context.Context, _ *User) error { return ErrEmailTaken },
+	}
+	rr := postJSON(t, newTestRouterWithRepo(repo), "/api/register", RegisterRequest{
+		Username: "alice",
+		Email:    "alice@example.com",
+		Password: "hunter2",
+	})
+
+	env := decodeEnvelope(t, rr, http.StatusConflict)
+	if env.Message != "Email already taken" {
+		t.Errorf("envelope.error = %q, want %q", env.Message, "Email already taken")
 	}
 }
 
@@ -240,7 +261,8 @@ func TestRegisterHandler_TooShortPasswordReturns400(t *testing.T) {
 
 // TestRegisterHandler_InternalErrorReturns500 covers the non-sentinel
 // branch: an unexpected repo failure must surface as 500, not as a 409
-// or a panic.
+// or a panic. MapError renders a static "Internal server error" wire
+// message; the per-operation safe detail is hidden behind details.
 func TestRegisterHandler_InternalErrorReturns500(t *testing.T) {
 	repo := &stubRepo{
 		createFn: func(_ context.Context, _ *User) error { return context.DeadlineExceeded },
@@ -252,8 +274,8 @@ func TestRegisterHandler_InternalErrorReturns500(t *testing.T) {
 	})
 
 	env := decodeEnvelope(t, rr, http.StatusInternalServerError)
-	if env.Message != "Failed to register user" {
-		t.Errorf("envelope.error = %q, want %q", env.Message, "Failed to register user")
+	if env.Message != "Internal server error" {
+		t.Errorf("envelope.error = %q, want %q", env.Message, "Internal server error")
 	}
 	if env.Details != "Failed to register user" {
 		t.Errorf("envelope.details = %v, want %q", env.Details, "Failed to register user")
@@ -360,7 +382,9 @@ func TestLoginHandler_MissingFieldReturns400(t *testing.T) {
 
 // TestLoginHandler_InternalErrorReturns500 — a genuine DB failure must
 // not be masked as a 401, which would hide outages behind "bad
-// password" in client-side telemetry.
+// password" in client-side telemetry. MapError renders a static
+// "Internal server error" wire message; the per-operation safe detail
+// is hidden behind details.
 func TestLoginHandler_InternalErrorReturns500(t *testing.T) {
 	repo := &stubRepo{
 		getByUsernameFn: func(_ context.Context, _ string) (*User, error) {
@@ -373,8 +397,8 @@ func TestLoginHandler_InternalErrorReturns500(t *testing.T) {
 	})
 
 	env := decodeEnvelope(t, rr, http.StatusInternalServerError)
-	if env.Message != "Failed to login" {
-		t.Errorf("envelope.error = %q, want %q", env.Message, "Failed to login")
+	if env.Message != "Internal server error" {
+		t.Errorf("envelope.error = %q, want %q", env.Message, "Internal server error")
 	}
 	if env.Details != "Failed to login" {
 		t.Errorf("envelope.details = %v, want %q", env.Details, "Failed to login")

@@ -2,6 +2,7 @@ package user
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"testing"
@@ -113,6 +114,54 @@ func setupRefreshIntegrationPool(t *testing.T) (*pgxpool.Pool, Repository) {
 
 	repo := NewRepository(userdb.New(pool))
 	return pool, repo
+}
+
+// TestCreateUser_UsernameConstraintIntegration is the real-Postgres
+// counterpart of the unit-level TestCreateUser_UsernameUniqueViolationMapsToErrUsernameTaken:
+// inserting a second user with the same username produces a
+// pgconn.PgError whose ConstraintName matches users_username_key and
+// the repository surfaces it as ErrUsernameTaken (not the raw
+// driver error). Skips when no DB is available.
+func TestCreateUser_UsernameConstraintIntegration(t *testing.T) {
+	if dbURL == "" {
+		t.Skip("PostgreSQL container not available; set SKIP_CONTAINERS=false to run integration tests")
+	}
+	ctx := context.Background()
+
+	repo := setupRefreshIntegrationTest(t)
+
+	first := &User{Username: "dup-username", Email: "first@example.com", PasswordHash: "x"}
+	require.NoError(t, repo.CreateUser(ctx, first))
+
+	second := &User{Username: "dup-username", Email: "second@example.com", PasswordHash: "x"}
+	err := repo.CreateUser(ctx, second)
+	require.Error(t, err)
+	assert.True(t, errors.Is(err, ErrUsernameTaken),
+		"expected ErrUsernameTaken against real Postgres, got %v", err)
+	assert.False(t, errors.Is(err, ErrEmailTaken),
+		"username collision must not surface as ErrEmailTaken")
+}
+
+// TestCreateUser_EmailConstraintIntegration mirrors the username test
+// for the users_email_key unique index.
+func TestCreateUser_EmailConstraintIntegration(t *testing.T) {
+	if dbURL == "" {
+		t.Skip("PostgreSQL container not available; set SKIP_CONTAINERS=false to run integration tests")
+	}
+	ctx := context.Background()
+
+	repo := setupRefreshIntegrationTest(t)
+
+	first := &User{Username: "email-alice", Email: "shared@example.com", PasswordHash: "x"}
+	require.NoError(t, repo.CreateUser(ctx, first))
+
+	second := &User{Username: "email-bob", Email: "shared@example.com", PasswordHash: "x"}
+	err := repo.CreateUser(ctx, second)
+	require.Error(t, err)
+	assert.True(t, errors.Is(err, ErrEmailTaken),
+		"expected ErrEmailTaken against real Postgres, got %v", err)
+	assert.False(t, errors.Is(err, ErrUsernameTaken),
+		"email collision must not surface as ErrUsernameTaken")
 }
 
 // TestRefreshTokensIntegration is the round-trip integration check for

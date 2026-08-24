@@ -4,8 +4,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
 
 	"nyx/internal/movie/db"
+	"nyx/internal/platform/api"
+	"nyx/internal/platform/pgerr"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
@@ -37,6 +40,13 @@ type Pool interface {
 // 500. Migrated from the old `err.Error() == "movie not found"`
 // string compare in handler.go.
 var ErrNotFound = errors.New("movie not found")
+
+// Register the movie-domain sentinel with api.MapError. The
+// repository is the only place that owns ErrNotFound — the handler
+// simply funnels every error through api.MapError.
+func init() {
+	api.RegisterSentinel(ErrNotFound, http.StatusNotFound, "Movie not found")
+}
 
 type Repository interface {
 	GetAll(ctx context.Context, query string, page, pageSize int) (*Page, error)
@@ -138,7 +148,12 @@ func (r *sqlRepository) Create(ctx context.Context, m *Movie) error {
 		Rating:      float8FromValue(m.Rating),
 	})
 	if err != nil {
-		return err
+		// pgerr.Map is a no-op for errors it doesn't recognize; today
+		// the movies table has no unique/FK/CHECK constraints so
+		// every SQL error passes through unchanged. Wiring it
+		// preemptively means new constraints added in future
+		// migrations get translated for free.
+		return pgerr.Map(err)
 	}
 	*m = toMovie(row)
 	return nil
@@ -155,7 +170,7 @@ func (r *sqlRepository) Update(ctx context.Context, id int, m *Movie) error {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return ErrNotFound
 		}
-		return err
+		return pgerr.Map(err)
 	}
 	*m = toMovie(row)
 	return nil
@@ -164,7 +179,7 @@ func (r *sqlRepository) Update(ctx context.Context, id int, m *Movie) error {
 func (r *sqlRepository) Delete(ctx context.Context, id int) error {
 	rows, err := r.q.SoftDeleteMovie(ctx, int32(id))
 	if err != nil {
-		return err
+		return pgerr.Map(err)
 	}
 	if rows == 0 {
 		return ErrNotFound

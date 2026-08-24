@@ -33,8 +33,10 @@ fails CI when the committed copy is stale.
 |---|---|
 | `internal/middleware/` | stdlib-shaped middleware: RequestID, RealIP, Recoverer, Prometheus, Logging, CORS, RateLimit, Auth. |
 | `internal/middleware/huma_adapter.go` | `HumaAuth()` — the huma-shape variant of `Auth` for use as `Operation.Middlewares`. |
-| `internal/platform/api/response.go` | `ErrorResponse` struct: `{error, code, request_id, details}` envelope. Implements `huma.StatusError` so handlers can return it directly. `WriteError` is the stdlib equivalent for middleware. |
+| `internal/platform/api/response.go` | `ErrorResponse` struct: `{error, code, request_id, details}` envelope. Implements `huma.StatusError` so handlers can return it directly. `ClassifyAndLog` keeps raw error text off the wire; `WriteError` is the stdlib equivalent for middleware. |
 | `internal/platform/api/humaerror.go` | `OverrideHumaErrors()` — replaces `huma.NewError` / `huma.NewErrorWithContext` so every error produced by huma (validation, panic, the prebuilt 4xx helpers, handler-returned errors) flows through the legacy envelope. |
+| `internal/platform/api/map.go` | `MapError(ctx, err, safeDetail)` — the single handler-layer funnel. Looks up the error against registered domain sentinels and returns the matching `*ErrorResponse`; unknown errors fall back to a 500 envelope via `ClassifyAndLog`. Domains register their sentinels from `init()`. |
+| `internal/platform/pgerr/` | `pgerr.Map(err)` — repo-layer translator. Reads `pgconn.PgError.Code` + `ConstraintName` and returns the matching domain sentinel (`ErrUsernameTaken`, `ErrEmailTaken`, `ErrRefreshTokenCollision`); unknown PgErrors pass through unchanged so callers keep full context. |
 | `internal/platform/api/humaconfig.go` | `HumaConfig()` — the shared `huma.Config` (title, version, `BearerAuth` scheme, `OpenAPIPath`, `DocsPath`, formats). Used by both `cmd/api` and `cmd/openapi`. |
 | `internal/reqctx/` | Typed context keys (`RequestIDFromContext`, `UserIDFromContext`, `UsernameFromContext`, `ClientIPFromContext`). Leaf package — both middleware and api import it to break an import cycle. |
 | `internal/<feature>/huma_handler.go` | One file per feature: operation registration, input/output structs, handler functions. |
@@ -71,10 +73,9 @@ func RegisterMovieOps(api huma.API, h *Handler) {
 func (h *Handler) GetMovie(ctx context.Context, in *getMovieInput) (*getMovieOutput, error) {
     m, err := h.service.GetMovie(ctx, in.ID)
     if err != nil {
-        return nil, &api.ErrorResponse{
-            Message: "Movie not found",
-            Code:    http.StatusNotFound,
-        }
+        // movie.ErrNotFound is registered via movie's init() block
+        // (→ 404 "Movie not found"); unknown errors fall back to 500.
+        return nil, api.MapError(ctx, err, "Failed to get movie")
     }
     return &getMovieOutput{Body: *m}, nil
 }
@@ -129,9 +130,37 @@ authenticated user via `reqctx.UserIDFromContext(ctx)`.
 
 ## Errors
 
-The error envelope is preserved end-to-end. Two ways to emit an error:
+The error envelope is preserved end-to-end. Three ways to emit an error:
 
-1. **From a handler** — return a pointer to `api.ErrorResponse`. It
+1. **From a handler (preferred)** — call `api.MapError(ctx, err, safeDetail)`.
+   The helper looks up the error against the registered domain sentinels
+   (e.g. `movie.ErrNotFound`, `user.ErrInvalidCredentials`,
+   `user.ErrUsernameTaken` for `users_username_key` unique violations,
+   `user.ErrEmailTaken` for `users_email_key`) and returns the matching
+   `*ErrorResponse`. Unknown errors fall back to a 500 envelope whose
+   `details` field is the static `safeDetail`; the raw error is logged at
+   `Warn` with the request ID. Every existing handler is a one-liner on
+   the error path:
+
+   ```go
+   func (h *Handler) Register(ctx context.Context, in *registerInput) (*registerOutput, error) {
+       res, err := h.service.Register(ctx, in.Body)
+       if err != nil {
+           return nil, api.MapError(ctx, err, "Failed to register user")
+       }
+       return &registerOutput{Status: http.StatusCreated, Body: *res}, nil
+   }
+   ```
+
+   Repos that need to translate `pgconn.PgError` into a domain sentinel
+   call `pgerr.Map(err)`; the result is what `MapError` matches against.
+   New domains register their sentinels in `init()` via
+   `api.RegisterSentinel(sentinel, status, message)` and
+   `pgerr.Register(constraint, sentinelFn)`.
+
+2. **From a handler (raw)** — return a pointer to `api.ErrorResponse`
+   directly. Use this only when the error doesn't fit a registered
+   sentinel (e.g. a feature-specific 422 with a custom message). It
    implements `huma.StatusError` (Error() and GetStatus()), so huma
    writes it as the response body via its JSON marshaller, respecting
    our struct tags.
@@ -143,7 +172,7 @@ The error envelope is preserved end-to-end. Two ways to emit an error:
    }
    ```
 
-2. **From middleware** — call `api.WriteError(w, r, statusCode, message, details)`.
+3. **From middleware** — call `api.WriteError(w, r, statusCode, message, details)`.
    Used by `Auth` and `RateLimit` to short-circuit the chain.
 
 `api.OverrideHumaErrors()` must be called once at process startup before

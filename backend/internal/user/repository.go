@@ -3,12 +3,14 @@ package user
 import (
 	"context"
 	"errors"
+	"net/http"
 	"time"
 
+	"nyx/internal/platform/api"
+	"nyx/internal/platform/pgerr"
 	"nyx/internal/user/db"
 
 	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
@@ -18,9 +20,37 @@ import (
 // failure should errors.Is against this value.
 var (
 	ErrUserNotFound          = errors.New("user not found")
-	ErrUserAlreadyExists     = errors.New("user already exists")
+	ErrUsernameTaken         = errors.New("username already taken")
+	ErrEmailTaken            = errors.New("email already taken")
+	ErrRefreshTokenCollision = errors.New("refresh token hash collision")
 	ErrRefreshTokenNotFound  = errors.New("refresh token not found")
 )
+
+// Register each user-domain sentinel with the api package so
+// MapError can render the right HTTP status + wire message. Runs at
+// process startup (init() order is undefined across packages but
+// each registration is independent). Splitting ErrUserAlreadyExists
+// into two sentinels lets the wire message distinguish "username
+// collision" from "email collision" without string compares.
+func init() {
+	api.RegisterSentinel(ErrUserNotFound, http.StatusNotFound, "User not found")
+	api.RegisterSentinel(ErrUsernameTaken, http.StatusConflict, "Username already taken")
+	api.RegisterSentinel(ErrEmailTaken, http.StatusConflict, "Email already taken")
+	// ErrRefreshTokenCollision is a 500: a sha256 collision is ~10^-38
+	// per row. No clean 4xx story — log loud and let the client retry.
+	api.RegisterSentinel(ErrRefreshTokenCollision, http.StatusInternalServerError, "Internal server error")
+	api.RegisterSentinel(ErrInvalidCredentials, http.StatusUnauthorized, "Invalid credentials")
+	api.RegisterSentinel(ErrInvalidRefreshToken, http.StatusUnauthorized, "Invalid refresh token")
+	api.RegisterSentinel(ErrRefreshTokenReuse, http.StatusUnauthorized, "Refresh token revoked")
+	api.RegisterSentinel(ErrRefreshTokenExpired, http.StatusUnauthorized, "Refresh token expired")
+
+	// Register pgerr matchers for the user-domain unique constraints.
+	// Switched on ConstraintName (not Code) so other domains that share
+	// the same SQLSTATE 23505 don't get hijacked.
+	pgerr.Register(pgerr.ConstraintUsersUsername, func() error { return ErrUsernameTaken })
+	pgerr.Register(pgerr.ConstraintUsersEmail, func() error { return ErrEmailTaken })
+	pgerr.Register(pgerr.ConstraintRefreshTokensTokenHash, func() error { return ErrRefreshTokenCollision })
+}
 
 // Querier is the subset of db.Querier we actually use. Defining it
 // here (rather than importing db.Querier directly) lets tests
@@ -94,30 +124,15 @@ func (r *sqlRepository) CreateUser(ctx context.Context, u *User) error {
 		PasswordHash: u.PasswordHash,
 	})
 	if err != nil {
-		// Postgres unique-constraint violation (SQLSTATE 23505) — both
-		// username and email have UNIQUE indexes. Translate the
-		// driver-specific error into the domain sentinel so the service
-		// and handler layers stay decoupled from pgx.
-		if isUniqueViolation(err) {
-			return ErrUserAlreadyExists
-		}
-		return err
+		// pgerr.Map switches on ConstraintName so users_username_key
+		// → ErrUsernameTaken and users_email_key → ErrEmailTaken.
+		// Other errors (network drop, schema mismatch) pass through
+		// unchanged.
+		return pgerr.Map(err)
 	}
 	converted := toUser(row)
 	*u = converted
 	return nil
-}
-
-// isUniqueViolation reports whether err is a Postgres unique-constraint
-// violation (SQLSTATE 23505). The repository layer is the right place to
-// translate driver-specific errors into domain sentinels; service and
-// handler layers stay decoupled from pgx.
-func isUniqueViolation(err error) bool {
-	var pgErr *pgconn.PgError
-	if errors.As(err, &pgErr) {
-		return pgErr.Code == "23505"
-	}
-	return false
 }
 
 func (r *sqlRepository) GetUserByUsername(ctx context.Context, username string) (*User, error) {
@@ -176,7 +191,10 @@ func (r *sqlRepository) CreateRefreshToken(ctx context.Context, userID int, toke
 		ExpiresAt: pgtype.Timestamptz{Time: expiresAt, Valid: true},
 	})
 	if err != nil {
-		return nil, err
+		// pgerr.Map turns idx_refresh_tokens_token_hash collisions into
+		// ErrRefreshTokenCollision (500). A sha256 collision is ~10^-38
+		// per row; this exists for defense-in-depth, not the happy path.
+		return nil, pgerr.Map(err)
 	}
 	out := toRefreshTokenRowFromCreate(row)
 	return &out, nil

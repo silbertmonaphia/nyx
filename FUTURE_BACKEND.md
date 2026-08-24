@@ -25,7 +25,7 @@ The history and design decisions behind the current backend. For the high-level 
 - [x] **Standardized JSON errors** — uniform envelope across handlers; central mapper in `internal/platform/api`.
 - [x] **Domain error sentinels** — `movie.ErrNotFound`, `user.ErrInvalidCredentials`, `auth.ErrInvalidToken`, `auth.ErrExpiredToken`. Handlers translate to HTTP status; never string-compare in tests or call sites.
 - [x] **Internal error messages never echo to clients** — `api.ClassifyAndLog(ctx, err, safeDetail)` logs the wrapped error with the request ID at `Warn` and returns the static `safeDetail`. Handlers and auth middleware call it instead of writing `err.Error()` into the response `details` field, so SQL fragments, bcrypt strings, and JWT parser errors stay off the wire.
-- [ ] **Semantic API Error Translators** — map DB constraint errors (duplicate username, foreign key on delete, etc.) to clean client-facing messages.
+- [x] **Semantic API Error Translators** — `internal/platform/pgerr.Translate` / `Map` reads `pgconn.PgError.Code` + `ConstraintName` and returns the matching domain sentinel (`user.ErrUsernameTaken` for `users_username_key`, `user.ErrEmailTaken` for `users_email_key`, `user.ErrRefreshTokenCollision` for `idx_refresh_tokens_token_hash`). `internal/platform/api.MapError(ctx, err, safeDetail)` is the single handler-layer funnel — every handler shrinks to one line on the error path, and unknown errors reuse `ClassifyAndLog` so internal error text never reaches the wire. `ErrUserAlreadyExists` was split into `ErrUsernameTaken` + `ErrEmailTaken` (status 409 stays, messages change); `ErrRefreshTokenCollision` maps to 500 (sha256 collisions are ~10⁻³⁸ per row).
 
 ## 3. Security & Authentication
 

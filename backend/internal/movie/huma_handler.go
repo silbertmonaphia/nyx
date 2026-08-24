@@ -2,7 +2,6 @@ package movie
 
 import (
 	"context"
-	"errors"
 	"net/http"
 
 	"github.com/danielgtaylor/huma/v2"
@@ -202,38 +201,21 @@ func (h *Handler) GetMovies(ctx context.Context, in *getMoviesInput) (*getMovies
 
 	result, err := h.service.GetMovies(ctx, in.Q, page, pageSize)
 	if err != nil {
-		return nil, &api.ErrorResponse{
-			Message: "Failed to retrieve movies",
-			Code:    http.StatusInternalServerError,
-			Details: api.ClassifyAndLog(ctx, err, "Failed to retrieve movies"),
-		}
+		return nil, api.MapError(ctx, err, "Failed to retrieve movies")
 	}
 	return &getMoviesOutput{Body: NewMoviesPage(result)}, nil
 }
 
 func (h *Handler) CreateMovie(ctx context.Context, in *createMovieInput) (*createMovieOutput, error) {
 	if err := h.service.CreateMovie(ctx, &in.Body); err != nil {
-		log.Error().Err(err).Msg("Error inserting movie")
-		return nil, &api.ErrorResponse{
-			Message: "Database error",
-			Code:    http.StatusInternalServerError,
-			Details: api.ClassifyAndLog(ctx, err, "Failed to create movie"),
-		}
+		return nil, api.MapError(ctx, err, "Failed to create movie")
 	}
 	return &createMovieOutput{Status: http.StatusCreated, Body: in.Body}, nil
 }
 
 func (h *Handler) UpdateMovie(ctx context.Context, in *updateMovieInput) (*updateMovieOutput, error) {
 	if err := h.service.UpdateMovie(ctx, in.ID, &in.Body); err != nil {
-		if errors.Is(err, ErrNotFound) {
-			return nil, &api.ErrorResponse{Message: "Movie not found", Code: http.StatusNotFound}
-		}
-		log.Error().Err(err).Msg("Error updating movie")
-		return nil, &api.ErrorResponse{
-			Message: "Database error",
-			Code:    http.StatusInternalServerError,
-			Details: api.ClassifyAndLog(ctx, err, "Failed to update movie"),
-		}
+		return nil, api.MapError(ctx, err, "Failed to update movie")
 	}
 	in.Body.ID = in.ID
 	return &updateMovieOutput{Body: in.Body}, nil
@@ -241,15 +223,7 @@ func (h *Handler) UpdateMovie(ctx context.Context, in *updateMovieInput) (*updat
 
 func (h *Handler) DeleteMovie(ctx context.Context, in *deleteMovieInput) (*deleteMovieOutput, error) {
 	if err := h.service.DeleteMovie(ctx, in.ID); err != nil {
-		if errors.Is(err, ErrNotFound) {
-			return nil, &api.ErrorResponse{Message: "Movie not found", Code: http.StatusNotFound}
-		}
-		log.Error().Err(err).Msg("Error deleting movie")
-		return nil, &api.ErrorResponse{
-			Message: "Database error",
-			Code:    http.StatusInternalServerError,
-			Details: api.ClassifyAndLog(ctx, err, "Failed to delete movie"),
-		}
+		return nil, api.MapError(ctx, err, "Failed to delete movie")
 	}
 	return &deleteMovieOutput{}, nil
 }

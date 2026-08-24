@@ -136,7 +136,7 @@ The same spec is committed at `api/openapi.json` and regenerated offline with
 ## Conventions
 
 - **Commits** — Conventional Commits (`feat:`, `fix:`, `refactor:`, `docs:`, `test:`, `chore:`).
-- **Errors** — domain sentinels (`movie.ErrNotFound`, `user.ErrInvalidCredentials`, `auth.ErrInvalidToken`, …). Handlers translate to HTTP status. Never string-compare error messages.
+- **Errors** — domain sentinels (`movie.ErrNotFound`, `user.ErrInvalidCredentials`, `user.ErrUsernameTaken` / `ErrEmailTaken` / `ErrRefreshTokenCollision` translated from `pgconn.PgError` by `internal/platform/pgerr`, `auth.ErrInvalidToken`, …). Handlers funnel every error through `api.MapError(ctx, err, "Failed to <op>")` — unknown errors reuse `ClassifyAndLog` so internal error text never reaches the wire. Never string-compare error messages.
 - **Cache** — best-effort. Mutations call `DeletePrefix("movies:")` (SCAN + UNLINK, non-blocking).
 - **Migrations** — `backend/migrations/00000N_description.{up,down}.sql`. Applied on every backend boot.
 

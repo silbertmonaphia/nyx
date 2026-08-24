@@ -44,7 +44,7 @@ Full stack: `cp .env.example .env && sudo docker compose up --build -d`. DB host
 # Conventions
 
 - **Commits**: Conventional Commits.
-- **Errors**: domain sentinels (`movie.ErrNotFound`, `user.ErrInvalidCredentials`, `auth.ErrInvalidToken`, `auth.ErrExpiredToken`). Handlers translate to HTTP status via the central error mapper. Never string-compare error messages.
+- **Errors**: domain sentinels (`movie.ErrNotFound`, `user.ErrInvalidCredentials`, `auth.ErrInvalidToken`, `auth.ErrExpiredToken`, plus the `pgerr`-translated `user.ErrUsernameTaken` / `user.ErrEmailTaken` / `user.ErrRefreshTokenCollision`). Handlers translate to HTTP status via `api.MapError` (the central funnel in `internal/platform/api`). Never string-compare error messages.
 - **Response details must be safe to ship**: handlers/middleware never copy `err.Error()` into the response `details` field. Use `api.ClassifyAndLog(ctx, err, "Operation failed")` — it logs the wrapped error with the request ID at `Warn` and returns the static `safeDetail` you pass in. SQL fragments, bcrypt strings, and JWT parser errors must never reach the wire.
 - **Cache is best-effort**: every cache call swallows errors with `log.Warn` and never fails the request.
 - **Pagination**: `GET /api/movies?page=N&page_size=M` → `{data, page, page_size, total, has_more}`. Default 20, max 100.
@@ -62,7 +62,6 @@ Full stack: `cp .env.example .env && sudo docker compose up --build -d`. DB host
 
 - Distributed Tracing (OTel) — `go.opentelemetry.io/otel` is in `go.mod`; no exporter wired in `main.go` yet.
 - Container Version Conflict Guardrail — script checks for Postgres major-version volume upgrades.
-- Semantic API Error Translators — map DB constraint errors (e.g. duplicate username) to clean client-facing messages via a shared helper.
 - Persist Auth Token Securely — JWT is in `localStorage` via Zustand `persist`. httpOnly cookies (or a documented XSS caveat) pending.
 
 # Communication

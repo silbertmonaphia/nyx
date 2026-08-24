@@ -19,7 +19,7 @@ Single source of truth for "what's done / what's next" across the stack. Tick an
 - [x] Middleware chain on chi v5 — RequestID, RealIP, Recoverer, Prometheus, Logging, CORS, RateLimit.
 - [x] Standardized JSON error envelopes.
 - [x] Domain error sentinels — `movie.ErrNotFound`, `user.ErrInvalidCredentials`, `auth.ErrInvalidToken`, `auth.ErrExpiredToken`. Handlers translate to HTTP status; never string-compare.
-- [ ] Semantic API Error Translators — map DB constraint errors (e.g. duplicate username) to clean client-facing messages.
+- [x] Semantic API Error Translators — `internal/platform/pgerr` translates `pgconn.PgError` codes + constraint names to domain sentinels (`user.ErrUsernameTaken`, `user.ErrEmailTaken`, `user.ErrRefreshTokenCollision`); `api.MapError` funnels every handler error through one call.
 - [x] CORS Hardening — `cors.go` now reads `CORS_ALLOWED_ORIGINS` (default `*`); set a comma-separated origin list in production.
 - [x] JWT Secret via Viper Config — `auth.SetSecret(cfg.JWTSecret)` is called once in `main.go`; `auth/jwt.go` no longer reads `os.Getenv`.
 - [x] JWT Refresh Tokens — short-lived access tokens (default 15m, configurable via `JWT_ACCESS_TTL`) paired with opaque rotated refresh tokens (default 7d, `JWT_REFRESH_TTL`) and family-level reuse detection. Frontend refreshes on `WWW-Authenticate: Bearer error="invalid_token", error_description="expired"`.
