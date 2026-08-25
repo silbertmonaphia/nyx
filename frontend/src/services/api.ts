@@ -1,5 +1,6 @@
 import axios from 'axios';
 import type { AxiosError, InternalAxiosRequestConfig } from 'axios';
+import { injectTraceparent } from './telemetry';
 import { useUiStore } from '../store/uiStore';
 import { useAuthStore } from '../store/authStore';
 import type { ApiError, AuthResponse } from '~/api/openapi';
@@ -48,13 +49,19 @@ async function performRefresh(): Promise<string | null> {
 // before replaying the original request.
 api.interceptors.request.use(
   (config) => {
-    if (config.headers.Authorization) {
-      return config;
+    if (!config.headers.Authorization) {
+      const token = useAuthStore.getState().token;
+      if (token) {
+        config.headers.Authorization = `Bearer ${token}`;
+      }
     }
-    const token = useAuthStore.getState().token;
-    if (token) {
-      config.headers.Authorization = `Bearer ${token}`;
-    }
+    // Stamp the W3C traceparent on every outbound request so the
+    // backend can stitch traces back to the SPA. Runs AFTER the auth
+    // header (whether we stamped it or the retry path supplied it)
+    // so both end up on the wire; noop when telemetry is disabled
+    // or there is no active span.
+    config.headers = config.headers ?? {};
+    injectTraceparent(config.headers);
     return config;
   },
   (error) => Promise.reject(error)

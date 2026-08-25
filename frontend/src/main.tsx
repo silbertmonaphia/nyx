@@ -3,6 +3,8 @@ import { createRoot } from 'react-dom/client'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { ReactQueryDevtools } from '@tanstack/react-query-devtools'
 import './index.css'
+import { initTelemetry } from './services/telemetry'
+import { logger } from './services/logger'
 import App from './App.tsx'
 
 const queryClient = new QueryClient({
@@ -13,6 +15,22 @@ const queryClient = new QueryClient({
     },
   },
 })
+
+initTelemetry()
+
+// Catch uncaught errors so they show up in our log pipeline alongside
+// any active trace context. Registered before mount() so we capture
+// failures during initial render too.
+window.addEventListener('error', (e) =>
+  logger.error('window.error', {
+    message: e.message,
+    filename: e.filename,
+    lineno: e.lineno,
+  }),
+)
+window.addEventListener('unhandledrejection', (e) =>
+  logger.error('unhandledrejection', { reason: String(e.reason) }),
+)
 
 function mount() {
   const rootElement = document.getElementById('root');

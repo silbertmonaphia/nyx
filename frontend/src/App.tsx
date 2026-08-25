@@ -22,6 +22,7 @@ import {
 } from './components/ui/Dialog';
 import { Plus, X, Search, LogOut, User as UserIcon } from 'lucide-react';
 import { PageMeta } from './components/app/PageMeta';
+import { logger } from './services/logger';
 
 const DEFAULT_TITLE = 'Nyx — Your minimalist movie guide';
 const DEFAULT_DESCRIPTION =
@@ -69,7 +70,7 @@ function App() {
       }
       resetFormState();
     } catch (err) {
-      console.error('Error saving movie:', err);
+      logger.error('Error saving movie', { error: String(err) });
     }
   };
 
@@ -84,7 +85,7 @@ function App() {
     try {
       await deleteMovie.mutateAsync(id);
     } catch (err) {
-      console.error('Error deleting movie:', err);
+      logger.error('Error deleting movie', { error: String(err) });
     }
   };
 

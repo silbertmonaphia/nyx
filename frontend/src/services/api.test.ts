@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest';
 import axios from 'axios';
 import api from './api';
+import * as telemetry from './telemetry';
 import { useAuthStore } from '../store/authStore';
 import { useUiStore } from '../store/uiStore';
 
@@ -350,5 +351,85 @@ describe('refresh-on-401', () => {
       'Session expired. Please login again.',
       'error',
     );
+  });
+});
+
+/**
+ * Request-interceptor contract: the request side of the interceptor
+ * must call `injectTraceparent` on every outbound config so the
+ * backend can continue the SPA's trace. We exercise it the same way
+ * the existing response-interceptor tests do — by poking the
+ * registered handler directly off `interceptors.request.handlers`.
+ */
+describe('api request interceptor (traceparent)', () => {
+  let spy: ReturnType<typeof vi.spyOn>;
+  let requestFulfilled: (config: unknown) => unknown;
+
+  beforeEach(() => {
+    const handlers = (api.interceptors.request as unknown as {
+      handlers: Array<{ fulfilled: (config: unknown) => unknown }>;
+    }).handlers;
+    expect(handlers.length).toBeGreaterThan(0);
+    requestFulfilled = handlers[0].fulfilled;
+    spy = vi.spyOn(telemetry, 'injectTraceparent').mockImplementation(() => {});
+  });
+
+  afterEach(() => {
+    spy.mockRestore();
+  });
+
+  it('calls injectTraceparent on each request', () => {
+    const config: { headers: Record<string, unknown> } = {
+      headers: { Authorization: 'Bearer test-token' },
+    };
+
+    requestFulfilled(config as never);
+
+    expect(spy).toHaveBeenCalledTimes(1);
+    // It receives the headers object (auth-stamped path: existing
+    // Authorization header short-circuits token re-injection but
+    // traceparent still runs).
+    expect(spy.mock.calls[0][0]).toBe(config.headers);
+  });
+});
+
+/**
+ * End-to-end traceparent shape: with a real tracer installed, the
+ * request interceptor must produce a valid W3C traceparent header.
+ * This exercises both the interceptor wiring AND the propagator
+ * itself in one go. We use the SDK's web variant here because its
+ * `register()` installs a stack context manager — without one,
+ * `startActiveSpan` doesn't actually attach the span to the active
+ * context, and `trace.getActiveSpan()` returns undefined.
+ */
+describe('api request interceptor (real traceparent shape)', () => {
+  beforeEach(async () => {
+    const { WebTracerProvider } = await import('@opentelemetry/sdk-trace-web');
+    const provider = new WebTracerProvider();
+    provider.register();
+  });
+
+  it('stamps a valid W3C traceparent on outbound headers', async () => {
+    const handlers = (api.interceptors.request as unknown as {
+      handlers: Array<{ fulfilled: (config: unknown) => unknown }>;
+    }).handlers;
+    const fulfilled = handlers[0].fulfilled;
+
+    const { trace: otelTrace } = await import('@opentelemetry/api');
+    const tr = otelTrace.getTracer('test');
+    const headers: Record<string, unknown> = {};
+    const config = { headers } as never;
+
+    await new Promise<void>((resolve) => {
+      tr.startActiveSpan('outer', (span) => {
+        fulfilled(config);
+        span.end();
+        resolve();
+      });
+    });
+
+    const tp = headers.traceparent;
+    expect(typeof tp).toBe('string');
+    expect(tp).toMatch(/^[0-9a-f]{2}-[0-9a-f]{32}-[0-9a-f]{16}-[0-9a-f]{2}$/);
   });
 });

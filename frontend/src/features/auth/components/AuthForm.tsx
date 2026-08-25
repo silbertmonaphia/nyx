@@ -5,6 +5,7 @@ import { z } from 'zod';
 import api from '../../../services/api';
 import { useAuthStore } from '../../../store/authStore';
 import { useUiStore } from '../../../store/uiStore';
+import { logger } from '../../../services/logger';
 import { Button } from '~/components/ui/Button';
 import { Input } from '~/components/ui/Input';
 import { Label } from '~/components/ui/Label';
@@ -49,7 +50,7 @@ export const AuthForm: React.FC<AuthFormProps> = ({ onSuccess, onCancel }) => {
       addToast(isLogin ? 'Successfully logged in!' : 'Successfully registered!', 'success');
       onSuccess();
     } catch (err) {
-      console.error('Auth error:', err);
+      logger.error('Auth error', { error: String(err) });
     }
   };
 
