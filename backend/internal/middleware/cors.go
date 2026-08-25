@@ -10,16 +10,19 @@ import (
 //
 //   - "*" in allowedOrigins → permissive, Access-Control-Allow-Origin: *.
 //     No Vary header, no per-request echo, no credentials. Matches the
-//     gin-era behaviour the frontend was built against and is the right
-//     default for local dev / a public API.
+//     gin-era behaviour the frontend was built against. Use ONLY for
+//     fully public credential-less APIs; combining "*" with cookie or
+//     Bearer auth is unsafe and the CORS spec forbids
+//     Access-Control-Allow-Credentials: true under "*" anyway.
 //
-//   - otherwise → the slice is an explicit allowlist of origins. On
-//     each request, if r.Header.Get("Origin") is in the list, the
-//     header is echoed back (Access-Control-Allow-Origin: <origin>)
+//   - otherwise (the default) → the slice is the explicit allowlist of
+//     origins. With an empty list, every cross-origin request from a
+//     browser gets NO Access-Control-Allow-Origin header — the browser
+//     blocks the response, which is the deny-by-default the project's
+//     safety convention calls for. When the request's Origin IS in the
+//     list, the header is echoed back (Access-Control-Allow-Origin: <origin>)
 //     and Vary: Origin is set so caches don't conflate responses
-//     across different origins. If the Origin is missing or not in
-//     the list, NO Access-Control-Allow-Origin header is sent — the
-//     browser will block the response.
+//     across different origins.
 //
 // In both modes Access-Control-Allow-Methods / Allow-Headers carry the
 // same values as before (the gin-era defaults; credentialed / custom

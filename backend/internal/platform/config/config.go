@@ -29,10 +29,17 @@ type Config struct {
 	RedisEnabled bool   `mapstructure:"REDIS_ENABLED"`
 	CacheTTL     string `mapstructure:"CACHE_TTL"`
 
-	// CORS — comma-separated allowlist. Default "*" preserves the
-	// gin-era permissive policy for local dev. Production should set
-	// this to the explicit list of frontend origins (e.g.
-	// "https://app.example.com,https://staging.example.com").
+	// CORS — comma-separated allowlist. Default is empty (deny-all
+	// cross-origin) per the project's deny-by-default safety
+	// convention. Operators MUST set this to the explicit list of
+	// frontend origins (e.g. "https://app.example.com,https://staging.example.com").
+	//
+	// "*" is supported as an explicit opt-in for fully public APIs
+	// that carry no credentials. Note that "*" + "Authorization" in
+	// Access-Control-Allow-Headers is invalid per the CORS spec
+	// (browsers refuse the credentialed header under "*"), and
+	// combining "*" with cookie-based auth is similarly unsafe; if
+	// you turn this on, audit the auth surface.
 	CORSAllowedOrigins string `mapstructure:"CORS_ALLOWED_ORIGINS"`
 
 	// Auth cookies. Defaults are deny-by-default per the project's
@@ -97,10 +104,12 @@ func Load() (*Config, error) {
 	viper.SetDefault("REDIS_ENABLED", false)
 	viper.SetDefault("CACHE_TTL", "5m")
 
-	// CORS allowlist default: "*" preserves the gin-era permissive policy
-	// for local dev. Production must set CORS_ALLOWED_ORIGINS to a
-	// comma-separated list of explicit origins.
-	viper.SetDefault("CORS_ALLOWED_ORIGINS", "*")
+	// CORS allowlist default: empty. Deny-by-default — every cross-origin
+	// request from a browser is rejected unless the operator has set
+	// CORS_ALLOWED_ORIGINS to an explicit list (or, for fully public
+	// credential-less APIs, to "*"). The same-origin Vite proxy in
+	// development keeps the SPA unaffected by this default.
+	viper.SetDefault("CORS_ALLOWED_ORIGINS", "")
 
 	// Cookie defaults — deny-by-default. Secure=true forces HTTPS (the
 	// browser silently drops the cookie otherwise, which is the

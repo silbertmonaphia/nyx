@@ -175,6 +175,61 @@ func TestCORS_PreflightAllowlistNoMatch(t *testing.T) {
 	}
 }
 
+// TestCORS_EmptyAllowlistDenies verifies the deny-by-default
+// behaviour: with no origins configured, every cross-origin request
+// gets NO Access-Control-Allow-Origin header (the browser will then
+// block the response). The downstream handler still runs because CORS
+// is a transport concern; the API itself should keep serving.
+func TestCORS_EmptyAllowlistDenies(t *testing.T) {
+	downstreamCalled := false
+	downstream := http.HandlerFunc(func(_ http.ResponseWriter, _ *http.Request) {
+		downstreamCalled = true
+	})
+	handler := NewCORS(nil)(downstream)
+
+	rr := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/movies", nil)
+	req.Header.Set("Origin", "https://anywhere.example")
+	handler.ServeHTTP(rr, req)
+
+	if !downstreamCalled {
+		t.Error("downstream was not called for an empty allowlist; CORS must not block the API itself")
+	}
+	if got := rr.Header().Get("Access-Control-Allow-Origin"); got != "" {
+		t.Errorf("Access-Control-Allow-Origin = %q, want \"\" (empty allowlist must deny)", got)
+	}
+	if got := rr.Header().Get("Vary"); got != "" {
+		t.Errorf("Vary = %q, want \"\"", got)
+	}
+}
+
+// TestCORS_PreflightEmptyAllowlistDenies — preflight against an
+// empty allowlist still returns 200 (OPTIONS short-circuits
+// regardless) but emits NO Access-Control-Allow-Origin, so the
+// browser refuses the actual cross-origin call.
+func TestCORS_PreflightEmptyAllowlistDenies(t *testing.T) {
+	downstreamCalled := false
+	downstream := http.HandlerFunc(func(_ http.ResponseWriter, _ *http.Request) {
+		downstreamCalled = true
+	})
+	handler := NewCORS(nil)(downstream)
+
+	rr := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodOptions, "/api/movies", nil)
+	req.Header.Set("Origin", "https://anywhere.example")
+	handler.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Errorf("OPTIONS status = %d, want 200", rr.Code)
+	}
+	if downstreamCalled {
+		t.Error("OPTIONS preflight invoked the downstream handler; preflight must short-circuit")
+	}
+	if got := rr.Header().Get("Access-Control-Allow-Origin"); got != "" {
+		t.Errorf("preflight Access-Control-Allow-Origin = %q, want \"\"", got)
+	}
+}
+
 // TestSplitNonEmpty verifies the comma-separated allowlist parser
 // used to bridge a single env var into NewCORS's []string argument.
 // Empty entries (between two commas) and whitespace-only entries are
