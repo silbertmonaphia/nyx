@@ -11,7 +11,20 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promauto"
 	"github.com/redis/go-redis/v9"
+)
+
+// cacheOps records the outcome of every Cache operation. The result
+// label distinguishes the three useful states ("hit", "miss", "error")
+// so dashboards can compute hit ratio without scraping logs.
+var cacheOps = promauto.NewCounterVec(
+	prometheus.CounterOpts{
+		Name: "cache_operations_total",
+		Help: "Cache Get/Set/Delete outcomes, labeled by op and result.",
+	},
+	[]string{"op", "result"},
 )
 
 // Cache is the interface used by service-layer code. Get returns
@@ -32,7 +45,10 @@ type noopCache struct{}
 
 func NewNoop() Cache { return &noopCache{} }
 
-func (noopCache) Get(context.Context, string, any) (bool, error)     { return false, nil }
+func (noopCache) Get(context.Context, string, any) (bool, error) {
+	cacheOps.WithLabelValues("get", "miss").Inc()
+	return false, nil
+}
 func (noopCache) Set(context.Context, string, any, time.Duration) error { return nil }
 func (noopCache) Delete(context.Context, ...string) error            { return nil }
 func (noopCache) DeletePrefix(context.Context, string) error         { return nil }
@@ -70,14 +86,18 @@ func newRedisFromClient(c *redis.Client) Cache { return &redisCache{client: c} }
 func (c *redisCache) Get(ctx context.Context, key string, dst any) (bool, error) {
 	raw, err := c.client.Get(ctx, key).Bytes()
 	if errors.Is(err, redis.Nil) {
+		cacheOps.WithLabelValues("get", "miss").Inc()
 		return false, nil
 	}
 	if err != nil {
+		cacheOps.WithLabelValues("get", "error").Inc()
 		return false, err
 	}
 	if err := json.Unmarshal(raw, dst); err != nil {
+		cacheOps.WithLabelValues("get", "error").Inc()
 		return false, fmt.Errorf("decode cached value: %w", err)
 	}
+	cacheOps.WithLabelValues("get", "hit").Inc()
 	return true, nil
 }
 

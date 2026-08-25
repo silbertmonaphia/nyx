@@ -4,6 +4,11 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/propagation"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
+	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 )
 
 // TestTracing_NoopProviderPassesThrough confirms that when the global
@@ -42,5 +47,46 @@ func TestTracing_RoutePatternFromChiCtx(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/api/movies", nil)
 	if got := routePattern(req); got != "" {
 		t.Fatalf("routePattern(no chi ctx) = %q, want \"\"", got)
+	}
+}
+
+// TestTracing_PropagatesTraceparentFromUpstream installs a real
+// tracer + W3C TraceContext propagator and confirms that the server
+// span produced by Tracing() is a child of the upstream traceparent
+// (i.e. otelhttp extracted the header and continued the trace).
+func TestTracing_PropagatesTraceparentFromUpstream(t *testing.T) {
+	prevTP := otel.GetTracerProvider()
+	prevProp := otel.GetTextMapPropagator()
+	t.Cleanup(func() {
+		otel.SetTracerProvider(prevTP)
+		otel.SetTextMapPropagator(prevProp)
+	})
+
+	sr := tracetest.NewSpanRecorder()
+	tp := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(sr))
+	otel.SetTracerProvider(tp)
+	otel.SetTextMapPropagator(propagation.TraceContext{})
+
+	h := Tracing("test")(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	}))
+
+	req := httptest.NewRequest(http.MethodGet, "/anything", nil)
+	const traceparent = "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01"
+	req.Header.Set("traceparent", traceparent)
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusNoContent {
+		t.Fatalf("status = %d, want %d", rr.Code, http.StatusNoContent)
+	}
+
+	started := sr.Started()
+	if len(started) != 1 {
+		t.Fatalf("spans started = %d, want 1", len(started))
+	}
+	sc := started[0].SpanContext()
+	if got := sc.TraceID().String(); got != "0af7651916cd43dd8448eb211c80319c" {
+		t.Errorf("trace id = %q, want %q (upstream traceparent not propagated)", got, "0af7651916cd43dd8448eb211c80319c")
 	}
 }
