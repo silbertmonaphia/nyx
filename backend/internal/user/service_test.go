@@ -137,7 +137,7 @@ func TestRegister_HappyPath(t *testing.T) {
 	if res.User.PasswordHash[0] != '$' {
 		t.Errorf("PasswordHash doesn't look like a bcrypt hash: %q", res.User.PasswordHash)
 	}
-	if res.Token == "" {
+	if res.AccessToken == "" {
 		t.Error("Token is empty; tokens.GenerateToken returned an empty string")
 	}
 }
@@ -213,7 +213,7 @@ func TestLogin_HappyPath(t *testing.T) {
 	if res.User.Username != "alice" {
 		t.Errorf("User.Username = %q, want %q", res.User.Username, "alice")
 	}
-	if res.Token == "" {
+	if res.AccessToken == "" {
 		t.Error("Token is empty after successful login")
 	}
 }
@@ -325,12 +325,12 @@ func TestRefresh_HappyPath(t *testing.T) {
 	if err != nil {
 		t.Fatalf("newRefreshToken: %v", err)
 	}
-	res, err := svc.Refresh(context.Background(), RefreshRequest{RefreshToken: raw})
+	res, err := svc.Refresh(context.Background(), raw)
 	if err != nil {
 		t.Fatalf("Refresh: %v", err)
 	}
-	if res.Token == "" {
-		t.Error("res.Token is empty after successful refresh")
+	if res.AccessToken == "" {
+		t.Error("res.AccessToken is empty after successful refresh")
 	}
 	if res.RefreshToken == "" {
 		t.Error("res.RefreshToken is empty after successful refresh")
@@ -338,7 +338,7 @@ func TestRefresh_HappyPath(t *testing.T) {
 	if res.RefreshToken == raw {
 		t.Error("refresh returned the same token; rotation didn't mint a new one")
 	}
-	if _, err := tokens.ValidateToken(res.Token); err != nil {
+	if _, err := tokens.ValidateToken(res.AccessToken); err != nil {
 		t.Errorf("new access token failed ValidateToken: %v", err)
 	}
 }
@@ -370,7 +370,7 @@ func TestRefresh_ReuseDetectedRevokesFamily(t *testing.T) {
 	svc := NewService(repo, newTestTokens(t), 15*time.Minute, 7*24*time.Hour, noop.NewTracerProvider().Tracer("test"))
 
 	raw, _, _ := newRefreshToken()
-	_, err := svc.Refresh(context.Background(), RefreshRequest{RefreshToken: raw})
+	_, err := svc.Refresh(context.Background(), raw)
 	if !errors.Is(err, ErrRefreshTokenReuse) {
 		t.Fatalf("expected ErrRefreshTokenReuse, got %v", err)
 	}
@@ -401,7 +401,7 @@ func TestRefresh_ExpiredReturnsErrExpired(t *testing.T) {
 	svc := NewService(repo, newTestTokens(t), 15*time.Minute, 7*24*time.Hour, noop.NewTracerProvider().Tracer("test"))
 
 	raw, _, _ := newRefreshToken()
-	_, err := svc.Refresh(context.Background(), RefreshRequest{RefreshToken: raw})
+	_, err := svc.Refresh(context.Background(), raw)
 	if !errors.Is(err, ErrRefreshTokenExpired) {
 		t.Errorf("expected ErrRefreshTokenExpired, got %v", err)
 	}
@@ -420,7 +420,7 @@ func TestRefresh_InvalidHashReturnsErrInvalid(t *testing.T) {
 	svc := NewService(repo, newTestTokens(t), 15*time.Minute, 7*24*time.Hour, noop.NewTracerProvider().Tracer("test"))
 
 	raw, _, _ := newRefreshToken()
-	_, err := svc.Refresh(context.Background(), RefreshRequest{RefreshToken: raw})
+	_, err := svc.Refresh(context.Background(), raw)
 	if !errors.Is(err, ErrInvalidRefreshToken) {
 		t.Errorf("expected ErrInvalidRefreshToken, got %v", err)
 	}
@@ -467,7 +467,7 @@ func TestRefresh_ConcurrentRotationSecondCallWins(t *testing.T) {
 	svc := NewService(repo, newTestTokens(t), 15*time.Minute, 7*24*time.Hour, noop.NewTracerProvider().Tracer("test"))
 
 	raw1, _, _ := newRefreshToken()
-	_, err := svc.Refresh(context.Background(), RefreshRequest{RefreshToken: raw1})
+	_, err := svc.Refresh(context.Background(), raw1)
 	if err != nil {
 		t.Fatalf("first Refresh: %v", err)
 	}
@@ -475,7 +475,7 @@ func TestRefresh_ConcurrentRotationSecondCallWins(t *testing.T) {
 	// Second call uses the SAME raw token. Service must take the
 	// reuse branch because the first call's RotateRefreshToken
 	// stamped revoked_at on the old row.
-	_, err = svc.Refresh(context.Background(), RefreshRequest{RefreshToken: raw1})
+	_, err = svc.Refresh(context.Background(), raw1)
 	if !errors.Is(err, ErrRefreshTokenReuse) {
 		t.Errorf("second Refresh: expected ErrRefreshTokenReuse, got %v", err)
 	}
@@ -496,7 +496,7 @@ func TestLogout_Idempotent(t *testing.T) {
 	svc := NewService(repo, newTestTokens(t), 15*time.Minute, 7*24*time.Hour, noop.NewTracerProvider().Tracer("test"))
 
 	raw, _, _ := newRefreshToken()
-	if err := svc.Logout(context.Background(), LogoutRequest{RefreshToken: raw}); err != nil {
+	if err := svc.Logout(context.Background(), raw); err != nil {
 		t.Errorf("Logout on unknown token should be nil, got %v", err)
 	}
 }
@@ -519,7 +519,7 @@ func TestLogout_RevokesFamily(t *testing.T) {
 	svc := NewService(repo, newTestTokens(t), 15*time.Minute, 7*24*time.Hour, noop.NewTracerProvider().Tracer("test"))
 
 	raw, _, _ := newRefreshToken()
-	if err := svc.Logout(context.Background(), LogoutRequest{RefreshToken: raw}); err != nil {
+	if err := svc.Logout(context.Background(), raw); err != nil {
 		t.Fatalf("Logout: %v", err)
 	}
 	if revokedFamily != 99 {
@@ -542,7 +542,7 @@ func TestLogout_RequiresRefreshToken(t *testing.T) {
 	}
 	svc := NewService(repo, newTestTokens(t), 15*time.Minute, 7*24*time.Hour, noop.NewTracerProvider().Tracer("test"))
 
-	if err := svc.Logout(context.Background(), LogoutRequest{RefreshToken: ""}); err != nil {
+	if err := svc.Logout(context.Background(), ""); err != nil {
 		t.Errorf("Logout with empty token should be nil (idempotent), got %v", err)
 	}
 }

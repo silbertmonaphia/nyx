@@ -96,6 +96,12 @@ services:
       - VITE_OTEL_ENABLED=${VITE_OTEL_ENABLED:-true}
       - VITE_OTEL_SERVICE_NAME=${VITE_OTEL_SERVICE_NAME:-nyx-frontend}
       - JAEGER_HOST=jaeger
+      # Same-origin proxy for /api/. The Vite dev server proxies
+      # /api/* on :5173 → :8080; the prod nginx container proxies
+      # /api/* on :8080 → :BACKEND_UPSTREAM:8080. With this in
+      # place, the browser sees frontend + API as same-origin in
+      # both dev and prod, so __Host- cookies flow correctly.
+      - BACKEND_UPSTREAM=backend
     # nginx runs as non-root (USER nginx in Dockerfile) so it can't bind
     # privileged port 80. The nginx.conf inside the container listens on 8080.
     ports:

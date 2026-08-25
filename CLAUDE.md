@@ -63,7 +63,7 @@ Full stack: `cp .env.example .env && sudo docker compose up --build -d`. DB host
 
 - Distributed Tracing (OTel) — landed on backend and frontend. `OTEL_ENABLED=false` + `VITE_OTEL_ENABLED != "true"` by default. Backend exports via OTLP/HTTP → Jaeger (compose `jaeger` service, UI on `:16686`); frontend exports via the SPA container's nginx `location /otlp/` proxy → Jaeger (same-origin, bypasses Jaeger's missing CORS). Browser axios injects W3C `traceparent` so backend spans are children of the SPA root span. `service.name=nyx-frontend` for browser spans, `service.name=nyx-backend` for server spans. See `FUTURE_BACKEND.md` §5 and `FUTURE_FRONTEND.md` §9.
 - Container Version Conflict Guardrail — script checks for Postgres major-version volume upgrades.
-- Persist Auth Token Securely — JWT is in `localStorage` via Zustand `persist`. httpOnly cookies (or a documented XSS caveat) pending.
+- Auth — landed on httpOnly `__Host-` cookies (Secure, SameSite=Lax, Path=/); see `FUTURE.md` §4 + `FUTURE_FRONTEND.md` §5. Same-origin topology (Vite proxy + nginx `location /api/`) is a prerequisite; revisit if the API ever moves to a separate subdomain (CSRF token flow would be required).
 
 # Communication
 Keep replies and commit messages terse. No preamble, no restating the diff, no trailing pleasantries. Skip a commit body if the subject already says it.

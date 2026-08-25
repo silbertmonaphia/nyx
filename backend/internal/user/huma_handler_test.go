@@ -17,6 +17,8 @@ import (
 	"github.com/go-chi/chi/v5"
 	"go.opentelemetry.io/otel/trace/noop"
 	"golang.org/x/crypto/bcrypt"
+
+	"nyx/internal/middleware"
 )
 
 // TestMain lives in repository_integration_test.go — it both installs
@@ -24,14 +26,48 @@ import (
 // the integration-test Postgres container (skipped under
 // SKIP_CONTAINERS=true). Go only allows one TestMain per package.
 
+// testCookieConfig mirrors what cmd/api/main.go feeds production —
+// the same struct the real handler threads through to the SetCookie
+// emission paths. Values don't have to match production because
+// tests don't assert on cookie attributes (those have their own
+// tests in the auth package); what's needed is a non-zero
+// CookieConfig so NewHandler and RegisterUserOpsTest type-check.
+//
+// Secure=false mirrors the test ergonomics of "localhost over http":
+// the prefix-stripping logic in resolveCookieName then yields the
+// bare "nyx-access" / "nyx-refresh" names below.
+var testCookieConfig = auth.CookieConfig{
+	Secure:        false,
+	Domain:        "",
+	AccessName:    "__Host-nyx-access",
+	RefreshName:   "__Host-nyx-refresh",
+	AccessMaxAge:  15 * time.Minute,
+	RefreshMaxAge: 7 * 24 * time.Hour,
+	SameSite:      1, // http.SameSiteLaxMode
+}
+
+// The resolved cookie names (after the Secure=false → prefix-strip
+// dance in resolveCookieName). Test code that constructs inbound
+// cookies or asserts on Set-Cookie values uses these constants so a
+// future flip to Secure=true only needs to change one line.
+const (
+	testAccessCookieName  = "nyx-access"
+	testRefreshCookieName = "nyx-refresh"
+)
+
 // setupTestRouter builds a chi + huma router carrying the same user
-// operations as the real API. Prometheus, RequestID, Logging, CORS, and
-// RateLimit are deliberately skipped — they have their own tests and
-// only add noise (and a goroutine, in RateLimit's case) here. tokens
-// is threaded through so the /api/logout route can attach the JWT
-// middleware in tests the same way it does in production.
+// operations as the real API. Prometheus, RequestID, Logging, CORS,
+// RateLimit, and the body-cap middleware are deliberately skipped —
+// they have their own tests and only add noise (and a goroutine, in
+// RateLimit's case) here. StoreRequest IS wired in because the
+// auth/refresh/logout flows read cookies off the live request via
+// reqctx.RequestFromContext; without this middleware, tests would
+// silently bypass the cookie path. tokens is threaded through so
+// the /api/logout route can attach the JWT middleware in tests the
+// same way it does in production.
 func setupTestRouter(h *Handler, tokens auth.TokenService) *chi.Mux {
 	router := chi.NewMux()
+	router.Use(middleware.StoreRequest)
 	hapi := humachi.New(router, huma.Config{
 		OpenAPI: &huma.OpenAPI{
 			OpenAPI: "3.1.0",
@@ -40,7 +76,7 @@ func setupTestRouter(h *Handler, tokens auth.TokenService) *chi.Mux {
 		Formats:       huma.DefaultFormats,
 		DefaultFormat: "application/json",
 	})
-	RegisterUserOpsTest(hapi, h, tokens)
+	RegisterUserOpsTest(hapi, h, tokens, testCookieConfig)
 	return router
 }
 
@@ -51,7 +87,7 @@ func newTestRouterWithRepo(repo Repository) *chi.Mux {
 	if err != nil {
 		panic(err) // test setup; never expected to fail
 	}
-	return setupTestRouter(NewHandler(NewService(repo, tokens, 15*time.Minute, 7*24*time.Hour, noop.NewTracerProvider().Tracer("test"))), tokens)
+	return setupTestRouter(NewHandler(NewService(repo, tokens, 15*time.Minute, 7*24*time.Hour, noop.NewTracerProvider().Tracer("test")), testCookieConfig), tokens)
 }
 
 // testHash bcrypt-hashes plain at MinCost. The default cost is ~60ms
@@ -82,6 +118,39 @@ func postJSON(t *testing.T, router *chi.Mux, path string, body any) *httptest.Re
 	return rr
 }
 
+// postWithRefreshCookie posts an empty JSON body with a refresh
+// cookie attached. /api/refresh reads the refresh token from the
+// __Host-nyx-refresh cookie (the test config uses Secure=false so
+// the prefix is stripped in dev mode and the resolved name is
+// "nyx-refresh").
+func postWithRefreshCookie(t *testing.T, router *chi.Mux, refreshRaw string) *httptest.ResponseRecorder {
+	t.Helper()
+	req := httptest.NewRequest(http.MethodPost, "/api/refresh", bytes.NewReader([]byte("{}")))
+	req.Header.Set("Content-Type", "application/json")
+	req.AddCookie(&http.Cookie{Name: testRefreshCookieName, Value: refreshRaw})
+	rr := httptest.NewRecorder()
+	router.ServeHTTP(rr, req)
+	return rr
+}
+
+// authedLogoutRequest builds a /api/logout request with both the
+// access cookie (so the JWT middleware accepts it) and the refresh
+// cookie (so the handler can revoke the family). When accessToken is
+// empty the caller is testing the auth-rejection path; pass the
+// token to exercise the success path.
+func authedLogoutRequest(t *testing.T, path, accessToken, refreshRaw string) *http.Request {
+	t.Helper()
+	req := httptest.NewRequest(http.MethodPost, path, bytes.NewReader([]byte("{}")))
+	req.Header.Set("Content-Type", "application/json")
+	if accessToken != "" {
+		req.AddCookie(&http.Cookie{Name: testAccessCookieName, Value: accessToken})
+	}
+	if refreshRaw != "" {
+		req.AddCookie(&http.Cookie{Name: testRefreshCookieName, Value: refreshRaw})
+	}
+	return req
+}
+
 // decodeEnvelope asserts the response carries the legacy error envelope
 // with the expected status code, and returns it for further assertions.
 func decodeEnvelope(t *testing.T, rr *httptest.ResponseRecorder, wantStatus int) platapi.ErrorResponse {
@@ -101,9 +170,11 @@ func decodeEnvelope(t *testing.T, rr *httptest.ResponseRecorder, wantStatus int)
 
 // ---- Register ----
 
-// TestRegisterHandler_Created is the happy path: 201 with a token and
-// the persisted user. The password hash must never appear on the wire
-// (User.PasswordHash is json:"-").
+// TestRegisterHandler_Created is the happy path: 201 with the user
+// profile in the body and the access + refresh cookies in the
+// Set-Cookie headers. The body must not contain tokens — those ride
+// the cookies exclusively. The password hash must never appear on
+// the wire (User.PasswordHash is json:"-").
 func TestRegisterHandler_Created(t *testing.T) {
 	repo := &stubRepo{
 		createFn: func(_ context.Context, u *User) error {
@@ -127,14 +198,33 @@ func TestRegisterHandler_Created(t *testing.T) {
 	if err := json.Unmarshal(rr.Body.Bytes(), &res); err != nil {
 		t.Fatalf("unmarshal AuthResponse: %v", err)
 	}
-	if res.Token == "" {
-		t.Error("token is empty on a successful registration")
-	}
 	if res.User.ID != 42 || res.User.Username != "alice" {
 		t.Errorf("user = %+v, want ID=42 username=alice", res.User)
 	}
+	// Tokens must not be in the body — they ride Set-Cookie headers.
+	if bytes.Contains(rr.Body.Bytes(), []byte("token")) || bytes.Contains(rr.Body.Bytes(), []byte("refresh_token")) {
+		t.Errorf("response body leaks a token field: %s", rr.Body.String())
+	}
 	if bytes.Contains(rr.Body.Bytes(), []byte("password")) {
 		t.Errorf("response body leaks a password field: %s", rr.Body.String())
+	}
+
+	// Set-Cookie must include both auth cookies.
+	cookies := rr.Result().Cookies()
+	var sawAccess, sawRefresh bool
+	for _, c := range cookies {
+		if c.Name == testAccessCookieName && c.Value != "" {
+			sawAccess = true
+		}
+		if c.Name == testRefreshCookieName && c.Value != "" {
+			sawRefresh = true
+		}
+	}
+	if !sawAccess {
+		t.Errorf("response missing %s Set-Cookie; got %v", testAccessCookieName, cookies)
+	}
+	if !sawRefresh {
+		t.Errorf("response missing %s Set-Cookie; got %v", testRefreshCookieName, cookies)
 	}
 }
 
@@ -288,8 +378,9 @@ func TestRegisterHandler_InternalErrorReturns500(t *testing.T) {
 
 // ---- Login ----
 
-// TestLoginHandler_OK is the happy path: 200 with a JWT for a user
-// whose stored bcrypt hash matches the submitted password.
+// TestLoginHandler_OK is the happy path: 200 with the user profile
+// in the body and the access + refresh cookies in the Set-Cookie
+// headers. The body must not contain tokens.
 func TestLoginHandler_OK(t *testing.T) {
 	const plain = "hunter2"
 	hash := testHash(t, plain)
@@ -316,11 +407,28 @@ func TestLoginHandler_OK(t *testing.T) {
 	if err := json.Unmarshal(rr.Body.Bytes(), &res); err != nil {
 		t.Fatalf("unmarshal AuthResponse: %v", err)
 	}
-	if res.Token == "" {
-		t.Error("token is empty on a successful login")
-	}
 	if res.User.ID != 7 || res.User.Username != "alice" {
 		t.Errorf("user = %+v, want ID=7 username=alice", res.User)
+	}
+	if bytes.Contains(rr.Body.Bytes(), []byte("token")) {
+		t.Errorf("response body leaks a token field: %s", rr.Body.String())
+	}
+
+	cookies := rr.Result().Cookies()
+	var sawAccess, sawRefresh bool
+	for _, c := range cookies {
+		if c.Name == testAccessCookieName && c.Value != "" {
+			sawAccess = true
+		}
+		if c.Name == testRefreshCookieName && c.Value != "" {
+			sawRefresh = true
+		}
+	}
+	if !sawAccess {
+		t.Errorf("response missing %s Set-Cookie; got %v", testAccessCookieName, cookies)
+	}
+	if !sawRefresh {
+		t.Errorf("response missing %s Set-Cookie; got %v", testRefreshCookieName, cookies)
 	}
 }
 
@@ -412,10 +520,11 @@ func TestLoginHandler_InternalErrorReturns500(t *testing.T) {
 // ---- Refresh ----
 
 // TestRefreshHandler_OK covers the happy path of /api/refresh: a
-// valid (non-expired, non-revoked) refresh token comes back as a
-// fresh AuthResponse with a new access token and a new refresh token.
-// The new refresh_token MUST differ from the supplied one — that's
-// what rotation means at the wire.
+// valid (non-expired, non-revoked) refresh token (sent via the
+// __Host-nyx-refresh cookie) comes back as a fresh AuthResponse in
+// the body + re-issued Set-Cookie headers. The body must not
+// contain tokens, and the Set-Cookie values MUST differ from the
+// supplied refresh token — that's what rotation means at the wire.
 func TestRefreshHandler_OK(t *testing.T) {
 	now := time.Now()
 
@@ -450,9 +559,7 @@ func TestRefreshHandler_OK(t *testing.T) {
 		},
 	}
 
-	rr := postJSON(t, newTestRouterWithRepo(repo), "/api/refresh", RefreshRequest{
-		RefreshToken: suppliedRaw,
-	})
+	rr := postWithRefreshCookie(t, newTestRouterWithRepo(repo), suppliedRaw)
 
 	if rr.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200; body=%s", rr.Code, rr.Body.String())
@@ -461,24 +568,46 @@ func TestRefreshHandler_OK(t *testing.T) {
 	if err := json.Unmarshal(rr.Body.Bytes(), &res); err != nil {
 		t.Fatalf("unmarshal AuthResponse: %v; body=%s", err, rr.Body.String())
 	}
-	if res.Token == "" {
-		t.Error("Token empty on successful refresh")
-	}
-	if res.RefreshToken == "" {
-		t.Error("RefreshToken empty on successful refresh")
-	}
-	if res.RefreshToken == suppliedRaw {
-		t.Error("RefreshToken unchanged after rotation; rotation didn't mint a new one")
+	if res.User.ID != 7 || res.User.Username != "alice" {
+		t.Errorf("user = %+v, want ID=7 username=alice", res.User)
 	}
 	if res.ExpiresAt.IsZero() {
 		t.Error("ExpiresAt zero on successful refresh")
+	}
+	// Tokens must not be in the body.
+	if bytes.Contains(rr.Body.Bytes(), []byte("token")) || bytes.Contains(rr.Body.Bytes(), []byte("refresh_token")) {
+		t.Errorf("response body leaks a token field: %s", rr.Body.String())
+	}
+
+	// Set-Cookie must include both refreshed auth cookies, and the
+	// refresh cookie value MUST differ from the supplied one (rotation
+	// minted a new raw via service.newRefreshToken, not the repo
+	// stub).
+	cookies := rr.Result().Cookies()
+	var sawAccess, sawRefresh string
+	for _, c := range cookies {
+		switch c.Name {
+		case testAccessCookieName:
+			sawAccess = c.Value
+		case testRefreshCookieName:
+			sawRefresh = c.Value
+		}
+	}
+	if sawAccess == "" {
+		t.Errorf("response missing nyx-access Set-Cookie")
+	}
+	if sawRefresh == "" {
+		t.Errorf("response missing nyx-refresh Set-Cookie")
+	}
+	if sawRefresh == suppliedRaw {
+		t.Errorf("nyx-refresh unchanged after rotation; rotation didn't mint a new one")
 	}
 }
 
 // TestRefreshHandler_ReuseReturns401 pins the reuse path: a refresh
 // token that was already rotated surfaces as 401 with a static
 // "Refresh token revoked" message. The wire must NOT echo the
-// underlying service error.
+// underlying service error. The refresh token arrives via cookie.
 func TestRefreshHandler_ReuseReturns401(t *testing.T) {
 	past := time.Now().Add(-time.Hour)
 	repo := &stubRepo{
@@ -493,7 +622,7 @@ func TestRefreshHandler_ReuseReturns401(t *testing.T) {
 		},
 	}
 	raw, _, _ := newRefreshToken()
-	rr := postJSON(t, newTestRouterWithRepo(repo), "/api/refresh", RefreshRequest{RefreshToken: raw})
+	rr := postWithRefreshCookie(t, newTestRouterWithRepo(repo), raw)
 
 	env := decodeEnvelope(t, rr, http.StatusUnauthorized)
 	if env.Message != "Refresh token revoked" {
@@ -520,7 +649,7 @@ func TestRefreshHandler_ExpiredReturns401(t *testing.T) {
 		},
 	}
 	raw, _, _ := newRefreshToken()
-	rr := postJSON(t, newTestRouterWithRepo(repo), "/api/refresh", RefreshRequest{RefreshToken: raw})
+	rr := postWithRefreshCookie(t, newTestRouterWithRepo(repo), raw)
 
 	env := decodeEnvelope(t, rr, http.StatusUnauthorized)
 	if env.Message != "Refresh token expired" {
@@ -528,19 +657,23 @@ func TestRefreshHandler_ExpiredReturns401(t *testing.T) {
 	}
 }
 
-// TestRefreshHandler_MissingFieldReturns400 — body omits refresh_token
-// entirely. huma's required:"true" tag rejects it before the service
-// runs, so no RefreshTokenNotFound lookup occurs.
-func TestRefreshHandler_MissingFieldReturns400(t *testing.T) {
+// TestRefreshHandler_MissingCookieReturns401 — refresh token cookie
+// is absent. The handler maps this to 401 with the static
+// "Invalid refresh token" message (no lookup happened because the
+// cookie reader returned false).
+func TestRefreshHandler_MissingCookieReturns401(t *testing.T) {
 	repo := &stubRepo{
 		getRefreshFn: func(_ context.Context, _ []byte) (*RefreshTokenRow, error) {
-			t.Error("repo.GetRefreshTokenByHash must not be reached when validation fails")
+			t.Error("repo.GetRefreshTokenByHash must not be reached when refresh cookie is missing")
 			return nil, nil
 		},
 	}
 	rr := postJSON(t, newTestRouterWithRepo(repo), "/api/refresh", map[string]any{})
 
-	decodeEnvelope(t, rr, http.StatusBadRequest)
+	env := decodeEnvelope(t, rr, http.StatusUnauthorized)
+	if env.Message != "Invalid refresh token" {
+		t.Errorf("envelope.error = %q, want %q", env.Message, "Invalid refresh token")
+	}
 }
 
 // TestRefreshHandler_UnknownTokenReturns401 covers the
@@ -555,7 +688,7 @@ func TestRefreshHandler_UnknownTokenReturns401(t *testing.T) {
 		},
 	}
 	raw, _, _ := newRefreshToken()
-	rr := postJSON(t, newTestRouterWithRepo(repo), "/api/refresh", RefreshRequest{RefreshToken: raw})
+	rr := postWithRefreshCookie(t, newTestRouterWithRepo(repo), raw)
 
 	env := decodeEnvelope(t, rr, http.StatusUnauthorized)
 	if env.Message != "Invalid refresh token" {
@@ -566,9 +699,11 @@ func TestRefreshHandler_UnknownTokenReturns401(t *testing.T) {
 // ---- Logout ----
 
 // TestLogoutHandler_NoContent covers the auth-required logout happy
-// path. The caller must present a valid access token (validated by
-// the per-operation middleware); the body's refresh_token is what
-// gets revoked. Returns 204 with empty body.
+// path. The caller must present a valid access token (cookie or
+// Authorization header — the test uses the cookie path so the
+// migration is exercised end-to-end); the __Host-nyx-refresh cookie
+// carries the family we revoke. Returns 204 with empty body AND
+// Set-Cookie headers that clear both auth cookies.
 func TestLogoutHandler_NoContent(t *testing.T) {
 	tokens, err := auth.NewTokenService([]byte(auth.TestSecret), 15*time.Minute)
 	if err != nil {
@@ -592,10 +727,7 @@ func TestLogoutHandler_NoContent(t *testing.T) {
 	}
 
 	raw, _, _ := newRefreshToken()
-	body, _ := json.Marshal(LogoutRequest{RefreshToken: raw})
-	req := httptest.NewRequest(http.MethodPost, "/api/logout", bytes.NewReader(body))
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+accessToken)
+	req := authedLogoutRequest(t, "/api/logout", accessToken, raw)
 	rr := httptest.NewRecorder()
 	newTestRouterWithRepo(repo).ServeHTTP(rr, req)
 
@@ -608,11 +740,32 @@ func TestLogoutHandler_NoContent(t *testing.T) {
 	if revokedFamily != 99 {
 		t.Errorf("expected family 99 to be revoked, got %d", revokedFamily)
 	}
+
+	// Both auth cookies must be cleared (MaxAge <= 0 + empty value).
+	cookies := rr.Result().Cookies()
+	for _, name := range []string{testAccessCookieName, testRefreshCookieName} {
+		var found bool
+		for _, c := range cookies {
+			if c.Name == name {
+				found = true
+				if c.Value != "" {
+					t.Errorf("clear cookie %q must have empty value, got %q", name, c.Value)
+				}
+				if c.MaxAge >= 0 {
+					t.Errorf("clear cookie %q must have MaxAge < 0, got %d", name, c.MaxAge)
+				}
+			}
+		}
+		if !found {
+			t.Errorf("response missing %q Set-Cookie clear; got %v", name, cookies)
+		}
+	}
 }
 
 // TestLogoutHandler_RequiresAuth confirms /api/logout is gated by the
-// JWT middleware: a request with no Authorization header returns 401
-// without ever reaching the handler.
+// JWT middleware: a request with no access cookie and no
+// Authorization header returns 401 without ever reaching the
+// handler.
 func TestLogoutHandler_RequiresAuth(t *testing.T) {
 	repo := &stubRepo{
 		getRefreshFn: func(_ context.Context, _ []byte) (*RefreshTokenRow, error) {
@@ -621,29 +774,25 @@ func TestLogoutHandler_RequiresAuth(t *testing.T) {
 		},
 	}
 	raw, _, _ := newRefreshToken()
-	rr := postJSON(t, newTestRouterWithRepo(repo), "/api/logout", LogoutRequest{RefreshToken: raw})
+	// Empty access token → middleware rejects.
+	req := authedLogoutRequest(t, "/api/logout", "", raw)
+	rr := httptest.NewRecorder()
+	newTestRouterWithRepo(repo).ServeHTTP(rr, req)
 
 	env := decodeEnvelope(t, rr, http.StatusUnauthorized)
-	if env.Message != "Authorization header is required" {
-		t.Errorf("envelope.error = %q, want %q", env.Message, "Authorization header is required")
+	if env.Message == "" {
+		t.Errorf("expected an error message on auth failure")
 	}
 }
 
-// TestLogoutHandler_MissingFieldReturns400 — body omits refresh_token.
-// huma's required:"true" tag rejects before the auth-gated handler
-// runs (validation order: huma body parse, then middleware, then
-// handler).
-func TestLogoutHandler_MissingFieldReturns400(t *testing.T) {
-	repo := &stubRepo{
-		getRefreshFn: func(_ context.Context, _ []byte) (*RefreshTokenRow, error) {
-			t.Error("repo.GetRefreshTokenByHash must not be reached when validation fails")
-			return nil, nil
-		},
-		revokeFamilyFn: func(_ context.Context, _ int64) (int64, error) {
-			t.Error("RevokeRefreshTokenFamily must not be reached when validation fails")
-			return 0, nil
-		},
-	}
+// TestLogoutHandler_NoRefreshCookieClearsAnyway verifies the
+// defensive branch: if the caller has a valid access cookie but no
+// refresh cookie (e.g. the refresh cookie was stripped by an
+// attacker, or the browser cleared it on its own), /api/logout
+// still returns 204 + clears both auth cookies at the browser.
+// Local clear is idempotent; family revocation is a no-op because
+// the service's Logout returns nil on empty input.
+func TestLogoutHandler_NoRefreshCookieClearsAnyway(t *testing.T) {
 	tokens, err := auth.NewTokenService([]byte(auth.TestSecret), 15*time.Minute)
 	if err != nil {
 		t.Fatalf("auth.NewTokenService: %v", err)
@@ -652,13 +801,26 @@ func TestLogoutHandler_MissingFieldReturns400(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GenerateToken: %v", err)
 	}
+	repo := &stubRepo{
+		getRefreshFn: func(_ context.Context, _ []byte) (*RefreshTokenRow, error) {
+			t.Error("repo.GetRefreshTokenByHash must not be reached when refresh cookie is absent")
+			return nil, nil
+		},
+		revokeFamilyFn: func(_ context.Context, _ int64) (int64, error) {
+			t.Error("RevokeRefreshTokenFamily must not be reached when refresh cookie is absent")
+			return 0, nil
+		},
+	}
 
-	body, _ := json.Marshal(map[string]any{})
-	req := httptest.NewRequest(http.MethodPost, "/api/logout", bytes.NewReader(body))
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+accessToken)
+	req := authedLogoutRequest(t, "/api/logout", accessToken, "")
 	rr := httptest.NewRecorder()
 	newTestRouterWithRepo(repo).ServeHTTP(rr, req)
 
-	decodeEnvelope(t, rr, http.StatusBadRequest)
+	if rr.Code != http.StatusNoContent {
+		t.Fatalf("status = %d, want 204; body=%s", rr.Code, rr.Body.String())
+	}
+	cookies := rr.Result().Cookies()
+	if len(cookies) == 0 {
+		t.Error("expected Set-Cookie clears even when refresh cookie is absent")
+	}
 }

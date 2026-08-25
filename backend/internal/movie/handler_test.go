@@ -37,6 +37,10 @@ import (
 // that want a 200 pass true and mint a token via testJWTAuthHeader.
 // tokens is the per-test TokenService used to validate tokens minted
 // by testJWTAuthHeader.
+//
+// testCookieConfig mirrors what cmd/api/main.go passes in production;
+// values don't have to match (tests don't assert on cookie attributes)
+// but the CookieConfig is part of RegisterMovieOpsTest's signature.
 func setupTestRouter(h *Handler, tokens auth.TokenService, withAuth bool) *chi.Mux {
 	router := chi.NewMux()
 	hapi := humachi.New(router, huma.Config{
@@ -47,8 +51,22 @@ func setupTestRouter(h *Handler, tokens auth.TokenService, withAuth bool) *chi.M
 		Formats:       huma.DefaultFormats,
 		DefaultFormat: "application/json",
 	})
-	RegisterMovieOpsTest(hapi, h, tokens, withAuth)
+	RegisterMovieOpsTest(hapi, h, tokens, testCookieConfig, withAuth)
 	return router
+}
+
+// testCookieConfig is the CookieConfig passed into RegisterMovieOpsTest.
+// Same shape as the user package's testCookieConfig — values don't
+// matter for movie tests (the movie domain doesn't set cookies itself)
+// but the struct is required to satisfy the signature.
+var testCookieConfig = auth.CookieConfig{
+	Secure:        false,
+	Domain:        "",
+	AccessName:    "__Host-nyx-access",
+	RefreshName:   "__Host-nyx-refresh",
+	AccessMaxAge:  15 * time.Minute,
+	RefreshMaxAge: 7 * 24 * time.Hour,
+	SameSite:      1, // http.SameSiteLaxMode
 }
 
 // testJWTAuthHeader mints a fresh JWT signed with the secret bound to

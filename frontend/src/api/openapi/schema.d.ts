@@ -35,7 +35,7 @@ export interface paths {
         put?: never;
         /**
          * Login a user
-         * @description Authenticate a user by username + password and receive a JWT.
+         * @description Authenticate a user by username + password. Sets __Host-nyx-access and __Host-nyx-refresh httpOnly cookies; the JSON body contains only the user profile.
          */
         post: operations["login"];
         delete?: never;
@@ -55,7 +55,7 @@ export interface paths {
         put?: never;
         /**
          * Logout a user
-         * @description Revoke the supplied refresh token's entire family. Requires a valid access token in the Authorization header. Returns 204.
+         * @description Revoke the refresh token family identified by the __Host-nyx-refresh cookie. Requires a valid access token (cookie or Authorization header). Returns 204 and clears both auth cookies.
          */
         post: operations["logout"];
         delete?: never;
@@ -123,7 +123,7 @@ export interface paths {
         put?: never;
         /**
          * Refresh access token
-         * @description Exchange a valid refresh token for a fresh access + refresh pair. Returns 401 on invalid / expired / reused tokens; reuse triggers family-wide revocation.
+         * @description Exchange a valid refresh cookie for a fresh access + refresh pair. Returns 401 on invalid / expired / reused tokens; reuse triggers family-wide revocation. Both cookies are re-issued.
          */
         post: operations["refresh"];
         delete?: never;
@@ -143,7 +143,7 @@ export interface paths {
         put?: never;
         /**
          * Register a user
-         * @description Create a new user account. Returns 409 when the username is already taken.
+         * @description Create a new user account. Returns 409 when the username or email is already taken. Sets __Host-nyx-access and __Host-nyx-refresh httpOnly cookies via Set-Cookie headers.
          */
         post: operations["register"];
         delete?: never;
@@ -159,8 +159,6 @@ export interface components {
         AuthResponse: {
             /** Format: date-time */
             expires_at?: string;
-            refresh_token?: string;
-            token: string;
             user: components["schemas"]["User"];
         };
         ErrorResponse: {
@@ -190,10 +188,7 @@ export interface components {
             password: string;
             username: string;
         };
-        LogoutOutputBody: Record<string, never>;
-        LogoutRequest: {
-            refresh_token: string;
-        };
+        LogoutRequest: Record<string, never>;
         Movie: {
             /** Format: date-time */
             created_at: string;
@@ -228,9 +223,7 @@ export interface components {
              */
             total: number;
         };
-        RefreshRequest: {
-            refresh_token: string;
-        };
+        RefreshRequest: Record<string, never>;
         RegisterRequest: {
             /** Format: email */
             email: string;
@@ -303,6 +296,7 @@ export interface operations {
             /** @description OK */
             200: {
                 headers: {
+                    "Set-Cookie"?: string;
                     [name: string]: unknown;
                 };
                 content: {
@@ -333,14 +327,13 @@ export interface operations {
             };
         };
         responses: {
-            /** @description OK */
-            200: {
+            /** @description No Content */
+            204: {
                 headers: {
+                    "Set-Cookie"?: string;
                     [name: string]: unknown;
                 };
-                content: {
-                    "application/json": components["schemas"]["LogoutOutputBody"];
-                };
+                content?: never;
             };
             /** @description Error */
             default: {
@@ -502,6 +495,7 @@ export interface operations {
             /** @description OK */
             200: {
                 headers: {
+                    "Set-Cookie"?: string;
                     [name: string]: unknown;
                 };
                 content: {
@@ -535,6 +529,7 @@ export interface operations {
             /** @description OK */
             200: {
                 headers: {
+                    "Set-Cookie"?: string;
                     [name: string]: unknown;
                 };
                 content: {

@@ -42,7 +42,7 @@ The history and design decisions behind the current frontend. For the high-level
 ## 5. Global State
 
 - [x] **Zustand** — `authStore` (token, login, logout, register), `uiStore` (toasts), `movieUiStore` (filter UI). Lightweight, no provider boilerplate.
-- [ ] **Persist Auth Token Securely** — `authStore.ts` uses Zustand `persist` which writes the JWT to `localStorage`. Consider httpOnly cookies, or at minimum document the XSS risk in the README.
+- [x] **Persist Auth Token Securely** — `authStore.ts` no longer persists tokens. Both the access JWT and the opaque refresh token ride httpOnly `__Host-` cookies set by the backend; the JSON envelope on auth endpoints is `{user, expires_at}` only. Frontend axios drops the Authorization interceptor and gains `withCredentials: true`; refresh-on-401 still works via the `WWW-Authenticate: expired` challenge. `authStore` carries only `user` (via Zustand `persist`, partialize strips everything else) with a `migrate` that discards any pre-cookie token fields from old localStorage. Same-origin topology is the prerequisite: Vite dev server proxies `/api`, prod nginx adds `location /api/`, k8s ingress already routes by path. CSRF: SameSite=Lax + same-origin only — revisit if the API ever moves to a separate subdomain.
 - [x] **Token Refresh** — `api.ts` single-flight refresh-on-401 driven by the backend's `WWW-Authenticate: Bearer error="invalid_token", error_description="expired"` signal. Bare `error="invalid_token"` (no `expired`) keeps the immediate-logout path so a tampered token never silently retries. Refresh tokens persist alongside access tokens in the `authStore` (Zustand `persist`, key `nyx-auth-storage`).
 
 ## 6. Testing & Quality

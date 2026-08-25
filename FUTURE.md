@@ -54,9 +54,9 @@ Single source of truth for "what's done / what's next" across the stack. Tick an
 - [x] Axios interceptors — auth header injection + global 401 handling.
 - [x] Search Debounce — `App.tsx` fires an API request on every keystroke. Add a 300ms debounce.
 - [x] Dynamic Metadata (SEO) — per-page `<title>` and meta description.
-- [ ] Persist Auth Token Securely — JWT in `localStorage` via Zustand `persist`. httpOnly cookies (or a documented XSS caveat) pending.
+- [x] Persist Auth Token Securely — both the access JWT and opaque refresh token ride two httpOnly `__Host-` cookies (Secure, SameSite=Lax, Path=/) set by the backend on /login, /register, /refresh. /logout clears both cookies and revokes the refresh family. JSON body on auth endpoints carries only `{user, expires_at}` — no tokens in JavaScript-readable storage. Frontend axios drops the Authorization interceptor and gains `withCredentials: true`. authStore keeps only `user` (Zustand `persist` with a `migrate` that strips stale token fields from pre-cookie localStorage state). Same-origin topology: Vite dev server proxies `/api` (vite.config.ts), prod nginx gains a `location /api/` block (mirrors the existing `/otlp/` JAEGER_HOST substitution), k8s ingress already did this. CSRF: SameSite=Lax + same-origin only; revisit if API ever moves to a separate subdomain.
 - [x] Traceparent propagation — axios request interceptor calls `injectTraceparent()` so backend spans are children of browser-initiated root spans (`nyx-frontend` service). Verified by the new `api.test.ts` traceparent test.
-- [x] Token Refresh — single-flight refresh-on-401 in `api.ts`, driven by the `WWW-Authenticate` challenge from the auth middleware. Refresh tokens persist in the auth store alongside the access token.
+- [x] Token Refresh — single-flight refresh-on-401 in `api.ts`, driven by the `WWW-Authenticate` challenge from the auth middleware. Refresh + access tokens ride httpOnly `__Host-` cookies (see "Persist Auth Token Securely" below); the auth store carries only `user`.
 
 ## 5. Developer Experience & CI/CD
 

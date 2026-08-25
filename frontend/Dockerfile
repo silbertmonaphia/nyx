@@ -14,6 +14,7 @@ ENV VITE_API_URL=$VITE_API_URL
 ARG VITE_OTEL_ENABLED
 ARG VITE_OTEL_SERVICE_NAME
 ARG JAEGER_HOST=jaeger
+ARG BACKEND_UPSTREAM=backend
 ENV VITE_OTEL_ENABLED=$VITE_OTEL_ENABLED \
     VITE_OTEL_SERVICE_NAME=$VITE_OTEL_SERVICE_NAME
 RUN npm run build
@@ -36,7 +37,8 @@ COPY --from=build /app/dist /usr/share/nginx/html
 # Copy a custom Nginx configuration
 COPY nginx.conf /etc/nginx/conf.d/default.conf
 
-RUN sed -i "s|__JAEGER_HOST__|${JAEGER_HOST}|g" /etc/nginx/conf.d/default.conf
+RUN sed -i "s|__JAEGER_HOST__|${JAEGER_HOST}|g" /etc/nginx/conf.d/default.conf && \
+    sed -i "s|__BACKEND_UPSTREAM__|${BACKEND_UPSTREAM}|g" /etc/nginx/conf.d/default.conf
 
 EXPOSE 8080
 

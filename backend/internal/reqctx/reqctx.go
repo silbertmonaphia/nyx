@@ -24,6 +24,7 @@ const (
 	userIDKey
 	usernameKey
 	clientIPKey
+	requestKey
 )
 
 // RequestIDHeader is the canonical HTTP header used for request IDs.
@@ -84,6 +85,30 @@ func ClientIPFromContext(ctx context.Context) string {
 // WithClientIP stores the given client IP on the context.
 func WithClientIP(parent context.Context, ip string) context.Context {
 	return context.WithValue(parent, clientIPKey, ip)
+}
+
+// RequestFromContext returns the *http.Request stored on ctx by the
+// StoreRequest middleware. Returns nil when no request is present
+// (e.g. background goroutines, unit tests that don't go through
+// HTTP). Handlers that need to read cookies or other request-only
+// data after huma has wrapped the call should use this rather than
+// relying on a huma.Context method — huma's generic handler
+// signature passes a plain context.Context, so the *http.Request has
+// to be recovered from the context value.
+//
+// The returned pointer is shared with the live request; treat it as
+// read-only.
+func RequestFromContext(ctx context.Context) *http.Request {
+	if v, ok := ctx.Value(requestKey).(*http.Request); ok {
+		return v
+	}
+	return nil
+}
+
+// WithRequest stores r on the context. Called by the StoreRequest
+// middleware; tests can also call it to seed a synthetic request.
+func WithRequest(parent context.Context, r *http.Request) context.Context {
+	return context.WithValue(parent, requestKey, r)
 }
 
 // ClientIPFromRequest returns the host portion of r.RemoteAddr. It is

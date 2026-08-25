@@ -124,19 +124,30 @@ func main() {
 	// validated them as positive durations and refresh > access.
 	userRepo := user.NewRepository(userdb.New(db))
 	userService := user.NewService(userRepo, tokens, accessTTL, refreshTTL, tracing.Provider.Tracer("nyx.user"))
-	userHandler := user.NewHandler(userService)
+
+	// CookieConfig is the single source of truth for auth-cookie
+	// attributes; both the auth middleware (which reads the access
+	// cookie) and the user handler (which sets/clears both cookies)
+	// consume the same struct. Resolved once at startup so request
+	// paths don't re-parse durations or samesite strings.
+	cookieCfg := cfg.CookieSettings()
+	userHandler := user.NewHandler(userService, cookieCfg)
 
 	// Build chi router. Middleware order (outermost first):
-	//   Tracing → RequestID → RealIP → Recoverer → Prometheus
-	//     → Logging → CORS → RateLimit → maxBodyBytes
+	//   Tracing → RequestID → StoreRequest → RealIP → Recoverer →
+	//     Prometheus → Logging → CORS → RateLimit → maxBodyBytes
 	// Tracing sits first so the OTel server span is the parent of
-	// every child span the application opens (service, pgx). CORS
-	// sits inside logging so OPTIONS preflight failures still get
-	// logged; rate-limit sits inside CORS so a throttled request
-	// still returns CORS headers.
+	// every child span the application opens (service, pgx). StoreRequest
+	// sits next so handlers and middlewares can recover the live
+	// *http.Request via reqctx.RequestFromContext (huma's generic
+	// handler signature is func(context.Context, *I) — no direct
+	// request access). CORS sits inside logging so OPTIONS preflight
+	// failures still get logged; rate-limit sits inside CORS so a
+	// throttled request still returns CORS headers.
 	router := chi.NewRouter()
 	router.Use(middleware.Tracing(cfg.OTelServiceName))
 	router.Use(middleware.RequestID)
+	router.Use(middleware.StoreRequest)
 	router.Use(middleware.RealIP)
 	router.Use(middleware.Recoverer)
 	router.Use(middleware.Prometheus)
@@ -164,8 +175,8 @@ func main() {
 	// artifact cannot drift from what the server serves.
 	humaAPI := humachi.New(router, api.HumaConfig())
 
-	movie.RegisterMovieOps(humaAPI, movieHandler, tokens)
-	user.RegisterUserOps(humaAPI, userHandler, tokens)
+	movie.RegisterMovieOps(humaAPI, movieHandler, tokens, cookieCfg)
+	user.RegisterUserOps(humaAPI, userHandler, tokens, cookieCfg)
 
 	port := ":" + cfg.Port
 	server := &http.Server{

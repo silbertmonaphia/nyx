@@ -21,6 +21,9 @@ spec:
         # OpenTelemetry — VITE_* are baked into the bundle at build
         # time; JAEGER_HOST is read at runtime by nginx to proxy /otlp/
         # to the in-cluster Jaeger Service (same-origin, no CORS).
+        # BACKEND_UPSTREAM is the nginx /api/ reverse-proxy target —
+        # same-origin so __Host- cookies flow correctly (see FUTURE.md
+        # §4 "Persist Auth Token Securely").
         env:
         - name: VITE_OTEL_ENABLED
           value: "true"
@@ -28,6 +31,8 @@ spec:
           value: "nyx-frontend"
         - name: JAEGER_HOST
           value: jaeger
+        - name: BACKEND_UPSTREAM
+          value: backend
         resources:
           requests:
             cpu: 50m

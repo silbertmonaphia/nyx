@@ -26,11 +26,11 @@ const baseUser: User = {
   updated_at: '2024-01-01T00:00:00Z',
 };
 
+// AuthResponse after the cookie migration: only user + expires_at
+// in the body. Tokens ride Set-Cookie headers, not JSON.
 const authResponse: AuthResponse = {
-  token: 'access-abc',
-  refresh_token: 'refresh-xyz',
-  expires_at: '2024-01-01T00:15:00Z',
   user: baseUser,
+  expires_at: '2024-01-01T00:15:00Z',
 };
 
 describe('AuthForm', () => {
@@ -57,7 +57,7 @@ describe('AuthForm', () => {
   });
 
   describe('login', () => {
-    it('POSTs to /login, calls setAuth with the full response, and fires onSuccess', async () => {
+    it('POSTs to /login, calls setAuth with the response, and fires onSuccess', async () => {
       mockedPost.mockResolvedValueOnce({ data: authResponse });
 
       render(<AuthForm onSuccess={onSuccess} onCancel={onCancel} />);
@@ -75,10 +75,10 @@ describe('AuthForm', () => {
         });
       });
 
-      // The contract: setAuth receives the whole AuthResponse so the
-      // store can pull access token, refresh token, expires_at, and
-      // user out of one envelope. Passing just `{user, token}` would
-      // silently drop the refresh credentials.
+      // The contract: setAuth receives the body envelope so the
+      // store can pull `user` out. Tokens ride Set-Cookie — they're
+      // never in the JSON envelope, so a future refactor that adds
+      // a token-shaped assertion here will fail loudly.
       await waitFor(() => {
         expect(setAuth).toHaveBeenCalledWith(authResponse);
       });
@@ -126,11 +126,7 @@ describe('AuthForm', () => {
   });
 
   describe('auth store end state', () => {
-    it('surfaces every refresh field through to the store', async () => {
-      // We don't assert on the internal setter; the contract is that
-      // `setAuth` received the full envelope so the store can persist
-      // access + refresh + expiry + user atomically. Verify the
-      // exact payload the form hands off.
+    it('surfaces user + expires_at through to setAuth', async () => {
       mockedPost.mockResolvedValueOnce({ data: authResponse });
 
       render(<AuthForm onSuccess={onSuccess} onCancel={onCancel} />);
@@ -142,10 +138,11 @@ describe('AuthForm', () => {
       await waitFor(() => expect(setAuth).toHaveBeenCalled());
 
       const [passed] = setAuth.mock.calls[0] as [AuthResponse];
-      expect(passed.token).toBe('access-abc');
-      expect(passed.refresh_token).toBe('refresh-xyz');
-      expect(passed.expires_at).toBe('2024-01-01T00:15:00Z');
       expect(passed.user).toEqual(baseUser);
+      expect(passed.expires_at).toBe('2024-01-01T00:15:00Z');
+      // Tokens must NOT be in the body — they ride Set-Cookie.
+      expect((passed as Record<string, unknown>).token).toBeUndefined();
+      expect((passed as Record<string, unknown>).refresh_token).toBeUndefined();
     });
   });
 });

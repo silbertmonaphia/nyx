@@ -8,18 +8,11 @@
             "format": "date-time",
             "type": "string"
           },
-          "refresh_token": {
-            "type": "string"
-          },
-          "token": {
-            "type": "string"
-          },
           "user": {
             "$ref": "#/components/schemas/User"
           }
         },
         "required": [
-          "token",
           "user"
         ],
         "type": "object"
@@ -112,14 +105,6 @@
       },
       "LogoutRequest": {
         "additionalProperties": false,
-        "properties": {
-          "refresh_token": {
-            "type": "string"
-          }
-        },
-        "required": [
-          "refresh_token"
-        ],
         "type": "object"
       },
       "Movie": {
@@ -218,14 +203,6 @@
       },
       "RefreshRequest": {
         "additionalProperties": false,
-        "properties": {
-          "refresh_token": {
-            "type": "string"
-          }
-        },
-        "required": [
-          "refresh_token"
-        ],
         "type": "object"
       },
       "RegisterRequest": {
@@ -338,7 +315,7 @@
     },
     "/api/login": {
       "post": {
-        "description": "Authenticate a user by username + password and receive a JWT.",
+        "description": "Authenticate a user by username + password. Sets __Host-nyx-access and __Host-nyx-refresh httpOnly cookies; the JSON body contains only the user profile.",
         "operationId": "login",
         "requestBody": {
           "content": {
@@ -359,7 +336,14 @@
                 }
               }
             },
-            "description": "OK"
+            "description": "OK",
+            "headers": {
+              "Set-Cookie": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
           },
           "default": {
             "content": {
@@ -380,7 +364,7 @@
     },
     "/api/logout": {
       "post": {
-        "description": "Revoke the supplied refresh token's entire family. Requires a valid access token in the Authorization header. Returns 204.",
+        "description": "Revoke the refresh token family identified by the __Host-nyx-refresh cookie. Requires a valid access token (cookie or Authorization header). Returns 204 and clears both auth cookies.",
         "operationId": "logout",
         "requestBody": {
           "content": {
@@ -394,7 +378,14 @@
         },
         "responses": {
           "204": {
-            "description": "No Content"
+            "description": "No Content",
+            "headers": {
+              "Set-Cookie": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
           },
           "default": {
             "content": {
@@ -634,7 +625,7 @@
     },
     "/api/refresh": {
       "post": {
-        "description": "Exchange a valid refresh token for a fresh access + refresh pair. Returns 401 on invalid / expired / reused tokens; reuse triggers family-wide revocation.",
+        "description": "Exchange a valid refresh cookie for a fresh access + refresh pair. Returns 401 on invalid / expired / reused tokens; reuse triggers family-wide revocation. Both cookies are re-issued.",
         "operationId": "refresh",
         "requestBody": {
           "content": {
@@ -655,7 +646,14 @@
                 }
               }
             },
-            "description": "OK"
+            "description": "OK",
+            "headers": {
+              "Set-Cookie": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
           },
           "default": {
             "content": {
@@ -676,7 +674,7 @@
     },
     "/api/register": {
       "post": {
-        "description": "Create a new user account. Returns 409 when the username or email is already taken.",
+        "description": "Create a new user account. Returns 409 when the username or email is already taken. Sets __Host-nyx-access and __Host-nyx-refresh httpOnly cookies via Set-Cookie headers.",
         "operationId": "register",
         "requestBody": {
           "content": {
@@ -697,7 +695,14 @@
                 }
               }
             },
-            "description": "OK"
+            "description": "OK",
+            "headers": {
+              "Set-Cookie": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
           },
           "default": {
             "content": {

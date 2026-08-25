@@ -66,12 +66,12 @@ describe('api response interceptor', () => {
     setAuth = vi.fn();
     // The interceptor calls `useAuthStore.getState().logout()` and
     // `useUiStore.getState().addToast(msg, 'error')`. Wire those
-    // methods through the mocked `getState` accessors.
+    // methods through the mocked `getState` accessors. The
+    // post-cookie auth store has no `token` / `refreshToken` fields;
+    // the cookie rides on every request via `withCredentials: true`.
     mockedAuthStore.getState = vi.fn().mockReturnValue({
       logout,
       setAuth,
-      refreshToken: 'refresh-stub',
-      token: 'access-stub',
     });
     mockedUiStore.getState = vi.fn().mockReturnValue({ addToast });
     rejected = getResponseErrorHandler();
@@ -195,8 +195,6 @@ describe('refresh-on-401', () => {
     mockedAuthStore.getState = vi.fn().mockReturnValue({
       logout,
       setAuth,
-      refreshToken: 'refresh-stub',
-      token: 'access-stub',
     });
     mockedUiStore.getState = vi.fn().mockReturnValue({ addToast });
     rejected = getResponseErrorHandler();
@@ -220,44 +218,55 @@ describe('refresh-on-401', () => {
   });
 
   it('refresh + retry succeeds on an "expired" challenge (no logout)', async () => {
-    const newToken = 'access-rotated';
+    // Post-cookie refresh: the body is empty, the new tokens arrive
+    // as Set-Cookie headers on the response (mocked as the bare
+    // data envelope here — the browser does the actual cookie
+    // storage). The store only updates its `user` profile.
     postSpy.mockResolvedValueOnce({
       data: {
-        token: newToken,
-        refresh_token: 'refresh-rotated',
-        expires_at: '2024-02-01T00:15:00Z',
         user: { id: 1, username: 'tester' },
+        expires_at: '2024-02-01T00:15:00Z',
       },
     });
 
     const error = make401({
       wwwAuthenticate: 'Bearer error="invalid_token", error_description="expired"',
     });
-    // The interceptor mutates `config` in place to mark `_retried`
-    // and inject the fresh token — give the test its own handle so
-    // we can assert the mutation afterwards.
+    // The interceptor mutates `config` in place to mark `_retried` —
+    // give the test its own handle so we can assert the mutation
+    // afterwards.
     error.config = { ...(error.config as object) };
 
     await expect(rejected(error)).resolves.toBeDefined();
 
-    // Single refresh was attempted.
+    // Single refresh was attempted. POST body is empty (the refresh
+    // token rides in the cookie); withCredentials=true is set so the
+    // browser attaches the cookie.
     expect(postSpy).toHaveBeenCalledTimes(1);
     expect(postSpy).toHaveBeenCalledWith(
       expect.stringContaining('/refresh'),
-      expect.objectContaining({ refresh_token: 'refresh-stub' }),
+      {},
+      expect.objectContaining({ withCredentials: true }),
     );
 
-    // Store was updated with the new envelope.
+    // Store was updated with the user profile (cookies carry the
+    // tokens themselves — no token-shaped assertion here).
     expect(setAuth).toHaveBeenCalledTimes(1);
     expect(setAuth).toHaveBeenCalledWith(
-      expect.objectContaining({ token: newToken }),
+      expect.objectContaining({ user: { id: 1, username: 'tester' } }),
     );
 
-    // Original request was replayed with the fresh token.
+    // Original request was replayed with `_retried=true`. The cookie
+    // auto-attaches on the replay; no Authorization header is
+    // stamped (the Authorization path is gone — that's the whole
+    // point of the cookie migration).
     expect(requestSpy).toHaveBeenCalledTimes(1);
-    const replayConfig = requestSpy.mock.calls[0][0] as { _retried?: boolean; headers: Record<string, string> };
+    const replayConfig = requestSpy.mock.calls[0][0] as {
+      _retried?: boolean;
+      headers?: Record<string, string>;
+    };
     expect(replayConfig._retried).toBe(true);
-    expect(replayConfig.headers.Authorization).toBe(`Bearer ${newToken}`);
+    expect(replayConfig.headers?.Authorization).toBeUndefined();
 
     // No logout, no toast — the refresh was transparent.
     expect(logout).not.toHaveBeenCalled();
@@ -316,10 +325,8 @@ describe('refresh-on-401', () => {
     // Settle the refresh so both handlers resume.
     resolveRefresh({
       data: {
-        token: 'access-rotated',
-        refresh_token: 'refresh-rotated',
-        expires_at: '2024-02-01T00:15:00Z',
         user: { id: 1, username: 'tester' },
+        expires_at: '2024-02-01T00:15:00Z',
       },
     });
 
@@ -380,15 +387,15 @@ describe('api request interceptor (traceparent)', () => {
 
   it('calls injectTraceparent on each request', () => {
     const config: { headers: Record<string, unknown> } = {
-      headers: { Authorization: 'Bearer test-token' },
+      headers: {},
     };
 
     requestFulfilled(config as never);
 
     expect(spy).toHaveBeenCalledTimes(1);
-    // It receives the headers object (auth-stamped path: existing
-    // Authorization header short-circuits token re-injection but
-    // traceparent still runs).
+    // It receives the headers object. (Pre-cookie the path also
+    // stamped Authorization here; post-cookie only traceparent runs
+    // on every request — the access JWT rides the cookie.)
     expect(spy.mock.calls[0][0]).toBe(config.headers);
   });
 });

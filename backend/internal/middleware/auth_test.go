@@ -75,7 +75,7 @@ func TestAuth_InvalidTokenHidesInternalDetails(t *testing.T) {
 		w.WriteHeader(http.StatusOK)
 	})
 
-	handler := NewAuth(tokens)(downstream)
+	handler := NewAuth(tokens, "__Host-nyx-access", true)(downstream)
 
 	req := httptest.NewRequest(http.MethodGet, "/x", nil)
 	req.Header.Set("Authorization", "Bearer abc.def.ghi")
@@ -127,7 +127,7 @@ func TestAuth_ExpiredTokenSetsExpiredChallenge(t *testing.T) {
 		t.Error("downstream handler must not be reached on expired token")
 		w.WriteHeader(http.StatusOK)
 	})
-	handler := NewAuth(tokens)(downstream)
+	handler := NewAuth(tokens, "__Host-nyx-access", true)(downstream)
 
 	req := httptest.NewRequest(http.MethodGet, "/x", nil)
 	req.Header.Set("Authorization", "Bearer expired.jwt.token")
@@ -163,7 +163,7 @@ func TestAuth_InvalidTokenSetsBareChallenge(t *testing.T) {
 		t.Error("downstream handler must not be reached on invalid token")
 		w.WriteHeader(http.StatusOK)
 	})
-	handler := NewAuth(tokens)(downstream)
+	handler := NewAuth(tokens, "__Host-nyx-access", true)(downstream)
 
 	req := httptest.NewRequest(http.MethodGet, "/x", nil)
 	req.Header.Set("Authorization", "Bearer garbage")
@@ -221,7 +221,7 @@ func TestHumaAuth_InvalidTokenHidesInternalDetails(t *testing.T) {
 		OperationID: "guarded",
 		Method:      http.MethodGet,
 		Path:        "/guarded",
-		Middlewares: huma.Middlewares{NewHumaAuth(tokens)},
+		Middlewares: huma.Middlewares{NewHumaAuth(tokens, "__Host-nyx-access", true)},
 	}, func(_ context.Context, _ *struct{}) (*struct{}, error) {
 		hit = true
 		return &struct{}{}, nil
@@ -283,7 +283,7 @@ func TestHumaAuth_ExpiredTokenSetsExpiredChallenge(t *testing.T) {
 		OperationID: "guarded",
 		Method:      http.MethodGet,
 		Path:        "/guarded",
-		Middlewares: huma.Middlewares{NewHumaAuth(tokens)},
+		Middlewares: huma.Middlewares{NewHumaAuth(tokens, "__Host-nyx-access", true)},
 	}, func(_ context.Context, _ *struct{}) (*struct{}, error) {
 		hit = true
 		return &struct{}{}, nil

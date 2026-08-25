@@ -90,12 +90,18 @@ services:
         # proxy /otlp/ → JAEGER_HOST:4318 (same-origin, no CORS).
         - VITE_OTEL_ENABLED=${VITE_OTEL_ENABLED:-true}
         - VITE_OTEL_SERVICE_NAME=${VITE_OTEL_SERVICE_NAME:-nyx-frontend}
+        # Same-origin /api/ proxy. nginx inside the container proxies
+        # /api/* on :8080 → ${BACKEND_UPSTREAM}:8080. The browser sees
+        # frontend + API as same-origin, so __Host- cookies flow
+        # correctly. Defaults to the compose service name `backend`.
+        - BACKEND_UPSTREAM=backend
     ports:
       - "80:80"
     environment:
       - VITE_OTEL_ENABLED=${VITE_OTEL_ENABLED:-true}
       - VITE_OTEL_SERVICE_NAME=${VITE_OTEL_SERVICE_NAME:-nyx-frontend}
       - JAEGER_HOST=jaeger
+      - BACKEND_UPSTREAM=backend
     depends_on:
       backend:
         condition: service_healthy

@@ -35,10 +35,29 @@ var (
 )
 
 type Service interface {
-	Register(ctx context.Context, req RegisterRequest) (*AuthResponse, error)
-	Login(ctx context.Context, req LoginRequest) (*AuthResponse, error)
-	Refresh(ctx context.Context, req RefreshRequest) (*AuthResponse, error)
-	Logout(ctx context.Context, req LogoutRequest) error
+	Register(ctx context.Context, req RegisterRequest) (*AuthResult, error)
+	Login(ctx context.Context, req LoginRequest) (*AuthResult, error)
+	// Refresh takes the raw refresh token read by the handler from
+	// the __Host-nyx-refresh cookie. The body is empty by design —
+	// huma never sees a refresh_token field, the wire contract is
+	// cookie-only.
+	Refresh(ctx context.Context, rawRefresh string) (*AuthResult, error)
+	// Logout takes the raw refresh token read by the handler from
+	// the __Host-nyx-refresh cookie. Same wire contract as Refresh.
+	Logout(ctx context.Context, rawRefresh string) error
+}
+
+// AuthResult is the service-layer return value: it carries the
+// raw tokens the handler needs to set as cookies, plus the
+// JSON-serialisable parts (user + expires_at) that survive in the
+// response body. Keeping the tokens out of AuthResponse is the
+// security boundary — there is no path by which they leak into the
+// JSON envelope.
+type AuthResult struct {
+	AccessToken  string
+	RefreshToken string
+	ExpiresAt    time.Time
+	User         User
 }
 
 // service is the user/auth domain service. tokens issues access JWTs;
@@ -93,7 +112,7 @@ func (s *service) accessExpires() time.Time {
 	return time.Now().Add(s.accessTTL)
 }
 
-func (s *service) Register(ctx context.Context, req RegisterRequest) (*AuthResponse, error) {
+func (s *service) Register(ctx context.Context, req RegisterRequest) (*AuthResult, error) {
 	ctx, span := s.tracer.Start(ctx, "user.Register", trace.WithSpanKind(trace.SpanKindInternal))
 	defer span.End()
 
@@ -122,15 +141,15 @@ func (s *service) Register(ctx context.Context, req RegisterRequest) (*AuthRespo
 		return nil, err
 	}
 
-	return &AuthResponse{
-		Token:        token,
+	return &AuthResult{
+		AccessToken:  token,
 		RefreshToken: refresh,
 		ExpiresAt:    s.accessExpires(),
 		User:         *u,
 	}, nil
 }
 
-func (s *service) Login(ctx context.Context, req LoginRequest) (*AuthResponse, error) {
+func (s *service) Login(ctx context.Context, req LoginRequest) (*AuthResult, error) {
 	ctx, span := s.tracer.Start(ctx, "user.Login", trace.WithSpanKind(trace.SpanKindInternal))
 	defer span.End()
 
@@ -156,8 +175,8 @@ func (s *service) Login(ctx context.Context, req LoginRequest) (*AuthResponse, e
 		return nil, err
 	}
 
-	return &AuthResponse{
-		Token:        token,
+	return &AuthResult{
+		AccessToken:  token,
 		RefreshToken: refresh,
 		ExpiresAt:    s.accessExpires(),
 		User:         *u,
@@ -165,7 +184,7 @@ func (s *service) Login(ctx context.Context, req LoginRequest) (*AuthResponse, e
 }
 
 // Refresh validates the supplied refresh token, rotates it (issuing a
-// new pair), and returns the new AuthResponse. Three failure modes:
+// new pair), and returns the new AuthResult. Three failure modes:
 //
 //  1. Token doesn't exist / hash mismatch -> ErrInvalidRefreshToken
 //  2. Token has revoked_at != nil -> family revocation +
@@ -176,11 +195,18 @@ func (s *service) Login(ctx context.Context, req LoginRequest) (*AuthResponse, e
 // The atomic CTE in RotateRefreshToken handles concurrent rotations:
 // the second caller observes the new revoked_at on the old row and
 // takes the reuse branch above.
-func (s *service) Refresh(ctx context.Context, req RefreshRequest) (*AuthResponse, error) {
+//
+// rawRefresh is read from the __Host-nyx-refresh cookie by the
+// handler — it never travels in the request body.
+func (s *service) Refresh(ctx context.Context, rawRefresh string) (*AuthResult, error) {
 	ctx, span := s.tracer.Start(ctx, "user.Refresh", trace.WithSpanKind(trace.SpanKindInternal))
 	defer span.End()
 
-	suppliedHash := sha256Sum(req.RefreshToken)
+	if rawRefresh == "" {
+		return nil, ErrInvalidRefreshToken
+	}
+
+	suppliedHash := sha256Sum(rawRefresh)
 
 	row, err := s.repo.GetRefreshTokenByHash(ctx, suppliedHash)
 	if err != nil {
@@ -228,8 +254,8 @@ func (s *service) Refresh(ctx context.Context, req RefreshRequest) (*AuthRespons
 		return nil, err
 	}
 
-	return &AuthResponse{
-		Token:        accessToken,
+	return &AuthResult{
+		AccessToken:  accessToken,
 		RefreshToken: newRaw,
 		ExpiresAt:    s.accessExpires(),
 		User:         *user,
@@ -237,16 +263,23 @@ func (s *service) Refresh(ctx context.Context, req RefreshRequest) (*AuthRespons
 }
 
 // Logout revokes the entire refresh-token family the supplied token
-// belongs to. Idempotent: an unknown token returns nil rather than
-// leaking that the token doesn't exist. Per-design v1 behavior: a
-// single Logout kills every active session for that user (logout on
-// phone also logs out the laptop) — per-device logout is a deliberate
-// follow-up tracked in FUTURE.md.
-func (s *service) Logout(ctx context.Context, req LogoutRequest) error {
+// belongs to. Idempotent: an unknown or empty token returns nil
+// rather than leaking that the token doesn't exist. Per-design v1
+// behavior: a single Logout kills every active session for that user
+// (logout on phone also logs out the laptop) — per-device logout is
+// a deliberate follow-up tracked in FUTURE.md.
+//
+// rawRefresh is read from the __Host-nyx-refresh cookie by the
+// handler.
+func (s *service) Logout(ctx context.Context, rawRefresh string) error {
 	ctx, span := s.tracer.Start(ctx, "user.Logout", trace.WithSpanKind(trace.SpanKindInternal))
 	defer span.End()
 
-	suppliedHash := sha256Sum(req.RefreshToken)
+	if rawRefresh == "" {
+		return nil // idempotent — no token means no work to do
+	}
+
+	suppliedHash := sha256Sum(rawRefresh)
 	row, err := s.repo.GetRefreshTokenByHash(ctx, suppliedHash)
 	if err != nil {
 		if errors.Is(err, ErrRefreshTokenNotFound) {

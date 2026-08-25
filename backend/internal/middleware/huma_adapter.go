@@ -15,7 +15,11 @@ import (
 // NewHumaAuth returns a huma.Middleware that performs the same JWT
 // validation as NewAuth, but in huma's middleware shape
 // (func(huma.Context, next func(huma.Context))). tokens carries the
-// signing key captured at startup.
+// signing key captured at startup. accessCookieName is the
+// configured cookie name (default "__Host-nyx-access"); cookieSecure
+// mirrors CookieConfig.Secure so the helper that strips the
+// __Host- prefix in dev (Secure=false) matches the read path used
+// by handlers.
 //
 // Huma parses the request body BEFORE running per-operation
 // Middlewares, which means a malicious 100 MB POST could trigger
@@ -32,23 +36,27 @@ import (
 // WWW-Authenticate challenge is set via SetHeader so the frontend's
 // axios interceptor can distinguish a refresh-eligible 401 (token
 // expired) from a hard-logout 401 (anything else).
-func NewHumaAuth(tokens auth.TokenService) func(huma.Context, func(huma.Context)) {
+//
+// Token source: __Host-nyx-access cookie first (httpOnly, browser
+// auto-attaches), then Authorization: Bearer as a deprecation-
+// window fallback for curl / Postman clients that haven't been
+// updated to the cookie flow. Remove the fallback once all clients
+// are cookie-native.
+func NewHumaAuth(tokens auth.TokenService, accessCookieName string, cookieSecure bool) func(huma.Context, func(huma.Context)) {
+	resolvedCookieName := accessCookieName
+	if !cookieSecure {
+		resolvedCookieName = strings.TrimPrefix(accessCookieName, "__Host-")
+	}
+
 	return func(ctx huma.Context, next func(huma.Context)) {
-		authHeader := ctx.Header("Authorization")
-		if authHeader == "" {
+		raw, ok := readAccessToken(ctx, resolvedCookieName)
+		if !ok {
 			ctx.SetHeader("WWW-Authenticate", wwwAuthInvalid)
-			writeHumaError(ctx, http.StatusUnauthorized, "Authorization header is required", nil)
+			writeHumaError(ctx, http.StatusUnauthorized, "Authentication required", nil)
 			return
 		}
 
-		parts := strings.Split(authHeader, " ")
-		if len(parts) != 2 || parts[0] != "Bearer" {
-			ctx.SetHeader("WWW-Authenticate", wwwAuthInvalid)
-			writeHumaError(ctx, http.StatusUnauthorized, "Authorization header must be in the format 'Bearer <token>'", nil)
-			return
-		}
-
-		claims, err := tokens.ValidateToken(parts[1])
+		claims, err := tokens.ValidateToken(raw)
 		if err != nil {
 			// Set the challenge before writeHumaError so it lands in
 			// the headers — once SetStatus / BodyWriter runs, headers
@@ -71,6 +79,33 @@ func NewHumaAuth(tokens auth.TokenService) func(huma.Context, func(huma.Context)
 		// handlers see the updated context via ctx.Context().
 		next(huma.WithContext(ctx, rctx))
 	}
+}
+
+// readAccessToken pulls the JWT from the __Host-nyx-access cookie
+// first; falls back to Authorization: Bearer for the deprecation
+// window. Returns ("", false) when neither source is present. The
+// Cookie is read via r.Cookie(name) on the *http.Request that
+// StoreRequest stashed on the request context — huma's middleware
+// path gives us a huma.Context, but the live request is recovered
+// from reqctx.RequestFromContext so we can use the standard
+// library's cookie parser.
+func readAccessToken(ctx huma.Context, cookieName string) (string, bool) {
+	r := reqctx.RequestFromContext(ctx.Context())
+	if r != nil {
+		if c, err := r.Cookie(cookieName); err == nil && c.Value != "" {
+			return c.Value, true
+		}
+	}
+
+	authHeader := ctx.Header("Authorization")
+	if authHeader == "" {
+		return "", false
+	}
+	parts := strings.Split(authHeader, " ")
+	if len(parts) != 2 || parts[0] != "Bearer" {
+		return "", false
+	}
+	return parts[1], true
 }
 
 // writeHumaError writes the canonical {error, code, request_id, details}
