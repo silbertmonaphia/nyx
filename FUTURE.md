@@ -6,9 +6,12 @@ Single source of truth for "what's done / what's next" across the stack. Tick an
 
 - [x] Structured logging (`rs/zerolog`, JSON output, request IDs).
 - [x] Prometheus `/metrics` endpoint + `prometheus` middleware.
+- [x] Cache hit/miss Prometheus counter — `cache_operations_total{op,result}` in `internal/platform/cache/cache.go`. Reuses the `prometheus.DefaultGatherer` text format from the request middleware.
 - [x] Graceful shutdown (`SIGTERM`/`SIGINT` + `context`).
 - [x] Health checks — `/api/health` includes DB connectivity.
-- [ ] Distributed Tracing — `go.opentelemetry.io/otel` is in `go.mod`; no exporter wired in `main.go` yet.
+- [x] Distributed Tracing (OpenTelemetry) — SDK initialised in `cmd/api/main.go` via `internal/platform/observability`. HTTP entry traced by `middleware.Tracing` (`otelhttp` + chi route-template span names); service-layer spans in `movie.Service` / `user.Service`; pgx pool traced via internal `pgx.QueryTracer`. Exporter: OTLP/HTTP → Jaeger all-in-one (compose `jaeger` service, UI on `:16686`). Default-off (`OTEL_ENABLED=false`) — every `tracer.Start` is a no-op and pgx skips its tracer callback when the global provider is noop. W3C TraceContext + Baggage composite propagator on the global; the existing `traceparent` extract path is covered by `TestTracing_PropagatesTraceparentFromUpstream`.
+- [x] Frontend → Jaeger end-to-end — `@opentelemetry/sdk-trace-web` initialised in `frontend/src/services/telemetry.ts`, exports OTLP/HTTP via the SPA container's nginx `location /otlp/` (same-origin proxy → Jaeger, bypasses Jaeger's missing CORS without an OTel Collector). axios request interceptor calls `injectTraceparent()` so backend spans are children of browser-initiated root spans. `service.name=nyx-frontend`; traceparent flows both directions via W3C TraceContext.
+- [x] Frontend structured logging — `frontend/src/services/logger.ts` (JSON-shaped `console.*`, `trace_id`/`span_id` pulled from the active span). Global `window.error` + `unhandledrejection` handlers in `main.tsx`.
 
 ## 2. API Maturity & Security
 
@@ -52,6 +55,7 @@ Single source of truth for "what's done / what's next" across the stack. Tick an
 - [x] Search Debounce — `App.tsx` fires an API request on every keystroke. Add a 300ms debounce.
 - [x] Dynamic Metadata (SEO) — per-page `<title>` and meta description.
 - [ ] Persist Auth Token Securely — JWT in `localStorage` via Zustand `persist`. httpOnly cookies (or a documented XSS caveat) pending.
+- [x] Traceparent propagation — axios request interceptor calls `injectTraceparent()` so backend spans are children of browser-initiated root spans (`nyx-frontend` service). Verified by the new `api.test.ts` traceparent test.
 - [x] Token Refresh — single-flight refresh-on-401 in `api.ts`, driven by the `WWW-Authenticate` challenge from the auth middleware. Refresh tokens persist in the auth store alongside the access token.
 
 ## 5. Developer Experience & CI/CD

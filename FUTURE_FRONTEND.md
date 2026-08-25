@@ -64,6 +64,14 @@ The history and design decisions behind the current frontend. For the high-level
 
 - [x] **Dynamic Metadata** — per-view `<title>` and meta description via React 19's native metadata hoisting (`<PageMeta>` wrapper in `src/components/ui/`). `index.html` retains a static title + description as the pre-JS crawler fallback.
 
+## 9. Observability
+
+- [x] **OpenTelemetry Tracing** — `@opentelemetry/sdk-trace-web` initialised in `frontend/src/services/telemetry.ts`. When `VITE_OTEL_ENABLED=true`, builds a `WebTracerProvider` with a `BatchSpanProcessor` + `OTLPTraceExporter` pointed at the same-origin `/otlp/v1/traces` (the SPA container's nginx proxies that path to `JAEGER_HOST:4318`, bypassing Jaeger's missing CORS without an OTel Collector). Registers `FetchInstrumentation` (axios uses fetch internally) and `XMLHttpRequestInstrumentation`. Default-off (`VITE_OTEL_ENABLED !== "true"`) — `initTelemetry()` is a noop, every `tracer.Start` is free. Resource `service.name = VITE_OTEL_SERVICE_NAME || "nyx-frontend"` so Jaeger groups frontend spans separately from backend.
+- [x] **W3C Traceparent propagation** — axios request interceptor (`frontend/src/services/api.ts`) calls `injectTraceparent()` on every outbound request so the backend's `otelhttp` server span joins the browser-initiated trace. The `traceparent` is stamped AFTER the auth header so both end up on the wire; runs on the 401 retry path too. Verified by `api.test.ts` (regex assertion against the W3C shape).
+- [x] **Structured Logger** — `frontend/src/services/logger.ts`. JSON-shaped `console.{debug,info,warn,error}` with `ts`, `level`, `msg`, `trace_id`, `span_id` pulled from `trace.getActiveSpan()`. Replaces the three pre-existing `console.error` callsites in `App.tsx` and `AuthForm.tsx`. Pure browser; no backend dependency.
+- [x] **Global error capture** — `window.addEventListener('error' | 'unhandledrejection', …)` in `main.tsx` forwards uncaught errors into `logger.error` so they appear alongside the rest of the structured log surface. The HTTP error toast flow in `api.ts` is unchanged (these handlers complement, not duplicate).
+- [x] **Same-origin OTLP proxy** — `frontend/nginx.conf` adds `location /otlp/` that proxies to `JAEGER_HOST:4318`. `__JAEGER_HOST__` is substituted at image build time via `sed` in the frontend `Dockerfile` (`ARG JAEGER_HOST=jaeger`). Avoids CORS entirely (browser POSTs to its own origin) and avoids adding an OTel Collector.
+
 ## 9. Developer Experience
 
 - [x] **ESLint** — `eslint.config.js` (flat config), React + hooks plugins.

@@ -9,7 +9,7 @@ A minimalist media rating application — Go 1.26.1 API, React 19 SPA, PostgreSQ
 - **Auth** — JWT access tokens (default 15m) paired with rotated refresh tokens (default 7d, opaque, sha256-hashed, family-level reuse detection). `POST /api/refresh` + `POST /api/logout`. Bcrypt-hashed passwords.
 - **Pagination** — `GET /api/movies` returns `{data, page, page_size, total, has_more}`. Default 20, max 100.
 - **Cache-aside** — Redis opt-in for `GET /api/movies` (`REDIS_ENABLED=true`). Cache is best-effort; failures never fail the request.
-- **Observability** — `/metrics` (Prometheus), structured JSON logging via `zerolog`, graceful shutdown.
+- **Observability** — Distributed tracing via OpenTelemetry (browser → nginx → Jaeger, all spans stitched by W3C `traceparent`), `/metrics` (Prometheus: HTTP request count/latency, cache hit/miss), structured JSON logging via `zerolog`, graceful shutdown.
 - **CI/CD** — GitHub Actions (lint + unit + integration + sqlc drift + e2e), `golangci-lint`, `husky` pre-commit on the frontend.
 - **Deploy** — Docker Compose for dev/prod, manifests in `k8s/`.
 
@@ -83,6 +83,37 @@ npm install
 npm run dev
 # http://localhost:5173
 ```
+
+### OpenTelemetry (optional)
+
+Tracing is off by default — both backend (`OTEL_ENABLED`) and frontend (`VITE_OTEL_ENABLED`) gate the SDK behind a `"true"` flag, so a vanilla `npm run dev` carries zero observability overhead.
+
+To turn it on in dev:
+
+```bash
+# 1. Start Jaeger (already part of `docker compose up`)
+sudo docker compose up jaeger -d
+
+# 2. Backend — env in repo-root .env or shell
+export OTEL_ENABLED=true
+export OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318
+cd backend && go run ./cmd/api
+
+# 3. Frontend — Vite inlines these at build time
+export VITE_OTEL_ENABLED=true
+export VITE_OTEL_SERVICE_NAME=nyx-frontend
+export JAEGER_HOST=localhost   # dev: nginx in container proxies via container DNS; in `npm run dev`, set to whatever Jaeger is reachable on
+cd frontend && npm run dev
+
+# 4. Open the Jaeger UI
+open http://localhost:16686
+# Service dropdown → "nyx-frontend". Click any trace and the tree shows:
+#   HTTP POST /api/movies
+#   ├── nyx.movie.Create (service span)
+#   └── pgx.query (db.operation = INSERT)
+```
+
+In the bundled `docker compose` stack, `OTEL_ENABLED=true` and `VITE_OTEL_ENABLED=true` are defaults; the frontend container's nginx proxies `/otlp/` to the `jaeger` service, so the browser hits same-origin and Jaeger's missing CORS is a non-issue.
 
 ## Testing
 

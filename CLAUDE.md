@@ -60,7 +60,7 @@ Full stack: `cp .env.example .env && sudo docker compose up --build -d`. DB host
 
 # Open roadmap (next candidates)
 
-- Distributed Tracing (OTel) — landed. `OTEL_ENABLED=false` by default. Set `OTEL_ENABLED=true` + `OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318` to send spans to a local Jaeger all-in-one (`docker compose up jaeger`; UI on `http://localhost:16686`). Compose runs Jaeger + backend with `OTEL_ENABLED=true` by default. See `FUTURE_BACKEND.md` §5.
+- Distributed Tracing (OTel) — landed on backend and frontend. `OTEL_ENABLED=false` + `VITE_OTEL_ENABLED != "true"` by default. Backend exports via OTLP/HTTP → Jaeger (compose `jaeger` service, UI on `:16686`); frontend exports via the SPA container's nginx `location /otlp/` proxy → Jaeger (same-origin, bypasses Jaeger's missing CORS). Browser axios injects W3C `traceparent` so backend spans are children of the SPA root span. `service.name=nyx-frontend` for browser spans, `service.name=nyx-backend` for server spans. See `FUTURE_BACKEND.md` §5 and `FUTURE_FRONTEND.md` §9.
 - Container Version Conflict Guardrail — script checks for Postgres major-version volume upgrades.
 - Persist Auth Token Securely — JWT is in `localStorage` via Zustand `persist`. httpOnly cookies (or a documented XSS caveat) pending.
 
