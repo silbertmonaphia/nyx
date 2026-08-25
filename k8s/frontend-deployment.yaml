@@ -18,6 +18,16 @@ spec:
         image: nyx-frontend:latest # Replace with actual image in CD
         ports:
         - containerPort: 8080
+        # OpenTelemetry — VITE_* are baked into the bundle at build
+        # time; JAEGER_HOST is read at runtime by nginx to proxy /otlp/
+        # to the in-cluster Jaeger Service (same-origin, no CORS).
+        env:
+        - name: VITE_OTEL_ENABLED
+          value: "true"
+        - name: VITE_OTEL_SERVICE_NAME
+          value: "nyx-frontend"
+        - name: JAEGER_HOST
+          value: jaeger
         resources:
           requests:
             cpu: 50m

@@ -33,6 +33,24 @@ services:
     networks:
       - nyx_network
 
+  # OpenTelemetry tracing — Jaeger v1.62+ ingests OTLP/HTTP directly
+  # (no sidecar collector needed). Internal-only in prod: the nginx
+  # proxy inside the frontend container is the only ingress, so we
+  # don't expose :16686 / :4318 to the host. healthcheck uses the
+  # admin port (14269) so backend/frontend can wait for it.
+  jaeger:
+    image: jaegertracing/all-in-one:1.62
+    restart: always
+    environment:
+      - COLLECTOR_OTLP_ENABLED=true
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:14269/status"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    networks:
+      - nyx_network
+
   backend:
     build:
       context: ./backend
@@ -45,10 +63,18 @@ services:
       - REDIS_URL=${REDIS_URL:-redis://redis:6379}
       - REDIS_ENABLED=${REDIS_ENABLED:-true}
       - CACHE_TTL=${CACHE_TTL:-5m}
+      # OpenTelemetry — on by default so spans flow into the local
+      # Jaeger UI through the frontend's nginx same-origin proxy.
+      # Override OTEL_ENABLED=false in .env to disable.
+      - OTEL_ENABLED=${OTEL_ENABLED:-true}
+      - OTEL_EXPORTER_OTLP_ENDPOINT=http://jaeger:4318
+      - OTEL_SERVICE_NAME=nyx-backend
     depends_on:
       db:
         condition: service_healthy
       redis:
+        condition: service_healthy
+      jaeger:
         condition: service_healthy
     networks:
       - nyx_network
@@ -59,10 +85,22 @@ services:
       dockerfile: Dockerfile
       args:
         - VITE_API_URL=${VITE_API_URL:-http://localhost:8080/api}
+        # OpenTelemetry — VITE_* vars are baked into the bundle at
+        # build time. JAEGER_HOST is read at runtime by nginx to
+        # proxy /otlp/ → JAEGER_HOST:4318 (same-origin, no CORS).
+        - VITE_OTEL_ENABLED=${VITE_OTEL_ENABLED:-true}
+        - VITE_OTEL_SERVICE_NAME=${VITE_OTEL_SERVICE_NAME:-nyx-frontend}
     ports:
       - "80:80"
+    environment:
+      - VITE_OTEL_ENABLED=${VITE_OTEL_ENABLED:-true}
+      - VITE_OTEL_SERVICE_NAME=${VITE_OTEL_SERVICE_NAME:-nyx-frontend}
+      - JAEGER_HOST=jaeger
     depends_on:
-      - backend
+      backend:
+        condition: service_healthy
+      jaeger:
+        condition: service_healthy
     networks:
       - nyx_network
 

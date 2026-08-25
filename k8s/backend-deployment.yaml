@@ -42,6 +42,14 @@ spec:
           value: "8080"
         - name: GIN_MODE
           value: "release"
+        # OpenTelemetry — backend ships OTLP/HTTP spans to the in-cluster
+        # Jaeger Service (cluster-local DNS name "jaeger", port 4318).
+        - name: OTEL_ENABLED
+          value: "true"
+        - name: OTEL_EXPORTER_OTLP_ENDPOINT
+          value: "http://jaeger:4318"
+        - name: OTEL_SERVICE_NAME
+          value: "nyx-backend"
         resources:
           requests:
             cpu: 100m
