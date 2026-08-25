@@ -11,6 +11,26 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const countActiveRefreshTokensByUser = `-- name: CountActiveRefreshTokensByUser :one
+SELECT COUNT(*)::bigint
+FROM refresh_tokens
+WHERE user_id = $1
+  AND revoked_at IS NULL
+  AND expires_at > now()
+`
+
+// Counts non-revoked, non-expired rows for a user. Used by the
+// service layer on every mint to enforce the per-user family cap
+// (see SECURITY.md M2). Excludes already-revoked rows because
+// those are being pruned in the background goroutine — counting
+// them would inflate the result and trigger spurious revokes.
+func (q *Queries) CountActiveRefreshTokensByUser(ctx context.Context, userID int32) (int64, error) {
+	row := q.db.QueryRow(ctx, countActiveRefreshTokensByUser, userID)
+	var column_1 int64
+	err := row.Scan(&column_1)
+	return column_1, err
+}
+
 const createRefreshToken = `-- name: CreateRefreshToken :one
 WITH inserted AS (
     INSERT INTO refresh_tokens (user_id, token_hash, family_id, expires_at)
@@ -160,6 +180,66 @@ func (q *Queries) InsertUser(ctx context.Context, arg InsertUserParams) (User, e
 		&i.DeletedAt,
 	)
 	return i, err
+}
+
+const listOldestActiveRefreshTokensByUser = `-- name: ListOldestActiveRefreshTokensByUser :many
+SELECT id
+FROM refresh_tokens
+WHERE user_id = $1
+  AND revoked_at IS NULL
+  AND expires_at > now()
+ORDER BY created_at ASC
+LIMIT $2
+`
+
+type ListOldestActiveRefreshTokensByUserParams struct {
+	UserID int32
+	Lim    int32
+}
+
+// Returns up to `limit` rows for a user, oldest first. Used when
+// the active-row count exceeds the cap: the service revokes the
+// surplus oldest rows to make room for the new mint. The mint
+// itself races only on this user's existing rows, so the index on
+// (user_id) WHERE revoked_at IS NULL covers it efficiently.
+func (q *Queries) ListOldestActiveRefreshTokensByUser(ctx context.Context, arg ListOldestActiveRefreshTokensByUserParams) ([]int64, error) {
+	rows, err := q.db.Query(ctx, listOldestActiveRefreshTokensByUser, arg.UserID, arg.Lim)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []int64{}
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		items = append(items, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const purgeRefreshTokensOlderThan = `-- name: PurgeRefreshTokensOlderThan :execrows
+DELETE FROM refresh_tokens
+WHERE created_at < $1
+  AND (revoked_at IS NOT NULL OR expires_at < now())
+`
+
+// Bulk-delete rows older than the supplied cutoff that are also
+// revoked OR expired. The cutoff exists so we never delete a row
+// an active session could still reach: even a revoked row is
+// useful to operators for the first few days after revocation
+// when investigating an incident. Used by the background cleanup
+// goroutine (see SECURITY.md M2).
+func (q *Queries) PurgeRefreshTokensOlderThan(ctx context.Context, cutoff pgtype.Timestamptz) (int64, error) {
+	result, err := q.db.Exec(ctx, purgeRefreshTokensOlderThan, cutoff)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const revokeRefreshTokenByID = `-- name: RevokeRefreshTokenByID :exec

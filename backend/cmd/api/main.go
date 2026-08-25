@@ -125,6 +125,14 @@ func main() {
 	userRepo := user.NewRepository(userdb.New(db))
 	userService := user.NewService(userRepo, tokens, accessTTL, refreshTTL, tracing.Provider.Tracer("nyx.user"))
 
+	// Background refresh-token cleanup. The goroutine sweeps for
+	// revoked/expired rows older than RefreshTokenRetention and
+	// deletes them in bulk. Stops on graceful shutdown so the
+	// process doesn't leak the goroutine past SIGTERM (see
+	// SECURITY.md M2).
+	stopCleanup := user.StartRefreshCleanup(userRepo)
+	defer stopCleanup()
+
 	// CookieConfig is the single source of truth for auth-cookie
 	// attributes; both the auth middleware (which reads the access
 	// cookie) and the user handler (which sets/clears both cookies)

@@ -78,7 +78,7 @@ func TestAuth_InvalidTokenHidesInternalDetails(t *testing.T) {
 	handler := NewAuth(tokens, "__Host-nyx-access", true)(downstream)
 
 	req := httptest.NewRequest(http.MethodGet, "/x", nil)
-	req.Header.Set("Authorization", "Bearer abc.def.ghi")
+	req.AddCookie(&http.Cookie{Name: "__Host-nyx-access", Value: "abc.def.ghi"})
 	req = newCtxWithReqID(req, "req-stdlib")
 	rr := httptest.NewRecorder()
 	handler.ServeHTTP(rr, req)
@@ -130,7 +130,7 @@ func TestAuth_ExpiredTokenSetsExpiredChallenge(t *testing.T) {
 	handler := NewAuth(tokens, "__Host-nyx-access", true)(downstream)
 
 	req := httptest.NewRequest(http.MethodGet, "/x", nil)
-	req.Header.Set("Authorization", "Bearer expired.jwt.token")
+	req.AddCookie(&http.Cookie{Name: "__Host-nyx-access", Value: "expired.jwt.token"})
 	rr := httptest.NewRecorder()
 	handler.ServeHTTP(rr, req)
 
@@ -166,7 +166,7 @@ func TestAuth_InvalidTokenSetsBareChallenge(t *testing.T) {
 	handler := NewAuth(tokens, "__Host-nyx-access", true)(downstream)
 
 	req := httptest.NewRequest(http.MethodGet, "/x", nil)
-	req.Header.Set("Authorization", "Bearer garbage")
+	req.AddCookie(&http.Cookie{Name: "__Host-nyx-access", Value: "garbage"})
 	rr := httptest.NewRecorder()
 	handler.ServeHTTP(rr, req)
 
@@ -183,6 +183,41 @@ func TestAuth_InvalidTokenSetsBareChallenge(t *testing.T) {
 	}
 	if env.Message != "Invalid or expired token" {
 		t.Errorf("envelope.error = %q, want %q", env.Message, "Invalid or expired token")
+	}
+}
+
+// TestAuth_BearerHeaderIgnored pins L1: the Authorization: Bearer
+// header is no longer accepted. Cookie rollout is complete and
+// leaving the fallback in place would re-open the door to
+// credential-leak headers on shared infrastructure. A request that
+// supplies only a Bearer token (no cookie) must be rejected as
+// unauthenticated.
+func TestAuth_BearerHeaderIgnored(t *testing.T) {
+	// stubTokens.ValidateToken would error on a garbage string;
+	// that's fine — we never reach ValidateToken because the
+	// cookie read returns false first.
+	tokens := &stubTokens{validateErr: errors.New("should not be called")}
+
+	downstream := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		t.Error("downstream handler must not be reached when only a Bearer header is supplied")
+		w.WriteHeader(http.StatusOK)
+	})
+	handler := NewAuth(tokens, "__Host-nyx-access", true)(downstream)
+
+	req := httptest.NewRequest(http.MethodGet, "/x", nil)
+	req.Header.Set("Authorization", "Bearer leaked-token-from-log")
+	rr := httptest.NewRecorder()
+	handler.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusUnauthorized {
+		t.Fatalf("status = %d, want 401; body=%s", rr.Code, rr.Body.String())
+	}
+	var env platapi.ErrorResponse
+	if err := json.Unmarshal(rr.Body.Bytes(), &env); err != nil {
+		t.Fatalf("unmarshal envelope: %v; body=%s", err, rr.Body.String())
+	}
+	if env.Message != "Authentication required" {
+		t.Errorf("envelope.error = %q, want %q", env.Message, "Authentication required")
 	}
 }
 
@@ -207,6 +242,7 @@ func TestHumaAuth_InvalidTokenHidesInternalDetails(t *testing.T) {
 	// Wire the middleware onto a minimal huma API so we exercise the
 	// huma.Context code path that handlers actually use.
 	router := chi.NewMux()
+	router.Use(StoreRequest) // huma middleware reads r via reqctx.RequestFromContext
 	hapi := humachi.New(router, huma.Config{
 		OpenAPI: &huma.OpenAPI{
 			OpenAPI: "3.1.0",
@@ -228,7 +264,7 @@ func TestHumaAuth_InvalidTokenHidesInternalDetails(t *testing.T) {
 	})
 
 	req := httptest.NewRequest(http.MethodGet, "/guarded", nil)
-	req.Header.Set("Authorization", "Bearer abc.def.ghi")
+	req.AddCookie(&http.Cookie{Name: "__Host-nyx-access", Value: "abc.def.ghi"})
 	req = newCtxWithReqID(req, "req-huma")
 	rr := httptest.NewRecorder()
 	router.ServeHTTP(rr, req)
@@ -269,6 +305,7 @@ func TestHumaAuth_ExpiredTokenSetsExpiredChallenge(t *testing.T) {
 	tokens := &stubTokens{validateErr: auth.ErrExpiredToken}
 
 	router := chi.NewMux()
+	router.Use(StoreRequest) // huma middleware reads r via reqctx.RequestFromContext
 	hapi := humachi.New(router, huma.Config{
 		OpenAPI: &huma.OpenAPI{
 			OpenAPI: "3.1.0",
@@ -290,7 +327,7 @@ func TestHumaAuth_ExpiredTokenSetsExpiredChallenge(t *testing.T) {
 	})
 
 	req := httptest.NewRequest(http.MethodGet, "/guarded", nil)
-	req.Header.Set("Authorization", "Bearer expired.jwt.token")
+	req.AddCookie(&http.Cookie{Name: "__Host-nyx-access", Value: "expired.jwt.token"})
 	rr := httptest.NewRecorder()
 	router.ServeHTTP(rr, req)
 

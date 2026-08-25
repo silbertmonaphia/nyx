@@ -229,10 +229,11 @@ func TestRegisterHandler_Created(t *testing.T) {
 }
 
 // TestRegisterHandler_UsernameTakenReturns409 pins the wiring of the
-// ErrUsernameTaken branch. The service test covers the sentinel
-// bubbling up; this covers the handler translating it to HTTP 409
-// with the static "Username already taken" message (no err.Error()
-// echo).
+// ErrUsernameTaken branch. Per H5, the wire message collapses to
+// "User already exists" regardless of which field collided — the
+// service-layer collapse ensures an attacker probing registration
+// can't tell whether the username or the email is the one already
+// in use (see SECURITY.md H5).
 func TestRegisterHandler_UsernameTakenReturns409(t *testing.T) {
 	repo := &stubRepo{
 		createFn: func(_ context.Context, _ *User) error { return ErrUsernameTaken },
@@ -244,14 +245,14 @@ func TestRegisterHandler_UsernameTakenReturns409(t *testing.T) {
 	})
 
 	env := decodeEnvelope(t, rr, http.StatusConflict)
-	if env.Message != "Username already taken" {
-		t.Errorf("envelope.error = %q, want %q", env.Message, "Username already taken")
+	if env.Message != "User already exists" {
+		t.Errorf("envelope.error = %q, want %q", env.Message, "User already exists")
 	}
 }
 
-// TestRegisterHandler_EmailTakenReturns409 pins the wiring of the
-// ErrEmailTaken branch — separate from the username case above so the
-// wire message and 409 mapping are both verified.
+// TestRegisterHandler_EmailTakenReturns409 mirrors the username case
+// to confirm the wire surface is identical — distinguishing the two
+// would defeat the H5 collapse.
 func TestRegisterHandler_EmailTakenReturns409(t *testing.T) {
 	repo := &stubRepo{
 		createFn: func(_ context.Context, _ *User) error { return ErrEmailTaken },
@@ -263,8 +264,8 @@ func TestRegisterHandler_EmailTakenReturns409(t *testing.T) {
 	})
 
 	env := decodeEnvelope(t, rr, http.StatusConflict)
-	if env.Message != "Email already taken" {
-		t.Errorf("envelope.error = %q, want %q", env.Message, "Email already taken")
+	if env.Message != "User already exists" {
+		t.Errorf("envelope.error = %q, want %q", env.Message, "User already exists")
 	}
 }
 
@@ -702,8 +703,9 @@ func TestRefreshHandler_UnknownTokenReturns401(t *testing.T) {
 // path. The caller must present a valid access token (cookie or
 // Authorization header — the test uses the cookie path so the
 // migration is exercised end-to-end); the __Host-nyx-refresh cookie
-// carries the family we revoke. Returns 204 with empty body AND
-// Set-Cookie headers that clear both auth cookies.
+// carries the row we revoke. Per M1, Logout revokes only the
+// supplied row, not the surrounding family. Returns 204 with empty
+// body AND Set-Cookie headers that clear both auth cookies.
 func TestLogoutHandler_NoContent(t *testing.T) {
 	tokens, err := auth.NewTokenService([]byte(auth.TestSecret), 15*time.Minute)
 	if err != nil {
@@ -715,14 +717,18 @@ func TestLogoutHandler_NoContent(t *testing.T) {
 	}
 
 	now := time.Now()
-	var revokedFamily int64
+	var revokedID int64
 	repo := &stubRepo{
 		getRefreshFn: func(_ context.Context, _ []byte) (*RefreshTokenRow, error) {
 			return &RefreshTokenRow{ID: 1, UserID: 7, FamilyID: 99, ExpiresAt: now.Add(time.Hour)}, nil
 		},
-		revokeFamilyFn: func(_ context.Context, familyID int64) (int64, error) {
-			revokedFamily = familyID
-			return 1, nil
+		revokeByIDFn: func(_ context.Context, id int64) error {
+			revokedID = id
+			return nil
+		},
+		revokeFamilyFn: func(_ context.Context, _ int64) (int64, error) {
+			t.Error("RevokeRefreshTokenFamily must not be reached on per-session logout")
+			return 0, nil
 		},
 	}
 
@@ -737,8 +743,8 @@ func TestLogoutHandler_NoContent(t *testing.T) {
 	if rr.Body.Len() != 0 {
 		t.Errorf("204 body should be empty, got %q", rr.Body.String())
 	}
-	if revokedFamily != 99 {
-		t.Errorf("expected family 99 to be revoked, got %d", revokedFamily)
+	if revokedID != 1 {
+		t.Errorf("expected row 1 to be revoked, got %d", revokedID)
 	}
 
 	// Both auth cookies must be cleared (MaxAge <= 0 + empty value).

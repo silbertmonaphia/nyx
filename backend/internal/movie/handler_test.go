@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"nyx/internal/middleware"
 	"nyx/internal/platform/api"
 	"nyx/internal/platform/auth"
 	"nyx/internal/platform/cache"
@@ -31,18 +32,25 @@ import (
 // via TestMain in handler_test.go so validation errors also come back
 // in the legacy shape.
 //
+// StoreRequest is installed so the auth middleware can recover the
+// live *http.Request via reqctx.RequestFromContext — without it the
+// cookie read would return ("", false) and every protected operation
+// would 401. Production main.go installs StoreRequest early in the
+// middleware chain for the same reason.
+//
 // The `withAuth` flag toggles whether the protected operations (POST/PUT/
 // DELETE) carry the JWT middleware. Tests that don't exercise auth pass
-// false; tests that want a 401 pass false and skip the header; tests
-// that want a 200 pass true and mint a token via testJWTAuthHeader.
+// false; tests that want a 401 pass false and skip the cookie; tests
+// that want a 200 pass true and mint a token via testAccessCookie.
 // tokens is the per-test TokenService used to validate tokens minted
-// by testJWTAuthHeader.
+// by testAccessCookie.
 //
 // testCookieConfig mirrors what cmd/api/main.go passes in production;
 // values don't have to match (tests don't assert on cookie attributes)
 // but the CookieConfig is part of RegisterMovieOpsTest's signature.
 func setupTestRouter(h *Handler, tokens auth.TokenService, withAuth bool) *chi.Mux {
 	router := chi.NewMux()
+	router.Use(middleware.StoreRequest)
 	hapi := humachi.New(router, huma.Config{
 		OpenAPI: &huma.OpenAPI{
 			OpenAPI: "3.1.0",
@@ -69,16 +77,17 @@ var testCookieConfig = auth.CookieConfig{
 	SameSite:      1, // http.SameSiteLaxMode
 }
 
-// testJWTAuthHeader mints a fresh JWT signed with the secret bound to
-// the supplied TokenService. The header value can be dropped straight
-// into an Authorization field.
-func testJWTAuthHeader(t *testing.T, tokens auth.TokenService) string {
+// testAccessCookie mints a fresh JWT and returns it as an
+// http.Cookie ready for req.AddCookie. After L1 the cookie is the
+// only auth source the middleware reads — Authorization: Bearer is
+// intentionally ignored.
+func testAccessCookie(t *testing.T, tokens auth.TokenService) *http.Cookie {
 	t.Helper()
 	tok, err := tokens.GenerateToken(1, "tester")
 	if err != nil {
 		t.Fatalf("mint test JWT: %v", err)
 	}
-	return "Bearer " + tok
+	return &http.Cookie{Name: "nyx-access", Value: tok}
 }
 
 // newMockRepo wires a pgxmock pool through to NewRepository. The
@@ -366,7 +375,7 @@ func TestCreateMovieHandler(t *testing.T) {
 	tokens := newTestTokens(t)
 	router := setupTestRouter(h, tokens, true)
 	req, _ := http.NewRequest("POST", "/api/movies", bytes.NewBuffer(body))
-	req.Header.Set("Authorization", testJWTAuthHeader(t, tokens))
+	req.AddCookie(testAccessCookie(t, tokens))
 	rr := httptest.NewRecorder()
 	router.ServeHTTP(rr, req)
 
@@ -441,7 +450,7 @@ func TestUpdateMovieHandler(t *testing.T) {
 	tokens := newTestTokens(t)
 	router := setupTestRouter(h, tokens, true)
 	req, _ := http.NewRequest("PUT", "/api/movies/1", bytes.NewBuffer(body))
-	req.Header.Set("Authorization", testJWTAuthHeader(t, tokens))
+	req.AddCookie(testAccessCookie(t, tokens))
 	rr := httptest.NewRecorder()
 	router.ServeHTTP(rr, req)
 
@@ -473,7 +482,7 @@ func TestDeleteMovieHandler(t *testing.T) {
 	tokens := newTestTokens(t)
 	router := setupTestRouter(h, tokens, true)
 	req, _ := http.NewRequest("DELETE", "/api/movies/1", nil)
-	req.Header.Set("Authorization", testJWTAuthHeader(t, tokens))
+	req.AddCookie(testAccessCookie(t, tokens))
 	rr := httptest.NewRecorder()
 	router.ServeHTTP(rr, req)
 
@@ -504,7 +513,7 @@ func TestUpdateMovieHandlerNotFound(t *testing.T) {
 	tokens := newTestTokens(t)
 	router := setupTestRouter(h, tokens, true)
 	req, _ := http.NewRequest("PUT", "/api/movies/999", bytes.NewBuffer(body))
-	req.Header.Set("Authorization", testJWTAuthHeader(t, tokens))
+	req.AddCookie(testAccessCookie(t, tokens))
 	rr := httptest.NewRecorder()
 	router.ServeHTTP(rr, req)
 
@@ -530,7 +539,7 @@ func TestDeleteMovieHandlerNotFound(t *testing.T) {
 	tokens := newTestTokens(t)
 	router := setupTestRouter(h, tokens, true)
 	req, _ := http.NewRequest("DELETE", "/api/movies/999", nil)
-	req.Header.Set("Authorization", testJWTAuthHeader(t, tokens))
+	req.AddCookie(testAccessCookie(t, tokens))
 	rr := httptest.NewRecorder()
 	router.ServeHTTP(rr, req)
 
@@ -570,7 +579,7 @@ func TestCreateMovieHandler_InternalErrorHidesInternalDetails(t *testing.T) {
 	tokens := newTestTokens(t)
 	router := setupTestRouter(h, tokens, true)
 	req, _ := http.NewRequest("POST", "/api/movies", bytes.NewBuffer(body))
-	req.Header.Set("Authorization", testJWTAuthHeader(t, tokens))
+	req.AddCookie(testAccessCookie(t, tokens))
 	rr := httptest.NewRecorder()
 	router.ServeHTTP(rr, req)
 
@@ -612,7 +621,7 @@ func TestUpdateMovieHandler_InternalErrorHidesInternalDetails(t *testing.T) {
 	tokens := newTestTokens(t)
 	router := setupTestRouter(h, tokens, true)
 	req, _ := http.NewRequest("PUT", "/api/movies/1", bytes.NewBuffer(body))
-	req.Header.Set("Authorization", testJWTAuthHeader(t, tokens))
+	req.AddCookie(testAccessCookie(t, tokens))
 	rr := httptest.NewRecorder()
 	router.ServeHTTP(rr, req)
 
@@ -646,7 +655,7 @@ func TestDeleteMovieHandler_InternalErrorHidesInternalDetails(t *testing.T) {
 	tokens := newTestTokens(t)
 	router := setupTestRouter(h, tokens, true)
 	req, _ := http.NewRequest("DELETE", "/api/movies/1", nil)
-	req.Header.Set("Authorization", testJWTAuthHeader(t, tokens))
+	req.AddCookie(testAccessCookie(t, tokens))
 	rr := httptest.NewRecorder()
 	router.ServeHTTP(rr, req)
 

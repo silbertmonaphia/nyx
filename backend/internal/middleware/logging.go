@@ -26,6 +26,16 @@ import (
 //   - The X-Request-ID middleware has populated the request ID.
 //   - RealIP has resolved the client IP.
 //   - The response status written by the handler is available.
+//
+// PII scope (see SECURITY.md L4): the raw query string is logged
+// verbatim. zerolog JSON-escapes every field, so log injection is
+// not a risk, but a query string may carry PII (search terms the
+// user typed, free-text form fields, accidental password-bearing
+// URLs from misbehaving clients). Operators MUST treat the
+// observability pipeline as containing potential PII — set
+// retention accordingly, restrict read access, and fuzz/replace
+// sensitive query parameters at the shipper level if the pipeline
+// is shared with a less-trusted boundary.
 func Logging(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()

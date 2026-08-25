@@ -32,8 +32,10 @@ const wwwAuthInvalid = `Bearer error="invalid_token"`
 // accessCookieName is the configured access cookie name
 // ("__Host-nyx-access" in prod). cookieSecure mirrors
 // CookieConfig.Secure so the prefix-stripping logic in dev matches
-// the read path. Token source order matches NewHumaAuth: cookie
-// first, Authorization: Bearer second.
+// the read path. Token source is the httpOnly cookie only — the
+// Authorization: Bearer fallback that shipped during the cookie
+// rollout has been removed (see SECURITY.md L1); every legitimate
+// client now goes through the browser's automatic cookie attachment.
 //
 // On success, the resolved user ID and username are stamped on the
 // context via reqctx.WithUserID / reqctx.WithUsername so downstream
@@ -82,20 +84,15 @@ func NewAuth(tokens auth.TokenService, accessCookieName string, cookieSecure boo
 	}
 }
 
-// readAccessTokenFromRequest is the stdlib-shaped mirror of
-// huma_adapter.readAccessToken: cookie first, Authorization: Bearer
-// second. Returns ("", false) when neither source carries a token.
+// readAccessTokenFromRequest pulls the JWT from the httpOnly access
+// cookie only. The Authorization: Bearer fallback was removed once
+// the cookie rollout completed (see SECURITY.md L1); the legacy
+// path is no longer reachable from production traffic, and leaving
+// it in would re-open the door to credential-leak headers on shared
+// infrastructure (proxy logs, CDN caches).
 func readAccessTokenFromRequest(r *http.Request, cookieName string) (string, bool) {
 	if c, err := r.Cookie(cookieName); err == nil && c.Value != "" {
 		return c.Value, true
 	}
-	authHeader := r.Header.Get("Authorization")
-	if authHeader == "" {
-		return "", false
-	}
-	parts := strings.Split(authHeader, " ")
-	if len(parts) != 2 || parts[0] != "Bearer" {
-		return "", false
-	}
-	return parts[1], true
+	return "", false
 }

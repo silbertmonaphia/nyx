@@ -3,10 +3,12 @@ package user
 import (
 	"context"
 	"errors"
+	"fmt"
 	"time"
 
 	"nyx/internal/platform/auth"
 
+	"github.com/rs/zerolog/log"
 	"go.opentelemetry.io/otel/trace"
 	"golang.org/x/crypto/bcrypt"
 )
@@ -33,6 +35,29 @@ var (
 	// too long and logs in again.
 	ErrRefreshTokenExpired = errors.New("refresh token expired")
 )
+
+// dummyBcryptHash is a pre-computed bcrypt hash used to equalise the
+// Login timing between the "username exists, wrong password" branch
+// and the "no such user" branch. Without this an attacker who can
+// measure login latency can enumerate registered usernames — bcrypt
+// cost dominates the request budget on the success branch and is
+// absent on the not-found branch (see SECURITY.md H2).
+//
+// Cost matches bcrypt.DefaultCost (10); the plaintext is irrelevant
+// because we only ever compare against it, never derive it from user
+// input. Computed once at process init via init() — the cost is paid
+// exactly once across the process lifetime.
+var dummyBcryptHash []byte
+
+func init() {
+	h, err := bcrypt.GenerateFromPassword([]byte("timing-equaliser-not-a-real-password"), bcrypt.DefaultCost)
+	if err != nil {
+		// bcrypt init failure is unrecoverable; the package can't
+		// function without a dummy hash on the not-found branch.
+		panic(fmt.Errorf("user: init: bcrypt dummy hash: %w", err))
+	}
+	dummyBcryptHash = h
+}
 
 type Service interface {
 	Register(ctx context.Context, req RegisterRequest) (*AuthResult, error)
@@ -92,16 +117,54 @@ func NewService(repo Repository, tokens auth.TokenService, accessTTL, refreshTTL
 // mintRefreshToken is a small helper: generate raw bytes, hash them,
 // persist the row, return the raw bytes for the response. Lives here
 // so Register, Login, and Refresh all build the row identically.
+//
+// Cap enforcement: before inserting, count the user's active rows.
+// If the count is at RefreshCap, revoke the oldest row(s) to make
+// room. This bounds the per-user table footprint so a stolen-cookie
+// flood or a buggy client that doesn't logout can't accumulate
+// forever (see SECURITY.md M2).
 func (s *service) mintRefreshToken(ctx context.Context, userID int) (string, error) {
 	raw, hash, err := newRefreshToken()
 	if err != nil {
 		return "", err
 	}
+
+	if err := s.enforceRefreshCap(ctx, userID); err != nil {
+		return "", err
+	}
+
 	expires := time.Now().Add(s.refreshTTL)
 	if _, err := s.repo.CreateRefreshToken(ctx, userID, hash, expires); err != nil {
 		return "", err
 	}
 	return raw, nil
+}
+
+// enforceRefreshCap revokes the user's oldest active rows until the
+// active count is below RefreshCap. Called before every mint so the
+// cap holds even under concurrent registrations / logins. Revoke
+// failures are intentionally swallowed: a stuck cap is a UX papercut
+// (one extra active row), not a security hole, and we'd rather let
+// the mint proceed than fail it for an unrelated bookkeeping issue.
+func (s *service) enforceRefreshCap(ctx context.Context, userID int) error {
+	active, err := s.repo.CountActiveRefreshTokensByUser(ctx, userID)
+	if err != nil {
+		return err
+	}
+	if active < int64(RefreshCap) {
+		return nil
+	}
+	surplus := int(active) - RefreshCap + 1 // +1 to make room for the about-to-be-minted row
+	oldest, err := s.repo.ListOldestActiveRefreshTokensByUser(ctx, userID, surplus)
+	if err != nil {
+		return err
+	}
+	for _, id := range oldest {
+		if err := s.repo.RevokeRefreshTokenByID(ctx, id); err != nil {
+			log.Warn().Err(err).Int64("token_id", id).Msg("revoke during cap enforcement failed; continuing")
+		}
+	}
+	return nil
 }
 
 // accessExpires is the wall-clock time the freshly-minted access JWT
@@ -128,6 +191,15 @@ func (s *service) Register(ctx context.Context, req RegisterRequest) (*AuthResul
 	}
 
 	if err := s.repo.CreateUser(ctx, u); err != nil {
+		// Collapse the per-field unique-violation sentinels into a
+		// single ErrUserAlreadyExists. Without this, an attacker who
+		// probes registration can tell whether a *given* username or
+		// a *given* email is already in use (Login only collapses to
+		// ErrInvalidCredentials; the two should be symmetric — see
+		// SECURITY.md H5).
+		if errors.Is(err, ErrUsernameTaken) || errors.Is(err, ErrEmailTaken) {
+			return nil, ErrUserAlreadyExists
+		}
 		return nil, err
 	}
 
@@ -156,6 +228,14 @@ func (s *service) Login(ctx context.Context, req LoginRequest) (*AuthResult, err
 	u, err := s.repo.GetUserByUsername(ctx, req.Username)
 	if err != nil {
 		if errors.Is(err, ErrUserNotFound) {
+			// Equalise timing with the existing-user branch by
+			// running a bcrypt compare against a known-bad hash.
+			// Without this, an attacker who can measure login
+			// latency can enumerate which usernames are registered
+			// (bcrypt cost dominates the request budget on the
+			// existing-user branch and is absent here). See
+			// SECURITY.md H2.
+			_ = bcrypt.CompareHashAndPassword(dummyBcryptHash, []byte(req.Password))
 			return nil, ErrInvalidCredentials
 		}
 		return nil, err
@@ -262,12 +342,12 @@ func (s *service) Refresh(ctx context.Context, rawRefresh string) (*AuthResult, 
 	}, nil
 }
 
-// Logout revokes the entire refresh-token family the supplied token
-// belongs to. Idempotent: an unknown or empty token returns nil
-// rather than leaking that the token doesn't exist. Per-design v1
-// behavior: a single Logout kills every active session for that user
-// (logout on phone also logs out the laptop) — per-device logout is
-// a deliberate follow-up tracked in FUTURE.md.
+// Logout revokes only the supplied refresh-token row. Idempotent:
+// an unknown or empty token returns nil rather than leaking that
+// the token doesn't exist. Per-device logout: killing the phone
+// session no longer drops the laptop session — each device holds its
+// own row in the refresh_tokens table, and revoking the row is
+// sufficient to invalidate that session (see SECURITY.md M1).
 //
 // rawRefresh is read from the __Host-nyx-refresh cookie by the
 // handler.
@@ -287,6 +367,5 @@ func (s *service) Logout(ctx context.Context, rawRefresh string) error {
 		}
 		return err
 	}
-	_, err = s.repo.RevokeRefreshTokenFamily(ctx, row.FamilyID)
-	return err
+	return s.repo.RevokeRefreshTokenByID(ctx, row.ID)
 }

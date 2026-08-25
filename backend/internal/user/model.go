@@ -16,15 +16,20 @@ type User struct {
 // gin-era `binding:` tags — huma uses its own dialect; see HUMA.md).
 // Without these, a malformed payload reaches the service and bcrypt,
 // producing a 500 on inputs that should reject at the edge.
+//
+// Password length is bounded above as well as below: bcrypt itself
+// truncates at 72 bytes and bcrypt on a multi-KB input wastes CPU.
+// 128 bytes leaves headroom for a future shift to Argon2id or
+// scrypt without breaking clients (see SECURITY.md M7).
 type RegisterRequest struct {
 	Username string `json:"username" required:"true" minLength:"3" maxLength:"50"`
 	Email    string `json:"email" required:"true" format:"email"`
-	Password string `json:"password" required:"true" minLength:"6"`
+	Password string `json:"password" required:"true" minLength:"6" maxLength:"128"`
 }
 
 type LoginRequest struct {
 	Username string `json:"username" required:"true"`
-	Password string `json:"password" required:"true"`
+	Password string `json:"password" required:"true" maxLength:"128"`
 }
 
 // AuthResponse is the JSON envelope returned by Login, Register, and

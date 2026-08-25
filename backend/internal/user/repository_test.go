@@ -63,6 +63,15 @@ func (s *stubQuerier) RevokeRefreshTokenFamily(_ context.Context, _ int64) (int6
 func (s *stubQuerier) RevokeRefreshTokenByID(_ context.Context, _ int64) error {
 	return s.revokeByIDErr
 }
+func (s *stubQuerier) CountActiveRefreshTokensByUser(_ context.Context, _ int32) (int64, error) {
+	return 0, nil
+}
+func (s *stubQuerier) ListOldestActiveRefreshTokensByUser(_ context.Context, _ db.ListOldestActiveRefreshTokensByUserParams) ([]int64, error) {
+	return nil, nil
+}
+func (s *stubQuerier) PurgeRefreshTokensOlderThan(_ context.Context, _ pgtype.Timestamptz) (int64, error) {
+	return 0, nil
+}
 
 func TestCreateUser_UsernameUniqueViolationMapsToErrUsernameTaken(t *testing.T) {
 	stub := &stubQuerier{

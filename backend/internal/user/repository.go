@@ -18,10 +18,19 @@ import (
 // uses to map onto ErrInvalidCredentials at the Login boundary; any
 // caller that wants to distinguish "no such user" from a real DB
 // failure should errors.Is against this value.
+//
+// ErrUserAlreadyExists is the public, wire-level collapsed form of
+// ErrUsernameTaken and ErrEmailTaken — registration no longer
+// distinguishes the two so an attacker can't enumerate which field
+// is already in use (see SECURITY.md H5). The two granular sentinels
+// remain as the *internal* failure modes from pgerr; the service
+// layer maps them both to ErrUserAlreadyExists before they reach
+// the handler.
 var (
 	ErrUserNotFound          = errors.New("user not found")
 	ErrUsernameTaken         = errors.New("username already taken")
 	ErrEmailTaken            = errors.New("email already taken")
+	ErrUserAlreadyExists     = errors.New("user already exists")
 	ErrRefreshTokenCollision = errors.New("refresh token hash collision")
 	ErrRefreshTokenNotFound  = errors.New("refresh token not found")
 )
@@ -29,13 +38,15 @@ var (
 // Register each user-domain sentinel with the api package so
 // MapError can render the right HTTP status + wire message. Runs at
 // process startup (init() order is undefined across packages but
-// each registration is independent). Splitting ErrUserAlreadyExists
-// into two sentinels lets the wire message distinguish "username
-// collision" from "email collision" without string compares.
+// each registration is independent). ErrUsernameTaken and
+// ErrEmailTaken still map to 409 — they're the internal collision
+// sentinels, surfaced only via the service layer's pre-check that
+// collapses them to ErrUserAlreadyExists before they hit the wire.
 func init() {
 	api.RegisterSentinel(ErrUserNotFound, http.StatusNotFound, "User not found")
-	api.RegisterSentinel(ErrUsernameTaken, http.StatusConflict, "Username already taken")
-	api.RegisterSentinel(ErrEmailTaken, http.StatusConflict, "Email already taken")
+	api.RegisterSentinel(ErrUsernameTaken, http.StatusConflict, "User already exists")
+	api.RegisterSentinel(ErrEmailTaken, http.StatusConflict, "User already exists")
+	api.RegisterSentinel(ErrUserAlreadyExists, http.StatusConflict, "User already exists")
 	// ErrRefreshTokenCollision is a 500: a sha256 collision is ~10^-38
 	// per row. No clean 4xx story — log loud and let the client retry.
 	api.RegisterSentinel(ErrRefreshTokenCollision, http.StatusInternalServerError, "Internal server error")
@@ -72,6 +83,11 @@ type Querier interface {
 	RotateRefreshToken(ctx context.Context, arg db.RotateRefreshTokenParams) (db.RotateRefreshTokenRow, error)
 	RevokeRefreshTokenFamily(ctx context.Context, familyID int64) (int64, error)
 	RevokeRefreshTokenByID(ctx context.Context, id int64) error
+
+	// Refresh-token maintenance (see SECURITY.md M2).
+	CountActiveRefreshTokensByUser(ctx context.Context, userID int32) (int64, error)
+	ListOldestActiveRefreshTokensByUser(ctx context.Context, arg db.ListOldestActiveRefreshTokensByUserParams) ([]int64, error)
+	PurgeRefreshTokensOlderThan(ctx context.Context, cutoff pgtype.Timestamptz) (int64, error)
 }
 
 // RefreshTokenRow is the API-shaped projection of db.RefreshToken.
@@ -88,6 +104,21 @@ type RefreshTokenRow struct {
 	RevokedAt    *time.Time
 	CreatedAt    time.Time
 }
+
+// RefreshCap is the maximum number of concurrently active refresh
+// tokens a single user may hold. The service enforces this on every
+// mint — Login, Register, Refresh — by revoking the oldest row when
+// the new mint would push the count above the cap. Sized to cover a
+// realistic device fleet (phone, laptop, tablet, plus a couple of
+// spare browser sessions) without letting a stolen-cookie flood
+// accumulate forever (see SECURITY.md M2).
+const RefreshCap = 10
+
+// RefreshTokenRetention is how long revoked/expired refresh rows
+// are kept before the background cleanup goroutine deletes them.
+// Long enough to investigate a recent incident; short enough that
+// the table doesn't grow unbounded.
+const RefreshTokenRetention = 7 * 24 * time.Hour
 
 type Repository interface {
 	CreateUser(ctx context.Context, u *User) error
@@ -107,6 +138,14 @@ type Repository interface {
 	RotateRefreshToken(ctx context.Context, oldID int64, userID int, tokenHash []byte, familyID int64, expiresAt time.Time) (*RefreshTokenRow, error)
 	RevokeRefreshTokenFamily(ctx context.Context, familyID int64) (int64, error)
 	RevokeRefreshTokenByID(ctx context.Context, id int64) error
+
+	// Refresh-token maintenance. CountActiveRefreshTokensByUser feeds
+	// RefreshCap enforcement; ListOldestActiveRefreshTokensByUser
+	// returns the rows to revoke when the cap is hit; PurgeRefreshTokensOlderThan
+	// is the background goroutine's delete path.
+	CountActiveRefreshTokensByUser(ctx context.Context, userID int) (int64, error)
+	ListOldestActiveRefreshTokensByUser(ctx context.Context, userID int, limit int) ([]int64, error)
+	PurgeRefreshTokensOlderThan(ctx context.Context, cutoff time.Time) (int64, error)
 }
 
 type sqlRepository struct {
@@ -233,6 +272,21 @@ func (r *sqlRepository) RevokeRefreshTokenFamily(ctx context.Context, familyID i
 
 func (r *sqlRepository) RevokeRefreshTokenByID(ctx context.Context, id int64) error {
 	return r.q.RevokeRefreshTokenByID(ctx, id)
+}
+
+func (r *sqlRepository) CountActiveRefreshTokensByUser(ctx context.Context, userID int) (int64, error) {
+	return r.q.CountActiveRefreshTokensByUser(ctx, int32(userID))
+}
+
+func (r *sqlRepository) ListOldestActiveRefreshTokensByUser(ctx context.Context, userID int, limit int) ([]int64, error) {
+	return r.q.ListOldestActiveRefreshTokensByUser(ctx, db.ListOldestActiveRefreshTokensByUserParams{
+		UserID: int32(userID),
+		Lim:    int32(limit),
+	})
+}
+
+func (r *sqlRepository) PurgeRefreshTokensOlderThan(ctx context.Context, cutoff time.Time) (int64, error) {
+	return r.q.PurgeRefreshTokensOlderThan(ctx, pgtype.Timestamptz{Time: cutoff, Valid: true})
 }
 
 // toRefreshTokenRow projects db.RefreshToken into the API-shaped

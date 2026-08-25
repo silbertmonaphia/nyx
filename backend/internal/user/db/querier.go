@@ -6,9 +6,17 @@ package db
 
 import (
 	"context"
+
+	"github.com/jackc/pgx/v5/pgtype"
 )
 
 type Querier interface {
+	// Counts non-revoked, non-expired rows for a user. Used by the
+	// service layer on every mint to enforce the per-user family cap
+	// (see SECURITY.md M2). Excludes already-revoked rows because
+	// those are being pruned in the background goroutine — counting
+	// them would inflate the result and trigger spurious revokes.
+	CountActiveRefreshTokensByUser(ctx context.Context, userID int32) (int64, error)
 	// Atomic self-stamping: insert with family_id=0 placeholder, then
 	// update family_id to the inserted row's id, then SELECT out the
 	// updated row. The two-CTE shape (rather than UPDATE … RETURNING
@@ -24,6 +32,19 @@ type Querier interface {
 	// block is the @name annotation (which becomes the method name) and the
 	// query type (`:one`, `:many`, `:exec`, `:execrows`).
 	InsertUser(ctx context.Context, arg InsertUserParams) (User, error)
+	// Returns up to `limit` rows for a user, oldest first. Used when
+	// the active-row count exceeds the cap: the service revokes the
+	// surplus oldest rows to make room for the new mint. The mint
+	// itself races only on this user's existing rows, so the index on
+	// (user_id) WHERE revoked_at IS NULL covers it efficiently.
+	ListOldestActiveRefreshTokensByUser(ctx context.Context, arg ListOldestActiveRefreshTokensByUserParams) ([]int64, error)
+	// Bulk-delete rows older than the supplied cutoff that are also
+	// revoked OR expired. The cutoff exists so we never delete a row
+	// an active session could still reach: even a revoked row is
+	// useful to operators for the first few days after revocation
+	// when investigating an incident. Used by the background cleanup
+	// goroutine (see SECURITY.md M2).
+	PurgeRefreshTokensOlderThan(ctx context.Context, cutoff pgtype.Timestamptz) (int64, error)
 	RevokeRefreshTokenByID(ctx context.Context, id int64) error
 	RevokeRefreshTokenFamily(ctx context.Context, familyID int64) (int64, error)
 	// Single CTE: insert new row tied to old via replaced_by_id, then mark

@@ -131,7 +131,10 @@ type healthServices struct {
 }
 
 type getMoviesInput struct {
-	Q        string `query:"q" required:"false" doc:"Case-insensitive search term matched against title and description."`
+	// maxLength caps the search term so a multi-MB query string can't
+	// reach Postgres. Huma emits a 400 on inputs over the limit before
+	// the handler runs (see SECURITY.md M6).
+	Q        string `query:"q" required:"false" maxLength:"200" doc:"Case-insensitive search term matched against title and description."`
 	Page     int    `query:"page" required:"false" default:"1" minimum:"1" doc:"1-based page index."`
 	PageSize int    `query:"page_size" required:"false" default:"20" minimum:"1" doc:"Items per page; clamped to a server-side maximum of 100."`
 }

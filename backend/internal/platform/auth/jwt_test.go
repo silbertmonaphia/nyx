@@ -2,6 +2,7 @@ package auth
 
 import (
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -115,9 +116,13 @@ func TestValidateToken_ExpiredToken(t *testing.T) {
 	claims := Claims{
 		UserID:   1,
 		Username: "alice",
+		Type:     "access",
 		RegisteredClaims: jwt.RegisteredClaims{
+			Issuer:    Issuer,
+			Audience:  jwt.ClaimStrings{Audience},
 			ExpiresAt: jwt.NewNumericDate(time.Now().Add(-1 * time.Hour)),
 			IssuedAt:  jwt.NewNumericDate(time.Now().Add(-2 * time.Hour)),
+			NotBefore: jwt.NewNumericDate(time.Now().Add(-2 * time.Hour)),
 		},
 	}
 	tok, err := jwt.NewWithClaims(jwt.SigningMethodHS256, claims).SignedString([]byte(TestSecret))
@@ -140,8 +145,13 @@ func TestValidateToken_WrongSecret(t *testing.T) {
 	tok, err := jwt.NewWithClaims(jwt.SigningMethodHS256, Claims{
 		UserID:   1,
 		Username: "alice",
+		Type:     "access",
 		RegisteredClaims: jwt.RegisteredClaims{
+			Issuer:    Issuer,
+			Audience:  jwt.ClaimStrings{Audience},
 			ExpiresAt: jwt.NewNumericDate(time.Now().Add(time.Hour)),
+			IssuedAt:  jwt.NewNumericDate(time.Now()),
+			NotBefore: jwt.NewNumericDate(time.Now()),
 		},
 	}).SignedString([]byte("other-secret"))
 	if err != nil {
@@ -178,7 +188,11 @@ func TestJWT_TypeClaimRequired(t *testing.T) {
 		Username: "alice",
 		Type:     "refresh",
 		RegisteredClaims: jwt.RegisteredClaims{
+			Issuer:    Issuer,
+			Audience:  jwt.ClaimStrings{Audience},
 			ExpiresAt: jwt.NewNumericDate(time.Now().Add(time.Hour)),
+			IssuedAt:  jwt.NewNumericDate(time.Now()),
+			NotBefore: jwt.NewNumericDate(time.Now()),
 		},
 	}
 	tok, err := jwt.NewWithClaims(jwt.SigningMethodHS256, claims).SignedString([]byte(TestSecret))
@@ -223,5 +237,122 @@ func TestJWT_GenerateSetsAccessTTL(t *testing.T) {
 	diff := got - want
 	if diff < -30*time.Second || diff > 30*time.Second {
 		t.Errorf("ExpiresAt in %v, want %v (±30s)", got, want)
+	}
+}
+
+// TestJWT_StampsIssuerAudience pins the iss/aud claims that H3/H4
+// require. Without these stamps the parser would reject every token
+// minted by GenerateToken, so this test guards the round-trip.
+func TestJWT_StampsIssuerAudience(t *testing.T) {
+	tokens := newTestTokenService(t)
+	tok, err := tokens.GenerateToken(1, "alice")
+	if err != nil {
+		t.Fatalf("GenerateToken: %v", err)
+	}
+	claims, err := tokens.ValidateToken(tok)
+	if err != nil {
+		t.Fatalf("ValidateToken: %v", err)
+	}
+	if claims.Issuer != Issuer {
+		t.Errorf("claims.Issuer = %q, want %q", claims.Issuer, Issuer)
+	}
+	if len(claims.Audience) != 1 || claims.Audience[0] != Audience {
+		t.Errorf("claims.Audience = %v, want [%q]", claims.Audience, Audience)
+	}
+}
+
+// TestJWT_RejectsForeignIssuer confirms WithIssuer enforces the
+// expected issuer value. A token minted with a different iss must
+// fail validation even when the signature is otherwise valid.
+func TestJWT_RejectsForeignIssuer(t *testing.T) {
+	tok, err := jwt.NewWithClaims(jwt.SigningMethodHS256, Claims{
+		UserID:   1,
+		Username: "alice",
+		Type:     "access",
+		RegisteredClaims: jwt.RegisteredClaims{
+			Issuer:    "evil-issuer",
+			Audience:  jwt.ClaimStrings{Audience},
+			ExpiresAt: jwt.NewNumericDate(time.Now().Add(time.Hour)),
+			IssuedAt:  jwt.NewNumericDate(time.Now()),
+			NotBefore: jwt.NewNumericDate(time.Now()),
+		},
+	}).SignedString([]byte(TestSecret))
+	if err != nil {
+		t.Fatalf("sign: %v", err)
+	}
+
+	tokens := newTestTokenService(t)
+	if _, err := tokens.ValidateToken(tok); !errors.Is(err, ErrInvalidToken) {
+		t.Errorf("foreign-issuer token: err = %v, want ErrInvalidToken", err)
+	}
+}
+
+// TestJWT_RejectsForeignAudience confirms WithAudience enforces the
+// expected audience value. Cross-API replay of an Nyx token against
+// a different backend should fail.
+func TestJWT_RejectsForeignAudience(t *testing.T) {
+	tok, err := jwt.NewWithClaims(jwt.SigningMethodHS256, Claims{
+		UserID:   1,
+		Username: "alice",
+		Type:     "access",
+		RegisteredClaims: jwt.RegisteredClaims{
+			Issuer:    Issuer,
+			Audience:  jwt.ClaimStrings{"some-other-api"},
+			ExpiresAt: jwt.NewNumericDate(time.Now().Add(time.Hour)),
+			IssuedAt:  jwt.NewNumericDate(time.Now()),
+			NotBefore: jwt.NewNumericDate(time.Now()),
+		},
+	}).SignedString([]byte(TestSecret))
+	if err != nil {
+		t.Fatalf("sign: %v", err)
+	}
+
+	tokens := newTestTokenService(t)
+	if _, err := tokens.ValidateToken(tok); !errors.Is(err, ErrInvalidToken) {
+		t.Errorf("foreign-audience token: err = %v, want ErrInvalidToken", err)
+	}
+}
+
+// TestJWT_RejectsUnexpectedAlg confirms WithValidMethods refuses a
+// token whose alg is anything other than HS256. This is the defense
+// against the alg=none / RS256→HMAC confusion attack: the keyfunc
+// should never even be called for a non-HMAC alg.
+func TestJWT_RejectsUnexpectedAlg(t *testing.T) {
+	// jwt.SigningMethodNone requires a sentinel key. The signing
+	// itself succeeds; what matters is that our validator rejects
+	// the resulting token.
+	tok, err := jwt.NewWithClaims(jwt.SigningMethodNone, Claims{
+		UserID:   1,
+		Username: "alice",
+		Type:     "access",
+		RegisteredClaims: jwt.RegisteredClaims{
+			Issuer:    Issuer,
+			Audience:  jwt.ClaimStrings{Audience},
+			ExpiresAt: jwt.NewNumericDate(time.Now().Add(time.Hour)),
+			IssuedAt:  jwt.NewNumericDate(time.Now()),
+			NotBefore: jwt.NewNumericDate(time.Now()),
+		},
+	}).SignedString(jwt.UnsafeAllowNoneSignatureType)
+	if err != nil {
+		t.Fatalf("sign: %v", err)
+	}
+
+	tokens := newTestTokenService(t)
+	if _, err := tokens.ValidateToken(tok); !errors.Is(err, ErrInvalidToken) {
+		t.Errorf("alg=none token: err = %v, want ErrInvalidToken", err)
+	}
+}
+
+// TestNewTokenService_ErrorHidesSecretLength pins M4: the error
+// string returned for a short secret must not include the supplied
+// length. A caller holding only the error message should not be able
+// to learn how close they were to MinSecretBytes.
+func TestNewTokenService_ErrorHidesSecretLength(t *testing.T) {
+	_, err := NewTokenService([]byte("short"), 15*time.Minute)
+	if err == nil {
+		t.Fatal("expected error for short secret")
+	}
+	if strings.Contains(err.Error(), "len=") || strings.Contains(err.Error(), "short=5") {
+		t.Errorf("error leaks secret length: %q", err.Error())
 	}
 }

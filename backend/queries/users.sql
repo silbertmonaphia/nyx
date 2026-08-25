@@ -76,3 +76,40 @@ WHERE family_id = $1 AND revoked_at IS NULL;
 UPDATE refresh_tokens
 SET revoked_at = COALESCE(revoked_at, now())
 WHERE id = $1 AND revoked_at IS NULL;
+
+-- name: CountActiveRefreshTokensByUser :one
+-- Counts non-revoked, non-expired rows for a user. Used by the
+-- service layer on every mint to enforce the per-user family cap
+-- (see SECURITY.md M2). Excludes already-revoked rows because
+-- those are being pruned in the background goroutine — counting
+-- them would inflate the result and trigger spurious revokes.
+SELECT COUNT(*)::bigint
+FROM refresh_tokens
+WHERE user_id = @user_id
+  AND revoked_at IS NULL
+  AND expires_at > now();
+
+-- name: ListOldestActiveRefreshTokensByUser :many
+-- Returns up to `limit` rows for a user, oldest first. Used when
+-- the active-row count exceeds the cap: the service revokes the
+-- surplus oldest rows to make room for the new mint. The mint
+-- itself races only on this user's existing rows, so the index on
+-- (user_id) WHERE revoked_at IS NULL covers it efficiently.
+SELECT id
+FROM refresh_tokens
+WHERE user_id = @user_id
+  AND revoked_at IS NULL
+  AND expires_at > now()
+ORDER BY created_at ASC
+LIMIT @lim;
+
+-- name: PurgeRefreshTokensOlderThan :execrows
+-- Bulk-delete rows older than the supplied cutoff that are also
+-- revoked OR expired. The cutoff exists so we never delete a row
+-- an active session could still reach: even a revoked row is
+-- useful to operators for the first few days after revocation
+-- when investigating an incident. Used by the background cleanup
+-- goroutine (see SECURITY.md M2).
+DELETE FROM refresh_tokens
+WHERE created_at < @cutoff
+  AND (revoked_at IS NOT NULL OR expires_at < now());

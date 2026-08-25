@@ -37,11 +37,14 @@ type stubRepo struct {
 	// Refresh-token methods. Same "default error if unset" pattern as
 	// the user CRUD stubs above: any test path that hits an unstubbed
 	// refresh method fails loudly rather than silently passing.
-	createRefreshFn func(ctx context.Context, userID int, tokenHash []byte, expiresAt time.Time) (*RefreshTokenRow, error)
-	getRefreshFn    func(ctx context.Context, tokenHash []byte) (*RefreshTokenRow, error)
-	rotateFn        func(ctx context.Context, oldID int64, userID int, tokenHash []byte, familyID int64, expiresAt time.Time) (*RefreshTokenRow, error)
-	revokeFamilyFn  func(ctx context.Context, familyID int64) (int64, error)
-	revokeByIDFn    func(ctx context.Context, id int64) error
+	createRefreshFn    func(ctx context.Context, userID int, tokenHash []byte, expiresAt time.Time) (*RefreshTokenRow, error)
+	getRefreshFn       func(ctx context.Context, tokenHash []byte) (*RefreshTokenRow, error)
+	rotateFn           func(ctx context.Context, oldID int64, userID int, tokenHash []byte, familyID int64, expiresAt time.Time) (*RefreshTokenRow, error)
+	revokeFamilyFn     func(ctx context.Context, familyID int64) (int64, error)
+	revokeByIDFn       func(ctx context.Context, id int64) error
+	countActiveFn      func(ctx context.Context, userID int) (int64, error)
+	listOldestActiveFn func(ctx context.Context, userID int, limit int) ([]int64, error)
+	purgeOlderThanFn   func(ctx context.Context, cutoff time.Time) (int64, error)
 }
 
 func (s *stubRepo) CreateUser(ctx context.Context, u *User) error {
@@ -103,6 +106,29 @@ func (s *stubRepo) RevokeRefreshTokenByID(ctx context.Context, id int64) error {
 	return s.revokeByIDFn(ctx, id)
 }
 
+func (s *stubRepo) CountActiveRefreshTokensByUser(ctx context.Context, userID int) (int64, error) {
+	if s.countActiveFn == nil {
+		// Default to "well under cap" so tests that don't care about
+		// the cap path don't have to stub it.
+		return 0, nil
+	}
+	return s.countActiveFn(ctx, userID)
+}
+
+func (s *stubRepo) ListOldestActiveRefreshTokensByUser(ctx context.Context, userID int, limit int) ([]int64, error) {
+	if s.listOldestActiveFn == nil {
+		return nil, nil
+	}
+	return s.listOldestActiveFn(ctx, userID, limit)
+}
+
+func (s *stubRepo) PurgeRefreshTokensOlderThan(ctx context.Context, cutoff time.Time) (int64, error) {
+	if s.purgeOlderThanFn == nil {
+		return 0, nil
+	}
+	return s.purgeOlderThanFn(ctx, cutoff)
+}
+
 // TestRegister_HappyPath covers the full Register pipeline: bcrypt
 // hashing, repo.CreateUser, JWT mint, AuthResponse assembly. The
 // assertion points that matter:
@@ -142,11 +168,12 @@ func TestRegister_HappyPath(t *testing.T) {
 	}
 }
 
-// TestRegister_RepoUniqueViolationBubbles confirms the service does
-// not silently swallow a unique-violation sentinel — the handler maps
-// each one to HTTP 409 with a distinct wire message. Anything else
-// leaking through would mask the real cause from the client.
-func TestRegister_RepoUniqueViolationBubbles(t *testing.T) {
+// TestRegister_CollapsesUniqueViolationsToUserAlreadyExists pins the
+// H5 invariant: regardless of whether the username or the email
+// collides, the wire surface is a single ErrUserAlreadyExists. An
+// attacker probing the registration endpoint can no longer tell
+// which field is already taken.
+func TestRegister_CollapsesUniqueViolationsToUserAlreadyExists(t *testing.T) {
 	cases := []struct {
 		name     string
 		sentinel error
@@ -156,10 +183,9 @@ func TestRegister_RepoUniqueViolationBubbles(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			want := tc.sentinel
 			repo := &stubRepo{
 				createFn: func(_ context.Context, _ *User) error {
-					return want
+					return tc.sentinel
 				},
 			}
 			svc := NewService(repo, newTestTokens(t), 15*time.Minute, 7*24*time.Hour, noop.NewTracerProvider().Tracer("test"))
@@ -169,8 +195,13 @@ func TestRegister_RepoUniqueViolationBubbles(t *testing.T) {
 				Email:    "alice@example.com",
 				Password: "hunter2",
 			})
-			if !errors.Is(err, want) {
-				t.Errorf("expected %v to surface, got %v", want, err)
+			if !errors.Is(err, ErrUserAlreadyExists) {
+				t.Errorf("expected ErrUserAlreadyExists to surface, got %v", err)
+			}
+			// The granular sentinel must NOT leak — that would defeat
+			// the whole point of the collapse.
+			if errors.Is(err, tc.sentinel) && tc.sentinel != ErrUserAlreadyExists {
+				t.Errorf("granular sentinel %v leaked through the collapse", tc.sentinel)
 			}
 		})
 	}
@@ -237,6 +268,104 @@ func TestLogin_UnknownUsernameReturnsInvalidCredentials(t *testing.T) {
 	})
 	if !errors.Is(err, ErrInvalidCredentials) {
 		t.Errorf("unknown username must map to ErrInvalidCredentials, got %v", err)
+	}
+}
+
+// TestDummyBcryptHashReady pins the H2 invariant: the dummy hash
+// used to equalise Login timing on the not-found branch must be
+// non-empty and bcrypt-comparable at package init. If init() fails
+// the whole process fails to start, so a non-nil hash plus a
+// successful CompareHashAndPassword is enough.
+func TestDummyBcryptHashReady(t *testing.T) {
+	if len(dummyBcryptHash) == 0 {
+		t.Fatal("dummyBcryptHash not initialised; init() likely failed silently")
+	}
+	// Must reject the obvious wrong password and accept the plaintext
+	// the dummy was computed from — together these confirm the hash
+	// is bcrypt-shaped and bcrypt-cost-compatible with real hashes.
+	if err := bcrypt.CompareHashAndPassword(dummyBcryptHash, []byte("wrong")); err == nil {
+		t.Error("dummyBcryptHash matched an unrelated password")
+	}
+	if err := bcrypt.CompareHashAndPassword(dummyBcryptHash, []byte("timing-equaliser-not-a-real-password")); err != nil {
+		t.Errorf("dummyBcryptHash did not match the plaintext it was computed from: %v", err)
+	}
+}
+
+// TestRegister_RefreshCapEnforced pins M2 via the public Register
+// entry point: when the user's active refresh-token count is at the
+// cap, registering (which mints a refresh token) revokes the oldest
+// surplus row before inserting. mintRefreshToken is unexported, so
+// we drive it through the public surface.
+func TestRegister_RefreshCapEnforced(t *testing.T) {
+	var listCalls, revokeCalls int
+	repo := &stubRepo{
+		createFn: func(_ context.Context, u *User) error {
+			u.ID = 1
+			return nil
+		},
+		countActiveFn: func(_ context.Context, _ int) (int64, error) {
+			return int64(RefreshCap), nil // user already at cap
+		},
+		listOldestActiveFn: func(_ context.Context, _ int, lim int) ([]int64, error) {
+			listCalls++
+			if lim != 1 {
+				t.Errorf("ListOldest limit = %d, want 1 (cap surplus = cap - cap + 1)", lim)
+			}
+			return []int64{42}, nil
+		},
+		revokeByIDFn: func(_ context.Context, id int64) error {
+			revokeCalls++
+			if id != 42 {
+				t.Errorf("revoked id = %d, want 42 (oldest row)", id)
+			}
+			return nil
+		},
+	}
+	svc := NewService(repo, newTestTokens(t), 15*time.Minute, 7*24*time.Hour, noop.NewTracerProvider().Tracer("test"))
+
+	if _, err := svc.Register(context.Background(), RegisterRequest{
+		Username: "alice",
+		Email:    "alice@example.com",
+		Password: "hunter2",
+	}); err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+	if listCalls != 1 {
+		t.Errorf("ListOldestActiveRefreshTokensByUser called %d times, want 1", listCalls)
+	}
+	if revokeCalls != 1 {
+		t.Errorf("RevokeRefreshTokenByID called %d times, want 1", revokeCalls)
+	}
+}
+
+// TestRegister_BelowRefreshCapSkipsList pins the fast path: when
+// the user is below the cap, no list/revoke queries should fire.
+func TestRegister_BelowRefreshCapSkipsList(t *testing.T) {
+	repo := &stubRepo{
+		createFn: func(_ context.Context, u *User) error {
+			u.ID = 1
+			return nil
+		},
+		countActiveFn: func(_ context.Context, _ int) (int64, error) {
+			return int64(RefreshCap - 1), nil
+		},
+		listOldestActiveFn: func(_ context.Context, _ int, _ int) ([]int64, error) {
+			t.Error("ListOldestActiveRefreshTokensByUser must not be called below the cap")
+			return nil, nil
+		},
+		revokeByIDFn: func(_ context.Context, _ int64) error {
+			t.Error("RevokeRefreshTokenByID must not be called below the cap")
+			return nil
+		},
+	}
+	svc := NewService(repo, newTestTokens(t), 15*time.Minute, 7*24*time.Hour, noop.NewTracerProvider().Tracer("test"))
+
+	if _, err := svc.Register(context.Background(), RegisterRequest{
+		Username: "alice",
+		Email:    "alice@example.com",
+		Password: "hunter2",
+	}); err != nil {
+		t.Fatalf("Register: %v", err)
 	}
 }
 
@@ -501,19 +630,24 @@ func TestLogout_Idempotent(t *testing.T) {
 	}
 }
 
-// TestLogout_RevokesFamily — the supplied token's family is the unit
-// of revocation. We confirm RevokeRefreshTokenFamily is called with
-// the row's family_id, not the row's id.
-func TestLogout_RevokesFamily(t *testing.T) {
+// TestLogout_RevokesOnlySuppliedRow — per-session revocation (M1).
+// Logging out revokes exactly the supplied row's ID, not the
+// surrounding family. This is the property that lets two devices
+// stay logged in independently.
+func TestLogout_RevokesOnlySuppliedRow(t *testing.T) {
 	now := time.Now()
-	var revokedFamily int64
+	var revokedID int64
 	repo := &stubRepo{
 		getRefreshFn: func(_ context.Context, _ []byte) (*RefreshTokenRow, error) {
 			return &RefreshTokenRow{ID: 1, UserID: 7, FamilyID: 99, ExpiresAt: now.Add(time.Hour)}, nil
 		},
-		revokeFamilyFn: func(_ context.Context, familyID int64) (int64, error) {
-			revokedFamily = familyID
-			return 3, nil
+		revokeByIDFn: func(_ context.Context, id int64) error {
+			revokedID = id
+			return nil
+		},
+		revokeFamilyFn: func(_ context.Context, _ int64) (int64, error) {
+			t.Error("Logout must NOT call RevokeRefreshTokenFamily; per-session only")
+			return 0, nil
 		},
 	}
 	svc := NewService(repo, newTestTokens(t), 15*time.Minute, 7*24*time.Hour, noop.NewTracerProvider().Tracer("test"))
@@ -522,8 +656,8 @@ func TestLogout_RevokesFamily(t *testing.T) {
 	if err := svc.Logout(context.Background(), raw); err != nil {
 		t.Fatalf("Logout: %v", err)
 	}
-	if revokedFamily != 99 {
-		t.Errorf("expected family 99 to be revoked, got %d", revokedFamily)
+	if revokedID != 1 {
+		t.Errorf("expected row 1 to be revoked, got %d", revokedID)
 	}
 }
 

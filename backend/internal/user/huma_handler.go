@@ -56,6 +56,10 @@ func RegisterUserOpsTest(api huma.API, h *Handler, tokens auth.TokenService, coo
 		Summary:     "Register a user",
 		Description: "Create a new user account. Returns 409 when the username or email is already taken. Sets __Host-nyx-access and __Host-nyx-refresh httpOnly cookies via Set-Cookie headers.",
 		Tags:        []string{"auth"},
+		// Per-route tighter rate limit so a credential-stuffing or
+		// account-enumeration flood can't share the global IP
+		// bucket with the rest of the API (see SECURITY.md M3).
+		Middlewares: huma.Middlewares{middleware.DefaultAuthRateLimit()},
 	}, h.Register)
 
 	huma.Register(api, huma.Operation{
@@ -65,6 +69,9 @@ func RegisterUserOpsTest(api huma.API, h *Handler, tokens auth.TokenService, coo
 		Summary:     "Login a user",
 		Description: "Authenticate a user by username + password. Sets __Host-nyx-access and __Host-nyx-refresh httpOnly cookies; the JSON body contains only the user profile.",
 		Tags:        []string{"auth"},
+		// Same per-route limiter as register — login is the higher-
+		// value target so the cap matters more here than there.
+		Middlewares: huma.Middlewares{middleware.DefaultAuthRateLimit()},
 	}, h.Login)
 
 	// /api/refresh is public: it does not require an access token.
@@ -193,10 +200,11 @@ func (h *Handler) Refresh(ctx context.Context, in *refreshInput) (*refreshOutput
 
 // Logout handler. The middleware (NewHumaAuth) has already verified
 // the access token before we get here; the __Host-nyx-refresh cookie
-// identifies the family we revoke. Returns 204 with no body and
-// clears both auth cookies. Even when the refresh cookie is missing
-// (e.g. an attacker stripped it) we still clear both at the browser
-// — local clear is idempotent server-side.
+// identifies the single refresh-token row we revoke (per-session —
+// other devices stay logged in, see SECURITY.md M1). Returns 204
+// with no body and clears both auth cookies. Even when the refresh
+// cookie is missing (e.g. an attacker stripped it) we still clear
+// both at the browser — local clear is idempotent server-side.
 func (h *Handler) Logout(ctx context.Context, in *logoutInput) (*logoutOutput, error) {
 	if raw, ok := refreshTokenFromContext(ctx, h.cookies); ok {
 		if err := h.service.Logout(ctx, raw); err != nil {

@@ -91,6 +91,7 @@
         "additionalProperties": false,
         "properties": {
           "password": {
+            "maxLength": 128,
             "type": "string"
           },
           "username": {
@@ -213,6 +214,7 @@
             "type": "string"
           },
           "password": {
+            "maxLength": 128,
             "minLength": 6,
             "type": "string"
           },
@@ -421,6 +423,7 @@
             "name": "q",
             "schema": {
               "description": "Case-insensitive search term matched against title and description.",
+              "maxLength": 200,
               "type": "string"
             }
           },

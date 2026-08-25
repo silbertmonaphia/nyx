@@ -37,11 +37,10 @@ import (
 // axios interceptor can distinguish a refresh-eligible 401 (token
 // expired) from a hard-logout 401 (anything else).
 //
-// Token source: __Host-nyx-access cookie first (httpOnly, browser
-// auto-attaches), then Authorization: Bearer as a deprecation-
-// window fallback for curl / Postman clients that haven't been
-// updated to the cookie flow. Remove the fallback once all clients
-// are cookie-native.
+// Token source: __Host-nyx-access cookie only. The Authorization:
+// Bearer fallback shipped during the cookie rollout has been
+// removed (see SECURITY.md L1); every legitimate client now goes
+// through the browser's automatic cookie attachment.
 func NewHumaAuth(tokens auth.TokenService, accessCookieName string, cookieSecure bool) func(huma.Context, func(huma.Context)) {
 	resolvedCookieName := accessCookieName
 	if !cookieSecure {
@@ -81,31 +80,23 @@ func NewHumaAuth(tokens auth.TokenService, accessCookieName string, cookieSecure
 	}
 }
 
-// readAccessToken pulls the JWT from the __Host-nyx-access cookie
-// first; falls back to Authorization: Bearer for the deprecation
-// window. Returns ("", false) when neither source is present. The
-// Cookie is read via r.Cookie(name) on the *http.Request that
-// StoreRequest stashed on the request context — huma's middleware
-// path gives us a huma.Context, but the live request is recovered
-// from reqctx.RequestFromContext so we can use the standard
-// library's cookie parser.
+// readAccessToken pulls the JWT from the httpOnly access cookie only.
+// The Authorization: Bearer fallback was removed once the cookie
+// rollout completed (see SECURITY.md L1). The Cookie is read via
+// r.Cookie(name) on the *http.Request that StoreRequest stashed on
+// the request context — huma's middleware path gives us a
+// huma.Context, but the live request is recovered from
+// reqctx.RequestFromContext so we can use the standard library's
+// cookie parser.
 func readAccessToken(ctx huma.Context, cookieName string) (string, bool) {
 	r := reqctx.RequestFromContext(ctx.Context())
-	if r != nil {
-		if c, err := r.Cookie(cookieName); err == nil && c.Value != "" {
-			return c.Value, true
-		}
-	}
-
-	authHeader := ctx.Header("Authorization")
-	if authHeader == "" {
+	if r == nil {
 		return "", false
 	}
-	parts := strings.Split(authHeader, " ")
-	if len(parts) != 2 || parts[0] != "Bearer" {
-		return "", false
+	if c, err := r.Cookie(cookieName); err == nil && c.Value != "" {
+		return c.Value, true
 	}
-	return parts[1], true
+	return "", false
 }
 
 // writeHumaError writes the canonical {error, code, request_id, details}
