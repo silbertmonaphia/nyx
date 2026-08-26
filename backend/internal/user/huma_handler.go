@@ -9,6 +9,7 @@ import (
 	"nyx/internal/middleware"
 	"nyx/internal/platform/api"
 	"nyx/internal/platform/auth"
+	"nyx/internal/reqctx"
 )
 
 // Handler exposes user/auth domain operations. It is constructed in
@@ -100,6 +101,23 @@ func RegisterUserOpsTest(api huma.API, h *Handler, tokens auth.TokenService, coo
 		Security:    []map[string][]string{{"BearerAuth": {}}},
 		Middlewares: huma.Middlewares{middleware.NewHumaAuth(tokens, cookies.AccessName, cookies.Secure)},
 	}, h.Logout)
+
+	// /api/me returns the profile of the access token's subject.
+	// The SPA fires this on every page load so its persisted
+	// localStorage user can be reconciled against the server-truth
+	// (SECURITY.md L7). The same auth middleware as logout enforces
+	// a valid access token — without one, the persisted profile
+	// could be returned to anyone with a stale localStorage entry.
+	huma.Register(api, huma.Operation{
+		OperationID: "me",
+		Method:      http.MethodGet,
+		Path:        "/api/me",
+		Summary:     "Get current user",
+		Description: "Return the profile of the authenticated user (the access token's subject). Used by the SPA to reconcile its persisted user on every page load.",
+		Tags:        []string{"auth"},
+		Security:    []map[string][]string{{"BearerAuth": {}}},
+		Middlewares: huma.Middlewares{middleware.NewHumaAuth(tokens, cookies.AccessName, cookies.Secure)},
+	}, h.Me)
 }
 
 // ---- Operation input / output structs ----
@@ -149,6 +167,14 @@ type logoutInput struct{ Body LogoutRequest }
 type logoutOutput struct {
 	Status    int      `status:"204"`
 	SetCookie []string `header:"Set-Cookie"`
+}
+
+// meOutput returns just the user profile — no cookies, no
+// ExpiresAt, no token fields. The body shape matches what the
+// SPA already consumes from login/register/refresh so the
+// frontend can drop it straight into the authStore. SECURITY.md L7.
+type meOutput struct {
+	Body User `nullable:"false"`
 }
 
 // ---- Handler functions ----
@@ -215,4 +241,21 @@ func (h *Handler) Logout(ctx context.Context, in *logoutInput) (*logoutOutput, e
 		Status:    http.StatusNoContent,
 		SetCookie: clearSetCookieStrings(h.cookies),
 	}, nil
+}
+
+// Me returns the user profile for the access token's subject.
+// SECURITY.md L7: the SPA fires /api/me on every page load to
+// reconcile its persisted user. The auth middleware has already
+// validated the access token and stashed the subject id on the
+// context — if it didn't, this handler wouldn't run. A 404
+// (ErrUserNotFound) is theoretically possible only if the row
+// was deleted between login and now; api.MapError returns the
+// standard 404 envelope in that case.
+func (h *Handler) Me(ctx context.Context, _ *struct{}) (*meOutput, error) {
+	id := reqctx.UserIDFromContext(ctx)
+	u, err := h.service.GetByID(ctx, id)
+	if err != nil {
+		return nil, api.MapError(ctx, err, "Failed to load user")
+	}
+	return &meOutput{Body: *u}, nil
 }

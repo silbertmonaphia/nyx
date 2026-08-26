@@ -50,7 +50,20 @@ const safeLocalStorage = createJSONStorage<AuthState>(() => {
 // interceptors — calling /api/logout from a logout handler must
 // avoid recursion through api.ts' response interceptor). We use
 // this only inside logout() below.
-const loginAxios = axios.create({ withCredentials: true });
+//
+// The `/api` baseURL is relative so it lands on the same origin
+// as the SPA in both environments:
+//   - dev: Vite's server.proxy forwards /api/* → localhost:8080
+//   - prod: nginx `location /api/` upstream → backend container
+// Without this, `loginAxios.post('/logout')` would POST to
+// `<SPA origin>/logout` (no proxy), which 404s in dev and is
+// never the backend in prod. SECURITY.md M8.
+//
+// Exported (test-only) so vitest can spy on `loginAxios.post`
+// without going through axios's static surface — `vi.spyOn(axios,
+// 'post')` doesn't intercept instance-level calls on a separate
+// `axios.create()` instance.
+export const loginAxios = axios.create({ baseURL: '/api', withCredentials: true });
 
 export const useAuthStore = create<AuthState>()(
   persist(

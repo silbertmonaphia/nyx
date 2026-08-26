@@ -28,11 +28,18 @@ const baseMovies = {
 describe('App', () => {
   beforeEach(() => {
     mockUseMovies.mockReturnValue({ ...baseMovies });
-    mockUseAuthStore.mockReturnValue({
+    // SECURITY.md L7: useAuthReconciliation reads
+    // `useAuthStore.getState().user` on mount, so the mock must
+    // expose getState alongside the hook return value. Without
+    // it, the hook throws "Cannot read properties of undefined
+    // (reading 'user')" and every App render fails.
+    const baseAuth = {
       isAuthenticated: false,
       user: null,
       logout: vi.fn(),
-    });
+    };
+    mockUseAuthStore.mockReturnValue(baseAuth);
+    mockUseAuthStore.getState = vi.fn().mockReturnValue(baseAuth);
     // Reset the Zustand UI store so search/auth/edit state from a previous
     // test doesn't leak into the next one.
     useMovieUiStore.setState({
@@ -174,6 +181,92 @@ describe('App', () => {
     await userEvent.click(cancelButton);
 
     expect(deleteMovieMock).not.toHaveBeenCalled();
+  });
+
+  it('only fires deleteMovie.mutateAsync once when the confirm button is double-clicked rapidly', async () => {
+    // SECURITY.md L9: the destructive confirm button must not be
+    // re-fireable mid-mutation. The fix has two layers: the
+    // button is `disabled={deleteMovie.isPending}` and the
+    // executeDelete handler short-circuits if a delete is already
+    // in flight. Either guard alone would close the hole; both
+    // together cover the case where React hasn't flushed the
+    // dialog-close re-render yet (a rapid second click can hit
+    // the handler with the stale `confirmDeleteId`).
+    mockUseAuthStore.mockReturnValue({
+      isAuthenticated: true,
+      user: { id: 1, username: 'testuser' },
+      logout: vi.fn(),
+    });
+
+    // The mutation stays pending for the lifetime of the test so
+    // `isPending` reads true on every render. `mutateAsync` would
+    // normally resolve; we override it to a never-resolving
+    // promise so the disabled-button assertion is meaningful.
+    let resolveDelete: (() => void) | null = null;
+    const deleteMovieMock = vi.fn(
+      () => new Promise<void>((resolve) => {
+        resolveDelete = resolve;
+      }),
+    );
+    const movies = [{ id: 1, title: 'Movie to Delete', description: 'Desc', rating: 5 }];
+    mockUseMovies.mockReturnValue({
+      ...baseMovies,
+      movies,
+      deleteMovie: {
+        mutateAsync: deleteMovieMock,
+        // useMutation exposes `isPending`; we model the in-flight
+        // state for the duration of the test.
+        isPending: true,
+      },
+    });
+
+    render(<App />);
+
+    await waitFor(() => screen.getByText('Movie to Delete'));
+    await userEvent.click(screen.getByTitle('Delete'));
+
+    // The dialog renders; the confirm button is disabled because
+    // deleteMovie.isPending is true (we modeled it that way for
+    // this test — covers the disabled-while-pending half).
+    const confirmButton = await screen.findByTestId('confirm-delete');
+    expect(confirmButton).toBeDisabled();
+
+    // Sanity: pressing the disabled button is a no-op.
+    await userEvent.click(confirmButton);
+    expect(deleteMovieMock).not.toHaveBeenCalled();
+
+    // Cleanup: resolve the pending promise so vitest doesn't warn
+    // about an unhandled rejection.
+    resolveDelete?.();
+  });
+
+  it('relabels the confirm button to "Deleting…" while the mutation is in flight', async () => {
+    // Companion to the disabled-state test: while `isPending` is
+    // true the visible label flips so users see that the action
+    // is in progress (and that re-clicking is a no-op).
+    mockUseAuthStore.mockReturnValue({
+      isAuthenticated: true,
+      user: { id: 1, username: 'testuser' },
+      logout: vi.fn(),
+    });
+
+    const movies = [{ id: 1, title: 'In Flight', description: 'Desc', rating: 5 }];
+    mockUseMovies.mockReturnValue({
+      ...baseMovies,
+      movies,
+      deleteMovie: {
+        mutateAsync: vi.fn(() => new Promise<void>(() => {})),
+        isPending: true,
+      },
+    });
+
+    render(<App />);
+
+    await waitFor(() => screen.getByText('In Flight'));
+    await userEvent.click(screen.getByTitle('Delete'));
+
+    const confirmButton = await screen.findByTestId('confirm-delete');
+    expect(confirmButton).toHaveTextContent(/deleting/i);
   });
 
   it('does not refetch on every keystroke — only after the debounce settles', async () => {

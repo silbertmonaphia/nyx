@@ -5,6 +5,20 @@ import * as telemetry from './telemetry';
 import { useAuthStore } from '../store/authStore';
 import { useUiStore } from '../store/uiStore';
 
+// The structured logger is replaced wholesale so the H7 tests
+// can assert on `logger.error` calls. ES-module exports are
+// read-only, so `vi.spyOn(logger, 'error')` would fail; mocking
+// the module replaces the binding entirely.
+vi.mock('./logger', () => ({
+  logger: {
+    debug: vi.fn(),
+    info: vi.fn(),
+    warn: vi.fn(),
+    error: vi.fn(),
+  },
+}));
+import { logger } from './logger';
+
 // Mock the stores so the response interceptor's side effects
 // (logout + addToast) can be observed without touching real state.
 vi.mock('../store/authStore');
@@ -58,12 +72,15 @@ describe('api response interceptor', () => {
   let addToast: ReturnType<typeof vi.fn>;
   let logout: ReturnType<typeof vi.fn>;
   let setAuth: ReturnType<typeof vi.fn>;
+  let loggerError: ReturnType<typeof vi.fn>;
   let rejected: (error: unknown) => Promise<unknown>;
 
   beforeEach(() => {
     addToast = vi.fn();
     logout = vi.fn();
     setAuth = vi.fn();
+    loggerError = logger.error as ReturnType<typeof vi.fn>;
+    loggerError.mockClear();
     // The interceptor calls `useAuthStore.getState().logout()` and
     // `useUiStore.getState().addToast(msg, 'error')`. Wire those
     // methods through the mocked `getState` accessors. The
@@ -75,6 +92,16 @@ describe('api response interceptor', () => {
     });
     mockedUiStore.getState = vi.fn().mockReturnValue({ addToast });
     rejected = getResponseErrorHandler();
+
+    // The H8 refresh-on-any-401 tests stub axios.post for the
+    // refresh call. Default: refresh fails so the 401 path falls
+    // through to the same logout toast that the bare-401 case
+    // shows. Tests that want the success path override this.
+    vi.spyOn(axios, 'post').mockRejectedValue(new Error('refresh failed'));
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
   });
 
   it('passes through successful responses unchanged', async () => {
@@ -86,10 +113,13 @@ describe('api response interceptor', () => {
     expect(fulfilled(response)).toBe(response);
   });
 
-  it('logs out + toasts on 401 with no www-authenticate challenge', async () => {
-    // A bare 401 — neither `error_description="expired"` nor any other
-    // challenge. Today's behaviour (no refresh attempt, hard logout)
-    // applies.
+  it('attempts refresh on a bare 401 and logs out if refresh fails (H8)', async () => {
+    // SECURITY.md H8: any 401 triggers a refresh attempt. The
+    // previous behaviour matched only `error_description="expired"`
+    // which forced a hard logout on malformed/forged tokens and
+    // locked users out of recoverable sessions. Here the refresh
+    // itself fails (axios.post is stubbed to reject in beforeEach)
+    // so the handler falls through to the same logout path.
     const error = make401();
 
     await expect(rejected(error)).rejects.toBe(error);
@@ -101,10 +131,10 @@ describe('api response interceptor', () => {
     );
   });
 
-  it('logs out + toasts on 401 with bare "invalid_token" challenge (no "expired")', async () => {
-    // The backend sends `Bearer error="invalid_token"` when the token
-    // is malformed/forged (vs. expired). Same hard-logout branch as
-    // no header at all.
+  it('attempts refresh on a "invalid_token" 401 challenge (H8)', async () => {
+    // Pre-H8, a `Bearer error="invalid_token"` (no "expired")
+    // challenge forced a hard logout. H8 widens the refresh window
+    // so a stale-but-recoverable session gets a chance to rotate.
     const error = make401({
       wwwAuthenticate: 'Bearer error="invalid_token"',
     });
@@ -118,27 +148,106 @@ describe('api response interceptor', () => {
     );
   });
 
-  it('surfaces backend `error` field for non-401 4xx/5xx', async () => {
+  it('never echoes the backend `error` field to the toast (H7)', async () => {
+    // SECURITY.md H7: the backend's error message is trusted less
+    // than client-side text. The toast shows a generic label + the
+    // request id; the full payload goes to the log pipeline only.
     const error = Object.assign(new Error('Request failed'), {
-      response: { status: 422, data: { error: 'title is required' } },
+      response: {
+        status: 422,
+        data: { error: 'title is required', code: 'validation_failed' },
+        headers: { 'x-request-id': 'req-abc-123' },
+      },
       config: {},
     });
 
     await expect(rejected(error)).rejects.toBe(error);
 
     expect(logout).not.toHaveBeenCalled();
-    expect(addToast).toHaveBeenCalledWith('title is required', 'error');
+    // No echo of the server string.
+    expect(addToast).not.toHaveBeenCalledWith(
+      expect.stringContaining('title is required'),
+      'error',
+    );
+    // Generic label + request id is what the user sees.
+    expect(addToast).toHaveBeenCalledWith(
+      'Server error (422) (ref: req-abc-123)',
+      'error',
+    );
+    // Full payload (minus the request id which is logged alongside)
+    // is captured for the operator.
+    expect(loggerError).toHaveBeenCalledWith(
+      'api.error',
+      expect.objectContaining({
+        status: 422,
+        requestId: 'req-abc-123',
+        payload: expect.objectContaining({ error: 'title is required' }),
+      }),
+    );
   });
 
-  it('falls back to "Server error: <status>" when no `error` body', async () => {
+  it('falls back to "Server error (<status>)" with no request id when the header is absent', async () => {
+    // Some upstream paths (e.g. a misbehaving proxy) may swallow the
+    // X-Request-Id header. The toast must still be safe to show —
+    // generic label, no diagnostic detail, no leakage of the
+    // missing header.
     const error = Object.assign(new Error('Request failed'), {
-      response: { status: 500, data: { something: 'else' } },
+      response: { status: 500, data: { something: 'else' }, headers: {} },
       config: {},
     });
 
     await expect(rejected(error)).rejects.toBe(error);
 
-    expect(addToast).toHaveBeenCalledWith('Server error: 500', 'error');
+    expect(addToast).toHaveBeenCalledWith('Server error (500)', 'error');
+    expect(loggerError).toHaveBeenCalledWith(
+      'api.error',
+      expect.objectContaining({ status: 500, requestId: undefined }),
+    );
+  });
+
+  it('strips control characters from the logged payload (H7)', async () => {
+    // CRLF injection into a log line would let a malicious
+    // backend string forge fake log records. The sanitiser
+    // strips C0/C1 controls before the payload reaches
+    // logger.error.
+    const error = Object.assign(new Error('Request failed'), {
+      response: {
+        status: 400,
+        data: { error: 'evil\nINJECTED line: forged=true' },
+        headers: {},
+      },
+      config: {},
+    });
+
+    await expect(rejected(error)).rejects.toBe(error);
+
+    const call = loggerError.mock.calls.find(([msg]) => msg === 'api.error');
+    expect(call).toBeDefined();
+    const attrs = call?.[1] as { payload: { error: string } };
+    expect(attrs.payload.error).not.toMatch(/[\r\n]/);
+    expect(attrs.payload.error).toContain('evil');
+    expect(attrs.payload.error).toContain('INJECTED line: forged=true');
+  });
+
+  it('caps the logged payload string length (H7)', async () => {
+    // The backend could in principle return a multi-MB error
+    // message that bloats log lines. The sanitiser caps the
+    // length defensively.
+    const huge = 'x'.repeat(5_000);
+    const error = Object.assign(new Error('Request failed'), {
+      response: {
+        status: 400,
+        data: { error: huge },
+        headers: {},
+      },
+      config: {},
+    });
+
+    await expect(rejected(error)).rejects.toBe(error);
+
+    const call = loggerError.mock.calls.find(([msg]) => msg === 'api.error');
+    const attrs = call?.[1] as { payload: { error: string } };
+    expect(attrs.payload.error.length).toBeLessThanOrEqual(2_000);
   });
 
   it('toasts the network error message when no response is present', async () => {
@@ -174,11 +283,13 @@ describe('api response interceptor', () => {
 });
 
 /**
- * Refresh-on-401 behaviour: when the backend's middleware sets
- * `WWW-Authenticate: Bearer error="invalid_token", error_description="expired"`,
- * the response interceptor must kick off a single-flight refresh, swap
- * in the new access token, and replay the original request — without
- * logging the user out.
+ * Refresh-on-401 behaviour: when any 401 response comes back, the
+ * interceptor must kick off a single-flight refresh, swap in the
+ * fresh cookies via the retry path, and replay the original
+ * request — without logging the user out. SECURITY.md H8 widened
+ * this from "WWW-Authenticate=expired only" to any 401, so the
+ * tests below drive the path with a variety of challenge shapes
+ * (and no challenge at all) to pin the new contract.
  */
 describe('refresh-on-401', () => {
   let addToast: ReturnType<typeof vi.fn>;
@@ -217,7 +328,12 @@ describe('refresh-on-401', () => {
     postSpy.mockRestore();
   });
 
-  it('refresh + retry succeeds on an "expired" challenge (no logout)', async () => {
+  it('refresh + retry succeeds on any 401 (no logout) (H8)', async () => {
+    // SECURITY.md H8: the refresh path is no longer gated on the
+    // WWW-Authenticate=expired substring. Any 401 attempts the
+    // refresh once; on success the original request is replayed
+    // with the freshly rotated cookies.
+    //
     // Post-cookie refresh: the body is empty, the new tokens arrive
     // as Set-Cookie headers on the response (mocked as the bare
     // data envelope here — the browser does the actual cookie
@@ -229,9 +345,9 @@ describe('refresh-on-401', () => {
       },
     });
 
-    const error = make401({
-      wwwAuthenticate: 'Bearer error="invalid_token", error_description="expired"',
-    });
+    // No WWW-Authenticate challenge at all — the H8 widening
+    // means this still triggers a refresh.
+    const error = make401();
     // The interceptor mutates `config` in place to mark `_retried` —
     // give the test its own handle so we can assert the mutation
     // afterwards.
@@ -276,9 +392,7 @@ describe('refresh-on-401', () => {
   it('logs out + toasts when refresh itself fails', async () => {
     postSpy.mockRejectedValueOnce(new Error('refresh expired'));
 
-    const error = make401({
-      wwwAuthenticate: 'Bearer error="invalid_token", error_description="expired"',
-    });
+    const error = make401();
     error.config = { ...(error.config as object) };
 
     await expect(rejected(error)).rejects.toBe(error);
@@ -305,13 +419,9 @@ describe('refresh-on-401', () => {
       }),
     );
 
-    const err1 = make401({
-      wwwAuthenticate: 'Bearer error="invalid_token", error_description="expired"',
-    });
+    const err1 = make401();
     err1.config = { ...(err1.config as object) };
-    const err2 = make401({
-      wwwAuthenticate: 'Bearer error="invalid_token", error_description="expired"',
-    });
+    const err2 = make401();
     err2.config = { ...(err2.config as object) };
 
     // Fire both rejected handlers without awaiting the first yet.
@@ -344,10 +454,7 @@ describe('refresh-on-401', () => {
     // The retry path stamps `_retried` on the config it replays, so
     // a follow-up 401 on the replayed request must fall straight
     // through to the logout branch — otherwise we'd loop forever.
-    const error = make401({
-      wwwAuthenticate: 'Bearer error="invalid_token", error_description="expired"',
-      retried: true,
-    });
+    const error = make401({ retried: true });
 
     await expect(rejected(error)).rejects.toBe(error);
 

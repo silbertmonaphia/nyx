@@ -1,5 +1,5 @@
-import { describe, it, expect, beforeEach } from 'vitest';
-import { useAuthStore } from './authStore';
+import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest';
+import { useAuthStore, loginAxios } from './authStore';
 import type { User } from '~/api/openapi';
 
 const baseUser: User = {
@@ -38,6 +38,25 @@ describe('useAuthStore', () => {
   });
 
   describe('logout', () => {
+    let postSpy: ReturnType<typeof vi.spyOn>;
+
+    beforeEach(() => {
+      // Spy on the bare axios instance used by the logout handler
+      // so we can pin the URL it POSTs to. SECURITY.md M8: the URL
+      // must be `/api/logout` (same origin, proxied to the backend
+      // by Vite in dev and nginx in prod), not `<SPA origin>/logout`
+      // which 404s.
+      //
+      // We spy on `loginAxios.post` (the instance), NOT the static
+      // `axios.post`: `axios.create()` returns an instance whose
+      // methods don't dispatch through `axios.post`.
+      postSpy = vi.spyOn(loginAxios, 'post').mockResolvedValue({} as never);
+    });
+
+    afterEach(() => {
+      postSpy.mockRestore();
+    });
+
     it('clears user and flips isAuthenticated to false synchronously', () => {
       // Logout is synchronous for the local clear — the backend
       // POST is fire-and-forget so a hung server doesn't strand
@@ -53,6 +72,32 @@ describe('useAuthStore', () => {
       const state = useAuthStore.getState();
       expect(state.user).toBeNull();
       expect(state.isAuthenticated).toBe(false);
+    });
+
+    it('POSTs to /api/logout with withCredentials so the cookie clears', async () => {
+      // SECURITY.md M8: the bare axios instance must carry
+      // baseURL='/api' so the logout hits the backend proxy
+      // instead of the SPA's own origin.
+      useAuthStore.getState().logout();
+
+      // The fire-and-forget POST is unobserved — flush the
+      // microtask queue so the assertion runs after the call.
+      await Promise.resolve();
+
+      expect(postSpy).toHaveBeenCalledTimes(1);
+      const [url, body] = postSpy.mock.calls[0];
+      // The relative URL combines with the instance's baseURL='/api'
+      // to hit the backend proxy. Pinning the baseURL separately
+      // below covers the M8 fix in full.
+      expect(url).toBe('/logout');
+      // The empty body matches the backend's LogoutRequest shape.
+      expect(body).toEqual({});
+
+      // withCredentials lives on the instance defaults (set via
+      // axios.create), not the per-call config. Pin it there so
+      // a future refactor can't drop the cookie ride silently.
+      expect(loginAxios.defaults.withCredentials).toBe(true);
+      expect(loginAxios.defaults.baseURL).toBe('/api');
     });
   });
 

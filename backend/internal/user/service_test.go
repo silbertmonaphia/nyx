@@ -630,6 +630,70 @@ func TestLogout_Idempotent(t *testing.T) {
 	}
 }
 
+// TestGetByID_HappyPath verifies the /api/me service path: the
+// user id from the access token's subject reaches the repository
+// unchanged, and the returned user is passed back to the handler
+// verbatim. SECURITY.md L7.
+func TestGetByID_HappyPath(t *testing.T) {
+	want := &User{ID: 42, Username: "alice", Email: "alice@example.com"}
+	var seenID int
+	repo := &stubRepo{
+		getByIDFn: func(_ context.Context, id int) (*User, error) {
+			seenID = id
+			return want, nil
+		},
+	}
+	svc := NewService(repo, newTestTokens(t), 15*time.Minute, 7*24*time.Hour, noop.NewTracerProvider().Tracer("test"))
+
+	got, err := svc.GetByID(context.Background(), 42)
+	if err != nil {
+		t.Fatalf("GetByID: %v", err)
+	}
+	if seenID != 42 {
+		t.Errorf("repo received id=%d, want 42", seenID)
+	}
+	if got != want {
+		t.Errorf("returned user = %+v, want %+v", got, want)
+	}
+}
+
+// TestGetByID_RepoErrorPropagates — a database failure surfaces
+// to the handler unchanged so api.MapError can decide the HTTP
+// status. SECURITY.md L7.
+func TestGetByID_RepoErrorPropagates(t *testing.T) {
+	sentinel := errors.New("connection reset")
+	repo := &stubRepo{
+		getByIDFn: func(_ context.Context, _ int) (*User, error) {
+			return nil, sentinel
+		},
+	}
+	svc := NewService(repo, newTestTokens(t), 15*time.Minute, 7*24*time.Hour, noop.NewTracerProvider().Tracer("test"))
+
+	_, err := svc.GetByID(context.Background(), 1)
+	if !errors.Is(err, sentinel) {
+		t.Errorf("GetByID err = %v, want %v", err, sentinel)
+	}
+}
+
+// TestGetByID_NotFound — ErrUserNotFound from the repository is
+// the canonical "user was deleted between login and now" signal.
+// api.MapError translates it to 404; this test pins the
+// propagation so a future service-layer short-circuit doesn't
+// accidentally swallow it.
+func TestGetByID_NotFound(t *testing.T) {
+	repo := &stubRepo{
+		getByIDFn: func(_ context.Context, _ int) (*User, error) {
+			return nil, ErrUserNotFound
+		},
+	}
+	svc := NewService(repo, newTestTokens(t), 15*time.Minute, 7*24*time.Hour, noop.NewTracerProvider().Tracer("test"))
+
+	_, err := svc.GetByID(context.Background(), 99)
+	if !errors.Is(err, ErrUserNotFound) {
+		t.Errorf("GetByID err = %v, want ErrUserNotFound", err)
+	}
+}
+
 // TestLogout_RevokesOnlySuppliedRow — per-session revocation (M1).
 // Logging out revokes exactly the supplied row's ID, not the
 // surrounding family. This is the property that lets two devices

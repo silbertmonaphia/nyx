@@ -11,6 +11,12 @@ export default defineConfig({
     },
   },
   build: {
+    // Source maps stay off in production builds. The .map files would
+    // land in the nginx image and let anyone fetch the original
+    // source over the same origin as the SPA (XSS-grade info leak).
+    // For local debugging, `npm run dev` emits inline source maps
+    // and the build target is dev-only anyway. SECURITY.md L5.
+    sourcemap: false,
     rollupOptions: {
       output: {
         // Vite 8 / rolldown requires manualChunks as a function rather than

@@ -6,6 +6,7 @@ import { MovieList } from './features/movies/components/MovieList';
 import { MovieForm } from './features/movies/components/MovieForm';
 import { useMovieUiStore } from './features/movies/store/movieUiStore';
 import { useDebounce } from './hooks/useDebounce';
+import { useAuthReconciliation } from './hooks/useAuthReconciliation';
 import { ToastContainer } from './components/app/ToastContainer';
 import { useUiStore } from './store/uiStore';
 import { useAuthStore } from './store/authStore';
@@ -42,6 +43,10 @@ function App() {
   const { isAuthenticated, user, logout } = useAuthStore();
   const [showAuthForm, setShowAuthForm] = useState(false);
   const [confirmDeleteId, setConfirmDeleteId] = useState<number | null>(null);
+
+  // Boot-time round-trip: if localStorage has a persisted user,
+  // reconcile it against the server. SECURITY.md L7.
+  useAuthReconciliation();
 
   // The input stays fully controlled by `searchTerm` (instant typing),
   // but the network query only fires once the user has paused for
@@ -80,6 +85,14 @@ function App() {
 
   const executeDelete = async () => {
     if (confirmDeleteId === null) return;
+    // Guard against double-fire: the synchronous setState below
+    // closes the dialog, but the React re-render is async, so a
+    // second click on the same tick can still reach this handler
+    // with the stale `confirmDeleteId`. The disabled prop on the
+    // confirm button (`deleteMovie.isPending`) is the primary
+    // defense — this branch is the belt-and-suspenders backstop.
+    // SECURITY.md L9.
+    if (deleteMovie.isPending) return;
     const id = confirmDeleteId;
     setConfirmDeleteId(null);
     try {
@@ -152,6 +165,7 @@ function App() {
               type="text"
               placeholder="Search for movies..."
               value={searchTerm}
+              maxLength={200}
               onChange={(e) => setSearchTerm(e.target.value)}
               className="pl-10 h-12 text-lg rounded-xl"
             />
@@ -242,8 +256,13 @@ function App() {
             <Button variant="outline" onClick={() => setConfirmDeleteId(null)}>
               Cancel
             </Button>
-            <Button variant="destructive" onClick={executeDelete} data-testid="confirm-delete">
-              Delete
+            <Button
+              variant="destructive"
+              onClick={executeDelete}
+              disabled={deleteMovie.isPending}
+              data-testid="confirm-delete"
+            >
+              {deleteMovie.isPending ? 'Deleting…' : 'Delete'}
             </Button>
           </DialogFooter>
         </DialogContent>

@@ -70,6 +70,11 @@ type Service interface {
 	// Logout takes the raw refresh token read by the handler from
 	// the __Host-nyx-refresh cookie. Same wire contract as Refresh.
 	Logout(ctx context.Context, rawRefresh string) error
+	// GetByID returns the user profile identified by the access
+	// token. Used by /api/me so the SPA can reconcile its persisted
+	// user profile against the server-truth on every page load
+	// (SECURITY.md L7).
+	GetByID(ctx context.Context, id int) (*User, error)
 }
 
 // AuthResult is the service-layer return value: it carries the
@@ -368,4 +373,26 @@ func (s *service) Logout(ctx context.Context, rawRefresh string) error {
 		return err
 	}
 	return s.repo.RevokeRefreshTokenByID(ctx, row.ID)
+}
+
+// GetByID returns the user profile for the access token's subject.
+// SECURITY.md L7: the SPA calls /api/me on every page load so the
+// persisted localStorage profile can be reconciled against the
+// server-truth. The middleware reads the id from the access JWT
+// claim and stashes it on the context via reqctx.WithUserID; the
+// handler pulls it off and forwards it here.
+//
+// The trace wraps a single repository read so the request shows up
+// as a child of the HTTP span in the OTel pipeline. Returns the
+// domain ErrNotFound (sourced from the repository) on a missing
+// user — the handler maps that to 404 via api.MapError.
+func (s *service) GetByID(ctx context.Context, id int) (*User, error) {
+	ctx, span := s.tracer.Start(ctx, "user.GetByID", trace.WithSpanKind(trace.SpanKindInternal))
+	defer span.End()
+
+	u, err := s.repo.GetUserByID(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	return u, nil
 }

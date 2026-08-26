@@ -830,3 +830,124 @@ func TestLogoutHandler_NoRefreshCookieClearsAnyway(t *testing.T) {
 		t.Error("expected Set-Cookie clears even when refresh cookie is absent")
 	}
 }
+
+// ---- /api/me (SECURITY.md L7) ----
+
+// authedGetRequest builds a GET request carrying the supplied access
+// cookie. When accessToken is empty the caller is testing the
+// auth-rejection path; pass the token to exercise the success path.
+// Mirrors authedLogoutRequest but uses GET + no body, since /api/me
+// is a read-only profile lookup with no Set-Cookie contract.
+func authedGetRequest(t *testing.T, path, accessToken string) *http.Request {
+	t.Helper()
+	req := httptest.NewRequest(http.MethodGet, path, nil)
+	if accessToken != "" {
+		req.AddCookie(&http.Cookie{Name: testAccessCookieName, Value: accessToken})
+	}
+	return req
+}
+
+// TestMeHandler_ReturnsProfile exercises the auth-required happy
+// path. The access token's subject id reaches the service, the
+// repository returns the user, and the JSON envelope carries the
+// profile unchanged. No cookies are set or cleared on this route.
+func TestMeHandler_ReturnsProfile(t *testing.T) {
+	tokens, err := auth.NewTokenService([]byte(auth.TestSecret), 15*time.Minute)
+	if err != nil {
+		t.Fatalf("auth.NewTokenService: %v", err)
+	}
+	accessToken, err := tokens.GenerateToken(7, "alice")
+	if err != nil {
+		t.Fatalf("GenerateToken: %v", err)
+	}
+
+	var seenID int
+	repo := &stubRepo{
+		getByIDFn: func(_ context.Context, id int) (*User, error) {
+			seenID = id
+			return &User{
+				ID:        7,
+				Username:  "alice",
+				Email:     "alice@example.com",
+				CreatedAt: time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC),
+				UpdatedAt: time.Date(2024, 1, 2, 0, 0, 0, 0, time.UTC),
+			}, nil
+		},
+	}
+
+	req := authedGetRequest(t, "/api/me", accessToken)
+	rr := httptest.NewRecorder()
+	newTestRouterWithRepo(repo).ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", rr.Code, rr.Body.String())
+	}
+	if seenID != 7 {
+		t.Errorf("repo received id=%d, want 7", seenID)
+	}
+
+	var body User
+	if err := json.Unmarshal(rr.Body.Bytes(), &body); err != nil {
+		t.Fatalf("unmarshal: %v; body=%s", err, rr.Body.String())
+	}
+	if body.ID != 7 || body.Username != "alice" || body.Email != "alice@example.com" {
+		t.Errorf("body = %+v, want id=7 username=alice", body)
+	}
+	// The wire shape must NOT carry the password hash, even on
+	// the dedicated profile endpoint — the json:"-" tag does the
+	// work, but pin the invariant so a future refactor doesn't
+	// drop the tag.
+	if body.PasswordHash != "" {
+		t.Errorf("PasswordHash must be omitted from /api/me wire body")
+	}
+
+	// No Set-Cookie headers — /api/me is a read-only profile lookup.
+	if cookies := rr.Result().Cookies(); len(cookies) != 0 {
+		t.Errorf("/api/me must not set cookies; got %d", len(cookies))
+	}
+}
+
+// TestMeHandler_RequiresAuth confirms /api/me is gated by the JWT
+// middleware. A request with no access cookie reaches no handler —
+// the repo must not be touched.
+func TestMeHandler_RequiresAuth(t *testing.T) {
+	repo := &stubRepo{
+		getByIDFn: func(_ context.Context, _ int) (*User, error) {
+			t.Error("repo.GetUserByID must not be reached when auth fails")
+			return nil, nil
+		},
+	}
+
+	req := authedGetRequest(t, "/api/me", "")
+	rr := httptest.NewRecorder()
+	newTestRouterWithRepo(repo).ServeHTTP(rr, req)
+
+	decodeEnvelope(t, rr, http.StatusUnauthorized)
+}
+
+// TestMeHandler_NotFoundReturns404 — if the user row was deleted
+// between login and now (rare but possible), /api/me must surface
+// a clean 404 via api.MapError rather than crashing or returning
+// a partially-populated body.
+func TestMeHandler_NotFoundReturns404(t *testing.T) {
+	tokens, err := auth.NewTokenService([]byte(auth.TestSecret), 15*time.Minute)
+	if err != nil {
+		t.Fatalf("auth.NewTokenService: %v", err)
+	}
+	accessToken, err := tokens.GenerateToken(42, "ghost")
+	if err != nil {
+		t.Fatalf("GenerateToken: %v", err)
+	}
+
+	repo := &stubRepo{
+		getByIDFn: func(_ context.Context, _ int) (*User, error) {
+			return nil, ErrUserNotFound
+		},
+	}
+
+	req := authedGetRequest(t, "/api/me", accessToken)
+	rr := httptest.NewRecorder()
+	newTestRouterWithRepo(repo).ServeHTTP(rr, req)
+
+	decodeEnvelope(t, rr, http.StatusNotFound)
+}
