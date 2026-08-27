@@ -133,13 +133,11 @@ func main() {
 	stopCleanup := user.StartRefreshCleanup(userRepo)
 	defer stopCleanup()
 
-	// CookieConfig is the single source of truth for auth-cookie
-	// attributes; both the auth middleware (which reads the access
-	// cookie) and the user handler (which sets/clears both cookies)
-	// consume the same struct. Resolved once at startup so request
-	// paths don't re-parse durations or samesite strings.
-	cookieCfg := cfg.CookieSettings()
-	userHandler := user.NewHandler(userService, cookieCfg)
+	// TokenService is the single source of truth for auth-token
+	// validation; both the auth middleware (which reads the
+	// Authorization header) and the user handler (which mints /
+	// rotates refresh tokens) consume the same struct.
+	userHandler := user.NewHandler(userService)
 
 	// Build chi router. Middleware order (outermost first):
 	//   Tracing → RequestID → StoreRequest → RealIP → Recoverer →
@@ -183,8 +181,8 @@ func main() {
 	// artifact cannot drift from what the server serves.
 	humaAPI := humachi.New(router, api.HumaConfig())
 
-	movie.RegisterMovieOps(humaAPI, movieHandler, tokens, cookieCfg)
-	user.RegisterUserOps(humaAPI, userHandler, tokens, cookieCfg)
+	movie.RegisterMovieOps(humaAPI, movieHandler, tokens)
+	user.RegisterUserOps(humaAPI, userHandler, tokens)
 
 	port := ":" + cfg.Port
 	server := &http.Server{

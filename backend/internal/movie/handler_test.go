@@ -34,20 +34,16 @@ import (
 //
 // StoreRequest is installed so the auth middleware can recover the
 // live *http.Request via reqctx.RequestFromContext — without it the
-// cookie read would return ("", false) and every protected operation
-// would 401. Production main.go installs StoreRequest early in the
-// middleware chain for the same reason.
+// Authorization header read would return ("", false) and every
+// protected operation would 401. Production main.go installs
+// StoreRequest early in the middleware chain for the same reason.
 //
 // The `withAuth` flag toggles whether the protected operations (POST/PUT/
 // DELETE) carry the JWT middleware. Tests that don't exercise auth pass
-// false; tests that want a 401 pass false and skip the cookie; tests
-// that want a 200 pass true and mint a token via testAccessCookie.
+// false; tests that want a 401 pass false and skip the token; tests
+// that want a 200 pass true and mint a token via testAccessToken.
 // tokens is the per-test TokenService used to validate tokens minted
-// by testAccessCookie.
-//
-// testCookieConfig mirrors what cmd/api/main.go passes in production;
-// values don't have to match (tests don't assert on cookie attributes)
-// but the CookieConfig is part of RegisterMovieOpsTest's signature.
+// by testAccessToken.
 func setupTestRouter(h *Handler, tokens auth.TokenService, withAuth bool) *chi.Mux {
 	router := chi.NewMux()
 	router.Use(middleware.StoreRequest)
@@ -59,35 +55,20 @@ func setupTestRouter(h *Handler, tokens auth.TokenService, withAuth bool) *chi.M
 		Formats:       huma.DefaultFormats,
 		DefaultFormat: "application/json",
 	})
-	RegisterMovieOpsTest(hapi, h, tokens, testCookieConfig, withAuth)
+	RegisterMovieOpsTest(hapi, h, tokens, withAuth)
 	return router
 }
 
-// testCookieConfig is the CookieConfig passed into RegisterMovieOpsTest.
-// Same shape as the user package's testCookieConfig — values don't
-// matter for movie tests (the movie domain doesn't set cookies itself)
-// but the struct is required to satisfy the signature.
-var testCookieConfig = auth.CookieConfig{
-	Secure:        false,
-	Domain:        "",
-	AccessName:    "__Host-nyx-access",
-	RefreshName:   "__Host-nyx-refresh",
-	AccessMaxAge:  15 * time.Minute,
-	RefreshMaxAge: 7 * 24 * time.Hour,
-	SameSite:      1, // http.SameSiteLaxMode
-}
-
-// testAccessCookie mints a fresh JWT and returns it as an
-// http.Cookie ready for req.AddCookie. After L1 the cookie is the
-// only auth source the middleware reads — Authorization: Bearer is
-// intentionally ignored.
-func testAccessCookie(t *testing.T, tokens auth.TokenService) *http.Cookie {
+// testAccessToken mints a fresh JWT and returns it as a string
+// suitable for the Authorization: Bearer header. This is the only
+// auth source the middleware reads.
+func testAccessToken(t *testing.T, tokens auth.TokenService) string {
 	t.Helper()
 	tok, err := tokens.GenerateToken(1, "tester")
 	if err != nil {
 		t.Fatalf("mint test JWT: %v", err)
 	}
-	return &http.Cookie{Name: "nyx-access", Value: tok}
+	return tok
 }
 
 // newMockRepo wires a pgxmock pool through to NewRepository. The
@@ -375,7 +356,7 @@ func TestCreateMovieHandler(t *testing.T) {
 	tokens := newTestTokens(t)
 	router := setupTestRouter(h, tokens, true)
 	req, _ := http.NewRequest("POST", "/api/movies", bytes.NewBuffer(body))
-	req.AddCookie(testAccessCookie(t, tokens))
+	req.Header.Set("Authorization", "Bearer "+testAccessToken(t, tokens))
 	rr := httptest.NewRecorder()
 	router.ServeHTTP(rr, req)
 
@@ -450,7 +431,7 @@ func TestUpdateMovieHandler(t *testing.T) {
 	tokens := newTestTokens(t)
 	router := setupTestRouter(h, tokens, true)
 	req, _ := http.NewRequest("PUT", "/api/movies/1", bytes.NewBuffer(body))
-	req.AddCookie(testAccessCookie(t, tokens))
+	req.Header.Set("Authorization", "Bearer "+testAccessToken(t, tokens))
 	rr := httptest.NewRecorder()
 	router.ServeHTTP(rr, req)
 
@@ -482,7 +463,7 @@ func TestDeleteMovieHandler(t *testing.T) {
 	tokens := newTestTokens(t)
 	router := setupTestRouter(h, tokens, true)
 	req, _ := http.NewRequest("DELETE", "/api/movies/1", nil)
-	req.AddCookie(testAccessCookie(t, tokens))
+	req.Header.Set("Authorization", "Bearer "+testAccessToken(t, tokens))
 	rr := httptest.NewRecorder()
 	router.ServeHTTP(rr, req)
 
@@ -513,7 +494,7 @@ func TestUpdateMovieHandlerNotFound(t *testing.T) {
 	tokens := newTestTokens(t)
 	router := setupTestRouter(h, tokens, true)
 	req, _ := http.NewRequest("PUT", "/api/movies/999", bytes.NewBuffer(body))
-	req.AddCookie(testAccessCookie(t, tokens))
+	req.Header.Set("Authorization", "Bearer "+testAccessToken(t, tokens))
 	rr := httptest.NewRecorder()
 	router.ServeHTTP(rr, req)
 
@@ -539,7 +520,7 @@ func TestDeleteMovieHandlerNotFound(t *testing.T) {
 	tokens := newTestTokens(t)
 	router := setupTestRouter(h, tokens, true)
 	req, _ := http.NewRequest("DELETE", "/api/movies/999", nil)
-	req.AddCookie(testAccessCookie(t, tokens))
+	req.Header.Set("Authorization", "Bearer "+testAccessToken(t, tokens))
 	rr := httptest.NewRecorder()
 	router.ServeHTTP(rr, req)
 
@@ -579,7 +560,7 @@ func TestCreateMovieHandler_InternalErrorHidesInternalDetails(t *testing.T) {
 	tokens := newTestTokens(t)
 	router := setupTestRouter(h, tokens, true)
 	req, _ := http.NewRequest("POST", "/api/movies", bytes.NewBuffer(body))
-	req.AddCookie(testAccessCookie(t, tokens))
+	req.Header.Set("Authorization", "Bearer "+testAccessToken(t, tokens))
 	rr := httptest.NewRecorder()
 	router.ServeHTTP(rr, req)
 
@@ -621,7 +602,7 @@ func TestUpdateMovieHandler_InternalErrorHidesInternalDetails(t *testing.T) {
 	tokens := newTestTokens(t)
 	router := setupTestRouter(h, tokens, true)
 	req, _ := http.NewRequest("PUT", "/api/movies/1", bytes.NewBuffer(body))
-	req.AddCookie(testAccessCookie(t, tokens))
+	req.Header.Set("Authorization", "Bearer "+testAccessToken(t, tokens))
 	rr := httptest.NewRecorder()
 	router.ServeHTTP(rr, req)
 
@@ -655,7 +636,7 @@ func TestDeleteMovieHandler_InternalErrorHidesInternalDetails(t *testing.T) {
 	tokens := newTestTokens(t)
 	router := setupTestRouter(h, tokens, true)
 	req, _ := http.NewRequest("DELETE", "/api/movies/1", nil)
-	req.AddCookie(testAccessCookie(t, tokens))
+	req.Header.Set("Authorization", "Bearer "+testAccessToken(t, tokens))
 	rr := httptest.NewRecorder()
 	router.ServeHTTP(rr, req)
 

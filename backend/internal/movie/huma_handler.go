@@ -32,8 +32,8 @@ func NewHandler(service Service) *Handler {
 // flag so the middleware can read the token from the httpOnly
 // cookie first (with Authorization: Bearer as the deprecation-
 // window fallback).
-func RegisterMovieOps(api huma.API, h *Handler, tokens auth.TokenService, cookieConfig auth.CookieConfig) {
-	RegisterMovieOpsTest(api, h, tokens, cookieConfig, true)
+func RegisterMovieOps(api huma.API, h *Handler, tokens auth.TokenService) {
+	RegisterMovieOpsTest(api, h, tokens, true)
 }
 
 // RegisterMovieOpsTest is the test-friendly variant of RegisterMovieOps.
@@ -41,7 +41,7 @@ func RegisterMovieOps(api huma.API, h *Handler, tokens auth.TokenService, cookie
 // without the JWT middleware so tests can exercise the handler logic
 // without minting tokens. Production code should always call
 // RegisterMovieOps (which forces withAuth=true).
-func RegisterMovieOpsTest(api huma.API, h *Handler, tokens auth.TokenService, cookieConfig auth.CookieConfig, withAuth bool) {
+func RegisterMovieOpsTest(api huma.API, h *Handler, tokens auth.TokenService, withAuth bool) {
 	huma.Register(api, huma.Operation{
 		OperationID: "health",
 		Method:      http.MethodGet,
@@ -68,7 +68,7 @@ func RegisterMovieOpsTest(api huma.API, h *Handler, tokens auth.TokenService, co
 		Description: "Creates a new movie record. Requires a valid JWT in the Authorization header.",
 		Tags:        []string{"movies"},
 		Security:    []map[string][]string{{"BearerAuth": {}}},
-		Middlewares: protectedMiddlewares(tokens, cookieConfig, withAuth),
+		Middlewares: protectedMiddlewares(tokens, withAuth),
 	}, h.CreateMovie)
 
 	huma.Register(api, huma.Operation{
@@ -79,7 +79,7 @@ func RegisterMovieOpsTest(api huma.API, h *Handler, tokens auth.TokenService, co
 		Description: "Updates the title, description, or rating of an existing movie. Requires a valid JWT.",
 		Tags:        []string{"movies"},
 		Security:    []map[string][]string{{"BearerAuth": {}}},
-		Middlewares: protectedMiddlewares(tokens, cookieConfig, withAuth),
+		Middlewares: protectedMiddlewares(tokens, withAuth),
 	}, h.UpdateMovie)
 
 	huma.Register(api, huma.Operation{
@@ -90,22 +90,21 @@ func RegisterMovieOpsTest(api huma.API, h *Handler, tokens auth.TokenService, co
 		Description: "Soft-deletes a movie record. Requires a valid JWT.",
 		Tags:        []string{"movies"},
 		Security:    []map[string][]string{{"BearerAuth": {}}},
-		Middlewares: protectedMiddlewares(tokens, cookieConfig, withAuth),
+		Middlewares: protectedMiddlewares(tokens, withAuth),
 	}, h.DeleteMovie)
 }
 
 // protectedMiddlewares returns the per-operation middleware list for
 // the protected movie operations. With withAuth=true it builds the JWT
 // validator middleware from tokens; otherwise the list is empty so
-// tests can exercise the handler without minting tokens. cookieConfig
-// supplies the access-cookie name + Secure flag the middleware uses
-// to read the token from the __Host-nyx-access cookie (the
-// Authorization: Bearer fallback is left in place for curl/Postman).
-func protectedMiddlewares(tokens auth.TokenService, cookieConfig auth.CookieConfig, withAuth bool) huma.Middlewares {
+// tests can exercise the handler without minting tokens. The
+// validator reads Authorization: Bearer (RFC 6750) — same contract
+// as every other auth path in the API.
+func protectedMiddlewares(tokens auth.TokenService, withAuth bool) huma.Middlewares {
 	if !withAuth {
 		return nil
 	}
-	return huma.Middlewares{middleware.NewHumaAuth(tokens, cookieConfig.AccessName, cookieConfig.Secure)}
+	return huma.Middlewares{middleware.NewHumaAuth(tokens)}
 }
 
 // ---- Operation input / output structs ----

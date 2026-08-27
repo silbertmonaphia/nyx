@@ -3,6 +3,7 @@ import { renderHook, waitFor } from '@testing-library/react';
 import axios from 'axios';
 import { useAuthReconciliation } from './useAuthReconciliation';
 import { useAuthStore } from '~/store/authStore';
+import { tokenStore } from '~/services/api';
 import type { User } from '~/api/openapi';
 
 // We intentionally do NOT `vi.mock('axios')` — auto-mocking the
@@ -27,6 +28,7 @@ describe('useAuthReconciliation', () => {
     // Reset the auth store to a known shape — clear persisted
     // fields too so each test starts from "no user".
     useAuthStore.setState({ user: null, isAuthenticated: false });
+    tokenStore.clear();
     getSpy = vi.spyOn(axios, 'get');
   });
 
@@ -52,6 +54,7 @@ describe('useAuthReconciliation', () => {
     // change on the server surfaces here without a manual
     // logout/login cycle.
     useAuthStore.getState().setAuth({ user: baseUser });
+    tokenStore.setTokens('access.token', 'refresh.token');
 
     const serverTruth: User = {
       ...baseUser,
@@ -66,19 +69,26 @@ describe('useAuthReconciliation', () => {
       expect(useAuthStore.getState().user).toEqual(serverTruth);
     });
     expect(getSpy).toHaveBeenCalledTimes(1);
+    // The Bearer contract: withCredentials is gone, Authorization
+    // header is stamped when the tokenStore has an access token.
     expect(getSpy).toHaveBeenCalledWith(
-      '/api/me',
-      expect.objectContaining({ withCredentials: true }),
+      expect.stringContaining('/me'),
+      expect.objectContaining({
+        withCredentials: false,
+        headers: { Authorization: 'Bearer access.token' },
+      }),
     );
   });
 
-  it('clears the persisted user on 401 (cookies revoked)', async () => {
+  it('clears the persisted user on 401 (tokens revoked)', async () => {
     // The user was logged in server-side (e.g. an admin revoked
-    // the family) but the SPA still has a stale localStorage
-    // entry. The reconciliation probe must surface this as a
-    // logged-out UI on the next render — otherwise the SPA
-    // would keep showing a logged-in shell with no working API.
+    // the refresh family) but the SPA still has a stale
+    // localStorage entry. The reconciliation probe must surface
+    // this as a logged-out UI on the next render — otherwise the
+    // SPA would keep showing a logged-in shell with no working
+    // API.
     useAuthStore.getState().setAuth({ user: baseUser });
+    tokenStore.setTokens('access.token', 'refresh.token');
 
     const err = Object.assign(new Error('Unauthorized'), {
       response: { status: 401 },
@@ -113,7 +123,7 @@ describe('useAuthReconciliation', () => {
   });
 
   it('leaves the persisted user alone on a 5xx', async () => {
-    // Transient server failure: the cookies may still be
+    // Transient server failure: the tokens may still be
     // valid; logging the user out would be over-reaction.
     useAuthStore.getState().setAuth({ user: baseUser });
 

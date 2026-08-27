@@ -2,7 +2,6 @@ package config
 
 import (
 	"fmt"
-	"net/http"
 	"strings"
 	"time"
 
@@ -41,19 +40,6 @@ type Config struct {
 	// combining "*" with cookie-based auth is similarly unsafe; if
 	// you turn this on, audit the auth surface.
 	CORSAllowedOrigins string `mapstructure:"CORS_ALLOWED_ORIGINS"`
-
-	// Auth cookies. Defaults are deny-by-default per the project's
-	// safety convention: Secure + SameSite=Lax + __Host- prefix where
-	// the browser permits. CookieSecure=false is the dev escape hatch
-	// (localhost http) — production must keep it true. CookieDomain
-	// stays empty so the __Host- prefix remains valid; if a future
-	// deployment ever needs cross-subdomain cookies, switch the name
-	// prefix from __Host- to __Secure- and document the downgrade.
-	CookieSecure      bool   `mapstructure:"COOKIE_SECURE"`
-	CookieSameSite    string `mapstructure:"COOKIE_SAMESITE"`
-	CookieDomain      string `mapstructure:"COOKIE_DOMAIN"`
-	CookieAccessName  string `mapstructure:"COOKIE_ACCESS_NAME"`
-	CookieRefreshName string `mapstructure:"COOKIE_REFRESH_NAME"`
 
 	// OpenTelemetry — distributed tracing.
 	//
@@ -111,18 +97,12 @@ func Load() (*Config, error) {
 	// development keeps the SPA unaffected by this default.
 	viper.SetDefault("CORS_ALLOWED_ORIGINS", "")
 
-	// Cookie defaults — deny-by-default. Secure=true forces HTTPS (the
-	// browser silently drops the cookie otherwise, which is the
-	// intended fail-closed behaviour). SameSite=lax permits same-site
-	// XHR (the only traffic the SPA produces) and rejects cross-site
-	// POSTs that would carry credentials. CookieDomain stays empty so
-	// the __Host- name prefix remains valid; production should not
-	// override it without also switching the prefix to __Secure-.
-	viper.SetDefault("COOKIE_SECURE", true)
-	viper.SetDefault("COOKIE_SAMESITE", "lax")
-	viper.SetDefault("COOKIE_DOMAIN", "")
-	viper.SetDefault("COOKIE_ACCESS_NAME", "__Host-nyx-access")
-	viper.SetDefault("COOKIE_REFRESH_NAME", "__Host-nyx-refresh")
+	// Cookie-based auth was retired in favour of Bearer tokens (see
+	// FUTURE.md §4). The legacy COOKIE_* env vars are no longer
+	// consumed — they would silently produce zero values if a stale
+	// deployment kept them in its env file. The startup does not
+	// fail-closed on this; operators should drop the stale vars when
+	// upgrading.
 
 	// OpenTelemetry tracing defaults. Disabled by default — every
 	// tracer.Start becomes a no-op and unit tests / testcontainers
@@ -145,8 +125,6 @@ func Load() (*Config, error) {
 		"DB_CONN_MAX_LIFETIME", "DB_CONN_MAX_IDLE_TIME",
 		"REDIS_URL", "REDIS_ENABLED", "CACHE_TTL",
 		"CORS_ALLOWED_ORIGINS",
-		"COOKIE_SECURE", "COOKIE_SAMESITE", "COOKIE_DOMAIN",
-		"COOKIE_ACCESS_NAME", "COOKIE_REFRESH_NAME",
 		"OTEL_ENABLED", "OTEL_SERVICE_NAME",
 		"OTEL_EXPORTER_OTLP_ENDPOINT",
 	} {
@@ -213,60 +191,5 @@ func Load() (*Config, error) {
 		return nil, fmt.Errorf("JWT_SECRET must be at least %d bytes", auth.MinSecretBytes)
 	}
 
-	// Cookie SameSite validation. Unknown values would silently break
-	// session continuity because Go's http.SameSite defaults to 0 (no
-	// SameSite attribute), so refuse anything other than the four
-	// documented values.
-	switch strings.ToLower(cfg.CookieSameSite) {
-	case "lax", "strict", "none", "":
-		// ok — empty string means "default to lax" downstream
-	default:
-		return nil, fmt.Errorf("COOKIE_SAMESITE must be one of lax, strict, none (got %q)", cfg.CookieSameSite)
-	}
-	// Cross-field: SameSite=None requires Secure, otherwise the browser
-	// refuses to set the cookie. Document this constraint loudly so
-	// misconfiguration fails closed at startup.
-	if strings.EqualFold(cfg.CookieSameSite, "none") && !cfg.CookieSecure {
-		return nil, fmt.Errorf("COOKIE_SECURE must be true when COOKIE_SAMESITE=none")
-	}
-
 	return &cfg, nil
-}
-
-// CookieSettings resolves the parsed same-site value once so handlers
-// don't re-parse on every request. The returned struct is the single
-// source of truth for cookie attributes; the auth/cookies.go helper
-// consumes it directly.
-func (c *Config) CookieSettings() auth.CookieConfig {
-	return auth.CookieConfig{
-		Secure:        c.CookieSecure,
-		Domain:        c.CookieDomain,
-		AccessName:    c.CookieAccessName,
-		RefreshName:   c.CookieRefreshName,
-		AccessMaxAge:  mustDuration(c.JWTAccessTTL),
-		RefreshMaxAge: mustDuration(c.JWTRefreshTTL),
-		SameSite:      parseSameSite(c.CookieSameSite),
-	}
-}
-
-func parseSameSite(s string) http.SameSite {
-	switch strings.ToLower(s) {
-	case "strict":
-		return http.SameSiteStrictMode
-	case "none":
-		return http.SameSiteNoneMode
-	default:
-		return http.SameSiteLaxMode
-	}
-}
-
-func mustDuration(s string) time.Duration {
-	d, err := time.ParseDuration(s)
-	if err != nil {
-		// config.Load already validated these; if we get here it's a
-		// programming error (e.g. calling CookieSettings on a Config
-		// built without Load).
-		panic(fmt.Sprintf("invalid duration %q: %v", s, err))
-	}
-	return d
 }

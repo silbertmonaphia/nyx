@@ -80,25 +80,10 @@ func generateSpec() ([]byte, error) {
 
 	humaAPI := humachi.New(chi.NewRouter(), api.HumaConfig())
 
-	// cookieCfg mirrors what cmd/api/main.go feeds config.Load().
-	// Registration only reads struct tags so the values here never
-	// need to match production — but the CookieConfig is part of the
-	// NewHandler / RegisterUserOps / RegisterMovieOps signatures, so
-	// any value satisfies the compiler. Production defaults are the
-	// safe choice.
-	cookieCfg := auth.CookieConfig{
-		Secure:       true,
-		Domain:       "",
-		AccessName:   "__Host-nyx-access",
-		RefreshName:  "__Host-nyx-refresh",
-		SameSite:     1, // http.SameSiteLaxMode
-		AccessMaxAge: 15 * time.Minute,
-	}
-
 	// nil services: registration only reads struct tags, the handler
 	// funcs are never called.
-	movie.RegisterMovieOps(humaAPI, movie.NewHandler(nil), tokens, cookieCfg)
-	user.RegisterUserOps(humaAPI, user.NewHandler(nil, cookieCfg), tokens, cookieCfg)
+	movie.RegisterMovieOps(humaAPI, movie.NewHandler(nil), tokens)
+	user.RegisterUserOps(humaAPI, user.NewHandler(nil), tokens)
 
 	b, err := json.MarshalIndent(humaAPI.OpenAPI(), "", "  ")
 	if err != nil {

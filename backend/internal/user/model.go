@@ -33,24 +33,37 @@ type LoginRequest struct {
 }
 
 // AuthResponse is the JSON envelope returned by Login, Register, and
-// Refresh. Tokens are NOT in the body — they ride in httpOnly
-// __Host- cookies set by the handler (see auth.SetAuthCookies). The
-// body carries only the user profile and the access-token expiry so
-// the SPA can show "logged in as X" and decide when to pre-emptively
-// refresh. The wire shape is intentionally narrower than the gin-era
-// envelope; clients that previously read Token/RefreshToken must
-// rely on cookie auto-attachment instead.
+// Refresh. Tokens ride in the BODY (RFC 6750 Bearer transport) — not
+// in cookies — so native clients (iOS, Android, Unity / Unreal game
+// binaries, console SDKs) can speak the same wire contract as the
+// SPA. The browser SPA uses Authorization: Bearer on every request
+// the same way it would with any third-party API; the token store
+// keeps the access token in memory and the refresh token alongside
+// it (see frontend/src/services/api.ts). Native clients persist to
+// platform-secure storage (Keychain / Keystore / Windows Credential
+// Manager / platform SDK save data).
+//
+// TokenType is always "Bearer" — included for forward-compatibility
+// with clients that switch transports later. ExpiresAt is duplicated
+// from the JWT's exp claim so clients can drive pre-expiry refresh
+// without parsing the token.
 type AuthResponse struct {
-	ExpiresAt time.Time `json:"expires_at,omitempty"`
-	User      User      `json:"user"`
+	AccessToken  string    `json:"access_token"`
+	RefreshToken string    `json:"refresh_token"`
+	TokenType    string    `json:"token_type" example:"Bearer"`
+	ExpiresAt    time.Time `json:"expires_at,omitempty"`
+	User         User      `json:"user"`
 }
 
-// RefreshRequest / LogoutRequest now carry no body. The opaque
-// refresh token rides in the __Host-nyx-refresh cookie; the handler
-// reads it via auth.RefreshTokenFromCookie before invoking the
-// service. huma's empty-body schema validates fine — the request
-// type exists only to give huma something to bind against so the
-// operation registers cleanly.
-type RefreshRequest struct{}
+// RefreshRequest / LogoutRequest carry the refresh token in the
+// request body (was previously a __Host-nyx-refresh cookie). The
+// required:"true" tag drives huma's automatic 400 response on a
+// missing or empty field — the handler never sees a malformed
+// payload.
+type RefreshRequest struct {
+	RefreshToken string `json:"refresh_token" required:"true"`
+}
 
-type LogoutRequest struct{}
+type LogoutRequest struct {
+	RefreshToken string `json:"refresh_token" required:"true"`
+}

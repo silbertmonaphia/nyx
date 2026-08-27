@@ -74,30 +74,37 @@ describe('useAuthStore', () => {
       expect(state.isAuthenticated).toBe(false);
     });
 
-    it('POSTs to /api/logout with withCredentials so the cookie clears', async () => {
-      // SECURITY.md M8: the bare axios instance must carry
-      // baseURL='/api' so the logout hits the backend proxy
-      // instead of the SPA's own origin.
+    it('POSTs to /api/logout with the refresh token in the body (Bearer)', async () => {
+      // Post-Bearer: logout fires the bare-axios POST carrying the
+      // refresh_token in the body so the backend can revoke exactly
+      // that row. The baseURL is the same VITE_API_URL the wrapped
+      // client uses so dev / prod land on the right host. There is
+      // no withCredentials — Bearer tokens ride on the body, not
+      // cookies.
+      const { tokenStore } = await import('~/services/api');
+      tokenStore.setTokens('access.token', 'refresh.token');
+
       useAuthStore.getState().logout();
 
       // The fire-and-forget POST is unobserved — flush the
-      // microtask queue so the assertion runs after the call.
+      // microtask queue so the assertion runs after the logout
+      // synchronously stamps the body and posts.
+      await Promise.resolve();
       await Promise.resolve();
 
       expect(postSpy).toHaveBeenCalledTimes(1);
       const [url, body] = postSpy.mock.calls[0];
-      // The relative URL combines with the instance's baseURL='/api'
-      // to hit the backend proxy. Pinning the baseURL separately
-      // below covers the M8 fix in full.
       expect(url).toBe('/logout');
-      // The empty body matches the backend's LogoutRequest shape.
-      expect(body).toEqual({});
+      // Body carries the refresh token so the backend can revoke
+      // exactly that row (SECURITY.md M1 — per-session, not
+      // family-wide).
+      expect(body).toEqual({ refresh_token: 'refresh.token' });
 
-      // withCredentials lives on the instance defaults (set via
-      // axios.create), not the per-call config. Pin it there so
-      // a future refactor can't drop the cookie ride silently.
-      expect(loginAxios.defaults.withCredentials).toBe(true);
-      expect(loginAxios.defaults.baseURL).toBe('/api');
+      // Bearer transport: no withCredentials, no cookies.
+      expect(loginAxios.defaults.withCredentials).toBe(false);
+      expect(loginAxios.defaults.baseURL).toBe(
+        import.meta.env.VITE_API_URL || 'http://localhost:8080/api',
+      );
     });
   });
 

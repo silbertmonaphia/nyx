@@ -75,10 +75,10 @@ func TestAuth_InvalidTokenHidesInternalDetails(t *testing.T) {
 		w.WriteHeader(http.StatusOK)
 	})
 
-	handler := NewAuth(tokens, "__Host-nyx-access", true)(downstream)
+	handler := NewAuth(tokens)(downstream)
 
 	req := httptest.NewRequest(http.MethodGet, "/x", nil)
-	req.AddCookie(&http.Cookie{Name: "__Host-nyx-access", Value: "abc.def.ghi"})
+	req.Header.Set("Authorization", "Bearer abc.def.ghi")
 	req = newCtxWithReqID(req, "req-stdlib")
 	rr := httptest.NewRecorder()
 	handler.ServeHTTP(rr, req)
@@ -127,10 +127,10 @@ func TestAuth_ExpiredTokenSetsExpiredChallenge(t *testing.T) {
 		t.Error("downstream handler must not be reached on expired token")
 		w.WriteHeader(http.StatusOK)
 	})
-	handler := NewAuth(tokens, "__Host-nyx-access", true)(downstream)
+	handler := NewAuth(tokens)(downstream)
 
 	req := httptest.NewRequest(http.MethodGet, "/x", nil)
-	req.AddCookie(&http.Cookie{Name: "__Host-nyx-access", Value: "expired.jwt.token"})
+	req.Header.Set("Authorization", "Bearer expired.jwt.token")
 	rr := httptest.NewRecorder()
 	handler.ServeHTTP(rr, req)
 
@@ -163,10 +163,10 @@ func TestAuth_InvalidTokenSetsBareChallenge(t *testing.T) {
 		t.Error("downstream handler must not be reached on invalid token")
 		w.WriteHeader(http.StatusOK)
 	})
-	handler := NewAuth(tokens, "__Host-nyx-access", true)(downstream)
+	handler := NewAuth(tokens)(downstream)
 
 	req := httptest.NewRequest(http.MethodGet, "/x", nil)
-	req.AddCookie(&http.Cookie{Name: "__Host-nyx-access", Value: "garbage"})
+	req.Header.Set("Authorization", "Bearer garbage")
 	rr := httptest.NewRecorder()
 	handler.ServeHTTP(rr, req)
 
@@ -186,32 +186,78 @@ func TestAuth_InvalidTokenSetsBareChallenge(t *testing.T) {
 	}
 }
 
-// TestAuth_BearerHeaderIgnored pins L1: the Authorization: Bearer
-// header is no longer accepted. Cookie rollout is complete and
-// leaving the fallback in place would re-open the door to
-// credential-leak headers on shared infrastructure. A request that
-// supplies only a Bearer token (no cookie) must be rejected as
-// unauthenticated.
-func TestAuth_BearerHeaderIgnored(t *testing.T) {
-	// stubTokens.ValidateToken would error on a garbage string;
-	// that's fine — we never reach ValidateToken because the
-	// cookie read returns false first.
-	tokens := &stubTokens{validateErr: errors.New("should not be called")}
+// TestAuth_BearerHeaderAccepted pins the Bearer-on-the-wire contract:
+// when a request carries a syntactically valid Authorization header
+// and ValidateToken succeeds, the downstream handler runs and the
+// response is the handler's, not a 401. This replaces the previous
+// "Bearer ignored" test — cookies have been retired in favour of
+// Bearer so the SPA, native mobile, and game clients can share the
+// same wire contract.
+func TestAuth_BearerHeaderAccepted(t *testing.T) {
+	// happyTokens returns a valid Claims with no error.
+	tokens := &happyTokens{}
 
-	downstream := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		t.Error("downstream handler must not be reached when only a Bearer header is supplied")
-		w.WriteHeader(http.StatusOK)
+	downstreamCalled := false
+	downstream := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		downstreamCalled = true
+		// Verify the claims were stamped on the context — downstream
+		// handlers depend on this for user identity.
+		if uid := reqctx.UserIDFromContext(r.Context()); uid != 42 {
+			t.Errorf("reqctx.UserIDFromContext = %d, want 42", uid)
+		}
+		if name := reqctx.UsernameFromContext(r.Context()); name != "alice" {
+			t.Errorf("reqctx.UsernameFromContext = %q, want alice", name)
+		}
+		w.WriteHeader(http.StatusNoContent)
 	})
-	handler := NewAuth(tokens, "__Host-nyx-access", true)(downstream)
+
+	handler := NewAuth(tokens)(downstream)
 
 	req := httptest.NewRequest(http.MethodGet, "/x", nil)
-	req.Header.Set("Authorization", "Bearer leaked-token-from-log")
+	req.Header.Set("Authorization", "Bearer valid.jwt.token")
 	rr := httptest.NewRecorder()
 	handler.ServeHTTP(rr, req)
 
+	if !downstreamCalled {
+		t.Fatal("downstream handler must run when Bearer is valid")
+	}
+	if rr.Code != http.StatusNoContent {
+		t.Fatalf("status = %d, want 204; body=%s", rr.Code, rr.Body.String())
+	}
+	if got := rr.Header().Get("WWW-Authenticate"); got != "" {
+		t.Errorf("WWW-Authenticate = %q, want empty on success", got)
+	}
+}
+
+// TestAuth_MissingAuthorizationReturns401 pins the "no credential"
+// failure path. A request without an Authorization header must be
+// rejected as unauthenticated with the bare Bearer challenge. This
+// is what cross-origin clients see if they forget to stamp the
+// header, and what the SPA sees on cold start before /api/refresh
+// has produced a token.
+func TestAuth_MissingAuthorizationReturns401(t *testing.T) {
+	tokens := &happyTokens{}
+
+	downstreamCalled := false
+	downstream := http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		downstreamCalled = true
+	})
+
+	handler := NewAuth(tokens)(downstream)
+	req := httptest.NewRequest(http.MethodGet, "/x", nil)
+	rr := httptest.NewRecorder()
+	handler.ServeHTTP(rr, req)
+
+	if downstreamCalled {
+		t.Error("downstream handler must not run without Authorization header")
+	}
 	if rr.Code != http.StatusUnauthorized {
 		t.Fatalf("status = %d, want 401; body=%s", rr.Code, rr.Body.String())
 	}
+	if got := rr.Header().Get("WWW-Authenticate"); got != `Bearer error="invalid_token"` {
+		t.Errorf("WWW-Authenticate = %q, want %q", got, `Bearer error="invalid_token"`)
+	}
+
 	var env platapi.ErrorResponse
 	if err := json.Unmarshal(rr.Body.Bytes(), &env); err != nil {
 		t.Fatalf("unmarshal envelope: %v; body=%s", err, rr.Body.String())
@@ -219,6 +265,59 @@ func TestAuth_BearerHeaderIgnored(t *testing.T) {
 	if env.Message != "Authentication required" {
 		t.Errorf("envelope.error = %q, want %q", env.Message, "Authentication required")
 	}
+}
+
+// TestAuth_MalformedBearerReturns401 pins the "wrong scheme / empty
+// token" path. A header that carries something other than "Bearer"
+// (e.g. "Token xyz", "Basic xyz") or a "Bearer " with no token must
+// be rejected as unauthenticated — only RFC 6750's Bearer scheme is
+// accepted. Hand-rolled clients and old curl invocations are the
+// usual sources of these mistakes; the bare challenge tells the
+// caller the contract is Bearer-only.
+func TestAuth_MalformedBearerReturns401(t *testing.T) {
+	cases := []struct {
+		name  string
+		value string
+	}{
+		{"wrong scheme", "Token xyz"},
+		{"basic scheme", "Basic dXNlcjpwYXNz"},
+		{"empty bearer", "Bearer "},
+		{"bare bearer no space", "Bearer"},
+	}
+	tokens := &happyTokens{}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			downstream := http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+				t.Error("downstream must not run on malformed Authorization")
+			})
+			handler := NewAuth(tokens)(downstream)
+
+			req := httptest.NewRequest(http.MethodGet, "/x", nil)
+			req.Header.Set("Authorization", tc.value)
+			rr := httptest.NewRecorder()
+			handler.ServeHTTP(rr, req)
+
+			if rr.Code != http.StatusUnauthorized {
+				t.Fatalf("status = %d, want 401; body=%s", rr.Code, rr.Body.String())
+			}
+			if got := rr.Header().Get("WWW-Authenticate"); got != `Bearer error="invalid_token"` {
+				t.Errorf("WWW-Authenticate = %q, want bare invalid_token challenge", got)
+			}
+		})
+	}
+}
+
+// happyTokens is a TokenService that always succeeds. Used by tests
+// that don't care about JWT parsing internals — they only assert the
+// middleware's routing of valid vs invalid credentials.
+type happyTokens struct{}
+
+func (h *happyTokens) GenerateToken(int, string) (string, error) {
+	return "", errors.New("not used in these tests")
+}
+func (h *happyTokens) ValidateToken(string) (*auth.Claims, error) {
+	return &auth.Claims{UserID: 42, Username: "alice"}, nil
 }
 
 // ---- Huma-shaped auth middleware ----
@@ -257,14 +356,14 @@ func TestHumaAuth_InvalidTokenHidesInternalDetails(t *testing.T) {
 		OperationID: "guarded",
 		Method:      http.MethodGet,
 		Path:        "/guarded",
-		Middlewares: huma.Middlewares{NewHumaAuth(tokens, "__Host-nyx-access", true)},
+		Middlewares: huma.Middlewares{NewHumaAuth(tokens)},
 	}, func(_ context.Context, _ *struct{}) (*struct{}, error) {
 		hit = true
 		return &struct{}{}, nil
 	})
 
 	req := httptest.NewRequest(http.MethodGet, "/guarded", nil)
-	req.AddCookie(&http.Cookie{Name: "__Host-nyx-access", Value: "abc.def.ghi"})
+	req.Header.Set("Authorization", "Bearer abc.def.ghi")
 	req = newCtxWithReqID(req, "req-huma")
 	rr := httptest.NewRecorder()
 	router.ServeHTTP(rr, req)
@@ -320,14 +419,14 @@ func TestHumaAuth_ExpiredTokenSetsExpiredChallenge(t *testing.T) {
 		OperationID: "guarded",
 		Method:      http.MethodGet,
 		Path:        "/guarded",
-		Middlewares: huma.Middlewares{NewHumaAuth(tokens, "__Host-nyx-access", true)},
+		Middlewares: huma.Middlewares{NewHumaAuth(tokens)},
 	}, func(_ context.Context, _ *struct{}) (*struct{}, error) {
 		hit = true
 		return &struct{}{}, nil
 	})
 
 	req := httptest.NewRequest(http.MethodGet, "/guarded", nil)
-	req.AddCookie(&http.Cookie{Name: "__Host-nyx-access", Value: "expired.jwt.token"})
+	req.Header.Set("Authorization", "Bearer expired.jwt.token")
 	rr := httptest.NewRecorder()
 	router.ServeHTTP(rr, req)
 

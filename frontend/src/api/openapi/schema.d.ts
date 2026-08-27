@@ -35,7 +35,7 @@ export interface paths {
         put?: never;
         /**
          * Login a user
-         * @description Authenticate a user by username + password. Sets __Host-nyx-access and __Host-nyx-refresh httpOnly cookies; the JSON body contains only the user profile.
+         * @description Authenticate a user by username + password. The response body carries the access token, refresh token, token type, expiry, and user profile.
          */
         post: operations["login"];
         delete?: never;
@@ -55,9 +55,29 @@ export interface paths {
         put?: never;
         /**
          * Logout a user
-         * @description Revoke the refresh token family identified by the __Host-nyx-refresh cookie. Requires a valid access token (cookie or Authorization header). Returns 204 and clears both auth cookies.
+         * @description Revoke the refresh token identified in the request body. Requires a valid access token in the Authorization header. Returns 204.
          */
         post: operations["logout"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/me": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get current user
+         * @description Return the profile of the authenticated user (the access token's subject). Used by the SPA to reconcile its persisted user on every page load.
+         */
+        get: operations["me"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -123,7 +143,7 @@ export interface paths {
         put?: never;
         /**
          * Refresh access token
-         * @description Exchange a valid refresh cookie for a fresh access + refresh pair. Returns 401 on invalid / expired / reused tokens; reuse triggers family-wide revocation. Both cookies are re-issued.
+         * @description Exchange a valid refresh token (in the request body) for a fresh access + refresh pair. Returns 401 on invalid / expired / reused tokens; reuse triggers family-wide revocation.
          */
         post: operations["refresh"];
         delete?: never;
@@ -143,7 +163,7 @@ export interface paths {
         put?: never;
         /**
          * Register a user
-         * @description Create a new user account. Returns 409 when the username or email is already taken. Sets __Host-nyx-access and __Host-nyx-refresh httpOnly cookies via Set-Cookie headers.
+         * @description Create a new user account. Returns 409 when the username or email is already taken. The response body carries the access token, refresh token, token type, expiry, and user profile — clients store the tokens themselves.
          */
         post: operations["register"];
         delete?: never;
@@ -157,8 +177,12 @@ export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
         AuthResponse: {
+            access_token: string;
             /** Format: date-time */
             expires_at?: string;
+            refresh_token: string;
+            /** @example Bearer */
+            token_type: string;
             user: components["schemas"]["User"];
         };
         ErrorResponse: {
@@ -188,7 +212,9 @@ export interface components {
             password: string;
             username: string;
         };
-        LogoutRequest: Record<string, never>;
+        LogoutRequest: {
+            refresh_token: string;
+        };
         Movie: {
             /** Format: date-time */
             created_at: string;
@@ -223,7 +249,9 @@ export interface components {
              */
             total: number;
         };
-        RefreshRequest: Record<string, never>;
+        RefreshRequest: {
+            refresh_token: string;
+        };
         RegisterRequest: {
             /** Format: email */
             email: string;
@@ -296,7 +324,6 @@ export interface operations {
             /** @description OK */
             200: {
                 headers: {
-                    "Set-Cookie"?: string;
                     [name: string]: unknown;
                 };
                 content: {
@@ -330,10 +357,38 @@ export interface operations {
             /** @description No Content */
             204: {
                 headers: {
-                    "Set-Cookie"?: string;
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    me: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["User"];
+                };
             };
             /** @description Error */
             default: {
@@ -495,7 +550,6 @@ export interface operations {
             /** @description OK */
             200: {
                 headers: {
-                    "Set-Cookie"?: string;
                     [name: string]: unknown;
                 };
                 content: {
@@ -529,7 +583,6 @@ export interface operations {
             /** @description OK */
             200: {
                 headers: {
-                    "Set-Cookie"?: string;
                     [name: string]: unknown;
                 };
                 content: {

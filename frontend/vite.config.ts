@@ -52,21 +52,12 @@ export default defineConfig({
       },
     },
   },
-  // Same-origin proxy for the API: every /api/* request from the SPA
-  // is forwarded to the backend container. This makes dev match prod
-  // (k8s ingress already does this) so httpOnly __Host- cookies work
-  // identically in both environments. Without this, the SPA would
-  // call the API on a different origin (localhost:8080 vs :5173) and
-  // the browser would refuse to attach the cookies on cross-site
-  // XHR.
-  server: {
-    proxy: {
-      "/api": {
-        target: "http://localhost:8080",
-        changeOrigin: false,
-      },
-    },
-  },
+  // No `/api` dev proxy anymore — the SPA now hits the backend
+  // directly via VITE_API_URL and the browser handles the CORS
+  // preflight. Same-origin proxying would re-introduce cookie
+  // semantics; Bearer tokens don't need it. Devs see the same
+  // cross-origin XHR / preflight round-trips production sees,
+  // which makes dev a more faithful predictor of prod.
   test: {
     globals: true,
     environment: "jsdom",

@@ -13,34 +13,29 @@ import (
 )
 
 // Handler exposes user/auth domain operations. It is constructed in
-// main.go from a Service + CookieConfig and registered onto a huma
-// API via RegisterUserOps. cookies carries the cookie attributes
-// every auth handler needs to Set / Clear — centralising the lookup
-// in Handler keeps SetAuthCookies / ClearAuthCookies out of the
-// individual handler bodies.
+// main.go from a Service and registered onto a huma API via
+// RegisterUserOps. No cookie plumbing — auth state rides in the
+// request body on login/refresh/logout and in the Authorization
+// header on protected routes.
 type Handler struct {
 	service Service
-	cookies auth.CookieConfig
 }
 
-func NewHandler(service Service, cookies auth.CookieConfig) *Handler {
-	return &Handler{service: service, cookies: cookies}
+func NewHandler(service Service) *Handler {
+	return &Handler{service: service}
 }
 
 // RegisterUserOps wires the user endpoints onto a huma API. The
 // register/refresh routes are public — no Middlewares — so the
 // existing rate-limit cap is the only upstream gate. The /api/logout
 // route is auth-required: callers must already hold a valid access
-// token (in the __Host-nyx-access cookie OR, during the rollout
-// window, in the Authorization header), and the handler revokes the
-// entire refresh-token family identified by the __Host-nyx-refresh
-// cookie.
+// token in the Authorization header, and the handler revokes the
+// refresh-token row identified by the refresh_token in the body.
 //
-// tokens is threaded through to attach middleware.NewHumaAuth to the
-// protected logout operation. cookies is the shared CookieConfig
-// every handler needs.
-func RegisterUserOps(api huma.API, h *Handler, tokens auth.TokenService, cookies auth.CookieConfig) {
-	RegisterUserOpsTest(api, h, tokens, cookies)
+// tokens is threaded through to attach middleware.NewHumaAuth to
+// the protected logout and me operations.
+func RegisterUserOps(api huma.API, h *Handler, tokens auth.TokenService) {
+	RegisterUserOpsTest(api, h, tokens)
 }
 
 // RegisterUserOpsTest registers the same operations as RegisterUserOps.
@@ -49,13 +44,13 @@ func RegisterUserOps(api huma.API, h *Handler, tokens auth.TokenService, cookies
 // RegisterMovieOpsTest). Unlike movie there is no `withAuth` flag:
 // register, login, and refresh are public by design, so there is no
 // JWT middleware to toggle. Logout is always auth-required.
-func RegisterUserOpsTest(api huma.API, h *Handler, tokens auth.TokenService, cookies auth.CookieConfig) {
+func RegisterUserOpsTest(api huma.API, h *Handler, tokens auth.TokenService) {
 	huma.Register(api, huma.Operation{
 		OperationID: "register",
 		Method:      http.MethodPost,
 		Path:        "/api/register",
 		Summary:     "Register a user",
-		Description: "Create a new user account. Returns 409 when the username or email is already taken. Sets __Host-nyx-access and __Host-nyx-refresh httpOnly cookies via Set-Cookie headers.",
+		Description: "Create a new user account. Returns 409 when the username or email is already taken. The response body carries the access token, refresh token, token type, expiry, and user profile — clients store the tokens themselves.",
 		Tags:        []string{"auth"},
 		// Per-route tighter rate limit so a credential-stuffing or
 		// account-enumeration flood can't share the global IP
@@ -68,7 +63,7 @@ func RegisterUserOpsTest(api huma.API, h *Handler, tokens auth.TokenService, coo
 		Method:      http.MethodPost,
 		Path:        "/api/login",
 		Summary:     "Login a user",
-		Description: "Authenticate a user by username + password. Sets __Host-nyx-access and __Host-nyx-refresh httpOnly cookies; the JSON body contains only the user profile.",
+		Description: "Authenticate a user by username + password. The response body carries the access token, refresh token, token type, expiry, and user profile.",
 		Tags:        []string{"auth"},
 		// Same per-route limiter as register — login is the higher-
 		// value target so the cap matters more here than there.
@@ -76,38 +71,36 @@ func RegisterUserOpsTest(api huma.API, h *Handler, tokens auth.TokenService, coo
 	}, h.Login)
 
 	// /api/refresh is public: it does not require an access token.
-	// The __Host-nyx-refresh cookie carries the credential. We rotate
-	// the family and re-issue both cookies in the response.
+	// The refresh token rides in the request body; the handler
+	// rotates the family and re-issues a fresh pair in the
+	// response body.
 	huma.Register(api, huma.Operation{
 		OperationID: "refresh",
 		Method:      http.MethodPost,
 		Path:        "/api/refresh",
 		Summary:     "Refresh access token",
-		Description: "Exchange a valid refresh cookie for a fresh access + refresh pair. Returns 401 on invalid / expired / reused tokens; reuse triggers family-wide revocation. Both cookies are re-issued.",
+		Description: "Exchange a valid refresh token (in the request body) for a fresh access + refresh pair. Returns 401 on invalid / expired / reused tokens; reuse triggers family-wide revocation.",
 		Tags:        []string{"auth"},
 	}, h.Refresh)
 
 	// /api/logout IS auth-required: the middleware enforces a valid
-	// access cookie (or Authorization header during the rollout
-	// window). The __Host-nyx-refresh cookie carries the family we
-	// revoke. Returns 204 and clears both auth cookies.
+	// Authorization: Bearer header. The refresh_token in the body
+	// identifies the single refresh-token row we revoke
+	// (per-session — other devices stay logged in, see SECURITY.md M1).
 	huma.Register(api, huma.Operation{
 		OperationID: "logout",
 		Method:      http.MethodPost,
 		Path:        "/api/logout",
 		Summary:     "Logout a user",
-		Description: "Revoke the refresh token family identified by the __Host-nyx-refresh cookie. Requires a valid access token (cookie or Authorization header). Returns 204 and clears both auth cookies.",
+		Description: "Revoke the refresh token identified in the request body. Requires a valid access token in the Authorization header. Returns 204.",
 		Tags:        []string{"auth"},
 		Security:    []map[string][]string{{"BearerAuth": {}}},
-		Middlewares: huma.Middlewares{middleware.NewHumaAuth(tokens, cookies.AccessName, cookies.Secure)},
+		Middlewares: huma.Middlewares{middleware.NewHumaAuth(tokens)},
 	}, h.Logout)
 
 	// /api/me returns the profile of the access token's subject.
 	// The SPA fires this on every page load so its persisted
-	// localStorage user can be reconciled against the server-truth
-	// (SECURITY.md L7). The same auth middleware as logout enforces
-	// a valid access token — without one, the persisted profile
-	// could be returned to anyone with a stale localStorage entry.
+	// user can be reconciled against the server-truth (SECURITY.md L7).
 	huma.Register(api, huma.Operation{
 		OperationID: "me",
 		Method:      http.MethodGet,
@@ -116,7 +109,7 @@ func RegisterUserOpsTest(api huma.API, h *Handler, tokens auth.TokenService, coo
 		Description: "Return the profile of the authenticated user (the access token's subject). Used by the SPA to reconcile its persisted user on every page load.",
 		Tags:        []string{"auth"},
 		Security:    []map[string][]string{{"BearerAuth": {}}},
-		Middlewares: huma.Middlewares{middleware.NewHumaAuth(tokens, cookies.AccessName, cookies.Secure)},
+		Middlewares: huma.Middlewares{middleware.NewHumaAuth(tokens)},
 	}, h.Me)
 }
 
@@ -124,55 +117,48 @@ func RegisterUserOpsTest(api huma.API, h *Handler, tokens auth.TokenService, coo
 
 type registerInput struct{ Body RegisterRequest }
 
-// registerOutput carries both the JSON body and the two Set-Cookie
-// headers. huma emits []string tagged `header:"Set-Cookie"` as one
-// header per slice element (via AppendHeader), so the browser
-// stores both cookies.
+// registerOutput carries the JSON body — the access token, refresh
+// token, token type, expiry, and user profile. No Set-Cookie
+// headers; clients store the tokens themselves and stamp them on
+// subsequent requests via Authorization: Bearer.
 type registerOutput struct {
-	Status    int          `status:"201"`
-	SetCookie []string     `header:"Set-Cookie"`
-	Body      AuthResponse `nullable:"false"`
+	Status int          `status:"201"`
+	Body   AuthResponse `nullable:"false"`
 }
 
 type loginInput struct{ Body LoginRequest }
 
 type loginOutput struct {
-	SetCookie []string     `header:"Set-Cookie"`
-	Body      AuthResponse `nullable:"false"`
-	// 200 is the default; huma uses DefaultStatus unless overridden.
+	Body AuthResponse `nullable:"false"`
 }
 
-// refreshInput has an empty body — the refresh token rides in the
-// __Host-nyx-refresh cookie.
+// refreshInput carries the refresh token in the body — the same
+// Bearer contract as every other auth surface.
 type refreshInput struct{ Body RefreshRequest }
 
-// refreshOutput deliberately returns the same AuthResponse shape as
-// login/register, plus re-issued Set-Cookie headers. Clients treat
-// /api/refresh as a credential-exchange endpoint — they don't care
-// that the underlying row was rotated, just that the cookies are
-// fresh.
+// refreshOutput returns the same AuthResponse shape as
+// login/register. Clients treat /api/refresh as a credential-
+// exchange endpoint — they don't care that the underlying row was
+// rotated, just that the new pair is in the body.
 type refreshOutput struct {
-	SetCookie []string     `header:"Set-Cookie"`
-	Body      AuthResponse `nullable:"false"`
+	Body AuthResponse `nullable:"false"`
 }
 
-// logoutInput has an empty body — the refresh token rides in the
-// __Host-nyx-refresh cookie.
+// logoutInput carries the refresh token in the body so the handler
+// can revoke exactly that row.
 type logoutInput struct{ Body LogoutRequest }
 
-// logoutOutput carries the Set-Cookie clears (Max-Age=0) and the
-// 204 status. With only Status set on the JSON envelope, huma
-// generates a 204 response with no content schema (mirroring
+// logoutOutput returns 204 with no body. With only Status set,
+// huma generates a 204 response with no content schema (mirroring
 // deleteMovieOutput in internal/movie/huma_handler.go).
 type logoutOutput struct {
-	Status    int      `status:"204"`
-	SetCookie []string `header:"Set-Cookie"`
+	Status int `status:"204"`
 }
 
-// meOutput returns just the user profile — no cookies, no
-// ExpiresAt, no token fields. The body shape matches what the
-// SPA already consumes from login/register/refresh so the
-// frontend can drop it straight into the authStore. SECURITY.md L7.
+// meOutput returns just the user profile — no tokens, no
+// ExpiresAt. The body shape matches what the SPA already consumes
+// from login/register/refresh so the frontend can drop it straight
+// into the authStore. SECURITY.md L7.
 type meOutput struct {
 	Body User `nullable:"false"`
 }
@@ -185,9 +171,8 @@ func (h *Handler) Register(ctx context.Context, in *registerInput) (*registerOut
 		return nil, api.MapError(ctx, err, "Failed to register user")
 	}
 	return &registerOutput{
-		Status:    http.StatusCreated,
-		SetCookie: issueSetCookieStrings(res, h.cookies),
-		Body:      res.toResponse(),
+		Status: http.StatusCreated,
+		Body:   res.toResponse(),
 	}, nil
 }
 
@@ -196,10 +181,7 @@ func (h *Handler) Login(ctx context.Context, in *loginInput) (*loginOutput, erro
 	if err != nil {
 		return nil, api.MapError(ctx, err, "Failed to login")
 	}
-	return &loginOutput{
-		SetCookie: issueSetCookieStrings(res, h.cookies),
-		Body:      res.toResponse(),
-	}, nil
+	return &loginOutput{Body: res.toResponse()}, nil
 }
 
 // Refresh handler. The three sentinel errors all map to 401 with
@@ -207,40 +189,34 @@ func (h *Handler) Login(ctx context.Context, in *loginInput) (*loginOutput, erro
 // clients that care (reuse = "your token was already used, please
 // re-login"; expired = "your session timed out, please re-login") but
 // a defensive client can collapse them. MapError is the only error
-// path. On success the handler re-issues both auth cookies via the
-// output struct's SetCookie field.
+// path. On success the handler returns a fresh Bearer pair in the
+// response body.
 func (h *Handler) Refresh(ctx context.Context, in *refreshInput) (*refreshOutput, error) {
-	raw, ok := refreshTokenFromContext(ctx, h.cookies)
-	if !ok {
+	if in.Body.RefreshToken == "" {
 		return nil, api.MapError(ctx, ErrInvalidRefreshToken, "Failed to refresh token")
 	}
-	res, err := h.service.Refresh(ctx, raw)
+	res, err := h.service.Refresh(ctx, in.Body.RefreshToken)
 	if err != nil {
 		return nil, api.MapError(ctx, err, "Failed to refresh token")
 	}
-	return &refreshOutput{
-		SetCookie: issueSetCookieStrings(res, h.cookies),
-		Body:      res.toResponse(),
-	}, nil
+	return &refreshOutput{Body: res.toResponse()}, nil
 }
 
 // Logout handler. The middleware (NewHumaAuth) has already verified
-// the access token before we get here; the __Host-nyx-refresh cookie
-// identifies the single refresh-token row we revoke (per-session —
-// other devices stay logged in, see SECURITY.md M1). Returns 204
-// with no body and clears both auth cookies. Even when the refresh
-// cookie is missing (e.g. an attacker stripped it) we still clear
-// both at the browser — local clear is idempotent server-side.
+// the access token in the Authorization header; the refresh_token
+// in the body identifies the single refresh-token row we revoke
+// (per-session — other devices stay logged in, see SECURITY.md M1).
+// Returns 204 with no body. When the refresh token is missing /
+// invalid the row revoke is skipped — the access token is already
+// invalid by definition if we got here, so the cookie-based escape
+// hatch no longer applies.
 func (h *Handler) Logout(ctx context.Context, in *logoutInput) (*logoutOutput, error) {
-	if raw, ok := refreshTokenFromContext(ctx, h.cookies); ok {
-		if err := h.service.Logout(ctx, raw); err != nil {
+	if in.Body.RefreshToken != "" {
+		if err := h.service.Logout(ctx, in.Body.RefreshToken); err != nil {
 			return nil, api.MapError(ctx, err, "Failed to logout")
 		}
 	}
-	return &logoutOutput{
-		Status:    http.StatusNoContent,
-		SetCookie: clearSetCookieStrings(h.cookies),
-	}, nil
+	return &logoutOutput{Status: http.StatusNoContent}, nil
 }
 
 // Me returns the user profile for the access token's subject.

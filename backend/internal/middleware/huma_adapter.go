@@ -3,7 +3,6 @@ package middleware
 import (
 	"errors"
 	"net/http"
-	"strings"
 
 	"nyx/internal/platform/api"
 	"nyx/internal/platform/auth"
@@ -15,11 +14,13 @@ import (
 // NewHumaAuth returns a huma.Middleware that performs the same JWT
 // validation as NewAuth, but in huma's middleware shape
 // (func(huma.Context, next func(huma.Context))). tokens carries the
-// signing key captured at startup. accessCookieName is the
-// configured cookie name (default "__Host-nyx-access"); cookieSecure
-// mirrors CookieConfig.Secure so the helper that strips the
-// __Host- prefix in dev (Secure=false) matches the read path used
-// by handlers.
+// signing key captured at startup.
+//
+// Token source: the Authorization request header (RFC 6750). Same
+// rationale as NewAuth — Bearer lets native clients (iOS, Android,
+// Unity / Unreal, console SDKs) speak the identical wire contract
+// as the SPA, with the cross-origin CORS preflight providing the
+// CSRF defence.
 //
 // Huma parses the request body BEFORE running per-operation
 // Middlewares, which means a malicious 100 MB POST could trigger
@@ -36,19 +37,10 @@ import (
 // WWW-Authenticate challenge is set via SetHeader so the frontend's
 // axios interceptor can distinguish a refresh-eligible 401 (token
 // expired) from a hard-logout 401 (anything else).
-//
-// Token source: __Host-nyx-access cookie only. The Authorization:
-// Bearer fallback shipped during the cookie rollout has been
-// removed (see SECURITY.md L1); every legitimate client now goes
-// through the browser's automatic cookie attachment.
-func NewHumaAuth(tokens auth.TokenService, accessCookieName string, cookieSecure bool) func(huma.Context, func(huma.Context)) {
-	resolvedCookieName := accessCookieName
-	if !cookieSecure {
-		resolvedCookieName = strings.TrimPrefix(accessCookieName, "__Host-")
-	}
-
+func NewHumaAuth(tokens auth.TokenService) func(huma.Context, func(huma.Context)) {
 	return func(ctx huma.Context, next func(huma.Context)) {
-		raw, ok := readAccessToken(ctx, resolvedCookieName)
+		r := reqctx.RequestFromContext(ctx.Context())
+		raw, ok := bearerFromHeader(r)
 		if !ok {
 			ctx.SetHeader("WWW-Authenticate", wwwAuthInvalid)
 			writeHumaError(ctx, http.StatusUnauthorized, "Authentication required", nil)
@@ -78,25 +70,6 @@ func NewHumaAuth(tokens auth.TokenService, accessCookieName string, cookieSecure
 		// handlers see the updated context via ctx.Context().
 		next(huma.WithContext(ctx, rctx))
 	}
-}
-
-// readAccessToken pulls the JWT from the httpOnly access cookie only.
-// The Authorization: Bearer fallback was removed once the cookie
-// rollout completed (see SECURITY.md L1). The Cookie is read via
-// r.Cookie(name) on the *http.Request that StoreRequest stashed on
-// the request context — huma's middleware path gives us a
-// huma.Context, but the live request is recovered from
-// reqctx.RequestFromContext so we can use the standard library's
-// cookie parser.
-func readAccessToken(ctx huma.Context, cookieName string) (string, bool) {
-	r := reqctx.RequestFromContext(ctx.Context())
-	if r == nil {
-		return "", false
-	}
-	if c, err := r.Cookie(cookieName); err == nil && c.Value != "" {
-		return c.Value, true
-	}
-	return "", false
 }
 
 // writeHumaError writes the canonical {error, code, request_id, details}

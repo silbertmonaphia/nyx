@@ -23,24 +23,31 @@ const wwwAuthExpired = `Bearer error="invalid_token", error_description="expired
 // failure.
 const wwwAuthInvalid = `Bearer error="invalid_token"`
 
+// bearerPrefix is the case-insensitive scheme the middleware accepts.
+// RFC 6750 §2.1 specifies "Bearer" (capitalised) but most clients
+// send it case-insensitively; we accept any case to be friendly to
+// hand-rolled clients (curl, mobile SDKs, game engines) without
+// weakening the contract.
+const bearerPrefix = "bearer "
+
 // NewAuth returns a chi middleware that validates JWTs using the
 // injected TokenService. It is the stdlib-shaped counterpart to
 // NewHumaAuth and is intended for mounting on protected sub-routers
 // (e.g., a future /api/admin/... group) — keep it exported for that
 // future use.
 //
-// accessCookieName is the configured access cookie name
-// ("__Host-nyx-access" in prod). cookieSecure mirrors
-// CookieConfig.Secure so the prefix-stripping logic in dev matches
-// the read path. Token source is the httpOnly cookie only — the
-// Authorization: Bearer fallback that shipped during the cookie
-// rollout has been removed (see SECURITY.md L1); every legitimate
-// client now goes through the browser's automatic cookie attachment.
+// Token source: the Authorization request header (RFC 6750). The
+// previous httpOnly-cookie transport has been replaced with Bearer
+// so native clients (iOS, Android, Unity/Unreal game binaries,
+// console SDKs) can speak the same wire contract as the SPA. A
+// single Authorization header on a cross-origin XHR triggers a CORS
+// preflight, which is the natural CSRF defence — no SameSite cookie
+// and no token flow needed.
 //
 // On success, the resolved user ID and username are stamped on the
 // context via reqctx.WithUserID / reqctx.WithUsername so downstream
 // handlers can read them via reqctx.UserIDFromContext /
-// reqctx.UsernameFromContext. On failure, the canonical {error, code,
+// UsernameFromContext. On failure, the canonical {error, code,
 // request_id, details} envelope is written and the chain is
 // short-circuited. The WWW-Authenticate header distinguishes "expired"
 // (refresh-eligible) from "invalid" (force logout) without leaking
@@ -49,14 +56,10 @@ const wwwAuthInvalid = `Bearer error="invalid_token"`
 // huma parses the request body before invoking per-operation
 // Middlewares, so a 1 MiB body cap is applied at the router level in
 // main.go to mitigate pre-auth DoS via large payloads.
-func NewAuth(tokens auth.TokenService, accessCookieName string, cookieSecure bool) func(http.Handler) http.Handler {
-	resolvedCookieName := accessCookieName
-	if !cookieSecure {
-		resolvedCookieName = strings.TrimPrefix(accessCookieName, "__Host-")
-	}
+func NewAuth(tokens auth.TokenService) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			raw, ok := readAccessTokenFromRequest(r, resolvedCookieName)
+			raw, ok := bearerFromHeader(r)
 			if !ok {
 				w.Header().Set("WWW-Authenticate", wwwAuthInvalid)
 				api.WriteError(w, r, http.StatusUnauthorized, "Authentication required", nil)
@@ -84,15 +87,27 @@ func NewAuth(tokens auth.TokenService, accessCookieName string, cookieSecure boo
 	}
 }
 
-// readAccessTokenFromRequest pulls the JWT from the httpOnly access
-// cookie only. The Authorization: Bearer fallback was removed once
-// the cookie rollout completed (see SECURITY.md L1); the legacy
-// path is no longer reachable from production traffic, and leaving
-// it in would re-open the door to credential-leak headers on shared
-// infrastructure (proxy logs, CDN caches).
-func readAccessTokenFromRequest(r *http.Request, cookieName string) (string, bool) {
-	if c, err := r.Cookie(cookieName); err == nil && c.Value != "" {
-		return c.Value, true
+// bearerFromHeader extracts a JWT from the Authorization request
+// header per RFC 6750 §2.1. Accepts case-insensitive "Bearer "
+// prefix; rejects every other scheme ("Token", "Basic", missing
+// scheme) and rejects a present-but-empty token string. The shared
+// helper is used by both NewAuth (stdlib) and NewHumaAuth (huma)
+// so the read rules can't drift.
+//
+// Returned bool is false when the header is absent, malformed, or
+// carries a non-Bearer scheme — callers treat that as "no
+// credential supplied" and 401.
+func bearerFromHeader(r *http.Request) (string, bool) {
+	h := r.Header.Get("Authorization")
+	if h == "" {
+		return "", false
 	}
-	return "", false
+	if len(h) <= len(bearerPrefix) || !strings.EqualFold(h[:len(bearerPrefix)], bearerPrefix) {
+		return "", false
+	}
+	raw := strings.TrimSpace(h[len(bearerPrefix):])
+	if raw == "" {
+		return "", false
+	}
+	return raw, true
 }

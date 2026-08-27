@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest';
 import axios from 'axios';
-import api from './api';
+import api, { tokenStore } from './api';
 import * as telemetry from './telemetry';
 import { useAuthStore } from '../store/authStore';
 import { useUiStore } from '../store/uiStore';
@@ -332,18 +332,27 @@ describe('refresh-on-401', () => {
     // SECURITY.md H8: the refresh path is no longer gated on the
     // WWW-Authenticate=expired substring. Any 401 attempts the
     // refresh once; on success the original request is replayed
-    // with the freshly rotated cookies.
+    // with the freshly rotated Bearer token.
     //
-    // Post-cookie refresh: the body is empty, the new tokens arrive
-    // as Set-Cookie headers on the response (mocked as the bare
-    // data envelope here — the browser does the actual cookie
-    // storage). The store only updates its `user` profile.
+    // Post-Bearer refresh: the body carries { refresh_token }; the
+    // response body carries { access_token, refresh_token, token_type,
+    // expires_at, user }. The store updates `user` and the
+    // tokenStore swaps in the fresh pair.
     postSpy.mockResolvedValueOnce({
       data: {
-        user: { id: 1, username: 'tester' },
+        access_token: 'new.access',
+        refresh_token: 'new.refresh',
+        token_type: 'Bearer',
         expires_at: '2024-02-01T00:15:00Z',
+        user: { id: 1, username: 'tester' },
       },
     });
+
+    // Seed the token store with a refresh token so performRefresh
+    // actually attempts the call. The interceptor only refreshes
+    // when an access token is present; a synchronous test that
+    // triggers a 401 without seeding the store would skip refresh.
+    tokenStore.setTokens('expired.access', 'old.refresh');
 
     // No WWW-Authenticate challenge at all — the H8 widening
     // means this still triggers a refresh.
@@ -355,42 +364,44 @@ describe('refresh-on-401', () => {
 
     await expect(rejected(error)).resolves.toBeDefined();
 
-    // Single refresh was attempted. POST body is empty (the refresh
-    // token rides in the cookie); withCredentials=true is set so the
-    // browser attaches the cookie.
+    // Single refresh was attempted. POST body carries the refresh
+    // token (RFC 6750 Bearer transport); withCredentials is false.
     expect(postSpy).toHaveBeenCalledTimes(1);
     expect(postSpy).toHaveBeenCalledWith(
       expect.stringContaining('/refresh'),
-      {},
-      expect.objectContaining({ withCredentials: true }),
+      expect.objectContaining({ refresh_token: 'old.refresh' }),
+      expect.objectContaining({ withCredentials: false }),
     );
 
-    // Store was updated with the user profile (cookies carry the
-    // tokens themselves — no token-shaped assertion here).
+    // Store was updated with the user profile.
     expect(setAuth).toHaveBeenCalledTimes(1);
     expect(setAuth).toHaveBeenCalledWith(
       expect.objectContaining({ user: { id: 1, username: 'tester' } }),
     );
 
-    // Original request was replayed with `_retried=true`. The cookie
-    // auto-attaches on the replay; no Authorization header is
-    // stamped (the Authorization path is gone — that's the whole
-    // point of the cookie migration).
+    // Original request was replayed with `_retried=true`. The
+    // request interceptor re-runs and stamps the freshly rotated
+    // Bearer token onto the replay.
     expect(requestSpy).toHaveBeenCalledTimes(1);
     const replayConfig = requestSpy.mock.calls[0][0] as {
       _retried?: boolean;
-      headers?: Record<string, string>;
     };
     expect(replayConfig._retried).toBe(true);
-    expect(replayConfig.headers?.Authorization).toBeUndefined();
 
     // No logout, no toast — the refresh was transparent.
     expect(logout).not.toHaveBeenCalled();
     expect(addToast).not.toHaveBeenCalled();
+
+    // Clean up the tokenStore so other tests start anonymous.
+    tokenStore.clear();
   });
 
   it('logs out + toasts when refresh itself fails', async () => {
     postSpy.mockRejectedValueOnce(new Error('refresh expired'));
+    // Seed the token store so the refresh path actually fires the
+    // POST (without an access token the interceptor skips refresh
+    // and goes straight to logout — that's a different test).
+    tokenStore.setTokens('expired.access', 'old.refresh');
 
     const error = make401();
     error.config = { ...(error.config as object) };
@@ -407,6 +418,8 @@ describe('refresh-on-401', () => {
       'Session expired. Please login again.',
       'error',
     );
+
+    tokenStore.clear();
   });
 
   it('collapses concurrent 401s into a single refresh', async () => {
@@ -418,6 +431,9 @@ describe('refresh-on-401', () => {
         resolveRefresh = resolve;
       }),
     );
+
+    // Seed the token store so the refresh path is enabled.
+    tokenStore.setTokens('expired.access', 'old.refresh');
 
     const err1 = make401();
     err1.config = { ...(err1.config as object) };
@@ -435,8 +451,11 @@ describe('refresh-on-401', () => {
     // Settle the refresh so both handlers resume.
     resolveRefresh({
       data: {
-        user: { id: 1, username: 'tester' },
+        access_token: 'new.access',
+        refresh_token: 'new.refresh',
+        token_type: 'Bearer',
         expires_at: '2024-02-01T00:15:00Z',
+        user: { id: 1, username: 'tester' },
       },
     });
 
@@ -448,6 +467,9 @@ describe('refresh-on-401', () => {
     // Both original requests were replayed with the fresh token.
     expect(requestSpy).toHaveBeenCalledTimes(2);
     expect(logout).not.toHaveBeenCalled();
+
+    // Clean up the tokenStore so other tests start anonymous.
+    tokenStore.clear();
   });
 
   it('skips refresh when the request is flagged skipAuthRefresh', async () => {

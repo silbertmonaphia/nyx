@@ -4,8 +4,20 @@
       "AuthResponse": {
         "additionalProperties": false,
         "properties": {
+          "access_token": {
+            "type": "string"
+          },
           "expires_at": {
             "format": "date-time",
+            "type": "string"
+          },
+          "refresh_token": {
+            "type": "string"
+          },
+          "token_type": {
+            "examples": [
+              "Bearer"
+            ],
             "type": "string"
           },
           "user": {
@@ -13,6 +25,9 @@
           }
         },
         "required": [
+          "access_token",
+          "refresh_token",
+          "token_type",
           "user"
         ],
         "type": "object"
@@ -106,6 +121,14 @@
       },
       "LogoutRequest": {
         "additionalProperties": false,
+        "properties": {
+          "refresh_token": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "refresh_token"
+        ],
         "type": "object"
       },
       "Movie": {
@@ -204,6 +227,14 @@
       },
       "RefreshRequest": {
         "additionalProperties": false,
+        "properties": {
+          "refresh_token": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "refresh_token"
+        ],
         "type": "object"
       },
       "RegisterRequest": {
@@ -317,7 +348,7 @@
     },
     "/api/login": {
       "post": {
-        "description": "Authenticate a user by username + password. Sets __Host-nyx-access and __Host-nyx-refresh httpOnly cookies; the JSON body contains only the user profile.",
+        "description": "Authenticate a user by username + password. The response body carries the access token, refresh token, token type, expiry, and user profile.",
         "operationId": "login",
         "requestBody": {
           "content": {
@@ -338,14 +369,7 @@
                 }
               }
             },
-            "description": "OK",
-            "headers": {
-              "Set-Cookie": {
-                "schema": {
-                  "type": "string"
-                }
-              }
-            }
+            "description": "OK"
           },
           "default": {
             "content": {
@@ -366,7 +390,7 @@
     },
     "/api/logout": {
       "post": {
-        "description": "Revoke the refresh token family identified by the __Host-nyx-refresh cookie. Requires a valid access token (cookie or Authorization header). Returns 204 and clears both auth cookies.",
+        "description": "Revoke the refresh token identified in the request body. Requires a valid access token in the Authorization header. Returns 204.",
         "operationId": "logout",
         "requestBody": {
           "content": {
@@ -380,14 +404,7 @@
         },
         "responses": {
           "204": {
-            "description": "No Content",
-            "headers": {
-              "Set-Cookie": {
-                "schema": {
-                  "type": "string"
-                }
-              }
-            }
+            "description": "No Content"
           },
           "default": {
             "content": {
@@ -406,6 +423,43 @@
           }
         ],
         "summary": "Logout a user",
+        "tags": [
+          "auth"
+        ]
+      }
+    },
+    "/api/me": {
+      "get": {
+        "description": "Return the profile of the authenticated user (the access token's subject). Used by the SPA to reconcile its persisted user on every page load.",
+        "operationId": "me",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/User"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Get current user",
         "tags": [
           "auth"
         ]
@@ -628,7 +682,7 @@
     },
     "/api/refresh": {
       "post": {
-        "description": "Exchange a valid refresh cookie for a fresh access + refresh pair. Returns 401 on invalid / expired / reused tokens; reuse triggers family-wide revocation. Both cookies are re-issued.",
+        "description": "Exchange a valid refresh token (in the request body) for a fresh access + refresh pair. Returns 401 on invalid / expired / reused tokens; reuse triggers family-wide revocation.",
         "operationId": "refresh",
         "requestBody": {
           "content": {
@@ -649,14 +703,7 @@
                 }
               }
             },
-            "description": "OK",
-            "headers": {
-              "Set-Cookie": {
-                "schema": {
-                  "type": "string"
-                }
-              }
-            }
+            "description": "OK"
           },
           "default": {
             "content": {
@@ -677,7 +724,7 @@
     },
     "/api/register": {
       "post": {
-        "description": "Create a new user account. Returns 409 when the username or email is already taken. Sets __Host-nyx-access and __Host-nyx-refresh httpOnly cookies via Set-Cookie headers.",
+        "description": "Create a new user account. Returns 409 when the username or email is already taken. The response body carries the access token, refresh token, token type, expiry, and user profile — clients store the tokens themselves.",
         "operationId": "register",
         "requestBody": {
           "content": {
@@ -698,14 +745,7 @@
                 }
               }
             },
-            "description": "OK",
-            "headers": {
-              "Set-Cookie": {
-                "schema": {
-                  "type": "string"
-                }
-              }
-            }
+            "description": "OK"
           },
           "default": {
             "content": {
