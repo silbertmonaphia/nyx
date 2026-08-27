@@ -73,6 +73,15 @@ services:
       - OTEL_ENABLED=${OTEL_ENABLED:-true}
       - OTEL_EXPORTER_OTLP_ENDPOINT=http://jaeger:4318
       - OTEL_SERVICE_NAME=${OTEL_SERVICE_NAME:-nyx-backend}
+    # Cross-origin XHR — the SPA now hits the backend directly via
+    # VITE_API_URL=http://localhost:8080/api. The browser opens
+    # a CORS preflight; the backend's CORS_ALLOWED_ORIGINS env
+    # (set below) is the allowlist. Bearer is a custom header,
+    # so the preflight carries Access-Control-Request-Headers:
+    # Authorization, and the backend's allowlist closes the CSRF
+    # surface automatically.
+    environment:
+      - CORS_ALLOWED_ORIGINS=${CORS_ALLOWED_ORIGINS:-http://localhost:5173,http://localhost:8080}
     depends_on:
       db:
         condition: service_healthy
@@ -85,7 +94,15 @@ services:
     build:
       context: ./frontend
       args:
-        - VITE_API_URL=http://localhost:8080/api
+        # Cross-origin: the SPA hits the backend on :8080 directly.
+        # The browser triggers CORS preflight; see the backend's
+        # CORS_ALLOWED_ORIGINS env above. No more /api/ same-origin
+        # proxy — Bearer is a regular Authorization header that
+        # doesn't need cookie-style same-origin semantics.
+        - VITE_API_URL=${VITE_API_URL:-http://localhost:8080/api}
+        # API_ORIGIN feeds the CSP connect-src directive via the
+        # __API_ORIGIN__ placeholder in nginx.conf.
+        - API_ORIGIN=${API_ORIGIN:-http://localhost:8080}
         # OpenTelemetry — the frontend Dockerfile bakes VITE_OTEL_ENABLED
         # and VITE_OTEL_SERVICE_NAME into the bundle at build time.
         # JAEGER_HOST is read at runtime by nginx to proxy /otlp/ to the
@@ -96,12 +113,7 @@ services:
       - VITE_OTEL_ENABLED=${VITE_OTEL_ENABLED:-true}
       - VITE_OTEL_SERVICE_NAME=${VITE_OTEL_SERVICE_NAME:-nyx-frontend}
       - JAEGER_HOST=jaeger
-      # Same-origin proxy for /api/. The Vite dev server proxies
-      # /api/* on :5173 → :8080; the prod nginx container proxies
-      # /api/* on :8080 → :BACKEND_UPSTREAM:8080. With this in
-      # place, the browser sees frontend + API as same-origin in
-      # both dev and prod, so __Host- cookies flow correctly.
-      - BACKEND_UPSTREAM=backend
+      - API_ORIGIN=${API_ORIGIN:-http://localhost:8080}
     # nginx runs as non-root (USER nginx in Dockerfile) so it can't bind
     # privileged port 80. The nginx.conf inside the container listens on 8080.
     ports:

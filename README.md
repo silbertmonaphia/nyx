@@ -6,7 +6,7 @@ A minimalist media rating application — Go 1.26.1 API, React 19 SPA, PostgreSQ
 
 - **Clean-arch backend** — `chi v5` router + `huma v2` for declarative, OpenAPI 3.1-emitting HTTP handlers. SQL is type-safe via `sqlc` + `pgx/v5` + `pgxpool`.
 - **Modern frontend** — React 19 + Vite 8 + TypeScript, Tailwind CSS v4, Radix UI primitives (shadcn-style), TanStack Query, Zustand, React Hook Form + Zod, axios.
-- **Auth** — JWT access tokens (default 15m) paired with rotated refresh tokens (default 7d, opaque, sha256-hashed, family-level reuse detection). Both ride two httpOnly `__Host-` cookies (Secure, SameSite=Lax, Path=/) — the JSON envelope on auth endpoints carries only `{user, expires_at}`. CSRF defence is `SameSite=Lax` + same-origin (Vite dev server proxies `/api`, prod nginx adds `location /api/`, k8s ingress routes by path). `POST /api/refresh` + `POST /api/logout`. Bcrypt-hashed passwords.
+- **Auth** — JWT access tokens (default 15m) paired with rotated refresh tokens (default 7d, opaque, sha256-hashed, family-level reuse detection). Auth endpoints (`/api/register`, `/api/login`, `/api/refresh`) return `{access_token, refresh_token, token_type: "Bearer", expires_at, user}` in the body; every protected endpoint expects `Authorization: Bearer <access_token>`. `/api/logout` + `/api/refresh` send `{refresh_token}` in the body. Bcrypt-hashed passwords. The SPA stores tokens in a module-level `tokenStore` (in-memory + `sessionStorage`); the Zustand `authStore` persist carries only `user`. Native clients (iOS / Android / Unity / Unreal / console SDKs) speak the identical wire contract — only the token storage differs. Production topology: SPA at `app.nyx.com`, API at `api.nyx.com` (separate Ingress hosts); Bearer is a custom header → CORS preflight = CSRF defence, no token flow needed.
 - **Pagination** — `GET /api/movies` returns `{data, page, page_size, total, has_more}`. Default 20, max 100.
 - **Cache-aside** — Redis opt-in for `GET /api/movies` (`REDIS_ENABLED=true`). Cache is best-effort; failures never fail the request.
 - **Observability** — Distributed tracing via OpenTelemetry (browser → nginx → Jaeger, all spans stitched by W3C `traceparent`), `/metrics` (Prometheus: HTTP request count/latency, cache hit/miss), structured JSON logging via `zerolog`, graceful shutdown.
@@ -151,10 +151,10 @@ See `k8s/*.yaml` for per-resource config.
 | Method | Path | Auth | Notes |
 |---|---|---|---|
 | GET | `/api/health` | — | Liveness + DB status |
-| POST | `/api/register` | — | Body `{username, email, password}`. Sets `__Host-nyx-access` + `__Host-nyx-refresh` cookies; body `{user, expires_at}` |
-| POST | `/api/login` | — | Body `{username, password}`. Sets both cookies; body `{user, expires_at}` |
-| POST | `/api/refresh` | cookie | Reads `__Host-nyx-refresh` cookie; rotates; re-issues both cookies. Body `{user, expires_at}`. Reuse revokes the entire family |
-| POST | `/api/logout` | cookie | Reads `__Host-nyx-refresh` cookie; revokes the family; clears both cookies. Returns 204 |
+| POST | `/api/register` | — | Body `{username, email, password}`. Returns `{access_token, refresh_token, token_type: "Bearer", expires_at, user}` |
+| POST | `/api/login` | — | Body `{username, password}`. Returns the Bearer pair + user |
+| POST | `/api/refresh` | — | Body `{refresh_token}`. Returns a fresh Bearer pair + user. Reuse revokes the entire family |
+| POST | `/api/logout` | Bearer | Body `{refresh_token}`. Revokes only that row. Returns 204 |
 | GET | `/api/movies` | — | `?q=`, `?page=`, `?page_size=` |
 | POST | `/api/movies` | JWT | |
 | PUT | `/api/movies/{id}` | JWT | |

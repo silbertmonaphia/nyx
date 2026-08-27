@@ -29,11 +29,12 @@ The history and design decisions behind the current backend. For the high-level 
 
 ## 3. Security & Authentication
 
-- [x] **JWT auth** — `auth/jwt.go` issues `Bearer` tokens with 24h expiry; `huma.Adapter` validates the header and stores claims on `reqctx`.
+- [x] **JWT auth** — `auth/jwt.go` issues `Bearer` tokens (HS256, 15m default via `JWT_ACCESS_TTL`); `middleware.NewAuth` / `NewHumaAuth` validate the `Authorization` header and store claims on `reqctx`. Algorithm pinning + issuer + audience + type claim guards (`type: "access"`) defend against alg-confusion and refresh-token-as-access attacks.
 - [x] **User management** — `users` table with bcrypt-hashed passwords.
-- [x] **Auth middleware** — write/delete routes require a valid token; read routes are public.
+- [x] **Auth middleware** — write/delete routes require a valid Bearer token; read routes are public.
 - [x] **Rate limiting** — token bucket middleware (`middleware/ratelimit.go`).
-- [x] **CORS Hardening** — `middleware.NewCORS` reads `CORS_ALLOWED_ORIGINS` (default `*`); set a comma-separated origin list in production. Wildcard and explicit-allowlist modes are both supported and unit-tested.
+- [x] **CORS Hardening** — `middleware.NewCORS` reads `CORS_ALLOWED_ORIGINS` (default empty — deny-by-default); set a comma-separated origin list in production. Wildcard and explicit-allowlist modes are both supported and unit-tested. `Access-Control-Allow-Credentials` is intentionally never set: Bearer is a plain Authorization header (custom → preflight → backend allowlist = CSRF defence), so ACAC would only matter if cookies returned to the picture.
+- [x] **Bearer-only auth transport** — `/api/login`, `/api/register`, `/api/refresh` return `{access_token, refresh_token, token_type: "Bearer", expires_at, user}` in the body. `/api/refresh` and `/api/logout` read the refresh token from the request body. The legacy cookie / `CookieConfig` plumbing is gone (`backend/internal/platform/auth/cookies.go` deleted; `COOKIE_*` viper bindings removed). Same wire contract works for SPA, iOS / Android native apps, Unity / Unreal game clients, and (after `POST /api/auth/exchange`) PSN / Xbox / Nintendo / Steam console clients.
 - [x] **JWT Secret via Viper Config** — `auth.SetSecret(cfg.JWTSecret)` is called once in `main.go`; `auth/jwt.go` no longer reads `os.Getenv`. (Superseded by constructor injection — see below.)
 - [x] **Constructor-injected JWT signing** — `auth.TokenService` interface + `auth.NewTokenService(secret []byte)` constructor hold the signing key in a private field. `main.go` builds one and threads it through the user service and auth middleware; the package-level `secret` / `SetSecret` are gone.
 - [x] **Enforce non-default JWT secret at startup** — `config.Load()` and `auth.NewTokenService` both refuse the built-in default placeholder and any key shorter than `auth.MinSecretBytes` (32 bytes). Misconfiguration fails closed before the HTTP server starts.

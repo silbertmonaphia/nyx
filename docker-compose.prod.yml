@@ -69,6 +69,11 @@ services:
       - OTEL_ENABLED=${OTEL_ENABLED:-true}
       - OTEL_EXPORTER_OTLP_ENDPOINT=http://jaeger:4318
       - OTEL_SERVICE_NAME=nyx-backend
+      # Cross-origin XHR — the SPA hits the backend at a different
+      # origin in production. The browser triggers a CORS preflight;
+      # this allowlist gates cross-origin XHR (no ACAC — Bearer is a
+      # plain Authorization header).
+      - CORS_ALLOWED_ORIGINS=${CORS_ALLOWED_ORIGINS:-https://app.nyx.com}
     depends_on:
       db:
         condition: service_healthy
@@ -84,24 +89,23 @@ services:
       context: ./frontend
       dockerfile: Dockerfile
       args:
-        - VITE_API_URL=${VITE_API_URL:-http://localhost:8080/api}
+        # Split origin: SPA at https://app.nyx.com, API at
+        # https://api.nyx.com. Override these via .env per
+        # environment (staging / preview / etc.).
+        - VITE_API_URL=${VITE_API_URL:-https://api.nyx.com/api}
+        - API_ORIGIN=${API_ORIGIN:-https://api.nyx.com}
         # OpenTelemetry — VITE_* vars are baked into the bundle at
         # build time. JAEGER_HOST is read at runtime by nginx to
         # proxy /otlp/ → JAEGER_HOST:4318 (same-origin, no CORS).
         - VITE_OTEL_ENABLED=${VITE_OTEL_ENABLED:-true}
         - VITE_OTEL_SERVICE_NAME=${VITE_OTEL_SERVICE_NAME:-nyx-frontend}
-        # Same-origin /api/ proxy. nginx inside the container proxies
-        # /api/* on :8080 → ${BACKEND_UPSTREAM}:8080. The browser sees
-        # frontend + API as same-origin, so __Host- cookies flow
-        # correctly. Defaults to the compose service name `backend`.
-        - BACKEND_UPSTREAM=backend
     ports:
       - "80:80"
     environment:
       - VITE_OTEL_ENABLED=${VITE_OTEL_ENABLED:-true}
       - VITE_OTEL_SERVICE_NAME=${VITE_OTEL_SERVICE_NAME:-nyx-frontend}
       - JAEGER_HOST=jaeger
-      - BACKEND_UPSTREAM=backend
+      - API_ORIGIN=${API_ORIGIN:-https://api.nyx.com}
     depends_on:
       backend:
         condition: service_healthy
