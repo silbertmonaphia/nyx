@@ -21,6 +21,14 @@ import (
 	"nyx/internal/middleware"
 )
 
+// Wire-contract constants used across the handler tests. Extracted to
+// keep the literal usage sites focused on assertions; goconst flags
+// the repeated strings otherwise.
+const (
+	testUsername = "alice"
+	tokenType    = "Bearer"
+)
+
 // TestMain lives in repository_integration_test.go — it both installs
 // the huma error override (needed by handler tests below) and boots
 // the integration-test Postgres container (skipped under
@@ -160,7 +168,7 @@ func TestRegisterHandler_Created(t *testing.T) {
 		},
 	}
 	rr := postJSON(t, newTestRouterWithRepo(repo), "/api/register", RegisterRequest{
-		Username: "alice",
+		Username: testUsername,
 		Email:    "alice@example.com",
 		Password: "hunter2",
 	})
@@ -173,7 +181,7 @@ func TestRegisterHandler_Created(t *testing.T) {
 	if err := json.Unmarshal(rr.Body.Bytes(), &res); err != nil {
 		t.Fatalf("unmarshal AuthResponse: %v", err)
 	}
-	if res.User.ID != 42 || res.User.Username != "alice" {
+	if res.User.ID != 42 || res.User.Username != testUsername {
 		t.Errorf("user = %+v, want ID=42 username=alice", res.User)
 	}
 	if res.AccessToken == "" {
@@ -182,8 +190,8 @@ func TestRegisterHandler_Created(t *testing.T) {
 	if res.RefreshToken == "" {
 		t.Errorf("response missing refresh_token; body=%s", rr.Body.String())
 	}
-	if res.TokenType != "Bearer" {
-		t.Errorf("token_type = %q, want %q", res.TokenType, "Bearer")
+	if res.TokenType != tokenType {
+		t.Errorf("token_type = %q, want %q", res.TokenType, tokenType)
 	}
 	if res.ExpiresAt.IsZero() {
 		t.Errorf("expires_at zero on successful register; body=%s", rr.Body.String())
@@ -214,7 +222,7 @@ func TestRegisterHandler_BodyCarriesTokens(t *testing.T) {
 		},
 	}
 	rr := postJSON(t, newTestRouterWithRepo(repo), "/api/register", RegisterRequest{
-		Username: "alice",
+		Username: testUsername,
 		Email:    "alice@example.com",
 		Password: "hunter2",
 	})
@@ -226,7 +234,7 @@ func TestRegisterHandler_BodyCarriesTokens(t *testing.T) {
 	if res.AccessToken == "" || res.RefreshToken == "" {
 		t.Fatalf("missing tokens in body: %+v", res)
 	}
-	if res.TokenType != "Bearer" {
+	if res.TokenType != tokenType {
 		t.Errorf("token_type = %q, want Bearer", res.TokenType)
 	}
 }
@@ -242,7 +250,7 @@ func TestRegisterHandler_UsernameTakenReturns409(t *testing.T) {
 		createFn: func(_ context.Context, _ *User) error { return ErrUsernameTaken },
 	}
 	rr := postJSON(t, newTestRouterWithRepo(repo), "/api/register", RegisterRequest{
-		Username: "alice",
+		Username: testUsername,
 		Email:    "alice@example.com",
 		Password: "hunter2",
 	})
@@ -261,7 +269,7 @@ func TestRegisterHandler_EmailTakenReturns409(t *testing.T) {
 		createFn: func(_ context.Context, _ *User) error { return ErrEmailTaken },
 	}
 	rr := postJSON(t, newTestRouterWithRepo(repo), "/api/register", RegisterRequest{
-		Username: "alice",
+		Username: testUsername,
 		Email:    "alice@example.com",
 		Password: "hunter2",
 	})
@@ -283,7 +291,7 @@ func TestRegisterHandler_MissingFieldReturns400(t *testing.T) {
 		},
 	}
 	rr := postJSON(t, newTestRouterWithRepo(repo), "/api/register", map[string]any{
-		"username": "alice",
+		"username": testUsername,
 		"email":    "alice@example.com",
 	})
 
@@ -326,7 +334,7 @@ func TestRegisterHandler_InvalidEmailReturns400(t *testing.T) {
 		},
 	}
 	rr := postJSON(t, newTestRouterWithRepo(repo), "/api/register", RegisterRequest{
-		Username: "alice",
+		Username: testUsername,
 		Email:    "not-an-email",
 		Password: "hunter2",
 	})
@@ -346,7 +354,7 @@ func TestRegisterHandler_TooShortPasswordReturns400(t *testing.T) {
 		},
 	}
 	rr := postJSON(t, newTestRouterWithRepo(repo), "/api/register", RegisterRequest{
-		Username: "alice",
+		Username: testUsername,
 		Email:    "alice@example.com",
 		Password: "x",
 	})
@@ -363,7 +371,7 @@ func TestRegisterHandler_InternalErrorReturns500(t *testing.T) {
 		createFn: func(_ context.Context, _ *User) error { return context.DeadlineExceeded },
 	}
 	rr := postJSON(t, newTestRouterWithRepo(repo), "/api/register", RegisterRequest{
-		Username: "alice",
+		Username: testUsername,
 		Email:    "alice@example.com",
 		Password: "hunter2",
 	})
@@ -398,7 +406,7 @@ func TestLoginHandler_OK(t *testing.T) {
 		},
 	}
 	rr := postJSON(t, newTestRouterWithRepo(repo), "/api/login", LoginRequest{
-		Username: "alice",
+		Username: testUsername,
 		Password: plain,
 	})
 
@@ -410,13 +418,13 @@ func TestLoginHandler_OK(t *testing.T) {
 	if err := json.Unmarshal(rr.Body.Bytes(), &res); err != nil {
 		t.Fatalf("unmarshal AuthResponse: %v", err)
 	}
-	if res.User.ID != 7 || res.User.Username != "alice" {
+	if res.User.ID != 7 || res.User.Username != testUsername {
 		t.Errorf("user = %+v, want ID=7 username=alice", res.User)
 	}
 	if res.AccessToken == "" || res.RefreshToken == "" {
 		t.Errorf("login response missing tokens: %+v", res)
 	}
-	if res.TokenType != "Bearer" {
+	if res.TokenType != tokenType {
 		t.Errorf("token_type = %q, want Bearer", res.TokenType)
 	}
 	if cookies := rr.Result().Cookies(); len(cookies) != 0 {
@@ -452,7 +460,7 @@ func TestLoginHandler_WrongPasswordReturns401(t *testing.T) {
 		},
 	}
 	rr := postJSON(t, newTestRouterWithRepo(repo), "/api/login", LoginRequest{
-		Username: "alice",
+		Username: testUsername,
 		Password: "wrong-password",
 	})
 
@@ -472,7 +480,7 @@ func TestLoginHandler_MissingFieldReturns400(t *testing.T) {
 		},
 	}
 	rr := postJSON(t, newTestRouterWithRepo(repo), "/api/login", map[string]any{
-		"username": "alice",
+		"username": testUsername,
 	})
 
 	env := decodeEnvelope(t, rr, http.StatusBadRequest)
@@ -493,7 +501,7 @@ func TestLoginHandler_InternalErrorReturns500(t *testing.T) {
 		},
 	}
 	rr := postJSON(t, newTestRouterWithRepo(repo), "/api/login", LoginRequest{
-		Username: "alice",
+		Username: testUsername,
 		Password: "hunter2",
 	})
 
@@ -546,7 +554,7 @@ func TestRefreshHandler_OK(t *testing.T) {
 			}, nil
 		},
 		getByIDFn: func(_ context.Context, id int) (*User, error) {
-			return &User{ID: id, Username: "alice", Email: "a@x.com"}, nil
+			return &User{ID: id, Username: testUsername, Email: "a@x.com"}, nil
 		},
 	}
 
@@ -559,13 +567,13 @@ func TestRefreshHandler_OK(t *testing.T) {
 	if err := json.Unmarshal(rr.Body.Bytes(), &res); err != nil {
 		t.Fatalf("unmarshal AuthResponse: %v; body=%s", err, rr.Body.String())
 	}
-	if res.User.ID != 7 || res.User.Username != "alice" {
+	if res.User.ID != 7 || res.User.Username != testUsername {
 		t.Errorf("user = %+v, want ID=7 username=alice", res.User)
 	}
 	if res.AccessToken == "" || res.RefreshToken == "" {
 		t.Errorf("refresh response missing tokens: %+v", res)
 	}
-	if res.TokenType != "Bearer" {
+	if res.TokenType != tokenType {
 		t.Errorf("token_type = %q, want Bearer", res.TokenType)
 	}
 	if res.ExpiresAt.IsZero() {
@@ -596,7 +604,7 @@ func TestRefreshHandler_ReadsTokenFromBody(t *testing.T) {
 			return &RefreshTokenRow{ID: 2, UserID: userID, FamilyID: familyID, ExpiresAt: expiresAt}, nil
 		},
 		getByIDFn: func(_ context.Context, id int) (*User, error) {
-			return &User{ID: id, Username: "alice"}, nil
+			return &User{ID: id, Username: testUsername}, nil
 		},
 	}
 
@@ -706,7 +714,7 @@ func TestLogoutHandler_NoContent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("auth.NewTokenService: %v", err)
 	}
-	accessToken, err := tokens.GenerateToken(7, "alice")
+	accessToken, err := tokens.GenerateToken(7, testUsername)
 	if err != nil {
 		t.Fatalf("GenerateToken: %v", err)
 	}
@@ -776,7 +784,7 @@ func TestLogoutHandler_ReadsTokenFromBody(t *testing.T) {
 	if err != nil {
 		t.Fatalf("auth.NewTokenService: %v", err)
 	}
-	accessToken, err := tokens.GenerateToken(7, "alice")
+	accessToken, err := tokens.GenerateToken(7, testUsername)
 	if err != nil {
 		t.Fatalf("GenerateToken: %v", err)
 	}
@@ -817,7 +825,7 @@ func TestMeHandler_ReturnsProfile(t *testing.T) {
 	if err != nil {
 		t.Fatalf("auth.NewTokenService: %v", err)
 	}
-	accessToken, err := tokens.GenerateToken(7, "alice")
+	accessToken, err := tokens.GenerateToken(7, testUsername)
 	if err != nil {
 		t.Fatalf("GenerateToken: %v", err)
 	}
@@ -828,7 +836,7 @@ func TestMeHandler_ReturnsProfile(t *testing.T) {
 			seenID = id
 			return &User{
 				ID:        7,
-				Username:  "alice",
+				Username:  testUsername,
 				Email:     "alice@example.com",
 				CreatedAt: time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC),
 				UpdatedAt: time.Date(2024, 1, 2, 0, 0, 0, 0, time.UTC),
@@ -851,7 +859,7 @@ func TestMeHandler_ReturnsProfile(t *testing.T) {
 	if err := json.Unmarshal(rr.Body.Bytes(), &body); err != nil {
 		t.Fatalf("unmarshal: %v; body=%s", err, rr.Body.String())
 	}
-	if body.ID != 7 || body.Username != "alice" || body.Email != "alice@example.com" {
+	if body.ID != 7 || body.Username != testUsername || body.Email != "alice@example.com" {
 		t.Errorf("body = %+v, want id=7 username=alice", body)
 	}
 	// The wire shape must NOT carry the password hash, even on

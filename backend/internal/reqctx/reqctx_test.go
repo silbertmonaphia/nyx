@@ -6,6 +6,11 @@ import (
 	"testing"
 )
 
+// testClientIP is the IP used across ClientIPFromRequest tests. Comes
+// from the TEST-NET-1 documentation block (RFC 5737) so it's never a
+// real routable address.
+const testClientIP = "192.0.2.10"
+
 // TestRoundTrip_AllKeys is the canonical sanity check: every With
 // function writes a value its sibling From function can read back.
 // If a key is renamed, a type changes, or a getter reads the wrong
@@ -77,10 +82,10 @@ func TestFromContext_IgnoresWrongType(t *testing.T) {
 // real sockets.
 func TestClientIPFromRequest_HostPort(t *testing.T) {
 	r := httptest.NewRequest("GET", "/", nil)
-	r.RemoteAddr = "192.0.2.10:54321"
+	r.RemoteAddr = testClientIP + ":54321"
 
-	if got := ClientIPFromRequest(r); got != "192.0.2.10" {
-		t.Errorf("ClientIPFromRequest = %q, want %q", got, "192.0.2.10")
+	if got := ClientIPFromRequest(r); got != testClientIP {
+		t.Errorf("ClientIPFromRequest = %q, want %q", got, testClientIP)
 	}
 }
 
@@ -89,10 +94,10 @@ func TestClientIPFromRequest_HostPort(t *testing.T) {
 // fallback in ClientIPFromRequest returns the raw address.
 func TestClientIPFromRequest_BareAddress(t *testing.T) {
 	r := httptest.NewRequest("GET", "/", nil)
-	r.RemoteAddr = "192.0.2.10"
+	r.RemoteAddr = testClientIP
 
-	if got := ClientIPFromRequest(r); got != "192.0.2.10" {
-		t.Errorf("ClientIPFromRequest (bare) = %q, want %q", got, "192.0.2.10")
+	if got := ClientIPFromRequest(r); got != testClientIP {
+		t.Errorf("ClientIPFromRequest (bare) = %q, want %q", got, testClientIP)
 	}
 }
 

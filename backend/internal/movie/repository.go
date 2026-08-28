@@ -23,6 +23,16 @@ type Page struct {
 	PageSize int
 }
 
+// toInt32 narrows an int to int32. Movie rows use SERIAL PKs and
+// pagination is hard-capped at 100 by the handler, so offset/pageSize
+// and movie IDs are well below math.MaxInt32. If a hostile client
+// somehow passed values above that, pgx would either wrap to a
+// negative int32 (no rows match) or fail with a value-out-of-range
+// SQLSTATE.
+//
+//nolint:gosec // G115: SERIAL PKs + handler-side caps keep this safe.
+func toInt32(v int) int32 { return int32(v) }
+
 // Pool is the subset of *pgxpool.Pool the repository needs. Both
 // pgxpool.Pool and pgxmock.PgxPoolIface satisfy it (the latter is
 // the unit-test path; see handler_test.go). The interface embeds
@@ -57,8 +67,8 @@ type Repository interface {
 }
 
 type sqlRepository struct {
-	pool Pool              // nil for tx-bound or stub repositories
-	q    *db.Queries       // sqlc-generated; WithTx returns *db.Queries
+	pool Pool        // nil for tx-bound or stub repositories
+	q    *db.Queries // sqlc-generated; WithTx returns *db.Queries
 }
 
 // NewRepository is the production constructor. It wires the sqlc
@@ -118,8 +128,8 @@ func (r *sqlRepository) GetAll(ctx context.Context, queryParam string, page, pag
 
 	items, err := qtx.QueryMoviesPage(ctx, db.QueryMoviesPageParams{
 		Query:    queryArg,
-		Offset:   int32(offset),
-		PageSize: int32(pageSize),
+		Offset:   toInt32(offset),
+		PageSize: toInt32(pageSize),
 	})
 	if err != nil {
 		return nil, err
@@ -164,7 +174,7 @@ func (r *sqlRepository) Update(ctx context.Context, id int, m *Movie) error {
 		Title:       m.Title,
 		Description: textFromString(m.Description),
 		Rating:      float8FromValue(m.Rating),
-		ID:          int32(id),
+		ID:          toInt32(id),
 	})
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -177,7 +187,7 @@ func (r *sqlRepository) Update(ctx context.Context, id int, m *Movie) error {
 }
 
 func (r *sqlRepository) Delete(ctx context.Context, id int) error {
-	rows, err := r.q.SoftDeleteMovie(ctx, int32(id))
+	rows, err := r.q.SoftDeleteMovie(ctx, toInt32(id))
 	if err != nil {
 		return pgerr.Map(err)
 	}

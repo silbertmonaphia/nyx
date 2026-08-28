@@ -109,4 +109,3 @@ func attrMap(attrs []attribute.KeyValue) map[string]string {
 	}
 	return m
 }
-

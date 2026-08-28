@@ -53,9 +53,9 @@ func TestFirstSQLVerb(t *testing.T) {
 		{"-- only comment", "UNKNOWN"},
 		{"with cte AS (SELECT 1) SELECT * FROM cte", "WITH"},
 		{"delete from x", "DELETE"},
-		{"(SELECT 1)", "UNKNOWN"},            // non-letter first char
-		{"1 + 1", "UNKNOWN"},                 // digit first char (psql expression)
-		{"  ", "UNKNOWN"},                    // whitespace only after trim
+		{"(SELECT 1)", "UNKNOWN"},              // non-letter first char
+		{"1 + 1", "UNKNOWN"},                   // digit first char (psql expression)
+		{"  ", "UNKNOWN"},                      // whitespace only after trim
 		{"_internal_call()", "_INTERNAL_CALL"}, // underscore-prefixed
 	}
 	for _, tc := range cases {

@@ -66,6 +66,56 @@ type Config struct {
 }
 
 func Load() (*Config, error) {
+	setDefaults()
+
+	// Explicitly bind every env-sourced key. viper.AutomaticEnv() only
+	// checks env vars for keys already known to viper (via SetDefault,
+	// BindEnv, or a successful ReadInConfig). In Docker there's no .env
+	// file next to the binary, so without BindEnv the env vars are
+	// silently ignored and DB_URL comes back empty.
+	bindEnvVars()
+
+	viper.AutomaticEnv()
+	// Allow environment variables to override config file (e.g.,
+	// DB_URL instead of db_url).
+	viper.SetEnvKeyReplacer(strings.NewReplacer(".", "_"))
+
+	// Optionally load from .env file for local development. Missing
+	// files are expected in production and ignored.
+	viper.SetConfigFile(".env")
+	viper.SetConfigType("env")
+	if err := viper.ReadInConfig(); err != nil {
+		// It's okay if .env doesn't exist in production
+	}
+
+	var cfg Config
+	if err := viper.Unmarshal(&cfg); err != nil {
+		return nil, err
+	}
+
+	if err := validateDurations(&cfg); err != nil {
+		return nil, err
+	}
+
+	// Cross-field validation: enabling the cache requires a URL to connect to.
+	if cfg.RedisEnabled && cfg.RedisURL == "" {
+		return nil, fmt.Errorf("REDIS_URL is required when REDIS_ENABLED=true")
+	}
+
+	if auth.IsDefault(cfg.JWTSecret) {
+		return nil, fmt.Errorf("JWT_SECRET must not be the default placeholder")
+	}
+	if len(cfg.JWTSecret) < auth.MinSecretBytes {
+		return nil, fmt.Errorf("JWT_SECRET must be at least %d bytes", auth.MinSecretBytes)
+	}
+
+	return &cfg, nil
+}
+
+// setDefaults installs the viper defaults. Extracted so Load stays
+// under the cyclomatic-complexity budget and the per-section defaults
+// are documented as a single block.
+func setDefaults() {
 	viper.SetDefault("PORT", "8080")
 	viper.SetDefault("MIGRATION_PATH", "file://migrations")
 	viper.SetDefault("JWT_SECRET", "your-default-secret-key-change-it-in-prod")
@@ -83,18 +133,19 @@ func Load() (*Config, error) {
 	viper.SetDefault("DB_CONN_MAX_LIFETIME", "1h")
 	viper.SetDefault("DB_CONN_MAX_IDLE_TIME", "30m")
 
-	// Cache defaults — caching is opt-in. Set REDIS_ENABLED=true to enable.
-	// REDIS_URL has no default: when REDIS_ENABLED=true it must come from env,
-	// and when REDIS_ENABLED=false it's unused. A blanket default would mask
-	// the cross-field validation below.
+	// Cache defaults — caching is opt-in. Set REDIS_ENABLED=true to
+	// enable. REDIS_URL has no default: when REDIS_ENABLED=true it
+	// must come from env, and when REDIS_ENABLED=false it's unused. A
+	// blanket default would mask the cross-field validation below.
 	viper.SetDefault("REDIS_ENABLED", false)
 	viper.SetDefault("CACHE_TTL", "5m")
 
-	// CORS allowlist default: empty. Deny-by-default — every cross-origin
-	// request from a browser is rejected unless the operator has set
-	// CORS_ALLOWED_ORIGINS to an explicit list (or, for fully public
-	// credential-less APIs, to "*"). The same-origin Vite proxy in
-	// development keeps the SPA unaffected by this default.
+	// CORS allowlist default: empty. Deny-by-default — every
+	// cross-origin request from a browser is rejected unless the
+	// operator has set CORS_ALLOWED_ORIGINS to an explicit list (or,
+	// for fully public credential-less APIs, to "*"). The same-origin
+	// Vite proxy in development keeps the SPA unaffected by this
+	// default.
 	viper.SetDefault("CORS_ALLOWED_ORIGINS", "")
 
 	// Cookie-based auth was retired in favour of Bearer tokens (see
@@ -112,12 +163,12 @@ func Load() (*Config, error) {
 	viper.SetDefault("OTEL_ENABLED", false)
 	viper.SetDefault("OTEL_SERVICE_NAME", "nyx-backend")
 	viper.SetDefault("OTEL_EXPORTER_OTLP_ENDPOINT", "http://localhost:4318")
+}
 
-	// Explicitly bind every env-sourced key. viper.AutomaticEnv() only checks
-	// env vars for keys already known to viper (via SetDefault, BindEnv, or a
-	// successful ReadInConfig). In Docker there's no .env file next to the
-	// binary, so without BindEnv the env vars are silently ignored and
-	// DB_URL comes back empty.
+// bindEnvVars explicitly wires every env-sourced viper key. See Load
+// for why this is necessary (AutomaticEnv alone doesn't pick up
+// keys that haven't been registered via SetDefault / BindEnv).
+func bindEnvVars() {
 	for _, key := range []string{
 		"DB_URL", "JWT_SECRET", "JWT_ACCESS_TTL", "JWT_REFRESH_TTL",
 		"PORT", "MIGRATION_PATH",
@@ -130,66 +181,42 @@ func Load() (*Config, error) {
 	} {
 		_ = viper.BindEnv(key)
 	}
+}
 
-	viper.AutomaticEnv()
-	// Allow environment variables to override config file (e.g., DB_URL instead of db_url)
-	viper.SetEnvKeyReplacer(strings.NewReplacer(".", "_"))
-
-	// Optionally load from .env file for local development
-	viper.SetConfigFile(".env")
-	viper.SetConfigType("env")
-	if err := viper.ReadInConfig(); err != nil {
-		// It's okay if .env doesn't exist in production
-	}
-
-	var cfg Config
-	if err := viper.Unmarshal(&cfg); err != nil {
-		return nil, err
-	}
-
-	// Validate Durations
+// validateDurations parses every duration field and enforces the
+// JWT TTL relationship (refresh must outlast access). Extracted from
+// Load so the public function stays under the cyclomatic-complexity
+// budget and the duration rules are documented as a single block.
+func validateDurations(cfg *Config) error {
 	if _, err := time.ParseDuration(cfg.DBConnMaxLifetime); err != nil {
-		return nil, fmt.Errorf("invalid DB_CONN_MAX_LIFETIME: %w", err)
+		return fmt.Errorf("invalid DB_CONN_MAX_LIFETIME: %w", err)
 	}
 	if _, err := time.ParseDuration(cfg.DBConnMaxIdleTime); err != nil {
-		return nil, fmt.Errorf("invalid DB_CONN_MAX_IDLE_TIME: %w", err)
+		return fmt.Errorf("invalid DB_CONN_MAX_IDLE_TIME: %w", err)
 	}
 	if _, err := time.ParseDuration(cfg.CacheTTL); err != nil {
-		return nil, fmt.Errorf("invalid CACHE_TTL: %w", err)
+		return fmt.Errorf("invalid CACHE_TTL: %w", err)
 	}
 
 	accessDur, err := time.ParseDuration(cfg.JWTAccessTTL)
 	if err != nil {
-		return nil, fmt.Errorf("invalid JWT_ACCESS_TTL: %w", err)
+		return fmt.Errorf("invalid JWT_ACCESS_TTL: %w", err)
 	}
 	if accessDur <= 0 {
-		return nil, fmt.Errorf("JWT_ACCESS_TTL must be positive, got %v", accessDur)
+		return fmt.Errorf("JWT_ACCESS_TTL must be positive, got %v", accessDur)
 	}
 	refreshDur, err := time.ParseDuration(cfg.JWTRefreshTTL)
 	if err != nil {
-		return nil, fmt.Errorf("invalid JWT_REFRESH_TTL: %w", err)
+		return fmt.Errorf("invalid JWT_REFRESH_TTL: %w", err)
 	}
 	if refreshDur <= 0 {
-		return nil, fmt.Errorf("JWT_REFRESH_TTL must be positive, got %v", refreshDur)
+		return fmt.Errorf("JWT_REFRESH_TTL must be positive, got %v", refreshDur)
 	}
 	if refreshDur <= accessDur {
-		return nil, fmt.Errorf(
+		return fmt.Errorf(
 			"JWT_REFRESH_TTL (%v) must be greater than JWT_ACCESS_TTL (%v)",
 			refreshDur, accessDur,
 		)
 	}
-
-	// Cross-field validation: enabling the cache requires a URL to connect to.
-	if cfg.RedisEnabled && cfg.RedisURL == "" {
-		return nil, fmt.Errorf("REDIS_URL is required when REDIS_ENABLED=true")
-	}
-
-	if auth.IsDefault(cfg.JWTSecret) {
-		return nil, fmt.Errorf("JWT_SECRET must not be the default placeholder")
-	}
-	if len(cfg.JWTSecret) < auth.MinSecretBytes {
-		return nil, fmt.Errorf("JWT_SECRET must be at least %d bytes", auth.MinSecretBytes)
-	}
-
-	return &cfg, nil
+	return nil
 }

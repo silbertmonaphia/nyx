@@ -23,10 +23,10 @@ func (s *stubRepo) GetAll(ctx context.Context, query string, page, pageSize int)
 	s.getAllCalls++
 	return s.getAllResp, s.getAllErr
 }
-func (s *stubRepo) Create(context.Context, *Movie) error  { return nil }
+func (s *stubRepo) Create(context.Context, *Movie) error      { return nil }
 func (s *stubRepo) Update(context.Context, int, *Movie) error { return nil }
-func (s *stubRepo) Delete(context.Context, int) error    { return nil }
-func (s *stubRepo) Ping(context.Context) error          { return nil }
+func (s *stubRepo) Delete(context.Context, int) error         { return nil }
+func (s *stubRepo) Ping(context.Context) error                { return nil }
 
 func newServiceWithCache(t *testing.T) (Service, *stubRepo, *miniredis.Miniredis) {
 	t.Helper()

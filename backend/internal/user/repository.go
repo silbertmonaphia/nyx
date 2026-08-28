@@ -63,6 +63,18 @@ func init() {
 	pgerr.Register(pgerr.ConstraintRefreshTokensTokenHash, func() error { return ErrRefreshTokenCollision })
 }
 
+// toInt32 narrows an int to int32. The DB columns are SERIAL
+// (Postgres INTEGER), so legitimate user-supplied IDs, limits, and
+// pagination parameters cannot exceed math.MaxInt32 in practice. If
+// one did, pgx would either wrap to a negative int32 (and the query
+// would return ErrNoRows, which the service layer maps to a 404) or
+// fail with a value-out-of-range SQLSTATE. The conversion is therefore
+// safe; the cast is concentrated here so a future schema bump to
+// BIGINT can swap the helper in one place.
+//
+//nolint:gosec // G115: SERIAL columns bound the value well below int32 max.
+func toInt32(v int) int32 { return int32(v) }
+
 // Querier is the subset of db.Querier we actually use. Defining it
 // here (rather than importing db.Querier directly) lets tests
 // substitute a hand-rolled mock without pulling in the generated
@@ -187,7 +199,7 @@ func (r *sqlRepository) GetUserByUsername(ctx context.Context, username string) 
 }
 
 func (r *sqlRepository) GetUserByID(ctx context.Context, id int) (*User, error) {
-	row, err := r.q.GetUserByID(ctx, int32(id))
+	row, err := r.q.GetUserByID(ctx, toInt32(id))
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, ErrUserNotFound
@@ -202,6 +214,7 @@ func (r *sqlRepository) GetUserByID(ctx context.Context, id int) (*User, error) 
 // The model differences are:
 //   - int32 (db) -> int (api)
 //   - pgtype.Timestamptz -> time.Time / *time.Time
+//
 // PasswordHash and the always-present scalars pass through unchanged.
 // created_at/updated_at are NOT NULL in the schema, so we read .Time
 // directly; only deleted_at needs a Valid check.
@@ -225,7 +238,7 @@ func toUser(d db.User) User {
 
 func (r *sqlRepository) CreateRefreshToken(ctx context.Context, userID int, tokenHash []byte, expiresAt time.Time) (*RefreshTokenRow, error) {
 	row, err := r.q.CreateRefreshToken(ctx, db.CreateRefreshTokenParams{
-		UserID:    int32(userID),
+		UserID:    toInt32(userID),
 		TokenHash: tokenHash,
 		ExpiresAt: pgtype.Timestamptz{Time: expiresAt, Valid: true},
 	})
@@ -254,7 +267,7 @@ func (r *sqlRepository) GetRefreshTokenByHash(ctx context.Context, tokenHash []b
 func (r *sqlRepository) RotateRefreshToken(ctx context.Context, oldID int64, userID int, tokenHash []byte, familyID int64, expiresAt time.Time) (*RefreshTokenRow, error) {
 	row, err := r.q.RotateRefreshToken(ctx, db.RotateRefreshTokenParams{
 		OldID:     oldID,
-		UserID:    int32(userID),
+		UserID:    toInt32(userID),
 		TokenHash: tokenHash,
 		FamilyID:  familyID,
 		ExpiresAt: pgtype.Timestamptz{Time: expiresAt, Valid: true},
@@ -275,13 +288,13 @@ func (r *sqlRepository) RevokeRefreshTokenByID(ctx context.Context, id int64) er
 }
 
 func (r *sqlRepository) CountActiveRefreshTokensByUser(ctx context.Context, userID int) (int64, error) {
-	return r.q.CountActiveRefreshTokensByUser(ctx, int32(userID))
+	return r.q.CountActiveRefreshTokensByUser(ctx, toInt32(userID))
 }
 
 func (r *sqlRepository) ListOldestActiveRefreshTokensByUser(ctx context.Context, userID int, limit int) ([]int64, error) {
 	return r.q.ListOldestActiveRefreshTokensByUser(ctx, db.ListOldestActiveRefreshTokensByUserParams{
-		UserID: int32(userID),
-		Lim:    int32(limit),
+		UserID: toInt32(userID),
+		Lim:    toInt32(limit),
 	})
 }
 

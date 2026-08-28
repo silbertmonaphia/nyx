@@ -18,6 +18,17 @@ import (
 // chi's RealIP rewrites r.RemoteAddr in place when it sees a proxy
 // header. The wrapper reads the post-resolution address via
 // reqctx.ClientIPFromRequest so the value is correct in both cases.
+//
+// TODO(security): chimw.RealIP is deprecated due to IP-spoofing
+// vulnerabilities (see GHSA-3fxj-6jh8-hvhx, GHSA-rjr7-jggh-pgcp,
+// GHSA-9g5q-2w5x-hmxf). It trusts X-Forwarded-For from any caller
+// rather than only from configured trusted proxies. The proper
+// replacement resolves the client IP from a configured proxy CIDR
+// list (e.g. from CF-Connecting-IP behind Cloudflare, or the rightmost
+// X-Forwarded-For entry when the immediate hop is a trusted reverse
+// proxy). Tracked in SECURITY.md; out of scope for the current
+// drift-cleanup PR.
+// nolint:staticcheck  // SA1019: deprecated chimw.RealIP; see TODO above.
 func RealIP(next http.Handler) http.Handler {
 	return chimw.RealIP(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		ctx := reqctx.WithClientIP(r.Context(), reqctx.ClientIPFromRequest(r))

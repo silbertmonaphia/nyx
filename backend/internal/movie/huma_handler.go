@@ -18,6 +18,14 @@ type Handler struct {
 	service Service
 }
 
+// Health-check status string constants. Extracted so the repeated
+// literals don't trip goconst in golangci-lint and so the wire format
+// is documented in one place.
+const (
+	statusUp   = "up"
+	statusDown = "down"
+)
+
 func NewHandler(service Service) *Handler {
 	return &Handler{service: service}
 }
@@ -166,34 +174,41 @@ type deleteMovieOutput struct{}
 
 // ---- Handler functions ----
 
+// Health returns the liveness/readiness state for the API, its DB
+// pool, and its cache backend. dbStatus / cacheStatus are "up" unless
+// their respective Check*Health call returns an error; status is "ok"
+// only when both upstream checks pass.
+//
+//nolint:revive // unexported-return is huma's idiomatic op pattern
 func (h *Handler) Health(ctx context.Context, _ *struct{}) (*healthOutput, error) {
-	dbStatus := "up"
+	dbStatus := statusUp
 	if err := h.service.CheckHealth(ctx); err != nil {
-		dbStatus = "down"
+		dbStatus = statusDown
 		log.Error().Err(err).Msg("Database health check failed")
 	}
 
-	cacheStatus := "up"
+	cacheStatus := statusUp
 	if err := h.service.CheckCacheHealth(ctx); err != nil {
-		cacheStatus = "down"
+		cacheStatus = statusDown
 		log.Error().Err(err).Msg("Cache health check failed")
 	}
 
 	status := "ok"
-	if dbStatus == "down" {
+	if dbStatus == statusDown {
 		status = "error"
 	}
 
 	return &healthOutput{Body: healthResponse{
 		Status: status,
 		Services: healthServices{
-			API:      "up",
+			API:      statusUp,
 			Database: dbStatus,
 			Cache:    cacheStatus,
 		},
 	}}, nil
 }
 
+//nolint:revive // unexported-return is huma's idiomatic op pattern
 func (h *Handler) GetMovies(ctx context.Context, in *getMoviesInput) (*getMoviesOutput, error) {
 	page := in.Page
 	if page < 1 {
@@ -214,6 +229,7 @@ func (h *Handler) GetMovies(ctx context.Context, in *getMoviesInput) (*getMovies
 	return &getMoviesOutput{Body: NewMoviesPage(result)}, nil
 }
 
+//nolint:revive // unexported-return is huma's idiomatic op pattern
 func (h *Handler) CreateMovie(ctx context.Context, in *createMovieInput) (*createMovieOutput, error) {
 	if err := h.service.CreateMovie(ctx, &in.Body); err != nil {
 		return nil, api.MapError(ctx, err, "Failed to create movie")
@@ -221,6 +237,7 @@ func (h *Handler) CreateMovie(ctx context.Context, in *createMovieInput) (*creat
 	return &createMovieOutput{Status: http.StatusCreated, Body: in.Body}, nil
 }
 
+//nolint:revive // unexported-return is huma's idiomatic op pattern
 func (h *Handler) UpdateMovie(ctx context.Context, in *updateMovieInput) (*updateMovieOutput, error) {
 	if err := h.service.UpdateMovie(ctx, in.ID, &in.Body); err != nil {
 		return nil, api.MapError(ctx, err, "Failed to update movie")
@@ -229,6 +246,7 @@ func (h *Handler) UpdateMovie(ctx context.Context, in *updateMovieInput) (*updat
 	return &updateMovieOutput{Body: in.Body}, nil
 }
 
+//nolint:revive // unexported-return is huma's idiomatic op pattern
 func (h *Handler) DeleteMovie(ctx context.Context, in *deleteMovieInput) (*deleteMovieOutput, error) {
 	if err := h.service.DeleteMovie(ctx, in.ID); err != nil {
 		return nil, api.MapError(ctx, err, "Failed to delete movie")

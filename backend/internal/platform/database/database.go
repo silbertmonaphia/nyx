@@ -7,6 +7,7 @@ package database
 import (
 	"context"
 	"fmt"
+	"math"
 	"time"
 
 	"nyx/internal/platform/config"
@@ -49,8 +50,8 @@ func New(ctx context.Context, cfg *config.Config, tracer pgx.QueryTracer) (*pgxp
 		if err != nil {
 			lastErr = err
 		} else {
-			poolCfg.MaxConns = int32(cfg.DBMaxOpenConns)
-			poolCfg.MinConns = int32(cfg.DBMaxIdleConns)
+			poolCfg.MaxConns = poolConns(cfg.DBMaxOpenConns)
+			poolCfg.MinConns = poolConns(cfg.DBMaxIdleConns)
 			poolCfg.MaxConnLifetime = maxLifetime
 			poolCfg.MaxConnIdleTime = maxIdleTime
 			poolCfg.ConnConfig.Tracer = tracer
@@ -111,4 +112,19 @@ func RunMigrations(dbURL, migrationPath string) error {
 
 	log.Info().Str("path", migrationPath).Msg("Database migrations applied successfully")
 	return nil
+}
+
+// poolConns clamps an operator-supplied pool-size int down to the
+// int32 range pgxpool.Config expects. DB_MAX_OPEN_CONNS /
+// DB_MAX_IDLE_CONNS are env-driven and could in principle be set above
+// math.MaxInt32; pool sizing above a few hundred is never sensible, so
+// the clamp simply caps the value at the type's max and lets pgxpool
+// enforce its own min-conns-vs-max-conns constraint.
+//
+//nolint:gosec // G115: the explicit math.MaxInt32 clamp above proves the cast is safe.
+func poolConns(v int) int32 {
+	if v > math.MaxInt32 {
+		return math.MaxInt32
+	}
+	return int32(v)
 }

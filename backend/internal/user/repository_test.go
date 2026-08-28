@@ -25,16 +25,16 @@ type stubQuerier struct {
 	insertErr   error
 	insertCalls int
 
-	createRefreshResp  db.CreateRefreshTokenRow
-	createRefreshErr   error
-	getRefreshResp     db.RefreshToken
-	getRefreshErr      error
-	rotateRefreshResp  db.RotateRefreshTokenRow
-	rotateRefreshErr   error
-	revokeFamilyResp   int64
-	revokeFamilyErr    error
-	revokeFamilyCalls  int
-	revokeByIDErr      error
+	createRefreshResp db.CreateRefreshTokenRow
+	createRefreshErr  error
+	getRefreshResp    db.RefreshToken
+	getRefreshErr     error
+	rotateRefreshResp db.RotateRefreshTokenRow
+	rotateRefreshErr  error
+	revokeFamilyResp  int64
+	revokeFamilyErr   error
+	revokeFamilyCalls int
+	revokeByIDErr     error
 }
 
 func (s *stubQuerier) InsertUser(_ context.Context, _ db.InsertUserParams) (db.User, error) {

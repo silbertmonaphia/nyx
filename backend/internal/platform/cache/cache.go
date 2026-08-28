@@ -50,10 +50,10 @@ func (noopCache) Get(context.Context, string, any) (bool, error) {
 	return false, nil
 }
 func (noopCache) Set(context.Context, string, any, time.Duration) error { return nil }
-func (noopCache) Delete(context.Context, ...string) error            { return nil }
-func (noopCache) DeletePrefix(context.Context, string) error         { return nil }
-func (noopCache) Ping(context.Context) error                         { return nil }
-func (noopCache) Close() error                                       { return nil }
+func (noopCache) Delete(context.Context, ...string) error               { return nil }
+func (noopCache) DeletePrefix(context.Context, string) error            { return nil }
+func (noopCache) Ping(context.Context) error                            { return nil }
+func (noopCache) Close() error                                          { return nil }
 
 // redisCache wraps a *redis.Client.
 type redisCache struct {

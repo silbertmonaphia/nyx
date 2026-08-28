@@ -21,6 +21,16 @@ import (
 	"nyx/internal/reqctx"
 )
 
+// WWW-Authenticate challenge strings and the safe error-detail string
+// used by the auth middleware. Extracted to constants so the wire
+// shape (RFC 6750 challenge) is documented in one place and goconst
+// stops complaining about the repeated literals in the test cases.
+const (
+	challengeBare          = `Bearer error="invalid_token"`
+	challengeExpired       = `Bearer error="invalid_token", error_description="expired"`
+	invalidOrExpiredDetail = "Invalid or expired token"
+)
+
 // stubTokens is an auth.TokenService that always returns the supplied
 // error from ValidateToken. The middleware must never echo that error
 // text to the client — it goes to zerolog instead.
@@ -91,8 +101,8 @@ func TestAuth_InvalidTokenHidesInternalDetails(t *testing.T) {
 	if err := json.Unmarshal(rr.Body.Bytes(), &env); err != nil {
 		t.Fatalf("unmarshal envelope: %v; body=%s", err, rr.Body.String())
 	}
-	if env.Message != "Invalid or expired token" {
-		t.Errorf("envelope.error = %q, want %q", env.Message, "Invalid or expired token")
+	if env.Message != invalidOrExpiredDetail {
+		t.Errorf("envelope.error = %q, want %q", env.Message, invalidOrExpiredDetail)
 	}
 	if env.Details != "invalid token" {
 		t.Errorf("envelope.details = %v, want %q", env.Details, "invalid token")
@@ -118,7 +128,7 @@ func TestAuth_InvalidTokenHidesInternalDetails(t *testing.T) {
 // response carries `WWW-Authenticate: Bearer error="invalid_token",
 // error_description="expired"`. That's the marker the frontend's
 // axios interceptor keys on to trigger single-flight refresh instead
-// of hard-logout. The body must still say "Invalid or expired token"
+// of hard-logout. The body must still say invalidOrExpiredDetail
 // — never the raw parser error.
 func TestAuth_ExpiredTokenSetsExpiredChallenge(t *testing.T) {
 	tokens := &stubTokens{validateErr: auth.ErrExpiredToken}
@@ -137,22 +147,22 @@ func TestAuth_ExpiredTokenSetsExpiredChallenge(t *testing.T) {
 	if rr.Code != http.StatusUnauthorized {
 		t.Fatalf("status = %d, want 401; body=%s", rr.Code, rr.Body.String())
 	}
-	if got := rr.Header().Get("WWW-Authenticate"); got != `Bearer error="invalid_token", error_description="expired"` {
-		t.Errorf("WWW-Authenticate = %q, want %q", got, `Bearer error="invalid_token", error_description="expired"`)
+	if got := rr.Header().Get("WWW-Authenticate"); got != challengeExpired {
+		t.Errorf("WWW-Authenticate = %q, want %q", got, challengeExpired)
 	}
 
 	var env platapi.ErrorResponse
 	if err := json.Unmarshal(rr.Body.Bytes(), &env); err != nil {
 		t.Fatalf("unmarshal envelope: %v; body=%s", err, rr.Body.String())
 	}
-	if env.Message != "Invalid or expired token" {
-		t.Errorf("envelope.error = %q, want %q", env.Message, "Invalid or expired token")
+	if env.Message != invalidOrExpiredDetail {
+		t.Errorf("envelope.error = %q, want %q", env.Message, invalidOrExpiredDetail)
 	}
 }
 
 // TestAuth_InvalidTokenSetsBareChallenge covers the non-expired
 // failure mode: a parser-style error (signature mismatch, malformed
-// token, etc.) sets the bare `Bearer error="invalid_token"`
+// token, etc.) sets the bare challengeBare
 // challenge. The frontend treats this as a hard logout because the
 // token can't be revived by /api/refresh.
 func TestAuth_InvalidTokenSetsBareChallenge(t *testing.T) {
@@ -173,16 +183,16 @@ func TestAuth_InvalidTokenSetsBareChallenge(t *testing.T) {
 	if rr.Code != http.StatusUnauthorized {
 		t.Fatalf("status = %d, want 401; body=%s", rr.Code, rr.Body.String())
 	}
-	if got := rr.Header().Get("WWW-Authenticate"); got != `Bearer error="invalid_token"` {
-		t.Errorf("WWW-Authenticate = %q, want %q", got, `Bearer error="invalid_token"`)
+	if got := rr.Header().Get("WWW-Authenticate"); got != challengeBare {
+		t.Errorf("WWW-Authenticate = %q, want %q", got, challengeBare)
 	}
 
 	var env platapi.ErrorResponse
 	if err := json.Unmarshal(rr.Body.Bytes(), &env); err != nil {
 		t.Fatalf("unmarshal envelope: %v; body=%s", err, rr.Body.String())
 	}
-	if env.Message != "Invalid or expired token" {
-		t.Errorf("envelope.error = %q, want %q", env.Message, "Invalid or expired token")
+	if env.Message != invalidOrExpiredDetail {
+		t.Errorf("envelope.error = %q, want %q", env.Message, invalidOrExpiredDetail)
 	}
 }
 
@@ -254,8 +264,8 @@ func TestAuth_MissingAuthorizationReturns401(t *testing.T) {
 	if rr.Code != http.StatusUnauthorized {
 		t.Fatalf("status = %d, want 401; body=%s", rr.Code, rr.Body.String())
 	}
-	if got := rr.Header().Get("WWW-Authenticate"); got != `Bearer error="invalid_token"` {
-		t.Errorf("WWW-Authenticate = %q, want %q", got, `Bearer error="invalid_token"`)
+	if got := rr.Header().Get("WWW-Authenticate"); got != challengeBare {
+		t.Errorf("WWW-Authenticate = %q, want %q", got, challengeBare)
 	}
 
 	var env platapi.ErrorResponse
@@ -301,7 +311,7 @@ func TestAuth_MalformedBearerReturns401(t *testing.T) {
 			if rr.Code != http.StatusUnauthorized {
 				t.Fatalf("status = %d, want 401; body=%s", rr.Code, rr.Body.String())
 			}
-			if got := rr.Header().Get("WWW-Authenticate"); got != `Bearer error="invalid_token"` {
+			if got := rr.Header().Get("WWW-Authenticate"); got != challengeBare {
 				t.Errorf("WWW-Authenticate = %q, want bare invalid_token challenge", got)
 			}
 		})
@@ -436,15 +446,15 @@ func TestHumaAuth_ExpiredTokenSetsExpiredChallenge(t *testing.T) {
 	if rr.Code != http.StatusUnauthorized {
 		t.Fatalf("status = %d, want 401; body=%s", rr.Code, rr.Body.String())
 	}
-	if got := rr.Header().Get("WWW-Authenticate"); got != `Bearer error="invalid_token", error_description="expired"` {
-		t.Errorf("WWW-Authenticate = %q, want %q", got, `Bearer error="invalid_token", error_description="expired"`)
+	if got := rr.Header().Get("WWW-Authenticate"); got != challengeExpired {
+		t.Errorf("WWW-Authenticate = %q, want %q", got, challengeExpired)
 	}
 
 	var env platapi.ErrorResponse
 	if err := json.Unmarshal(rr.Body.Bytes(), &env); err != nil {
 		t.Fatalf("unmarshal envelope: %v; body=%s", err, rr.Body.String())
 	}
-	if env.Message != "Invalid or expired token" {
-		t.Errorf("envelope.error = %q, want %q", env.Message, "Invalid or expired token")
+	if env.Message != invalidOrExpiredDetail {
+		t.Errorf("envelope.error = %q, want %q", env.Message, invalidOrExpiredDetail)
 	}
 }

@@ -60,7 +60,7 @@ func TestRedisCacheHitMiss(t *testing.T) {
 	}
 
 	want := payload{Name: "neo"}
-	if err := c.Set(ctx, "p", want, time.Minute); err != nil {
+	if err = c.Set(ctx, "p", want, time.Minute); err != nil {
 		t.Fatalf("Set: %v", err)
 	}
 

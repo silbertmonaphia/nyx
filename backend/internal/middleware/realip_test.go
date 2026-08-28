@@ -42,8 +42,8 @@ func TestRealIP_RespectsXForwardedFor(t *testing.T) {
 
 	rr := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
-	req.RemoteAddr = "10.0.0.1:80"                         // proxy
-	req.Header.Set("X-Forwarded-For", "198.51.100.5")      // real client
+	req.RemoteAddr = "10.0.0.1:80"                    // proxy
+	req.Header.Set("X-Forwarded-For", "198.51.100.5") // real client
 	handler.ServeHTTP(rr, req)
 
 	if seenOnContext != "198.51.100.5" {

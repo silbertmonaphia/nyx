@@ -25,10 +25,10 @@ import (
 // unchanged so the caller can decide whether to translate them at a
 // higher layer.
 const (
-	CodeUniqueViolation    = "23505"
+	CodeUniqueViolation     = "23505"
 	CodeForeignKeyViolation = "23503"
-	CodeNotNullViolation   = "23502"
-	CodeCheckViolation     = "23514"
+	CodeNotNullViolation    = "23502"
+	CodeCheckViolation      = "23514"
 )
 
 // Canonical constraint names from the migrations. The pgerr package

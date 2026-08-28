@@ -98,11 +98,11 @@ func main() {
 	// than serving cache errors on every request.
 	var cacheClient cache.Cache = cache.NewNoop()
 	if cfg.RedisEnabled {
-		var err error
-		cacheClient, err = connectRedisWithRetry(cfg.RedisURL, 10)
-		if err != nil {
-			log.Fatal().Err(err).Msg("Could not connect to Redis")
+		rc, redisErr := connectRedisWithRetry(cfg.RedisURL, 10)
+		if redisErr != nil {
+			log.Fatal().Err(redisErr).Msg("Could not connect to Redis")
 		}
+		cacheClient = rc
 		defer func() { _ = cacheClient.Close() }()
 		log.Info().Str("url", cfg.RedisURL).Msg("Cache enabled")
 	} else {

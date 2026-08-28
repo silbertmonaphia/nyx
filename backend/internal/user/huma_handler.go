@@ -165,6 +165,7 @@ type meOutput struct {
 
 // ---- Handler functions ----
 
+//nolint:revive // unexported-return is huma's idiomatic op pattern
 func (h *Handler) Register(ctx context.Context, in *registerInput) (*registerOutput, error) {
 	res, err := h.service.Register(ctx, in.Body)
 	if err != nil {
@@ -176,6 +177,7 @@ func (h *Handler) Register(ctx context.Context, in *registerInput) (*registerOut
 	}, nil
 }
 
+//nolint:revive // unexported-return is huma's idiomatic op pattern
 func (h *Handler) Login(ctx context.Context, in *loginInput) (*loginOutput, error) {
 	res, err := h.service.Login(ctx, in.Body)
 	if err != nil {
@@ -191,6 +193,8 @@ func (h *Handler) Login(ctx context.Context, in *loginInput) (*loginOutput, erro
 // a defensive client can collapse them. MapError is the only error
 // path. On success the handler returns a fresh Bearer pair in the
 // response body.
+//
+//nolint:revive // unexported-return is huma's idiomatic op pattern
 func (h *Handler) Refresh(ctx context.Context, in *refreshInput) (*refreshOutput, error) {
 	if in.Body.RefreshToken == "" {
 		return nil, api.MapError(ctx, ErrInvalidRefreshToken, "Failed to refresh token")
@@ -210,6 +214,8 @@ func (h *Handler) Refresh(ctx context.Context, in *refreshInput) (*refreshOutput
 // invalid the row revoke is skipped — the access token is already
 // invalid by definition if we got here, so the cookie-based escape
 // hatch no longer applies.
+//
+//nolint:revive // unexported-return is huma's idiomatic op pattern
 func (h *Handler) Logout(ctx context.Context, in *logoutInput) (*logoutOutput, error) {
 	if in.Body.RefreshToken != "" {
 		if err := h.service.Logout(ctx, in.Body.RefreshToken); err != nil {
@@ -227,6 +233,8 @@ func (h *Handler) Logout(ctx context.Context, in *logoutInput) (*logoutOutput, e
 // (ErrUserNotFound) is theoretically possible only if the row
 // was deleted between login and now; api.MapError returns the
 // standard 404 envelope in that case.
+//
+//nolint:revive // unexported-return is huma's idiomatic op pattern
 func (h *Handler) Me(ctx context.Context, _ *struct{}) (*meOutput, error) {
 	id := reqctx.UserIDFromContext(ctx)
 	u, err := h.service.GetByID(ctx, id)
