@@ -30,10 +30,10 @@ Status legend: ☐ open · ☑ fixed · ◌ wontfix (with rationale).
 | H6 | ☑ | Frontend / Infra | `frontend/nginx.conf` | No CSP / X-Frame-Options / Referrer-Policy / Permissions-Policy / X-Content-Type-Options / HSTS | Add the headers; strict CSP `default-src 'self'` | Fixed: server-level `add_header` directives for CSP (`default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'` — the inline style is the static FOUC-prevention block in `index.html`; `'unsafe-inline'` on style-src is far less risky than on script-src and switching to a hash is brittle), `X-Frame-Options: DENY`, `X-Content-Type-Options: nosniff`, `Referrer-Policy: strict-origin-when-cross-origin`, `Permissions-Policy` denying camera/mic/geo/payment/usb/etc., and HSTS (1y, includeSubDomains). `always` so headers apply to both SPA and proxied responses |
 | H7 | ☑ | Frontend | `frontend/src/services/api.ts:136-141`, `frontend/src/components/app/ToastContainer.tsx` | Server `ErrorResponse.error` rendered verbatim as toast | Cap length, strip control chars, show generic message + request id; log full payload | Fixed: response interceptor no longer echoes the backend `error` field. Toast shows `"Server error (<status>) (ref: <x-request-id>)"` — generic label plus the request id so users have something to quote. Full payload (with control chars stripped and length capped at 2 KB) is captured via `logger.error('api.error', {...})` for the operator. New `buildServerErrorToast` + `sanitiseForLog` helpers; tests cover the new behaviour |
 | H8 | ☑ | Frontend | `frontend/src/services/api.ts:104-117` | Refresh only fires when 401 carries `WWW-Authenticate: error_description="expired"`; non-expired 401s force-logout | Refresh on any 401 (unless `_retried` / `skipAuthRefresh`) | Fixed: the refresh attempt is now gated only on `!skipRefresh` (i.e. `_retried` or `skipAuthRefresh`). The previous `WWW-Authenticate=expired` substring check forced hard logouts on malformed/forged tokens and locked users out of recoverable sessions. Single-flight + replay logic is unchanged. Tests in `api.test.ts` updated to drive the path with a bare 401 (no challenge) and a non-expired `invalid_token` challenge |
-| H9 | ☐ | Docker | `backend/Dockerfile:21` | `FROM alpine:latest` — floating tag | Pin to `alpine:3.20@sha256:<digest>` |
-| H10 | ☐ | Docker | `frontend/Dockerfile:8` | `npm install` instead of `npm ci` | Use `npm ci --no-audit --no-fund` |
-| H11 | ☐ | Docker | `backend/Dockerfile:18` | `go build` missing `-trimpath -ldflags="-s -w -buildid="` | Add the flags |
-| H12 | ☐ | Docker | `docker-compose.yml:13-14, 27` | DB `5433` and Redis `6379` bound `0.0.0.0` with default `postgres/postgres` | Bind to `127.0.0.1` |
+| H9 | ☑ | Docker | `backend/Dockerfile:21` | `FROM alpine:latest` — floating tag | Pin to `alpine:3.20@sha256:<digest>` |
+| H10 | ☑ | Docker | `frontend/Dockerfile:8` | `npm install` instead of `npm ci` | Use `npm ci --no-audit --no-fund` |
+| H11 | ☑ | Docker | `backend/Dockerfile:18` | `go build` missing `-trimpath -ldflags="-s -w -buildid="` | Add the flags |
+| H12 | ☑ | Docker | `docker-compose.yml:13-14, 27` | DB `5433` and Redis `6379` bound `0.0.0.0` with default `postgres/postgres` | Bind to `127.0.0.1` |
 
 ### Medium
 
@@ -47,10 +47,10 @@ Status legend: ☐ open · ☑ fixed · ◌ wontfix (with rationale).
 | M6 | ☑ | Input | `backend/internal/movie/huma_handler.go:134`, `repository.go:101-104` | `Q` query has no length cap; multi-MB terms reach Postgres | Add `maxLength:"200"` | Fixed: `maxLength:"200"` tag on `getMoviesInput.Q`; huma emits 400 on overlong input before the handler runs |
 | M7 | ☑ | Input | `backend/internal/user/model.go:25-28` | `LoginRequest` has no `minLength` / `maxLength` on password | Cap server-side before bcrypt (e.g. 128 bytes) | Fixed: `RegisterRequest.Password` now `maxLength:"128"` (min 6 retained); `LoginRequest.Password` now `maxLength:"128"`. Cap covers both 72-byte bcrypt truncation and any future shift to Argon2id |
 | M8 | ☑ | Frontend | `frontend/src/store/authStore.ts` | `loginAxios.post('/logout')` had no `baseURL`; dev hit `localhost:5173/logout` (404) | Set `baseURL` to match `VITE_API_URL` | Fixed: `loginAxios` now created with `baseURL: VITE_API_URL || 'http://localhost:8080/api'` so `/logout` resolves to the backend in both dev and prod. Post-Bearer the body carries `{refresh_token: <rt>}` and `withCredentials` is `false`. New test pins both defaults and the request body |
-| M9 | ☐ | Docker | `docker-compose.prod.yml:62` + `.env.example` | `sslmode=disable` in prod; `DB_URL` interpolated from `POSTGRES_PASSWORD` shell expansion (visible in `docker inspect`) | Set `DB_URL` directly in secrets; `sslmode=require` |
-| M10 | ☐ | Docker | (no `.dockerignore`) | `COPY . .` ships tests, docs, `.env`, `coverage.out` into build image | Add `.dockerignore` per service |
-| M11 | ☐ | Docker | both Dockerfiles | No `HEALTHCHECK` directive | Add `HEALTHCHECK` per service |
-| M12 | ☐ | Docker | both compose files | No `cap_drop` / `read_only` / `security_opt` | Add hardening flags |
+| M9 | ☑ | Docker | `docker-compose.prod.yml:62` + `.env.example` | `sslmode=disable` in prod; `DB_URL` interpolated from `POSTGRES_PASSWORD` shell expansion (visible in `docker inspect`) | Set `DB_URL` directly in secrets; `sslmode=require` |
+| M10 | ☑ | Docker | (no `.dockerignore`) | `COPY . .` ships tests, docs, `.env`, `coverage.out` into build image | Add `.dockerignore` per service |
+| M11 | ☑ | Docker | both Dockerfiles | No `HEALTHCHECK` directive | Add `HEALTHCHECK` per service |
+| M12 | ☑ | Docker | both compose files | No `cap_drop` / `read_only` / `security_opt` | Add hardening flags |
 
 ### Low / informational
 
@@ -67,7 +67,7 @@ Status legend: ☐ open · ☑ fixed · ◌ wontfix (with rationale).
 | L9 | ☑ | Frontend | `frontend/src/App.tsx:81-90,242-249` | Delete dialog fire-twice if double-clicked rapidly | Disable button while `deleteMovie.isPending` | Fixed: confirm button now `disabled={deleteMovie.isPending}` and the visible label flips to "Deleting…" while in flight. `executeDelete` short-circuits if `deleteMovie.isPending` is true (the React re-render that closes the dialog is async, so a rapid second click can otherwise hit the handler with the stale `confirmDeleteId`). New tests in `App.test.tsx` cover both the disabled state and the relabelled button |
 | L10 | ☐ | Process | `.github/workflows/ci.yml`, `frontend/.husky/pre-commit` | No secret scanner in CI or pre-commit | Add `gitleaks-action` |
 | L11 | ☐ | Process | `.github/workflows/ci.yml` | Actions pinned to majors (`@v4`, `@v5`), not commit SHAs | Pin to SHAs |
-| L12 | ☐ | Repo | `k8s/secrets.yaml` | Gitignored but on disk with base64 placeholder; confirm it was never deployed | If deployed, rotate. Use `kubectl create secret` from `openssl rand` |
+| L12 | ☑ (`initial`) | Repo | `k8s/secrets.yaml` | Gitignored but on disk with base64 placeholder; confirm it was never deployed | Already scrubbed: `f483125` removed `k8s/secrets.yaml` from history; `.gitignore` line 41 keeps it out of working tree; only `k8s/secrets.yaml.example` is tracked. No rotation needed — file was never tracked in any commit that could have shipped. |
 | L13 | ☐ | Repo | `frontend/package.json:36` | `lucide-react@^1.7.0` is an unusual version specifier | Verify on npm |
 | L14 | ☑ (`initial`) | Process | repo | No `SECURITY.md` (this file) | Resolved by this commit | Resolved by the original audit commit |
 
@@ -93,7 +93,7 @@ Status legend: ☐ open · ☑ fixed · ◌ wontfix (with rationale).
 
 1. **Backend hardening** — H1–H5, M1–M7, L1–L4 — landed in `2fd84e5` (H1) and `93b2ef2` (H2–H5, M1–M7, L1, L3, L4); M5 carried over from initial commit
 2. **Frontend hardening** — H6–H8, M8, L5–L9 — landed (see table above for per-item SHAs)
-3. **Docker + compose** — H9–H12, M9–M12, L12
+3. **Docker + compose** — H9–H12, M9–M12, L12 — landed (this batch)
 4. **Process** — L10–L11, L13
 
 Tick a row by changing ☐ → ☑ and adding the fix commit SHA in the issue column.
