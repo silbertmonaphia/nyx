@@ -151,3 +151,46 @@ func TestLoadRejectsShortJWTSecret(t *testing.T) {
 		t.Errorf("Load() error = %v, want it to mention JWT_SECRET", err)
 	}
 }
+
+// TestLoadRejectsEmptyDBURL pins the SECURITY.md M9 fail-closed
+// contract: the prod compose ships with `DB_URL=` (empty literal)
+// in environment: and relies on docker-entrypoint.sh to fill it
+// in from the mounted secret. If the shim is bypassed or the
+// secret file is missing, the backend MUST refuse to start —
+// starting with DB_URL="" would let pgxpool.ParseConfig("") silently
+// open an unusable pool and the first request would 500. This test
+// pins that the load step itself errors before any network call.
+func TestLoadRejectsEmptyDBURL(t *testing.T) {
+	// Isolate from any ambient DB_URL.
+	t.Setenv("DB_URL", "")
+	t.Setenv("JWT_SECRET", auth.TestSecret)
+
+	_, err := Load()
+	if err == nil {
+		t.Fatal("Load() error = nil, want empty-DB_URL rejection")
+	}
+	if !strings.Contains(err.Error(), "DB_URL") {
+		t.Errorf("Load() error = %v, want it to mention DB_URL", err)
+	}
+}
+
+// TestLoadRejectsEmptyJWTSecret is the M9 mirror of the test above
+// for JWT_SECRET. The shim only exports JWT_SECRET if the secret
+// file is non-empty — an empty or missing secret leaves the env
+// var empty. The placeholder default would otherwise kick in via
+// viper.SetDefault and pass IsDefault, but the empty string is NOT
+// the placeholder literal, so we need a dedicated check. viper
+// falls through to the empty string, then this test pins that the
+// length check still fires.
+func TestLoadRejectsEmptyJWTSecret(t *testing.T) {
+	t.Setenv("DB_URL", "postgres://x")
+	t.Setenv("JWT_SECRET", "")
+
+	_, err := Load()
+	if err == nil {
+		t.Fatal("Load() error = nil, want empty-JWT_SECRET rejection")
+	}
+	if !strings.Contains(err.Error(), "JWT_SECRET") {
+		t.Errorf("Load() error = %v, want it to mention JWT_SECRET", err)
+	}
+}

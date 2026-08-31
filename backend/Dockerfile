@@ -44,6 +44,16 @@ RUN apk --no-cache add ca-certificates wget
 # user avoids bind-mount permission surprises in dev. nyx needs network
 # egress (wget) for HEALTHCHECK; no extra caps required.
 RUN adduser -D -u 1000 nyx
+
+# Entrypoint shim (SECURITY.md M9 bridge). The compose prod file
+# mounts DB_URL and JWT_SECRET as Docker secret files at
+# /run/secrets/db_url and /run/secrets/jwt_secret (mode 0400). The
+# shim reads each secret file into its env var before exec'ing the
+# binary so the values never appear as env literals in the image or
+# in `docker inspect`. It is intentionally tiny — see the file's
+# own doc-comment for the exact behaviour.
+COPY --chown=nyx:nyx --chmod=0555 docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
+
 USER nyx
 
 WORKDIR /home/nyx/
@@ -54,13 +64,20 @@ COPY --from=build --chown=nyx:nyx /app/migrations ./migrations
 
 EXPOSE 8080
 
-# Liveness probe (M11). wgets the public /api/health endpoint and treats
-# any HTTP 2xx as healthy. This is intentionally a "process up + serving
-# HTTP" check, not a deep dependency check (DB/Redis are not probed
-# here — a deep check would amplify outages and require secret-bearing
-# credentials in the health path). If you need a deep check, mount a
-# separate /readyz probe and wire it to compose/K8s readiness instead.
+# Liveness probe (M11). wgets the dedicated /api/livez endpoint
+# and treats any HTTP 2xx as healthy. /api/livez is intentionally
+# SHALLOW — it returns 200 unconditionally without touching the DB
+# or Redis — so a transient infra blip never flips the container to
+# unhealthy and triggers a restart cascade. The existing
+# /api/health endpoint remains the deep readiness signal for
+# operators (DB + cache status). See huma_handler.go for the
+# route registration and behaviour.
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
-    CMD wget -qO- http://127.0.0.1:8080/api/health >/dev/null 2>&1 || exit 1
+    CMD wget -qO- http://127.0.0.1:8080/api/livez >/dev/null 2>&1 || exit 1
 
+# ENTRYPOINT (not CMD) so docker-compose.yml can override the
+# binary args without rebuilding the image. The shim is what
+# bridges the mounted secret files into the backend's env-driven
+# config — see the file's own doc-comment.
+ENTRYPOINT ["/usr/local/bin/docker-entrypoint.sh"]
 CMD ["./main"]

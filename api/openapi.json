@@ -102,6 +102,22 @@
         ],
         "type": "object"
       },
+      "LivezResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "status": {
+            "description": "Always 'ok' as long as the process is serving HTTP.",
+            "examples": [
+              "ok"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "status"
+        ],
+        "type": "object"
+      },
       "LoginRequest": {
         "additionalProperties": false,
         "properties": {
@@ -341,6 +357,38 @@
           }
         },
         "summary": "Health check",
+        "tags": [
+          "health"
+        ]
+      }
+    },
+    "/api/livez": {
+      "get": {
+        "description": "Shallow liveness check — returns 200 as long as the process is up. Does NOT probe the database or cache; use /api/health for a deep readiness signal.",
+        "operationId": "livez",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LivezResponse"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Liveness probe",
         "tags": [
           "health"
         ]

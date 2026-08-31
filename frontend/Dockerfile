@@ -42,6 +42,18 @@ COPY nginx.conf /etc/nginx/conf.d/default.conf
 RUN sed -i "s|__JAEGER_HOST__|${JAEGER_HOST}|g" /etc/nginx/conf.d/default.conf && \
     sed -i "s|__API_ORIGIN__|${API_ORIGIN}|g" /etc/nginx/conf.d/default.conf
 
+# Syntactic guardrail: a stray typo in the nginx.conf template OR
+# in the sed substitution above (e.g. JAEGER_HOST set to an empty
+# string by an operator) silently produces a broken config that
+# nginx only fails on at boot time. `nginx -t` parses the resulting
+# file at build time so the failure surfaces in the build log,
+# not in production. Runs as root because nginx -t needs to read
+# every included mime.types / fastcgi / etc. file path; the
+# resulting config is what the nginx user will actually load.
+USER root
+RUN nginx -t
+USER nginx
+
 EXPOSE 8080
 
 # SECURITY.md M11: liveness probe. We use `--spider` on `/` rather than

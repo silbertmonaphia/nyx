@@ -158,6 +158,41 @@ func TestHealthHandlerError(t *testing.T) {
 	}
 }
 
+// TestLivezHandlerReturnsOK — SECURITY.md M11. /api/livez is the
+// SHALLOW liveness probe used by the backend container's Docker
+// HEALTHCHECK. It must return 200 unconditionally as long as the
+// process is serving HTTP — no DB ping, no Redis check, no
+// dependency surface. The deep readiness signal lives on
+// /api/health (TestHealthHandler / TestHealthHandlerError above).
+//
+// This test deliberately does NOT call mock.ExpectPing() — the
+// contract is that the handler never touches the repo. If a future
+// refactor adds a DB call here, pgxmock will fail the test with
+// "unexpected query" and the regression is caught before it can
+// turn a transient infra blip into a container restart cascade.
+func TestLivezHandlerReturnsOK(t *testing.T) {
+	repo, _ := newMockRepo(t)
+	service := NewService(repo, cache.NewNoop(), time.Minute, noop.NewTracerProvider().Tracer("test"))
+	h := NewHandler(service)
+
+	router := setupTestRouter(h, newTestTokens(t), false)
+	req, _ := http.NewRequest("GET", "/api/livez", nil)
+	rr := httptest.NewRecorder()
+	router.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Errorf("handler returned wrong status code: got %v want %v", rr.Code, http.StatusOK)
+	}
+
+	var response map[string]interface{}
+	if err := json.Unmarshal(rr.Body.Bytes(), &response); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if response["status"] != "ok" {
+		t.Errorf("expected status 'ok', got %v", response["status"])
+	}
+}
+
 func TestGetMoviesHandler(t *testing.T) {
 	repo, mock := newMockRepo(t)
 	service := NewService(repo, cache.NewNoop(), time.Minute, noop.NewTracerProvider().Tracer("test"))

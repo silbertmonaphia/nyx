@@ -59,6 +59,24 @@ func RegisterMovieOpsTest(api huma.API, h *Handler, tokens auth.TokenService, wi
 		Tags:        []string{"health"},
 	}, h.Health)
 
+	// /api/livez — shallow liveness probe. Returns 200 unconditionally
+	// as long as the process is up and serving HTTP. Used by the
+	// backend container's Docker HEALTHCHECK so a transient DB or
+	// Redis blip never flips the container to unhealthy and triggers
+	// a restart cascade. The deep readiness signal (DB + cache status)
+	// remains on /api/health — wire it to compose/K8s readiness when
+	// you need a dependency-aware check. See SECURITY.md M11.
+	huma.Register(api, huma.Operation{
+		OperationID: "livez",
+		Method:      http.MethodGet,
+		Path:        "/api/livez",
+		Summary:     "Liveness probe",
+		Description: "Shallow liveness check — returns 200 as long as the process is up. Does NOT probe the database or cache; use /api/health for a deep readiness signal.",
+		Tags:        []string{"health"},
+	}, func(_ context.Context, _ *struct{}) (*livezOutput, error) {
+		return &livezOutput{Body: livezResponse{Status: "ok"}}, nil
+	})
+
 	huma.Register(api, huma.Operation{
 		OperationID: "get-movies",
 		Method:      http.MethodGet,
@@ -135,6 +153,18 @@ type healthServices struct {
 	API      string `json:"api" example:"up"`
 	Database string `json:"database" example:"up"`
 	Cache    string `json:"cache" example:"up"`
+}
+
+// livezOutput / livezResponse are the wire types for /api/livez.
+// Kept deliberately separate from healthResponse so a future
+// health-shape change (adding new dependency checks) cannot
+// accidentally widen the liveness contract.
+type livezOutput struct {
+	Body livezResponse
+}
+
+type livezResponse struct {
+	Status string `json:"status" example:"ok" doc:"Always 'ok' as long as the process is serving HTTP."`
 }
 
 type getMoviesInput struct {

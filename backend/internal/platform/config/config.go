@@ -97,6 +97,18 @@ func Load() (*Config, error) {
 		return nil, err
 	}
 
+	// SECURITY.md M9 fail-closed: an empty DB_URL reaches pgxpool as
+	// an unusable connection string and the first request would 500
+	// instead of the backend refusing to start. The prod compose
+	// ships with DB_URL="" in environment: and relies on
+	// docker-entrypoint.sh to fill it from /run/secrets/db_url —
+	// if the shim is bypassed (or the secret file is missing) we
+	// must refuse to start here, not later. Tested by
+	// TestLoadRejectsEmptyDBURL in config_test.go.
+	if cfg.DBURL == "" {
+		return nil, fmt.Errorf("DB_URL is required")
+	}
+
 	// Cross-field validation: enabling the cache requires a URL to connect to.
 	if cfg.RedisEnabled && cfg.RedisURL == "" {
 		return nil, fmt.Errorf("REDIS_URL is required when REDIS_ENABLED=true")
