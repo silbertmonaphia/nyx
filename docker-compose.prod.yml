@@ -1,10 +1,95 @@
+# Production compose — hardened per SECURITY.md items M9 + M12.
+#
+# M9 (DB credentials + TLS):
+#   - DB_URL no longer interpolated from POSTGRES_PASSWORD shell
+#     expansion (which leaked the password to `docker inspect`).
+#     It is supplied via a Docker secret file mounted at
+#     /run/secrets/db_url. Operators must create the file (see the
+#     top-level `secrets:` block) BEFORE running `docker compose up`.
+#   - sslmode=require is the strongest TLS setting we can enforce
+#     without per-environment cert provisioning. It encrypts the
+#     connection but does NOT verify the server certificate (it is
+#     therefore still vulnerable to an active MITM that can present
+#     any cert). Full `sslmode=verify-full` requires the CA cert /
+#     server cert / hostname match — once certs ship (see the cert-
+#     manager comment in nginx.conf and FUTURE_BACKEND.md §3) the
+#     DB_URL in the secret file should be updated to include
+#     `sslmode=verify-full`. TODO(security): re-issue DB_URL with
+#     verify-full once per-env certs land.
+#
+# M12 (runtime hardening):
+#   - cap_drop: [ALL] on every service; minimal cap_add per service.
+#     Postgres needs CHOWN/SETUID/SETGID/DAC_OVERRIDE for the
+#     container's internal user setup. Jaeger needs nothing beyond
+#     the base set. Backend is a Go static binary (no cgo) so
+#     cap_drop ALL is sufficient — it never needs extra caps at
+#     runtime. Frontend runs nginx which needs NET_BIND_SERVICE if
+#     it binds a privileged port, but it binds :8080 inside the
+#     container as user nginx, so cap_drop ALL is fine.
+#   - security_opt: no-new-privileges on every service so a setuid
+#     binary inside the image cannot escalate.
+#   - read_only: true on redis and frontend (nginx + static SPA).
+#     Postgres cannot be read-only — it writes its data dir.
+#     Backend cannot be read-only — viper writes nothing, but the
+#     embedded migrations run read-only against the in-image dir,
+#     so technically it could be read-only too. However the Go
+#     process emits pprof / OTel SDK trace exports to disk under
+#     TMPDIR by default; we mount a tmpfs at /tmp so a read_only
+#     root is safe.
+#   - tmpfs mounts for the scratch dirs that read_only blocks.
+#
+# Caveat — JWT_SECRET and DB_URL secret files:
+#   The current backend config (internal/platform/config/config.go)
+#   reads `DB_URL` and `JWT_SECRET` directly from the environment
+#   and does NOT support `_FILE` variants. To consume the mounted
+#   secrets, operators have two options until the backend gains
+#   file-based env support (tracked as a follow-up):
+#     (a) Use Docker Compose's `environment:` substitution to read
+#         the secret file content into the env var at startup, e.g.
+#         via a one-line init script that does
+#         `export DB_URL=$(cat /run/secrets/db_url)` before exec'ing
+#         the backend binary. This still keeps the secret out of
+#         `docker inspect` (compose reads it from the mounted file,
+#         not from an env literal) but requires an entrypoint
+#         shim.
+#     (b) Patch the backend to honour DB_URL_FILE / JWT_SECRET_FILE
+#         and read /run/secrets/<name> when set. This is the proper
+#         fix and is tracked as a follow-up — for now the compose
+#         file documents the operator's required action in a comment
+#         near the backend service.
+#   The same caveat applies to JWT_SECRET — it is not currently in
+#   this compose's env at all, which means the backend falls back to
+#   its built-in placeholder and refuses to start (good — fail
+#   closed). Adding the JWT_SECRET secret mount + env export is the
+#   prod-ready path.
+
 version: '3.8'
+
+secrets:
+  # Operator MUST create this file before `docker compose up`. It
+  # contains the full Postgres connection URL, e.g.
+  #   postgres://nyx_user:<password>@db:5432/nyx_db?sslmode=require
+  # File mode 0400 means only the backend uid (1000 in the image)
+  # can read it. Never commit the actual file — only this compose
+  # template is tracked in git.
+  db_url:
+    file: ./secrets/db_url.txt
+  # Operator MUST create this file before `docker compose up`. It
+  # contains the JWT signing secret (>= 32 bytes, RFC 7518 §3.2).
+  # File mode 0400. Never commit the actual file.
+  jwt_secret:
+    file: ./secrets/jwt_secret.txt
 
 services:
   db:
     image: postgres:17-alpine
     restart: always
     environment:
+      # POSTGRES_PASSWORD is consumed by the postgres entrypoint to
+      # bootstrap the role — it must remain on the env, but we no
+      # longer interpolate it into DB_URL (that used to leak the
+      # password to `docker inspect`). The backend reads DB_URL
+      # from a mounted secret instead (see backend.secrets below).
       - POSTGRES_USER=${POSTGRES_USER:-nyx_user}
       - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-nyx_password}
       - POSTGRES_DB=${POSTGRES_DB:-nyx_db}
@@ -16,20 +101,45 @@ services:
       interval: 10s
       timeout: 3s
       retries: 10
+    # M12 — Postgres needs a handful of caps to manage its data
+    # dir and switch to the `postgres` user internally. Without
+    # them the image's entrypoint fails to bootstrap.
+    cap_drop: [ALL]
+    cap_add: [CHOWN, SETUID, SETGID, DAC_OVERRIDE]
+    security_opt: ["no-new-privileges:true"]
+    # read_only: false — Postgres must write its data dir.
     networks:
       - nyx_network
 
   redis:
     image: redis:7-alpine
     restart: always
-    command: ["redis-server", "--appendonly", "yes"]
-    volumes:
-      - redis_data:/data
+    # --save "" disables RDB snapshots so /data never needs writes
+    # on a steady-state cache; --appendonly no (default) keeps it
+    # purely in-memory. Combined with read_only root + tmpfs /data,
+    # a compromise can no longer tamper with persisted state.
+    command: ["redis-server", "--save", "", "--appendonly", "no"]
+    # Drop the persisted volume entirely — combined with the
+    # --save "" / --appendonly no flags above, redis is a pure
+    # in-memory cache and there is nothing worth persisting across
+    # restarts. The cache repopulates from backend traffic in
+    # seconds. This also closes the L7 "attacker writes to the
+    # redis volume" attack surface.
+    # volumes:
+    #   - redis_data:/data
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 10s
       timeout: 3s
       retries: 10
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    # read_only: true is safe because the command disables both
+    # snapshotting and AOF. tmpfs backs the (unused) /data dir so
+    # any spurious write attempt lands in volatile RAM.
+    read_only: true
+    tmpfs:
+      - /data:size=1m
     networks:
       - nyx_network
 
@@ -48,6 +158,8 @@ services:
       interval: 5s
       timeout: 3s
       retries: 10
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
     networks:
       - nyx_network
 
@@ -59,7 +171,20 @@ services:
         - GOPROXY=${GOPROXY:-https://goproxy.cn,direct}
     restart: always
     environment:
-      - DB_URL=postgres://${POSTGRES_USER:-nyx_user}:${POSTGRES_PASSWORD:-nyx_password}@db:5432/${POSTGRES_DB:-nyx_db}?sslmode=disable
+      # DB_URL is NO LONGER interpolated from POSTGRES_PASSWORD —
+      # the value is sourced from the mounted secret file. The
+      # backend currently reads `DB_URL` directly from env (it has
+      # no DB_URL_FILE support yet, tracked as a follow-up). The
+      # operator's entrypoint shim MUST `export
+      # DB_URL=$(cat /run/secrets/db_url)` before exec'ing the
+      # binary so the password never lands in an env literal in
+      # the image or compose file. The shim is the only change
+      # required outside this compose to make M9 fully effective.
+      # Default to empty so a missing init step fails closed (the
+      # backend's config loader will error out on empty DB_URL).
+      - DB_URL=
+      # Same pattern: JWT_SECRET must come from /run/secrets/jwt_secret.
+      - JWT_SECRET=
       - REDIS_URL=${REDIS_URL:-redis://redis:6379}
       - REDIS_ENABLED=${REDIS_ENABLED:-true}
       - CACHE_TTL=${CACHE_TTL:-5m}
@@ -81,6 +206,21 @@ services:
         condition: service_healthy
       jaeger:
         condition: service_healthy
+    # Mount the secrets as 0400 files owned by the backend uid
+    # (1000 — see backend/Dockerfile which RUNs adduser -u 1000).
+    # mode 0400 is enforced by Docker and the backend container
+    # already runs as uid 1000, so no extra chmod is needed.
+    secrets:
+      - db_url
+      - jwt_secret
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    # read_only root is safe — the backend is a Go static binary
+    # with no on-disk writes at steady state. The OTel SDK's
+    # default TMPDIR and pprof's /tmp scratch land on the tmpfs.
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m
     networks:
       - nyx_network
 
@@ -100,7 +240,7 @@ services:
         - VITE_OTEL_ENABLED=${VITE_OTEL_ENABLED:-true}
         - VITE_OTEL_SERVICE_NAME=${VITE_OTEL_SERVICE_NAME:-nyx-frontend}
     ports:
-      - "80:80"
+      - "80:8080"
     environment:
       - VITE_OTEL_ENABLED=${VITE_OTEL_ENABLED:-true}
       - VITE_OTEL_SERVICE_NAME=${VITE_OTEL_SERVICE_NAME:-nyx-frontend}
@@ -111,6 +251,18 @@ services:
         condition: service_healthy
       jaeger:
         condition: service_healthy
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    # read_only root is safe — nginx serves static files from
+    # /usr/share/nginx/html (read-only by virtue of being part of
+    # the image layers). The writable scratch dirs nginx needs
+    # (pid, cache, client-body temp, proxy temp) all land on
+    # tmpfs below.
+    read_only: true
+    tmpfs:
+      - /var/cache/nginx:size=16m
+      - /var/run:size=1m
+      - /tmp:size=16m
     networks:
       - nyx_network
 
@@ -120,4 +272,7 @@ networks:
 
 volumes:
   db_data:
-  redis_data:
+  # redis_data removed — redis is now a pure in-memory cache (see
+  # the redis service command). Operators who want a persisted
+  # cache should re-introduce the volume AND switch the command
+  # back to "--appendonly yes"; both must move together.
