@@ -10,10 +10,24 @@ services:
       - POSTGRES_USER=${POSTGRES_USER}
       - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
       - POSTGRES_DB=${POSTGRES_DB}
+    # SECURITY.md H12: dev DB is bound to loopback only — exposing the
+    # default `postgres/postgres` credentials on the LAN is a free
+    # admin cred. Developers who need LAN access can flip this back
+    # to "5433:5432" temporarily, but the safe default is 127.0.0.1.
     ports:
-      - "5433:5432"
+      - "127.0.0.1:5433:5432"
     volumes:
       - db_data:/var/lib/postgresql/data
+    # SECURITY.md M12: drop all caps by default, then add back only
+    # what postgres needs to run as a non-root user inside the
+    # container (CHOWN the data dir, SETUID/SETGID to drop to the
+    # `postgres` user, DAC_OVERRIDE/FOWNER for the postmaster pid
+    # file + socket). no-new-privileges blocks setuid binaries.
+    # read_only is intentionally NOT set — postgres writes to the
+    # data volume.
+    cap_drop: [ALL]
+    cap_add: [CHOWN, SETUID, SETGID, DAC_OVERRIDE, FOWNER]
+    security_opt: ["no-new-privileges:true"]
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
       interval: 5s
@@ -23,8 +37,19 @@ services:
   redis:
     image: redis:7-alpine
     restart: always
+    # SECURITY.md H12: same reasoning as the DB — loopback only.
     ports:
-      - "6379:6379"
+      - "127.0.0.1:6379:6379"
+    # SECURITY.md M12: redis is intentionally read-only rootfs
+    # because no persistence is enabled (no --save, no AOF). tmpfs
+    # gives /data a scratch space for runtime bookkeeping. caps
+    # trimmed to the bare minimum.
+    cap_drop: [ALL]
+    cap_add: [SETUID, SETGID]
+    security_opt: ["no-new-privileges:true"]
+    read_only: true
+    tmpfs:
+      - /data
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
@@ -36,14 +61,22 @@ services:
   # OTLP receiver on; the default UI lives on :16686 and the OTLP
   # HTTP receiver on :4318. healthcheck uses the admin port (14269)
   # so backend can wait for it via depends_on.
+  # SECURITY.md M12: minimal hardening — jaeger all-in-one is a Go
+  # binary that needs almost nothing. We keep the dev ports (16686
+  # UI, 4318 OTLP) bound on 0.0.0.0 because they're meant for host
+  # access; only DB/Redis got loopback-bound (H12).
   jaeger:
     image: jaegertracing/all-in-one:1.62
     restart: always
     environment:
       - COLLECTOR_OTLP_ENABLED=true
     ports:
-      - "16686:16686" # UI
-      - "4318:4318"   # OTLP HTTP
+      - "16686:16686" # UI (dev-only access — see H12 comment)
+      - "4318:4318"   # OTLP HTTP (dev-only access — see H12 comment)
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    tmpfs:
+      - /tmp
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://localhost:14269/status"]
       interval: 5s
@@ -73,14 +106,13 @@ services:
       - OTEL_ENABLED=${OTEL_ENABLED:-true}
       - OTEL_EXPORTER_OTLP_ENDPOINT=http://jaeger:4318
       - OTEL_SERVICE_NAME=${OTEL_SERVICE_NAME:-nyx-backend}
-    # Cross-origin XHR — the SPA now hits the backend directly via
-    # VITE_API_URL=http://localhost:8080/api. The browser opens
-    # a CORS preflight; the backend's CORS_ALLOWED_ORIGINS env
-    # (set below) is the allowlist. Bearer is a custom header,
-    # so the preflight carries Access-Control-Request-Headers:
-    # Authorization, and the backend's allowlist closes the CSRF
-    # surface automatically.
-    environment:
+      # Cross-origin XHR — the SPA now hits the backend directly via
+      # VITE_API_URL=http://localhost:8080/api. The browser opens
+      # a CORS preflight; the backend's CORS_ALLOWED_ORIGINS allowlist
+      # gates cross-origin XHR. Bearer is a custom header, so the
+      # preflight carries Access-Control-Request-Headers:
+      # Authorization, and the allowlist closes the CSRF surface
+      # automatically.
       - CORS_ALLOWED_ORIGINS=${CORS_ALLOWED_ORIGINS:-http://localhost:5173,http://localhost:8080}
     depends_on:
       db:
@@ -89,6 +121,16 @@ services:
         condition: service_healthy
       jaeger:
         condition: service_healthy
+    # SECURITY.md M12: backend Dockerfile already sets USER nyx
+    # (non-root), so no compose-level user: override is needed.
+    # Read-only rootfs; tmpfs gives /tmp the writable scratch Go
+    # runtime expects (e.g. cgo build cache, race detector temp
+    # files). All caps dropped; backend doesn't need any.
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    read_only: true
+    tmpfs:
+      - /tmp
 
   frontend:
     build:
@@ -121,6 +163,20 @@ services:
     depends_on:
       - backend
       - jaeger
+    # SECURITY.md M12: frontend Dockerfile already sets USER nginx
+    # (non-root), so no compose-level user: override. Read-only
+    # rootfs with tmpfs mounts for nginx's writable scratch dirs
+    # (cache, pid file, /run). All caps dropped — nginx in this
+    # image only needs to listen on a non-privileged port (8080)
+    # and proxy_pass to jaeger/backend.
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    read_only: true
+    tmpfs:
+      - /tmp
+      - /var/cache/nginx
+      - /var/run
+      - /run
 
 volumes:
   db_data:
