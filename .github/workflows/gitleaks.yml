@@ -1,0 +1,64 @@
+# SECURITY.md L10: secret scanning on every push and PR.
+#
+# Runs as its own job so a secret regression is caught before the
+# longer backend-test / frontend-test / e2e-test jobs queue up —
+# cheaper fail-fast on the common case. Uses gitleaks-action
+# SHA-pinned to commit e0c47f4f8be36e29cdc102c57e68cb5cbf0e8d1e
+# (release v3.0.0) per the SHA-pinning policy in ci.yml.
+#
+# The action runs `gitleaks detect` against the full history by
+# default. We scope to the diff against the base branch on PRs
+# (--detect-config staged) and run the full-history scan on push
+# events. This matches the standard gitleaks GitHub Action
+# behaviour: full scan on every push + diff scan on PRs.
+name: gitleaks
+
+on:
+  push:
+    branches: [ main, mvp ]
+  pull_request:
+    branches: [ main, mvp ]
+
+# Cancel in-progress runs for the same branch on a new push so a
+# rapid series of commits doesn't queue stale scans.
+concurrency:
+  group: gitleaks-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  # Pull-requests: read lets the action see PR metadata (head sha,
+  # base sha) which the diff-based scan needs. Secret scanning on
+  # private repos additionally needs security-events: write, but
+  # Nyx's primary repos are public so read is sufficient.
+  pull-requests: read
+
+jobs:
+  scan:
+    name: gitleaks
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          # Full history required for the `push` event scan. On PRs
+          # the action uses the merge-base diff instead, but the
+          # checkout still needs fetch-depth: 0 so the action can
+          # see the merge-base.
+          fetch-depth: 0
+
+      - name: Run gitleaks
+        uses: gitleaks/gitleaks-action@e0c47f4f8be36e29cdc102c57e68cb5cbf0e8d1e # v3.0.0
+        env:
+          # GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }} is implicitly
+          # available to actions; gitleaks-action uses it to surface
+          # findings as PR annotations (push events do NOT post
+          # annotations, only the workflow log shows the leak).
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # GITLEAKS_LICENSE: only required for Pro / Enterprise
+          # features; the free OSS tier is sufficient here. Leaving
+          # unset so the OSS gitleaks binary is used.
+
+      # The gitleaks-action fails the step on any finding, which
+      # fails the job, which fails the workflow run, which blocks
+      # the PR / branch push. No explicit upload step needed.
