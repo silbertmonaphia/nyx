@@ -10,7 +10,8 @@
     "commitlint": "commitlint --edit",
     "commit": "cz",
     "release": "semantic-release",
-    "prepare": "husky"
+    "prepare": "husky",
+    "postinstall": "git config --local alias.cz '!npm run commit --' || true"
   },
   "lint-staged": {
     "frontend/src/**/*.{js,jsx,ts,tsx}": [
