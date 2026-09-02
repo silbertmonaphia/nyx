@@ -33,7 +33,7 @@ import (
 // ServiceVersion is stamped on every span as service.version. Set via
 // -ldflags at build time (e.g. -ldflags "-X .../observability.ServiceVersion=v1.2.3").
 // Falls back to "dev" for `go run` and unit tests.
-var ServiceVersion = "dev"
+var ServiceVersion = "9.9.9"
 
 // Tracing bundles the tracer provider with its shutdown closure so
 // the caller can defer the flush without juggling two return values.

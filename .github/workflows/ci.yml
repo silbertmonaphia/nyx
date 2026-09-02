@@ -193,3 +193,43 @@ jobs:
         name: playwright-test-results
         path: frontend/test-results/
         retention-days: 14
+
+  # Release job — only runs on push (not on PRs), and only after CI
+  # is green. Drives semantic-release which:
+  #   - analyzes Conventional Commits since the last tag per package
+  #   - computes the next semver for backend / frontend independently
+  #   - writes per-package CHANGELOG.md (backend/CHANGELOG.md,
+  #     frontend/CHANGELOG.md)
+  #   - stamps the new version into ServiceVersion + frontend/package.json
+  #     via scripts/bump-version.sh
+  #   - tags (e.g. backend@0.4.1) and publishes GitHub Releases
+  release:
+    needs: [e2e-test]
+    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/mvp')
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write   # push tags + release commits
+      issues: write     # semantic-release mentions PRs in release notes
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # semantic-release needs full history
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+          cache-dependency-path: |
+            package-lock.json
+            frontend/package-lock.json
+      - name: Install dependencies
+        run: npm ci
+      - name: Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GIT_AUTHOR_NAME: 'github-actions[bot]'
+          GIT_AUTHOR_EMAIL: 'github-actions[bot]@users.noreply.github.com'
+          GIT_COMMITTER_NAME: 'github-actions[bot]'
+          GIT_COMMITTER_EMAIL: 'github-actions[bot]@users.noreply.github.com'
+        run: npx semantic-release

@@ -25,7 +25,14 @@ COPY . .
 #       -w          omit the DWARF debugging information.
 #       -buildid=   empty the build ID so builds are byte-identical
 #                   between rebuilds (only source + flags vary).
-RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w -buildid=" -o main ./cmd/api
+#       -X ...ServiceVersion=...  stamp the release version onto the
+#                   OTel `service.version` resource attribute. Defaults
+#                   to `dev` so local `docker build .` keeps working;
+#                   release automation passes --build-arg VERSION=<semver>.
+ARG VERSION=dev
+RUN CGO_ENABLED=0 GOOS=linux go build -trimpath \
+    -ldflags="-s -w -buildid= -X nyx/internal/platform/observability.ServiceVersion=${VERSION}" \
+    -o main ./cmd/api
 
 # Runtime stage.
 #
