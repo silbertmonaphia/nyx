@@ -43,7 +43,7 @@ Full stack: `cp .env.example .env && sudo docker compose up --build -d`. DB host
 
 # Conventions
 
-- **Commits**: Conventional Commits.
+- **Commits**: Conventional Commits. `git cz` (commitizen + cz-customizable, alias wired by `npm install`) drives interactive authoring; `.husky/commit-msg` runs `commitlint --edit` on the message file and rejects anything that doesn't match. Allowed scopes are pinned in `.cz-config.cjs` and `commitlint.config.js` — keep them in sync. Per-package versioning via `semantic-release` + `semantic-release-monorepo` runs in CI on push to `main` / `mvp` (`backend@X.Y.Z` / `frontend@X.Y.Z`, computed from commit paths); see `release.config.js` + `scripts/bump-version.sh`. No npm publish.
 - **Errors**: domain sentinels (`movie.ErrNotFound`, `user.ErrInvalidCredentials`, `auth.ErrInvalidToken`, `auth.ErrExpiredToken`, plus the `pgerr`-translated `user.ErrUsernameTaken` / `user.ErrEmailTaken` / `user.ErrRefreshTokenCollision`). Handlers translate to HTTP status via `api.MapError` (the central funnel in `internal/platform/api`). Never string-compare error messages.
 - **Safety is a first-class concern on every change**: validate input at trust boundaries (auth, user-supplied SQL params, query strings, headers); never log or return secrets, credentials, internal errors, or stack traces; treat new/upgraded dependencies as untrusted until vetted; prefer deny-by-default (allowlists over blocklists, least-privilege config, explicit timeouts); review auth/session paths for bypass or token leakage before merging. The rules below are concrete instances of this.
 - **Response details must be safe to ship**: handlers/middleware never copy `err.Error()` into the response `details` field. Use `api.ClassifyAndLog(ctx, err, "Operation failed")` — it logs the wrapped error with the request ID at `Warn` and returns the static `safeDetail` you pass in. SQL fragments, bcrypt strings, and JWT parser errors must never reach the wire.
@@ -53,7 +53,7 @@ Full stack: `cp .env.example .env && sudo docker compose up --build -d`. DB host
 - **Migrations**: `backend/migrations/00000N_description.{up,down}.sql`. Applied on every backend boot.
 - **Config**: env vars via viper (`internal/platform/config/config.go`). `.env` auto-loaded if present. `JWT_SECRET` is validated at startup: `config.Load()` refuses the built-in default and any key shorter than `auth.MinSecretBytes` (32 bytes, RFC 7518 §3.2). `auth.NewTokenService` repeats the check so the constructor is independently safe.
 - **Test infra**: `backend/internal/movie/repository_integration_test.go` boots a Postgres testcontainer; integration tests self-skip via `t.Skip()` when `dbURL == ""`. Never reintroduce an early `os.Exit(0)` in `TestMain` — it silently skips unit tests.
-- **Pre-commit** (`.husky/pre-commit`): `lint-staged` → `eslint --fix` + `vitest related --run --passWithNoTests`. Note: vitest v4's `related` is a subcommand, not a flag.
+- **Pre-commit** (`.husky/pre-commit`): `lint-staged` → `eslint --fix` + `vitest related --run --passWithNoTests`. Note: vitest v4's `related` is a subcommand, not a flag. Plus `gitleaks protect --staged --redact --verbose` runs first (CI is the authoritative gate; missing binary doesn't block commits).
 - **Tests**: backend uses pgxmock (haqndler/repo) + miniredis (cache); frontend uses vitest + RTL; e2e uses Playwright (auto-starts `vite dev`).
 - **sqlc drift**: CI runs `make sqlc-diff` and fails if generated code is out of sync with `queries/*.sql` or migrations. Regenerate locally and commit before pushing.
 

@@ -73,6 +73,9 @@ Single source of truth for "what's done / what's next" across the stack. Tick an
 - [x] User Domain Handler Test Coverage — `user/huma_handler_test.go` covers register/login happy paths, validation rejections (missing/short username, invalid email, short password), duplicate 409, unknown user 401, bad password 401, and 500 paths.
 - [x] Kubernetes manifests — `Deployment`, `Service`, `Ingress`, `Secrets`, `StatefulSet` (Postgres), `Deployment` (Redis) in `k8s/`.
 - [x] Viper config — multi-source (env + `.env` + defaults).
+- [x] Commitlint hook — `.husky/commit-msg` runs `commitlint --edit` with `@commitlint/config-conventional`; `commitlint.config.js` pins the scope enum (`backend`, `frontend`, `auth`, `infra`, `security`, `ci`, `docs`, `claude`, `env`, `observability`, `data`, `repo`) and ignores merge/revert commits.
+- [x] Commitizen interactive authoring — `git cz` alias wired by root `npm install` (postinstall). Drives `cz-customizable` against `.cz-config.cjs`, whose scope list mirrors commitlint's so messages pass the hook first try. Plain `git commit -m` is also accepted.
+- [x] Semantic-release per-package versioning — `release.config.js` + `@semantic-release/monorepo` compute `backend@X.Y.Z` / `frontend@X.Y.Z` from commit paths, write per-package `CHANGELOG.md`, stamp the new version into `backend/internal/platform/observability/tracing.go` (`ServiceVersion`) + `frontend/package.json` via `scripts/bump-version.sh`, and push tags + release commits. CI `release` job gated on `e2e-test` and only on push to `main` / `mvp`. No npm publish — both packages stay `private: true`.
 
 ---
 

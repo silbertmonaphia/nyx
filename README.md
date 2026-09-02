@@ -10,7 +10,7 @@ A minimalist media rating application — Go 1.26.1 API, React 19 SPA, PostgreSQ
 - **Pagination** — `GET /api/movies` returns `{data, page, page_size, total, has_more}`. Default 20, max 100.
 - **Cache-aside** — Redis opt-in for `GET /api/movies` (`REDIS_ENABLED=true`). Cache is best-effort; failures never fail the request.
 - **Observability** — Distributed tracing via OpenTelemetry (browser → nginx → Jaeger, all spans stitched by W3C `traceparent`), `/metrics` (Prometheus: HTTP request count/latency, cache hit/miss), structured JSON logging via `zerolog`, graceful shutdown.
-- **CI/CD** — GitHub Actions (lint + unit + integration + sqlc drift + e2e), `golangci-lint`, `husky` pre-commit on the frontend.
+- **CI/CD** — GitHub Actions (lint + unit + integration + sqlc drift + e2e, plus a semantic-release job on push to `main` / `mvp`), `golangci-lint`, `husky` pre-commit + commit-msg hooks on the frontend. Commits are authored via `git cz` (commitizen + cz-customizable) and linted by `@commitlint/config-conventional`; semantic-release per-package versioning drives `backend@X.Y.Z` / `frontend@X.Y.Z` tags from Conventional Commit messages.
 - **Deploy** — Docker Compose for dev/prod, manifests in `k8s/`.
 
 ## Repository Layout
@@ -167,6 +167,9 @@ The same spec is committed at `api/openapi.json` and regenerated offline with
 ## Conventions
 
 - **Commits** — Conventional Commits (`feat:`, `fix:`, `refactor:`, `docs:`, `test:`, `chore:`).
+  - Author via `git cz` (alias set up by `npm install`; runs commitizen + cz-customizable interactively). Plain `git commit -m` is also fine — the `.husky/commit-msg` hook runs `commitlint --edit` on the message file and rejects anything that doesn't match the schema.
+  - Allowed scopes (kept in sync between `.cz-config.cjs` and `commitlint.config.js`): `backend`, `frontend`, `auth`, `infra`, `security`, `ci`, `docs`, `claude`, `env`, `observability`, `data`, `repo`.
+  - Per-package releases: `semantic-release` (monorepo plugin) computes `backend@X.Y.Z` / `frontend@X.Y.Z` independently from commit paths, writes per-package `CHANGELOG.md`, stamps the new version into `ServiceVersion` + `frontend/package.json`, and pushes the release commit + tags. No npm publish.
 - **Errors** — domain sentinels (`movie.ErrNotFound`, `user.ErrInvalidCredentials`, `user.ErrUsernameTaken` / `ErrEmailTaken` / `ErrRefreshTokenCollision` translated from `pgconn.PgError` by `internal/platform/pgerr`, `auth.ErrInvalidToken`, …). Handlers funnel every error through `api.MapError(ctx, err, "Failed to <op>")` — unknown errors reuse `ClassifyAndLog` so internal error text never reaches the wire. Never string-compare error messages.
 - **Cache** — best-effort. Mutations call `DeletePrefix("movies:")` (SCAN + UNLINK, non-blocking).
 - **Migrations** — `backend/migrations/00000N_description.{up,down}.sql`. Applied on every backend boot.
