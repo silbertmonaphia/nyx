@@ -1,1 +1,28 @@
-npm test
+# SECURITY.md L10: scan staged changes for secrets before they
+# land. CI (.github/workflows/gitleaks.yml) is the authoritative
+# gate; this hook is the developer-side fast path so a leak never
+# reaches a remote branch.
+#
+# Gitleaks is optional locally — a missing install only prints a
+# warning and skips the scan. The CLI flags:
+#   --no-git    scan the working tree, not the repo history (fast)
+#   --staged    only scan staged files
+#   --redact    mask found secrets so the terminal log doesn't
+#               echo the secret back to the developer
+#   --verbose   show what was scanned
+# Exits non-zero on any finding → hook fails → commit rejected.
+if command -v gitleaks >/dev/null 2>&1; then
+  gitleaks protect --staged --redact --verbose
+else
+  echo "warning: gitleaks not installed; pre-commit scan skipped"
+  echo "  install with: brew install gitleaks  OR  apt-get install gitleaks"
+  echo "  CI still scans (see .github/workflows/gitleaks.yml)"
+fi
+
+# lint-staged config lives at root package.json; patterns match
+# frontend/src/**. lint-staged is a frontend-only devDep so it
+# resolves from frontend/node_modules/.bin — `cd frontend` for
+# the resolver, then lint-staged walks up to root to find its
+# config (the matcher paths are repo-relative, so `frontend/src/**`
+# still matches regardless of cwd).
+cd frontend && npx lint-staged
