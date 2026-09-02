@@ -1,3 +1,18 @@
+# SECURITY.md L11: all third-party actions are pinned to a commit SHA,
+# not a mutable tag like @v4 / @v5. A tag can be re-pointed by the
+# upstream maintainer (or by an attacker who compromises the
+# upstream) to a different commit; a SHA is immutable. Bumping a
+# SHA is a deliberate code review step (look up the new SHA on the
+# upstream release page, update the comment + the version comment
+# below).
+#
+# Pinning policy (kept in sync with this file's `actions:` lines):
+#   actions/checkout@v4.6.2       → ea165f8d65b6e75b540449e92b4886f43607fa02
+#   actions/setup-go@v5.6.0       → 40f1582b2485089dde7abd97c1529aa768e1baff
+#   actions/setup-node@v4.4.0     → 49933ea5288caeca8642d1e84afbd3f7d6820020
+#   actions/upload-artifact@v4.4. → 11d5960a326750d5838078e36cf38b85af677262
+# (last entry truncated for readability; SHAs match the comment
+# block below each `uses:` line)
 name: CI
 
 on:
@@ -29,9 +44,9 @@ jobs:
     env:
       DB_URL: postgres://postgres:postgres@localhost:5432/nyx_test?sslmode=disable
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
     - name: Set up Go
-      uses: actions/setup-go@v5
+      uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
       with:
         go-version: '1.26.1'
         cache-dependency-path: backend/go.sum
@@ -55,9 +70,9 @@ jobs:
   frontend-test:
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
     - name: Set up Node
-      uses: actions/setup-node@v4
+      uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
       with:
         node-version: '22'
         cache: 'npm'
@@ -94,14 +109,14 @@ jobs:
       PORT: "8080"
       REDIS_ENABLED: "false"
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
     - name: Set up Go
-      uses: actions/setup-go@v5
+      uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
       with:
         go-version: '1.26.1'
         cache-dependency-path: backend/go.sum
     - name: Set up Node
-      uses: actions/setup-node@v4
+      uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
       with:
         node-version: '22'
         cache: 'npm'
@@ -166,14 +181,14 @@ jobs:
         exit $test_exit
     - name: Upload Playwright HTML report
       if: always()
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       with:
         name: playwright-report
         path: frontend/playwright-report/
         retention-days: 14
     - name: Upload Playwright test artifacts (traces, videos)
       if: failure() || cancelled()
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       with:
         name: playwright-test-results
         path: frontend/test-results/
