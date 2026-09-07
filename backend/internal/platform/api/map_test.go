@@ -171,13 +171,13 @@ func TestRegisterSentinel_LastWriterWins(t *testing.T) {
 	// that swaps sentinels in should be able to do so without
 	// leaking to siblings.
 	a := errors.New("dup")
-	b := errors.New("dup-rebind") // must equal a for the same key test
+	b := a // same sentinel: second registration must overwrite the first
 
 	RegisterSentinel(a, http.StatusBadRequest, "first")
 	RegisterSentinel(b, http.StatusOK, "second")
-	if got := mappings[a]; got.status != http.StatusBadRequest {
-		t.Errorf("first registration: status = %d, want %d", got.status, http.StatusBadRequest)
+	got := mappings[a]
+	if got.status != http.StatusOK || got.message != "second" {
+		t.Errorf("last-writer-wins: got %+v, want {200, \"second\"}", got)
 	}
 	delete(mappings, a)
-	delete(mappings, b)
 }
