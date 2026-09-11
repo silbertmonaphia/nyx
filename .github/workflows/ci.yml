@@ -66,6 +66,9 @@ jobs:
       run: make openapi-diff
     - name: Test
       run: cd backend && go test -v ./...
+    - name: Coverage gate
+      working-directory: backend
+      run: make coverage-check
 
   frontend-test:
     runs-on: ubuntu-latest

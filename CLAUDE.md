@@ -16,6 +16,9 @@ Backend (from repo root):
 - Lint: `cd backend && golangci-lint run --timeout=5m`
 - Regenerate sqlc (after `queries/*.sql` or migrations change): `cd backend && make sqlc`
 - Verify sqlc output is in sync (CI does this): `cd backend && make sqlc-diff`
+- Coverage table (per-package %): `cd backend && make coverage`
+- Coverage gate (fails if any non-ignored package drops below `COVERAGE_MIN`, default 70%; CI runs this on every PR + push to `main`/`mvp`): `cd backend && make coverage-check`
+- HTML report (writes `backend/coverage.html`): `cd backend && make coverage-html`
 - Run: `DB_URL=... JWT_SECRET=... go run ./cmd/api` — add `REDIS_ENABLED=true REDIS_URL=redis://localhost:6379 CACHE_TTL=5m` to enable cache
 
 Frontend:

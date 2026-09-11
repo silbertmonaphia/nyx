@@ -19,6 +19,7 @@ backend/*.out
 backend/vendor/
 backend/.env
 backend/coverage.out
+backend/coverage.html
 
 # OS/IDEs
 .DS_Store
@@ -49,3 +50,6 @@ QWEN.md
 
 commit_message.txt
 .claude/settings.local.json
+
+# Dat file
+posts_douban/
