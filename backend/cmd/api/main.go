@@ -8,6 +8,8 @@ import (
 	"syscall"
 	"time"
 
+	"nyx/internal/chat"
+	"nyx/internal/llm/openai"
 	"nyx/internal/middleware"
 	"nyx/internal/movie"
 	"nyx/internal/platform/api"
@@ -183,6 +185,34 @@ func main() {
 
 	movie.RegisterMovieOps(humaAPI, movieHandler, tokens)
 	user.RegisterUserOps(humaAPI, userHandler, tokens)
+
+	// Chat domain. Opt-in via LLM_ENABLED; when off, no route is
+	// mounted and no provider client is constructed. The same
+	// router is reused (chat.RegisterChatRoute mounts directly on
+	// chi, bypassing huma — see backend/HUMA.md "Streaming
+	// endpoints" for the rationale). model + base_url are logged
+	// at Info on startup so the operator can confirm the operator's
+	// config took; the API key is NEVER logged.
+	if cfg.LLMEnabled {
+		llmClient, llmErr := openai.NewClient(cfg, tracing.Provider.Tracer("nyx.llm.openai"))
+		if llmErr != nil {
+			log.Fatal().Err(llmErr).Msg("LLM client init failed")
+		}
+		chatService := chat.NewService(llmClient, cfg, tracing.Provider.Tracer("nyx.chat"))
+		chatHandler := chat.NewHandler(chatService)
+		// Per-user limiter: 5 streams/min, burst 3. In-memory only;
+		// see chat/ratelimit.go for the cost trade-off.
+		chatLimiter := chat.NewUserRateLimiter(5.0/60.0, 3)
+		stopChatGC := chatLimiter.RunGC(time.Minute, time.Hour)
+		defer stopChatGC()
+		chat.RegisterChatRoute(router, chatHandler, tokens, chatLimiter)
+		log.Info().
+			Str("model", cfg.LLMModel).
+			Str("base_url", cfg.LLMBaseURL).
+			Msg("LLM chat enabled")
+	} else {
+		log.Info().Msg("LLM chat disabled (LLM_ENABLED=false)")
+	}
 
 	port := ":" + cfg.Port
 	server := &http.Server{

@@ -77,6 +77,13 @@ Single source of truth for "what's done / what's next" across the stack. Tick an
 - [x] Commitizen interactive authoring — `git cz` alias wired by root `npm install` (postinstall). Drives `cz-customizable` against `.cz-config.cjs`, whose scope list mirrors commitlint's so messages pass the hook first try. Plain `git commit -m` is also accepted.
 - [x] Semantic-release per-package versioning — `release.config.js` + `@semantic-release/monorepo` compute `backend@X.Y.Z` / `frontend@X.Y.Z` from commit paths, write per-package `CHANGELOG.md`, stamp the new version into `backend/internal/platform/observability/tracing.go` (`ServiceVersion`) + `frontend/package.json` via `scripts/bump-version.sh`, and push tags + release commits. CI `release` job gated on `e2e-test` and only on push to `main` / `mvp`. No npm publish — both packages stay `private: true`.
 
+## 6. AI / LLM
+
+- [x] Streaming Chat (OpenAI / vLLM) — `POST /api/chat` returns `text/event-stream` (event: delta / done / error + data: [DONE]). Provider-agnostic via `internal/llm.Provider`; `internal/llm/openai.Client` works against both OpenAI and vLLM because vLLM exposes the identical `/v1/chat/completions` wire contract. Frontend consumes via raw `fetch` + `ReadableStream` (axios can't stream) with the auth-gated `MessageSquare` button in `App.tsx`. Opt-in via `LLM_ENABLED=true` + `LLM_BASE_URL` / `LLM_API_KEY` / `LLM_MODEL`; defaults to off so deployments without an LLM pay nothing. System prompt is server-only; model is server-only; client request shape is `{messages:[{role,content}]}` with optional `model` (currently ignored). Per-user in-memory rate limit (5 streams/min, burst 3). See `FUTURE_BACKEND.md` §8 + §9 and `FUTURE_FRONTEND.md` §10.
+- [ ] Chat history persistence — currently stateless (client sends full history each request). When conversations outgrow `LLM_MAX_HISTORY_MESSAGES` or cross-device history / analytics / GDPR-delete become product needs, add `chat_sessions` + `chat_messages` tables with soft-delete + retention cron.
+- [ ] Chat persona allowlist — let authenticated users pick from an operator-curated model allowlist (cost-controlled).
+- [ ] Streaming tool calls / JSON mode — extend the provider interface once we have a feature that needs structured output beyond free text.
+
 ---
 
 *Nyx: Minimalist by design, production-credible by choice.*

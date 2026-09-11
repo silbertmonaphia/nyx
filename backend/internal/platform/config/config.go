@@ -63,6 +63,34 @@ type Config struct {
 	OTelEnabled              bool   `mapstructure:"OTEL_ENABLED"`
 	OTelServiceName          string `mapstructure:"OTEL_SERVICE_NAME"`
 	OTelExporterOTLPEndpoint string `mapstructure:"OTEL_EXPORTER_OTLP_ENDPOINT"`
+
+	// LLM (chat). Off by default; when enabled the operator MUST set
+	// LLM_BASE_URL, LLM_API_KEY, and LLM_MODEL. LLM_BASE_URL points
+	// at the chat-completions root (the OpenAI client appends
+	// "/chat/completions"); the same field works for OpenAI's hosted
+	// endpoint (https://api.openai.com/v1) and a self-hosted vLLM
+	// (http://vllm.internal:8000/v1) — the wire contract is identical.
+	//
+	// LLM_SYSTEM_PROMPT is server-controlled and prepended to every
+	// request; clients cannot override it (the chat service rejects
+	// role:"system" messages from the wire). When empty, the chat
+	// service falls back to a hard-coded default.
+	//
+	// LLM_MAX_HISTORY_MESSAGES / LLM_MAX_MESSAGE_CHARS cap the
+	// per-request history the client may send. LLM_MAX_TOKENS caps
+	// the upstream completion size. LLM_TIMEOUT is the per-call
+	// socket deadline; LLM_MAX_STREAM_DURATION is the hard wall-clock
+	// cap on a single stream — anything longer is force-closed.
+	LLMEnabled            bool   `mapstructure:"LLM_ENABLED"`
+	LLMBaseURL            string `mapstructure:"LLM_BASE_URL"`
+	LLMAPIKey             string `mapstructure:"LLM_API_KEY"`
+	LLMModel              string `mapstructure:"LLM_MODEL"`
+	LLMTimeout            string `mapstructure:"LLM_TIMEOUT"`
+	LLMMaxTokens          int    `mapstructure:"LLM_MAX_TOKENS"`
+	LLMSystemPrompt       string `mapstructure:"LLM_SYSTEM_PROMPT"`
+	LLMMaxHistoryMessages int    `mapstructure:"LLM_MAX_HISTORY_MESSAGES"`
+	LLMMaxMessageChars    int    `mapstructure:"LLM_MAX_MESSAGE_CHARS"`
+	LLMMaxStreamDuration  string `mapstructure:"LLM_MAX_STREAM_DURATION"`
 }
 
 func Load() (*Config, error) {
@@ -121,6 +149,12 @@ func Load() (*Config, error) {
 		return nil, fmt.Errorf("JWT_SECRET must be at least %d bytes", auth.MinSecretBytes)
 	}
 
+	if cfg.LLMEnabled {
+		if err := validateLLMConfig(&cfg); err != nil {
+			return nil, err
+		}
+	}
+
 	return &cfg, nil
 }
 
@@ -175,6 +209,21 @@ func setDefaults() {
 	viper.SetDefault("OTEL_ENABLED", false)
 	viper.SetDefault("OTEL_SERVICE_NAME", "nyx-backend")
 	viper.SetDefault("OTEL_EXPORTER_OTLP_ENDPOINT", "http://localhost:4318")
+
+	// LLM defaults. LLM_ENABLED is the master switch — false means
+	// no route is registered and no client is constructed at
+	// startup. The other defaults (timeouts, caps) only matter
+	// when LLM_ENABLED=true; they're installed so an operator can
+	// flip LLM_ENABLED=true without also setting every limit.
+	viper.SetDefault("LLM_ENABLED", false)
+	viper.SetDefault("LLM_TIMEOUT", "60s")
+	viper.SetDefault("LLM_MAX_TOKENS", 1024)
+	viper.SetDefault("LLM_MAX_HISTORY_MESSAGES", 50)
+	viper.SetDefault("LLM_MAX_MESSAGE_CHARS", 32768)
+	viper.SetDefault("LLM_MAX_STREAM_DURATION", "10m")
+	// LLM_SYSTEM_PROMPT is left empty by default — the chat
+	// service falls back to a hard-coded "movie catalog
+	// assistant" prompt when the operator hasn't customised it.
 }
 
 // bindEnvVars explicitly wires every env-sourced viper key. See Load
@@ -190,6 +239,10 @@ func bindEnvVars() {
 		"CORS_ALLOWED_ORIGINS",
 		"OTEL_ENABLED", "OTEL_SERVICE_NAME",
 		"OTEL_EXPORTER_OTLP_ENDPOINT",
+		"LLM_ENABLED", "LLM_BASE_URL", "LLM_API_KEY", "LLM_MODEL",
+		"LLM_TIMEOUT", "LLM_MAX_TOKENS", "LLM_SYSTEM_PROMPT",
+		"LLM_MAX_HISTORY_MESSAGES", "LLM_MAX_MESSAGE_CHARS",
+		"LLM_MAX_STREAM_DURATION",
 	} {
 		_ = viper.BindEnv(key)
 	}
@@ -229,6 +282,52 @@ func validateDurations(cfg *Config) error {
 			"JWT_REFRESH_TTL (%v) must be greater than JWT_ACCESS_TTL (%v)",
 			refreshDur, accessDur,
 		)
+	}
+
+	// LLM durations — only parsed when LLM is enabled to keep the
+	// default-off path free of "set me to use me" errors.
+	if cfg.LLMEnabled {
+		if _, err := time.ParseDuration(cfg.LLMTimeout); err != nil {
+			return fmt.Errorf("invalid LLM_TIMEOUT: %w", err)
+		}
+		if _, err := time.ParseDuration(cfg.LLMMaxStreamDuration); err != nil {
+			return fmt.Errorf("invalid LLM_MAX_STREAM_DURATION: %w", err)
+		}
+	}
+	return nil
+}
+
+// validateLLMConfig enforces the cross-field requirements for
+// turning LLM_ENABLED on. The rules:
+//   - BaseURL, APIKey, and Model must all be non-empty (no defaults).
+//   - APIKey must not be a placeholder that an operator might leave
+//     in by accident (case-insensitive contains-match against a
+//     short blocklist). The check is intentionally cheap — it
+//     catches the common "I committed my .env with a literal
+//     'your-key'" foot-gun, not a determined attacker.
+//   - System prompt length is capped at 8 KiB to bound the input to
+//     every chat completion.
+//
+// Called only when LLMEnabled is true so the default-off path
+// stays free of these requirements.
+func validateLLMConfig(cfg *Config) error {
+	if cfg.LLMBaseURL == "" {
+		return fmt.Errorf("LLM_BASE_URL is required when LLM_ENABLED=true")
+	}
+	if cfg.LLMAPIKey == "" {
+		return fmt.Errorf("LLM_API_KEY is required when LLM_ENABLED=true")
+	}
+	if cfg.LLMModel == "" {
+		return fmt.Errorf("LLM_MODEL is required when LLM_ENABLED=true")
+	}
+	lower := strings.ToLower(cfg.LLMAPIKey)
+	for _, placeholder := range []string{"changeme", "your-key", "sk-xxx", "xxx", "test-key"} {
+		if strings.Contains(lower, placeholder) {
+			return fmt.Errorf("LLM_API_KEY looks like a placeholder (%q); refusing to start — set a real key", placeholder)
+		}
+	}
+	if len(cfg.LLMSystemPrompt) > 8192 {
+		return fmt.Errorf("LLM_SYSTEM_PROMPT must be at most 8192 bytes, got %d", len(cfg.LLMSystemPrompt))
 	}
 	return nil
 }

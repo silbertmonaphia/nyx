@@ -21,9 +21,10 @@ import {
   DialogHeader,
   DialogTitle,
 } from './components/ui/Dialog';
-import { Plus, X, Search, LogOut, User as UserIcon } from 'lucide-react';
+import { Plus, X, Search, LogOut, User as UserIcon, MessageSquare } from 'lucide-react';
 import { PageMeta } from './components/app/PageMeta';
 import { logger } from './services/logger';
+import { ChatPanel } from './features/chat/components/ChatPanel';
 
 const DEFAULT_TITLE = 'Nyx — Your minimalist movie guide';
 const DEFAULT_DESCRIPTION =
@@ -43,6 +44,7 @@ function App() {
   const { isAuthenticated, user, logout } = useAuthStore();
   const [showAuthForm, setShowAuthForm] = useState(false);
   const [confirmDeleteId, setConfirmDeleteId] = useState<number | null>(null);
+  const [chatOpen, setChatOpen] = useState(false);
 
   // Boot-time round-trip: if localStorage has a persisted user,
   // reconcile it against the server. SECURITY.md L7.
@@ -113,6 +115,8 @@ function App() {
     ? 'Add a movie — Nyx'
     : showAuthForm && !isAuthenticated
     ? 'Sign in — Nyx'
+    : chatOpen && isAuthenticated
+    ? 'Chat — Nyx'
     : trimmedSearch
     ? `"${trimmedSearch}" — Search — Nyx`
     : DEFAULT_TITLE;
@@ -122,6 +126,8 @@ function App() {
     ? 'Add a new movie to your Nyx collection.'
     : showAuthForm && !isAuthenticated
     ? 'Sign in or create a Nyx account to curate your movie list.'
+    : chatOpen && isAuthenticated
+    ? 'Stream a chat with the Nyx assistant.'
     : trimmedSearch
     ? `Search Nyx for "${trimmedSearch}".`
     : DEFAULT_DESCRIPTION;
@@ -136,6 +142,16 @@ function App() {
           <div className="flex items-center gap-4">
             {isAuthenticated ? (
               <>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setChatOpen(true)}
+                  aria-label="Open chat"
+                  className="gap-2"
+                >
+                  <MessageSquare className="h-4 w-4" />
+                  Chat
+                </Button>
                 <div className="hidden md:flex items-center gap-2 text-sm font-medium text-muted-foreground">
                   <UserIcon className="h-4 w-4" />
                   <span>{user?.username}</span>
@@ -267,6 +283,8 @@ function App() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      <ChatPanel open={chatOpen} onOpenChange={setChatOpen} />
 
       <section id="spacer"></section>
     </div>

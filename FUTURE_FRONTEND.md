@@ -77,3 +77,10 @@ The history and design decisions behind the current frontend. For the high-level
 - [x] **ESLint** — `eslint.config.js` (flat config), React + hooks plugins.
 - [ ] **Prettier** — not yet introduced. Formatting relies on ESLint autofix and editor defaults.
 - [x] **Husky + lint-staged** — pre-commit runs `eslint --fix` + `vitest related --run --passWithNoTests` on staged files.
+
+## 10. Streaming Chat (LLM)
+
+- [x] **Streaming chat panel** — `src/features/chat/`: types (zod schemas + discriminated `ChatEvent` union), `chatService.streamMessage` (raw `fetch` SSE parser with Bearer + traceparent stamping), `chatStore` (ephemeral Zustand, no persist), `ChatPanel` (Radix Dialog with auto-scroll, Send / Cancel buttons). Auth-gated — the `MessageSquare` nav button only mounts when `isAuthenticated`. Model picker + system-prompt UI deliberately omitted; the backend picks the model.
+- [x] **Refresh-on-401 for raw fetch** — `services/api.ts` now exports `refreshTokensAndReplay()`; the axios interceptor and `chatService` both call it so a single-flight refresh works on both transport paths.
+- [ ] **Chat history persistence** — deliberate follow-up. Out of scope for the first slice; storing chat content on the client would land in the XSS exfiltration surface and needs a server-side history table.
+

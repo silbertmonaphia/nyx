@@ -118,6 +118,10 @@ export const tokenStore = {
 // concurrent 401 awaits the same promise instead of triggering a
 // second `/api/refresh` call. The promise is cleared in `finally`
 // so the next 401 after a settled refresh kicks off a fresh one.
+//
+// The slot is module-private and the helper below (`refreshTokensAndReplay`)
+// is the only way to enter it — keeping the single-flight invariant
+// intact even when non-axios callers (chatService) need to participate.
 let refreshing: Promise<boolean> | null = null;
 
 /**
@@ -152,6 +156,29 @@ async function performRefresh(): Promise<boolean> {
   } catch {
     return false;
   }
+}
+
+/**
+ * Public refresh entry point. Runs the single-flight refresh and
+ * returns `true` when the tokenStore holds a fresh pair, `false`
+ * otherwise. On a `false` return the caller MUST stop retrying —
+ * the refresh token is gone (or rejected) and the only correct
+ * outcome is to surface a logged-out state.
+ *
+ * Used by:
+ *  - The axios response interceptor (the original caller).
+ *  - Non-axios callers (chatService) that need to replicate the
+ *    refresh-on-401 contract on raw `fetch` — axios's interceptors
+ *    don't run on `fetch`, so chat runs the same single-flight
+ *    machinery manually via this helper.
+ */
+export async function refreshTokensAndReplay(): Promise<boolean> {
+  if (!refreshing) {
+    refreshing = performRefresh().finally(() => {
+      refreshing = null;
+    });
+  }
+  return refreshing;
 }
 
 /**
@@ -271,14 +298,11 @@ api.interceptors.response.use(
         // skip straight to logout.
         const hasAccessToken = tokenStore.getAccessToken() !== null;
         if (!skipRefresh && hasAccessToken) {
-          // Single-flight: if no refresh is in progress, kick one off;
-          // everyone else awaits the same promise.
-          if (!refreshing) {
-            refreshing = performRefresh().finally(() => {
-              refreshing = null;
-            });
-          }
-          const ok = await refreshing;
+          // Single-flight refresh shared with non-axios callers
+          // (chatService). Concurrent 401s collapse onto the same
+          // `refreshing` promise; `refreshTokensAndReplay` returns
+          // `false` on refresh failure (no replay attempted).
+          const ok = await refreshTokensAndReplay();
           if (ok && config) {
             config._retried = true;
             // Replay the original request — the request interceptor

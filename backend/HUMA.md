@@ -285,3 +285,46 @@ tests that don't exercise auth.
 
 **Spec path doesn't match URL** — operation paths are full URLs
 (`/api/movies`), not relative. Don't add an `api.Group("/api")` prefix.
+
+## Streaming endpoints (SSE)
+
+Huma v2 has no first-class Server-Sent Events support: the response
+body has unknown length and no JSON schema captures the streaming
+shape. For SSE endpoints, register the route directly on chi after
+`humachi.New(router, ...)` has wrapped the router, so the route still
+runs through the standard middleware chain (RequestID → Recoverer →
+Prometheus → Logging → CORS → RateLimit → maxBodyBytes → per-route
+Auth) without going through huma's body marshaller.
+
+The chat endpoint is the canonical example — `internal/chat/handler.go`
++ `RegisterChatRoute(router, handler, tokens, userLimiter)`. The
+pattern:
+
+1. Decode the JSON body with `json.NewDecoder(http.MaxBytesReader(...))`.
+   Keep a separate, route-specific cap (`chat.MaxBodyBytes`); the
+   router-level `maxBodyBytes(1<<20)` is the outer bound.
+2. **Validate before writing SSE headers.** Validation failures
+   produce the standard `{error, code, request_id, details}` JSON
+   envelope (`api.WriteError(w, r, http.StatusBadRequest, ...)`) —
+   no SSE bytes have been written, so the SPA's response interceptor
+   can handle the 400 with the same shape as every other endpoint.
+3. Write SSE headers — `Content-Type: text/event-stream; charset=utf-8`,
+   `Cache-Control: no-cache`, `Connection: keep-alive`,
+   `X-Accel-Buffering: no` (mandatory behind nginx ingress), then
+   `w.WriteHeader(http.StatusOK)`.
+4. Wrap `w` in a `flushingWriter` (or use
+   `http.NewResponseController(w).Flush()` after each write) —
+   chi's `WrapResponseWriter` in `Prometheus` + `Logging` middleware
+   otherwise buffers the response until the handler returns, which
+   defeats the whole point of streaming.
+5. Emit `event: <name>\ndata: <json>\n\n` frames; the trailing
+   `data: [DONE]\n\n` closes the stream per the SSE spec.
+6. Mid-stream errors emit one trailing `event: error\ndata: {...}\n\n`
+   frame then `[DONE]`. The HTTP status is already 200 because the
+   SSE headers flushed before the error — the SPA keys on the event
+   line, not the status.
+
+SSE routes are intentionally absent from the generated OpenAPI
+spec (`make openapi-diff` stays clean). Document them in your
+package comment or the API README so consumers know the wire
+contract.

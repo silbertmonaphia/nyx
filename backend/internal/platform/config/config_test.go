@@ -194,3 +194,136 @@ func TestLoadRejectsEmptyJWTSecret(t *testing.T) {
 		t.Errorf("Load() error = %v, want it to mention JWT_SECRET", err)
 	}
 }
+
+// TestLoad_AcceptsLLMDisabled_ByDefault is the common path: no LLM_*
+// env vars set, LLM_ENABLED defaults to false, Load returns a
+// valid Config with the LLM zero values. Without this baseline the
+// LLM-enabled tests would mask a regression where LLM_ENABLED
+// defaults to true.
+func TestLoad_AcceptsLLMDisabled_ByDefault(t *testing.T) {
+	t.Setenv("DB_URL", "postgres://x")
+	t.Setenv("JWT_SECRET", auth.TestSecret)
+	t.Setenv("LLM_ENABLED", "")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v, want nil (LLM off by default)", err)
+	}
+	if cfg.LLMEnabled {
+		t.Error("LLMEnabled default = true, want false")
+	}
+}
+
+// TestLoad_RejectsLLMEnabledWithoutBaseURL pins the fail-closed
+// contract: turning LLM on without a base URL is operator
+// misconfiguration; the backend must refuse to start so a missing
+// env var doesn't silently default to OpenAI's hosted endpoint.
+func TestLoad_RejectsLLMEnabledWithoutBaseURL(t *testing.T) {
+	t.Setenv("DB_URL", "postgres://x")
+	t.Setenv("JWT_SECRET", auth.TestSecret)
+	t.Setenv("LLM_ENABLED", "true")
+	t.Setenv("LLM_BASE_URL", "")
+	t.Setenv("LLM_API_KEY", "sk-prod-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+	t.Setenv("LLM_MODEL", "gpt-4o-mini")
+
+	_, err := Load()
+	if err == nil {
+		t.Fatal("Load() error = nil, want LLM_BASE_URL-required rejection")
+	}
+	if !strings.Contains(err.Error(), "LLM_BASE_URL") {
+		t.Errorf("Load() error = %v, want it to mention LLM_BASE_URL", err)
+	}
+}
+
+// TestLoad_RejectsLLMEnabledWithPlaceholderKey catches the
+// "I committed my .env with 'your-key'" foot-gun. The placeholder
+// list is intentionally narrow — it only blocks the patterns a
+// careless operator is likely to leave in, not a determined
+// attacker (who would just type a real-looking key).
+func TestLoad_RejectsLLMEnabledWithPlaceholderKey(t *testing.T) {
+	t.Setenv("DB_URL", "postgres://x")
+	t.Setenv("JWT_SECRET", auth.TestSecret)
+	t.Setenv("LLM_ENABLED", "true")
+	t.Setenv("LLM_BASE_URL", "https://api.openai.com/v1")
+	t.Setenv("LLM_API_KEY", "your-key-here-replace-me")
+	t.Setenv("LLM_MODEL", "gpt-4o-mini")
+
+	_, err := Load()
+	if err == nil {
+		t.Fatal("Load() error = nil, want placeholder-LLM_API_KEY rejection")
+	}
+	if !strings.Contains(err.Error(), "LLM_API_KEY") {
+		t.Errorf("Load() error = %v, want it to mention LLM_API_KEY", err)
+	}
+}
+
+// TestLoad_RejectsLLMEnabledWithoutModel asserts the third
+// cross-field requirement. Sk-anything-without-a-model would
+// otherwise default to a 404 on every call.
+func TestLoad_RejectsLLMEnabledWithoutModel(t *testing.T) {
+	t.Setenv("DB_URL", "postgres://x")
+	t.Setenv("JWT_SECRET", auth.TestSecret)
+	t.Setenv("LLM_ENABLED", "true")
+	t.Setenv("LLM_BASE_URL", "https://api.openai.com/v1")
+	t.Setenv("LLM_API_KEY", "sk-prod-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+	t.Setenv("LLM_MODEL", "")
+
+	_, err := Load()
+	if err == nil {
+		t.Fatal("Load() error = nil, want LLM_MODEL-required rejection")
+	}
+	if !strings.Contains(err.Error(), "LLM_MODEL") {
+		t.Errorf("Load() error = %v, want it to mention LLM_MODEL", err)
+	}
+}
+
+// TestLoad_AcceptsValidLLMConfig pins the happy path: every
+// required field set, durations valid, system prompt present.
+// Without this the failure-mode tests above could mask a regression
+// where every LLM_ENABLED=true case errors.
+func TestLoad_AcceptsValidLLMConfig(t *testing.T) {
+	t.Setenv("DB_URL", "postgres://x")
+	t.Setenv("JWT_SECRET", auth.TestSecret)
+	t.Setenv("LLM_ENABLED", "true")
+	t.Setenv("LLM_BASE_URL", "https://api.openai.com/v1")
+	t.Setenv("LLM_API_KEY", "sk-prod-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+	t.Setenv("LLM_MODEL", "gpt-4o-mini")
+	t.Setenv("LLM_TIMEOUT", "30s")
+	t.Setenv("LLM_MAX_STREAM_DURATION", "5m")
+	t.Setenv("LLM_SYSTEM_PROMPT", "You are a helpful movie catalog assistant.")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v, want nil for valid LLM config", err)
+	}
+	if !cfg.LLMEnabled {
+		t.Error("LLMEnabled = false, want true")
+	}
+	if cfg.LLMMaxTokens != 1024 {
+		t.Errorf("LLMMaxTokens default = %d, want 1024", cfg.LLMMaxTokens)
+	}
+	if cfg.LLMMaxHistoryMessages != 50 {
+		t.Errorf("LLMMaxHistoryMessages default = %d, want 50", cfg.LLMMaxHistoryMessages)
+	}
+}
+
+// TestLoad_RejectsInvalidLLMTimeout pins duration parsing for
+// LLM_TIMEOUT. A typo in the env file would otherwise crash on
+// the first chat request; better to fail at startup.
+func TestLoad_RejectsInvalidLLMTimeout(t *testing.T) {
+	t.Setenv("DB_URL", "postgres://x")
+	t.Setenv("JWT_SECRET", auth.TestSecret)
+	t.Setenv("LLM_ENABLED", "true")
+	t.Setenv("LLM_BASE_URL", "https://api.openai.com/v1")
+	t.Setenv("LLM_API_KEY", "sk-prod-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+	t.Setenv("LLM_MODEL", "gpt-4o-mini")
+	t.Setenv("LLM_TIMEOUT", "not-a-duration")
+
+	_, err := Load()
+	if err == nil {
+		t.Fatal("Load() error = nil, want LLM_TIMEOUT parse error")
+	}
+	if !strings.Contains(err.Error(), "LLM_TIMEOUT") {
+		t.Errorf("Load() error = %v, want it to mention LLM_TIMEOUT", err)
+	}
+}
