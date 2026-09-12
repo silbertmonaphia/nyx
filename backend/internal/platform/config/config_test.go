@@ -299,11 +299,145 @@ func TestLoad_AcceptsValidLLMConfig(t *testing.T) {
 	if !cfg.LLMEnabled {
 		t.Error("LLMEnabled = false, want true")
 	}
+	if cfg.LLMProvider != "openai" {
+		t.Errorf("LLMProvider default = %q, want %q", cfg.LLMProvider, llmProviderOpenAI)
+	}
+	if cfg.LLMAllowPrivateURL {
+		t.Error("LLMAllowPrivateURL default = true, want false")
+	}
 	if cfg.LLMMaxTokens != 1024 {
 		t.Errorf("LLMMaxTokens default = %d, want 1024", cfg.LLMMaxTokens)
 	}
 	if cfg.LLMMaxHistoryMessages != 50 {
 		t.Errorf("LLMMaxHistoryMessages default = %d, want 50", cfg.LLMMaxHistoryMessages)
+	}
+}
+
+// TestLoad_RejectsInvalidLLMProvider pins the LLM_PROVIDER
+// allowlist — anything outside {openai, vllm} must refuse to
+// start so a typo doesn't silently fall back to OpenAI.
+func TestLoad_RejectsInvalidLLMProvider(t *testing.T) {
+	t.Setenv("DB_URL", "postgres://x")
+	t.Setenv("JWT_SECRET", auth.TestSecret)
+	t.Setenv("LLM_ENABLED", "true")
+	t.Setenv("LLM_PROVIDER", "anthropic")
+	t.Setenv("LLM_BASE_URL", "https://api.openai.com/v1")
+	t.Setenv("LLM_API_KEY", "sk-prod-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+	t.Setenv("LLM_MODEL", "gpt-4o-mini")
+
+	_, err := Load()
+	if err == nil {
+		t.Fatal("Load() error = nil, want LLM_PROVIDER rejection")
+	}
+	if !strings.Contains(err.Error(), "LLM_PROVIDER") {
+		t.Errorf("Load() error = %v, want it to mention LLM_PROVIDER", err)
+	}
+}
+
+// TestLoad_AcceptsVLLMProviderWithEmptyAPIKey pins the vLLM happy
+// path: LLM_PROVIDER=vllm allows an empty LLM_API_KEY (vLLM
+// started without --api-key accepts any Authorization header).
+// The OpenAI provider would reject the same configuration.
+func TestLoad_AcceptsVLLMProviderWithEmptyAPIKey(t *testing.T) {
+	t.Setenv("DB_URL", "postgres://x")
+	t.Setenv("JWT_SECRET", auth.TestSecret)
+	t.Setenv("LLM_ENABLED", "true")
+	t.Setenv("LLM_PROVIDER", "vllm")
+	t.Setenv("LLM_BASE_URL", "http://vllm:8000/v1")
+	t.Setenv("LLM_API_KEY", "")
+	t.Setenv("LLM_MODEL", "Qwen/Qwen2.5-3B-Instruct")
+	t.Setenv("LLM_ALLOW_PRIVATE_URL", "true")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v, want nil for valid vLLM config", err)
+	}
+	if cfg.LLMProvider != "vllm" {
+		t.Errorf("LLMProvider = %q, want vllm", cfg.LLMProvider)
+	}
+}
+
+// TestLoad_RejectsVLLMWithInvalidBaseURLScheme covers the SSRF
+// scheme allowlist.
+func TestLoad_RejectsVLLMWithInvalidBaseURLScheme(t *testing.T) {
+	t.Setenv("DB_URL", "postgres://x")
+	t.Setenv("JWT_SECRET", auth.TestSecret)
+	t.Setenv("LLM_ENABLED", "true")
+	t.Setenv("LLM_PROVIDER", "vllm")
+	t.Setenv("LLM_BASE_URL", "file:///etc/passwd")
+	t.Setenv("LLM_API_KEY", "")
+	t.Setenv("LLM_MODEL", "test")
+	t.Setenv("LLM_ALLOW_PRIVATE_URL", "true")
+
+	_, err := Load()
+	if err == nil {
+		t.Fatal("Load() error = nil, want scheme rejection")
+	}
+	if !strings.Contains(err.Error(), "scheme") {
+		t.Errorf("Load() error = %v, want it to mention scheme", err)
+	}
+}
+
+// TestLoad_RejectsVLLMWithPrivateHost confirms the IP-class
+// allowlist at startup.
+func TestLoad_RejectsVLLMWithPrivateHost(t *testing.T) {
+	t.Setenv("DB_URL", "postgres://x")
+	t.Setenv("JWT_SECRET", auth.TestSecret)
+	t.Setenv("LLM_ENABLED", "true")
+	t.Setenv("LLM_PROVIDER", "vllm")
+	t.Setenv("LLM_BASE_URL", "http://127.0.0.1:8000/v1")
+	t.Setenv("LLM_API_KEY", "")
+	t.Setenv("LLM_MODEL", "test")
+	// LLM_ALLOW_PRIVATE_URL intentionally unset.
+
+	_, err := Load()
+	if err == nil {
+		t.Fatal("Load() error = nil, want private-host rejection")
+	}
+	if !strings.Contains(err.Error(), "LLM_ALLOW_PRIVATE_URL") {
+		t.Errorf("Load() error = %v, want it to mention the escape hatch", err)
+	}
+}
+
+// TestLoad_RejectsVLLMWithUserinfo confirms URLs with embedded
+// userinfo are refused.
+func TestLoad_RejectsVLLMWithUserinfo(t *testing.T) {
+	t.Setenv("DB_URL", "postgres://x")
+	t.Setenv("JWT_SECRET", auth.TestSecret)
+	t.Setenv("LLM_ENABLED", "true")
+	t.Setenv("LLM_PROVIDER", "vllm")
+	t.Setenv("LLM_BASE_URL", "http://attacker:pw@vllm.example.com/v1")
+	t.Setenv("LLM_API_KEY", "")
+	t.Setenv("LLM_MODEL", "test")
+	t.Setenv("LLM_ALLOW_PRIVATE_URL", "true")
+
+	_, err := Load()
+	if err == nil {
+		t.Fatal("Load() error = nil, want userinfo rejection")
+	}
+	if !strings.Contains(err.Error(), "userinfo") {
+		t.Errorf("Load() error = %v, want it to mention userinfo", err)
+	}
+}
+
+// TestLoad_RejectsOpenAIWithoutAPIKey pins that the OpenAI provider
+// still requires a non-empty LLM_API_KEY — only vLLM is allowed to
+// run keyless.
+func TestLoad_RejectsOpenAIWithoutAPIKey(t *testing.T) {
+	t.Setenv("DB_URL", "postgres://x")
+	t.Setenv("JWT_SECRET", auth.TestSecret)
+	t.Setenv("LLM_ENABLED", "true")
+	t.Setenv("LLM_PROVIDER", "openai")
+	t.Setenv("LLM_BASE_URL", "https://api.openai.com/v1")
+	t.Setenv("LLM_API_KEY", "")
+	t.Setenv("LLM_MODEL", "gpt-4o-mini")
+
+	_, err := Load()
+	if err == nil {
+		t.Fatal("Load() error = nil, want OpenAI-without-API-key rejection")
+	}
+	if !strings.Contains(err.Error(), "LLM_API_KEY") {
+		t.Errorf("Load() error = %v, want it to mention LLM_API_KEY", err)
 	}
 }
 

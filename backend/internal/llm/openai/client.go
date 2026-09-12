@@ -1,11 +1,11 @@
 // Package openai implements llm.Provider against the OpenAI Chat
-// Completions streaming API. The same client works against any
-// OpenAI-compatible server (vLLM, llama.cpp's Python server, etc.)
-// because the wire contract is identical — base URL is the only
-// difference. The Client constructor takes the base URL from
-// config so operators can point it at https://api.openai.com/v1
-// today and http://vllm.internal:8000/v1 tomorrow without a code
-// change.
+// Completions streaming API via github.com/sashabaranov/go-openai.
+// The same client works against any OpenAI-compatible server (vLLM,
+// llama.cpp's Python server, etc.) because the wire contract is
+// identical — base URL is the only difference. Operators who want
+// the vLLM-specific path (per-dial DNS hardening, optional empty
+// API key) should use internal/llm/vllm.Client instead by setting
+// LLM_PROVIDER=vllm in the environment.
 //
 // Streaming protocol: ChatCompletionRequest.Stream=true and
 // StreamOptions.IncludeUsage=true produce an SSE stream whose final

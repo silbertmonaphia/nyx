@@ -9,7 +9,9 @@ import (
 	"time"
 
 	"nyx/internal/chat"
+	"nyx/internal/llm"
 	"nyx/internal/llm/openai"
+	"nyx/internal/llm/vllm"
 	"nyx/internal/middleware"
 	"nyx/internal/movie"
 	"nyx/internal/platform/api"
@@ -28,6 +30,7 @@ import (
 	"github.com/rs/zerolog/log"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/propagation"
+	"go.opentelemetry.io/otel/trace"
 )
 
 func main() {
@@ -187,32 +190,13 @@ func main() {
 	user.RegisterUserOps(humaAPI, userHandler, tokens)
 
 	// Chat domain. Opt-in via LLM_ENABLED; when off, no route is
-	// mounted and no provider client is constructed. The same
-	// router is reused (chat.RegisterChatRoute mounts directly on
-	// chi, bypassing huma — see backend/HUMA.md "Streaming
-	// endpoints" for the rationale). model + base_url are logged
-	// at Info on startup so the operator can confirm the operator's
-	// config took; the API key is NEVER logged.
-	if cfg.LLMEnabled {
-		llmClient, llmErr := openai.NewClient(cfg, tracing.Provider.Tracer("nyx.llm.openai"))
-		if llmErr != nil {
-			log.Fatal().Err(llmErr).Msg("LLM client init failed")
-		}
-		chatService := chat.NewService(llmClient, cfg, tracing.Provider.Tracer("nyx.chat"))
-		chatHandler := chat.NewHandler(chatService)
-		// Per-user limiter: 5 streams/min, burst 3. In-memory only;
-		// see chat/ratelimit.go for the cost trade-off.
-		chatLimiter := chat.NewUserRateLimiter(5.0/60.0, 3)
-		stopChatGC := chatLimiter.RunGC(time.Minute, time.Hour)
-		defer stopChatGC()
-		chat.RegisterChatRoute(router, chatHandler, tokens, chatLimiter)
-		log.Info().
-			Str("model", cfg.LLMModel).
-			Str("base_url", cfg.LLMBaseURL).
-			Msg("LLM chat enabled")
-	} else {
-		log.Info().Msg("LLM chat disabled (LLM_ENABLED=false)")
-	}
+	// mounted and no provider client is constructed. The dispatch
+	// lives in mountChatRoute so the main wiring stays under the
+	// project's cyclomatic-complexity budget. The returned
+	// shutdown stops the rate-limiter GC goroutine on graceful
+	// shutdown.
+	stopChatGC := mountChatRoute(router, cfg, tracing.Provider, tokens)
+	defer stopChatGC()
 
 	port := ":" + cfg.Port
 	server := &http.Server{
@@ -275,6 +259,55 @@ func setupTracing(cfg *config.Config) *observability.Tracing {
 		propagation.Baggage{},
 	))
 	return tracing
+}
+
+// mountChatRoute wires the optional /api/chat SSE endpoint when
+// LLM_ENABLED=true. When LLM_ENABLED=false no route is mounted and
+// no provider client is constructed, so deployments without an LLM
+// pay nothing. The same router is reused (chat.RegisterChatRoute
+// mounts directly on chi, bypassing huma — see backend/HUMA.md
+// "Streaming endpoints" for the rationale).
+//
+// LLM_PROVIDER picks the client implementation: "openai" (default;
+// targets OpenAI proper or any OpenAI-compatible server via the
+// sashabaranov SDK) or "vllm" (raw HTTP + hand-rolled SSE decoder
+// for self-hosted vLLM, with per-dial DNS hardening). The chat
+// domain consumes the resulting client through the llm.Provider
+// interface and never imports either implementation directly.
+//
+// provider / model / base_url are logged at Info on startup so the
+// operator can confirm their config took; the API key is NEVER
+// logged. Returns a shutdown function the caller MUST defer so the
+// chat-rate-limiter's GC goroutine stops on graceful shutdown.
+func mountChatRoute(router chi.Router, cfg *config.Config, tracerProvider trace.TracerProvider, tokens auth.TokenService) (shutdown func()) {
+	if !cfg.LLMEnabled {
+		log.Info().Msg("LLM chat disabled (LLM_ENABLED=false)")
+		return func() {}
+	}
+	var llmClient llm.Provider
+	var llmErr error
+	switch cfg.LLMProvider {
+	case "vllm":
+		llmClient, llmErr = vllm.NewClient(cfg, tracerProvider.Tracer("nyx.llm.vllm"))
+	default: // "openai" — validated upstream
+		llmClient, llmErr = openai.NewClient(cfg, tracerProvider.Tracer("nyx.llm.openai"))
+	}
+	if llmErr != nil {
+		log.Fatal().Err(llmErr).Msg("LLM client init failed")
+	}
+	chatService := chat.NewService(llmClient, cfg, tracerProvider.Tracer("nyx.chat"))
+	chatHandler := chat.NewHandler(chatService)
+	// Per-user limiter: 5 streams/min, burst 3. In-memory only;
+	// see chat/ratelimit.go for the cost trade-off.
+	chatLimiter := chat.NewUserRateLimiter(5.0/60.0, 3)
+	stopGC := chatLimiter.RunGC(time.Minute, time.Hour)
+	chat.RegisterChatRoute(router, chatHandler, tokens, chatLimiter)
+	log.Info().
+		Str("provider", cfg.LLMProvider).
+		Str("model", cfg.LLMModel).
+		Str("base_url", cfg.LLMBaseURL).
+		Msg("LLM chat enabled")
+	return stopGC
 }
 
 // maxBodyBytes returns a middleware that wraps r.Body in an

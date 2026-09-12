@@ -3,14 +3,22 @@
 // consumes one through the Chat method without coupling to any
 // vendor's SDK.
 //
-// Today the only implementation is internal/llm/openai.Client, which
-// targets the OpenAI Chat Completions API. vLLM exposes the identical
-// /v1/chat/completions wire contract (same SSE framing, same JSON
-// shape, same usage chunk), so the OpenAI client also works against
-// a vLLM server when constructed with the operator's base URL. If
-// vLLM ever drifts (new fields, dropped SSE flags), swap in a
-// dedicated internal/llm/vllm/client.go behind the same Provider
-// interface — the chat domain does not need to change.
+// Two implementations live under this package:
+//
+//   - internal/llm/openai.Client targets OpenAI proper (or any
+//     OpenAI-compatible server) via github.com/sashabaranov/go-openai.
+//     Operators who point LLM_BASE_URL at a vLLM instance and don't
+//     enable LLM_PROVIDER=vllm get the OpenAI client targeting vLLM
+//     — the wire contract is identical, so it works.
+//   - internal/llm/vllm.Client targets a self-hosted vLLM with raw
+//     net/http + a hand-rolled SSE decoder. It adds per-dial IP-class
+//     DNS hardening that closes the rebinding window the SDK path
+//     leaves open, and accepts an empty LLM_API_KEY (vLLM started
+//     without --api-key).
+//
+// Selection happens once at process startup in cmd/api/main.go via
+// the LLM_PROVIDER env var (default "openai"); the chat domain
+// never imports either implementation directly.
 //
 // The streaming shape is callback-based: the Provider calls onDelta
 // for each content fragment as it arrives, and returns the trailing

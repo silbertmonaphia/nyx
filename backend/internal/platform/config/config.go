@@ -2,11 +2,22 @@ package config
 
 import (
 	"fmt"
+	"net"
+	"net/url"
 	"strings"
 	"time"
 
 	"github.com/spf13/viper"
 	"nyx/internal/platform/auth"
+)
+
+// LLM provider identifiers. Centralised as constants so the
+// validateLLMConfig switch, the cmd/api/main.go dispatch, and
+// the config_test.go golden-value assertions all reference the
+// same literals (goconst would otherwise flag the duplicates).
+const (
+	llmProviderOpenAI = "openai"
+	llmProviderVLLM   = "vllm"
 )
 
 type Config struct {
@@ -65,11 +76,29 @@ type Config struct {
 	OTelExporterOTLPEndpoint string `mapstructure:"OTEL_EXPORTER_OTLP_ENDPOINT"`
 
 	// LLM (chat). Off by default; when enabled the operator MUST set
-	// LLM_BASE_URL, LLM_API_KEY, and LLM_MODEL. LLM_BASE_URL points
-	// at the chat-completions root (the OpenAI client appends
-	// "/chat/completions"); the same field works for OpenAI's hosted
-	// endpoint (https://api.openai.com/v1) and a self-hosted vLLM
-	// (http://vllm.internal:8000/v1) — the wire contract is identical.
+	// LLM_BASE_URL and LLM_MODEL. LLM_PROVIDER selects the client
+	// implementation: "openai" (default, works against any
+	// OpenAI-compatible server via sashabaranov/go-openai) or
+	// "vllm" (raw HTTP + hand-rolled SSE decoder for self-hosted
+	// vLLM). LLM_BASE_URL points at the chat-completions root;
+	// the OpenAI client appends "/chat/completions" and the vLLM
+	// client does the same. The same LLM_BASE_URL works for OpenAI's
+	// hosted endpoint (https://api.openai.com/v1) and a self-hosted
+	// vLLM (http://vllm:8000/v1) — the wire contract is identical.
+	//
+	// LLM_API_KEY is required for the OpenAI provider (OpenAI proper
+	// refuses empty bearer) but optional for the vLLM provider
+	// (vLLM started without --api-key accepts any Authorization
+	// header, including none). The placeholder blocklist below
+	// catches the common "I committed my .env with a literal
+	// 'your-key'" foot-gun.
+	//
+	// LLM_ALLOW_PRIVATE_URL relaxes the SSRF guard on LLM_BASE_URL
+	// (loopback / RFC1918 / link-local / multicast / unspecified are
+	// refused by default). Required for dev compose where the vLLM
+	// container lives on a private container-network address, and
+	// for any self-hosted deployment that isn't fronted by a public
+	// hostname.
 	//
 	// LLM_SYSTEM_PROMPT is server-controlled and prepended to every
 	// request; clients cannot override it (the chat service rejects
@@ -82,6 +111,7 @@ type Config struct {
 	// socket deadline; LLM_MAX_STREAM_DURATION is the hard wall-clock
 	// cap on a single stream — anything longer is force-closed.
 	LLMEnabled            bool   `mapstructure:"LLM_ENABLED"`
+	LLMProvider           string `mapstructure:"LLM_PROVIDER"`
 	LLMBaseURL            string `mapstructure:"LLM_BASE_URL"`
 	LLMAPIKey             string `mapstructure:"LLM_API_KEY"`
 	LLMModel              string `mapstructure:"LLM_MODEL"`
@@ -91,6 +121,7 @@ type Config struct {
 	LLMMaxHistoryMessages int    `mapstructure:"LLM_MAX_HISTORY_MESSAGES"`
 	LLMMaxMessageChars    int    `mapstructure:"LLM_MAX_MESSAGE_CHARS"`
 	LLMMaxStreamDuration  string `mapstructure:"LLM_MAX_STREAM_DURATION"`
+	LLMAllowPrivateURL    bool   `mapstructure:"LLM_ALLOW_PRIVATE_URL"`
 }
 
 func Load() (*Config, error) {
@@ -212,15 +243,19 @@ func setDefaults() {
 
 	// LLM defaults. LLM_ENABLED is the master switch — false means
 	// no route is registered and no client is constructed at
-	// startup. The other defaults (timeouts, caps) only matter
-	// when LLM_ENABLED=true; they're installed so an operator can
-	// flip LLM_ENABLED=true without also setting every limit.
+	// startup. LLM_PROVIDER picks the client implementation; "openai"
+	// is the default so existing deployments don't need a new env
+	// var. The other defaults (timeouts, caps) only matter when
+	// LLM_ENABLED=true; they're installed so an operator can flip
+	// LLM_ENABLED=true without also setting every limit.
 	viper.SetDefault("LLM_ENABLED", false)
+	viper.SetDefault("LLM_PROVIDER", "openai")
 	viper.SetDefault("LLM_TIMEOUT", "60s")
 	viper.SetDefault("LLM_MAX_TOKENS", 1024)
 	viper.SetDefault("LLM_MAX_HISTORY_MESSAGES", 50)
 	viper.SetDefault("LLM_MAX_MESSAGE_CHARS", 32768)
 	viper.SetDefault("LLM_MAX_STREAM_DURATION", "10m")
+	viper.SetDefault("LLM_ALLOW_PRIVATE_URL", false)
 	// LLM_SYSTEM_PROMPT is left empty by default — the chat
 	// service falls back to a hard-coded "movie catalog
 	// assistant" prompt when the operator hasn't customised it.
@@ -239,10 +274,10 @@ func bindEnvVars() {
 		"CORS_ALLOWED_ORIGINS",
 		"OTEL_ENABLED", "OTEL_SERVICE_NAME",
 		"OTEL_EXPORTER_OTLP_ENDPOINT",
-		"LLM_ENABLED", "LLM_BASE_URL", "LLM_API_KEY", "LLM_MODEL",
+		"LLM_ENABLED", "LLM_PROVIDER", "LLM_BASE_URL", "LLM_API_KEY", "LLM_MODEL",
 		"LLM_TIMEOUT", "LLM_MAX_TOKENS", "LLM_SYSTEM_PROMPT",
 		"LLM_MAX_HISTORY_MESSAGES", "LLM_MAX_MESSAGE_CHARS",
-		"LLM_MAX_STREAM_DURATION",
+		"LLM_MAX_STREAM_DURATION", "LLM_ALLOW_PRIVATE_URL",
 	} {
 		_ = viper.BindEnv(key)
 	}
@@ -299,35 +334,162 @@ func validateDurations(cfg *Config) error {
 
 // validateLLMConfig enforces the cross-field requirements for
 // turning LLM_ENABLED on. The rules:
-//   - BaseURL, APIKey, and Model must all be non-empty (no defaults).
-//   - APIKey must not be a placeholder that an operator might leave
-//     in by accident (case-insensitive contains-match against a
-//     short blocklist). The check is intentionally cheap — it
-//     catches the common "I committed my .env with a literal
+//   - Provider must be one of {"openai", "vllm"} — anything else
+//     would silently fall back to the OpenAI client at runtime.
+//   - BaseURL and Model must be non-empty (no defaults).
+//   - APIKey is required for OpenAI (it rejects empty bearer)
+//     but optional for vLLM (vLLM started without --api-key
+//     accepts any Authorization header, including none).
+//   - APIKey (when set) must not be a placeholder an operator
+//     might leave in by accident (case-insensitive contains-match
+//     against a short blocklist). The check is intentionally cheap —
+//     it catches the common "I committed my .env with a literal
 //     'your-key'" foot-gun, not a determined attacker.
-//   - System prompt length is capped at 8 KiB to bound the input to
-//     every chat completion.
+//   - BaseURL scheme must be http or https; userinfo is rejected;
+//     private/restricted hosts (loopback, RFC1918, link-local,
+//     multicast, unspecified) are rejected unless the operator
+//     opts in via LLM_ALLOW_PRIVATE_URL=true. The per-dial
+//     re-check happens inside the vLLM provider's
+//     http.Transport.DialContext; this is the startup guard.
+//   - System prompt length is capped at 8 KiB to bound the input
+//     to every chat completion.
 //
 // Called only when LLMEnabled is true so the default-off path
 // stays free of these requirements.
 func validateLLMConfig(cfg *Config) error {
+	switch cfg.LLMProvider {
+	case llmProviderOpenAI, llmProviderVLLM:
+	case "":
+		// Empty means viper default didn't apply — treat as the
+		// canonical "openai" so a misconfigured deployment fails
+		// loudly here rather than silently routing to OpenAI.
+		return fmt.Errorf("LLM_PROVIDER must be one of {%s, %s}, got empty", llmProviderOpenAI, llmProviderVLLM)
+	default:
+		return fmt.Errorf("LLM_PROVIDER must be one of {%s, %s}, got %q", llmProviderOpenAI, llmProviderVLLM, cfg.LLMProvider)
+	}
 	if cfg.LLMBaseURL == "" {
 		return fmt.Errorf("LLM_BASE_URL is required when LLM_ENABLED=true")
-	}
-	if cfg.LLMAPIKey == "" {
-		return fmt.Errorf("LLM_API_KEY is required when LLM_ENABLED=true")
 	}
 	if cfg.LLMModel == "" {
 		return fmt.Errorf("LLM_MODEL is required when LLM_ENABLED=true")
 	}
-	lower := strings.ToLower(cfg.LLMAPIKey)
-	for _, placeholder := range []string{"changeme", "your-key", "sk-xxx", "xxx", "test-key"} {
-		if strings.Contains(lower, placeholder) {
-			return fmt.Errorf("LLM_API_KEY looks like a placeholder (%q); refusing to start — set a real key", placeholder)
+	if err := validateLLMBaseURL(cfg.LLMBaseURL, cfg.LLMAllowPrivateURL); err != nil {
+		return err
+	}
+	// OpenAI rejects an empty bearer; vLLM doesn't. Only the OpenAI
+	// path enforces a non-empty key.
+	if cfg.LLMProvider == "openai" {
+		if cfg.LLMAPIKey == "" {
+			return fmt.Errorf("LLM_API_KEY is required when LLM_ENABLED=true and LLM_PROVIDER=openai")
+		}
+		lower := strings.ToLower(cfg.LLMAPIKey)
+		for _, placeholder := range []string{"changeme", "your-key", "sk-xxx", "xxx", "test-key"} {
+			if strings.Contains(lower, placeholder) {
+				return fmt.Errorf("LLM_API_KEY looks like a placeholder (%q); refusing to start — set a real key", placeholder)
+			}
 		}
 	}
 	if len(cfg.LLMSystemPrompt) > 8192 {
 		return fmt.Errorf("LLM_SYSTEM_PROMPT must be at most 8192 bytes, got %d", len(cfg.LLMSystemPrompt))
 	}
 	return nil
+}
+
+// validateLLMBaseURL is the startup-time SSRF guard. It refuses:
+//   - malformed URLs (url.Parse fails)
+//   - schemes other than http / https
+//   - URLs with embedded userinfo (http://user:pw@host/) —
+//     userinfo is never a legitimate LLM URL component and
+//     silently dropping it would let a misconfigured client
+//     appear to authenticate as a different principal
+//   - hosts that resolve to loopback, RFC1918, link-local,
+//     multicast, or unspecified IPs — unless the operator
+//     opts in via LLM_ALLOW_PRIVATE_URL=true
+//
+// The vLLM provider repeats the IP-class check inside its
+// http.Transport.DialContext so a DNS rebinding attack can't
+// swap a public hostname's answer for a private IP between
+// startup and the first dial. The OpenAI provider (which uses
+// the sashabaranov SDK) inherits the SDK's default transport
+// with no per-dial check; this is a known residual risk and
+// is documented in SECURITY.md.
+func validateLLMBaseURL(rawURL string, allowPrivate bool) error {
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		return fmt.Errorf("LLM_BASE_URL is not a valid URL: %w", err)
+	}
+	switch u.Scheme {
+	case "http", "https":
+	default:
+		return fmt.Errorf("LLM_BASE_URL scheme must be http or https, got %q", u.Scheme)
+	}
+	if u.User != nil {
+		return fmt.Errorf("LLM_BASE_URL must not contain userinfo (user:password@host)")
+	}
+	host := u.Hostname()
+	if host == "" {
+		return fmt.Errorf("LLM_BASE_URL is missing a host")
+	}
+	if allowPrivate {
+		return nil
+	}
+	if err := checkHostNotPrivate(host); err != nil {
+		return fmt.Errorf("%w (set LLM_ALLOW_PRIVATE_URL=true to override)", err)
+	}
+	return nil
+}
+
+// checkHostNotPrivate resolves the host and refuses any address in
+// the loopback, RFC1918, link-local, multicast, or unspecified
+// classes. Mirrors the check inside internal/llm/vllm's
+// DialContext so an operator gets a clear error at startup
+// instead of an opaque 502 at request time.
+func checkHostNotPrivate(host string) error {
+	if ip := net.ParseIP(host); ip != nil {
+		if refused, reason := ipClassRefused(ip); refused {
+			return fmt.Errorf("LLM_BASE_URL points at a private/restricted address (%s)", reason)
+		}
+		return nil
+	}
+	addrs, err := net.LookupIP(host)
+	if err != nil {
+		return fmt.Errorf("LLM_BASE_URL DNS lookup failed for %q: %w", host, err)
+	}
+	if len(addrs) == 0 {
+		return fmt.Errorf("LLM_BASE_URL DNS lookup returned no addresses for %q", host)
+	}
+	for _, ip := range addrs {
+		if refused, reason := ipClassRefused(ip); refused {
+			return fmt.Errorf("LLM_BASE_URL resolves to a private/restricted address (%s)", reason)
+		}
+	}
+	return nil
+}
+
+// ipClassRefused returns (true, reason) when the IP belongs to a
+// class the project refuses by default. Uses net.IP's
+// classification methods (Go 1.17+) so RFC1918 + ULA +
+// link-local + IPv4-mapped IPv6 are all covered without rolling
+// CIDR checks by hand.
+func ipClassRefused(ip net.IP) (bool, string) {
+	switch {
+	case ip.IsUnspecified():
+		return true, "unspecified (0.0.0.0 / ::)"
+	case ip.IsLoopback():
+		return true, "loopback (127.0.0.0/8 / ::1)"
+	case ip.IsPrivate():
+		// Covers RFC1918 (10/8, 172.16/12, 192.168/16) and ULA (fc00::/7).
+		return true, "private (RFC1918 / ULA)"
+	case ip.IsLinkLocalUnicast():
+		return true, "link-local unicast (169.254/16 / fe80::/10)"
+	case ip.IsLinkLocalMulticast():
+		return true, "link-local multicast"
+	case ip.IsInterfaceLocalMulticast():
+		return true, "interface-local multicast (ff01::/16)"
+	case ip.IsMulticast():
+		// Site-local / org-local multicast — operators don't
+		// legitimately point an LLM URL at a multicast group.
+		return true, "multicast"
+	}
+	return false, ""
 }
