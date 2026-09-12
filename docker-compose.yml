@@ -112,6 +112,22 @@ services:
       # Authorization, and the allowlist closes the CSRF surface
       # automatically.
       - CORS_ALLOWED_ORIGINS=${CORS_ALLOWED_ORIGINS:-http://localhost:5173,http://localhost:8080}
+      # Self-hosted LLM (optional). Off by default — `docker compose up`
+      # boots the existing stack untouched. Operators opt in via
+      # `--profile vllm` (see the `vllm` service below). When the
+      # profile is active, LLM_BASE_URL points at the vLLM container
+      # on the default bridge network, LLM_ALLOW_PRIVATE_URL=true is
+      # required (the container hostname resolves to a private IP),
+      # and LLM_PROVIDER=vllm selects the new raw-HTTP client
+      # implemented in backend/internal/llm/vllm/. LLM_API_KEY is
+      # intentionally empty — vLLM started without --api-key accepts
+      # any Authorization header, including none.
+      - LLM_ENABLED=${LLM_ENABLED:-false}
+      - LLM_PROVIDER=${LLM_PROVIDER:-vllm}
+      - LLM_BASE_URL=${LLM_BASE_URL:-http://vllm:8000/v1}
+      - LLM_API_KEY=${LLM_API_KEY:-}
+      - LLM_MODEL=${LLM_MODEL:-Qwen/Qwen2.5-3B-Instruct}
+      - LLM_ALLOW_PRIVATE_URL=${LLM_ALLOW_PRIVATE_URL:-true}
     depends_on:
       db:
         condition: service_healthy
@@ -119,6 +135,9 @@ services:
         condition: service_healthy
       jaeger:
         condition: service_healthy
+      vllm:
+        condition: service_healthy
+        required: false
     # SECURITY.md M12: backend Dockerfile already sets USER nyx
     # (non-root), so no compose-level user: override is needed.
     # Read-only rootfs; tmpfs gives /tmp the writable scratch Go
@@ -176,5 +195,73 @@ services:
       - /var/run
       - /run
 
+  # Self-hosted vLLM (opt-in profile). Operators bring this up with
+  # `docker compose --profile vllm up`. When inactive, the rest of
+  # the stack boots untouched and the backend's LLM_ENABLED=false
+  # path skips constructing any provider client.
+  #
+  # Image is pinned — vLLM publishes a new minor every few weeks
+  # and a bump can change error JSON shape, default flags, or the
+  # stream framing. Bump deliberately.
+  #
+  # Cold start: Qwen2.5-3B-Instruct loads in ~30-90s on CPU and
+  # 10-30s on GPU. The 120s start_period on the healthcheck is
+  # generous for a 3B model — operators pointing at a larger model
+  # should raise it accordingly.
+  #
+  # GPU: deploy.resources.reservations.devices requests one
+  # NVIDIA device. On a host without the NVIDIA container runtime
+  # this is silently ignored and vLLM boots in CPU mode (slow but
+  # functional for smoke tests).
+  #
+  # Caching: the named vllm_cache volume persists HuggingFace
+  # downloads across `compose down` so a 2 GB model weight doesn't
+  # re-pull every restart. HUGGING_FACE_HUB_TOKEN is optional —
+  # only needed for gated models (Llama, Mistral). The default
+  # Qwen2.5-3B-Instruct is Apache-2.0 and ungated.
+  vllm:
+    image: vllm/vllm-openai:v0.6.3.post1
+    profiles: ["vllm"]
+    restart: always
+    command:
+      - "--model"
+      - "${VLLM_MODEL:-Qwen/Qwen2.5-3B-Instruct}"
+      - "--served-model-name"
+      - "${VLLM_MODEL:-Qwen/Qwen2.5-3B-Instruct}"
+      - "--host"
+      - "0.0.0.0"
+      - "--port"
+      - "8000"
+    environment:
+      - HUGGING_FACE_HUB_TOKEN=${HUGGING_FACE_HUB_TOKEN:-}
+    ports:
+      # Loopback only — vLLM is reached by the backend container
+      # on the compose network, never from the host directly.
+      # SECURITY.md H12: same pattern as db / redis.
+      - "127.0.0.1:8000:8000"
+    volumes:
+      - vllm_cache:/root/.cache/huggingface
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    healthcheck:
+      # /v1/models returns the list of loaded models — cheapest
+      # "server is up AND at least one model is loaded" probe.
+      # curl is in the vllm image; older revisions had only wget.
+      test: ["CMD-SHELL", "curl -fsS http://localhost:8000/v1/models > /dev/null || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 120s
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    tmpfs:
+      - /tmp
+
 volumes:
   db_data:
+  vllm_cache:

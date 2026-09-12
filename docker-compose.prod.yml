@@ -197,6 +197,17 @@ services:
       # this allowlist gates cross-origin XHR (no ACAC — Bearer is a
       # plain Authorization header).
       - CORS_ALLOWED_ORIGINS=${CORS_ALLOWED_ORIGINS:-https://app.nyx.com}
+      # Self-hosted LLM (opt-in profile — same as dev compose).
+      # Production operators usually point at a managed OpenAI
+      # endpoint or a hardened vLLM behind a private ingress; this
+      # block only fires when --profile vllm is active. See
+      # README.md "Self-hosted LLM (vLLM, optional)".
+      - LLM_ENABLED=${LLM_ENABLED:-false}
+      - LLM_PROVIDER=${LLM_PROVIDER:-vllm}
+      - LLM_BASE_URL=${LLM_BASE_URL:-http://vllm:8000/v1}
+      - LLM_API_KEY=${LLM_API_KEY:-}
+      - LLM_MODEL=${LLM_MODEL:-Qwen/Qwen2.5-3B-Instruct}
+      - LLM_ALLOW_PRIVATE_URL=${LLM_ALLOW_PRIVATE_URL:-true}
     depends_on:
       db:
         condition: service_healthy
@@ -204,6 +215,9 @@ services:
         condition: service_healthy
       jaeger:
         condition: service_healthy
+      vllm:
+        condition: service_healthy
+        required: false
     # Mount the secrets as 0400 files owned by the backend uid
     # (1000 — see backend/Dockerfile which RUNs adduser -u 1000).
     # mode 0400 is enforced by Docker and the backend container
@@ -270,12 +284,57 @@ services:
     networks:
       - nyx_network
 
+  # Self-hosted vLLM (opt-in profile). Production-side mirror of
+  # the dev compose service — same image pin, same healthcheck,
+  # same vllm_cache volume. Internal-only (no host ports); the
+  # backend container reaches it via the nyx_network DNS alias.
+  # See README.md "Self-hosted LLM (vLLM, optional)" for the
+  # operator guide (GPU requirement, model pull, HUGGING_FACE_HUB_TOKEN
+  # for gated models, start_period tuning for larger weights).
+  vllm:
+    image: vllm/vllm-openai:v0.6.3.post1
+    profiles: ["vllm"]
+    restart: always
+    command:
+      - "--model"
+      - "${VLLM_MODEL:-Qwen/Qwen2.5-3B-Instruct}"
+      - "--served-model-name"
+      - "${VLLM_MODEL:-Qwen/Qwen2.5-3B-Instruct}"
+      - "--host"
+      - "0.0.0.0"
+      - "--port"
+      - "8000"
+    environment:
+      - HUGGING_FACE_HUB_TOKEN=${HUGGING_FACE_HUB_TOKEN:-}
+    volumes:
+      - vllm_cache:/root/.cache/huggingface
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:8000/v1/models > /dev/null || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 120s
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    tmpfs:
+      - /tmp
+    networks:
+      - nyx_network
+
 networks:
   nyx_network:
     driver: bridge
 
 volumes:
   db_data:
+  vllm_cache:
   # redis_data removed — redis is now a pure in-memory cache (see
   # the redis service command). Operators who want a persisted
   # cache should re-introduce the volume AND switch the command
