@@ -115,6 +115,59 @@ open http://localhost:16686
 
 In the bundled `docker compose` stack, `OTEL_ENABLED=true` and `VITE_OTEL_ENABLED=true` are defaults; the frontend container's nginx proxies `/otlp/` to the `jaeger` service, so the browser hits same-origin and Jaeger's missing CORS is a non-issue.
 
+## Self-hosted LLM (vLLM, optional)
+
+The `/api/chat` SSE endpoint streams from any OpenAI-compatible server. The default `openai` provider uses `sashabaranov/go-openai` and targets OpenAI's hosted endpoint or any compatible server via `LLM_BASE_URL`. A second provider — `vllm` — implements the same `llm.Provider` interface against a self-hosted [vLLM](https://docs.vllm.ai/) server with raw `net/http` + a hand-rolled SSE decoder and a per-dial DNS allowlist that the SDK path lacks. Selection happens once at startup via `LLM_PROVIDER={openai,vllm}` (default `openai`).
+
+To run a self-hosted model in dev:
+
+```bash
+# Pull a model from HuggingFace (default: Qwen/Qwen2.5-3B-Instruct, Apache-2.0, ungated)
+sudo docker compose --profile vllm up -d
+
+# Watch the vLLM container finish model load (~30-90s on CPU, ~10-30s on GPU)
+sudo docker compose logs -f vllm
+
+# Use the chat panel in the SPA, or curl directly:
+TOKEN=$(curl -s -X POST http://localhost:8080/api/login \
+  -H 'Content-Type: application/json' \
+  -d '{"username":"...","password":"..."}' | jq -r .access_token)
+
+curl -N -X POST http://localhost:8080/api/chat \
+  -H "Authorization: Bearer $TOKEN" \
+  -H 'Content-Type: application/json' \
+  -H 'Accept: text/event-stream' \
+  -d '{"messages":[{"role":"user","content":"Say hi in one word"}]}'
+# Expect: event: delta frames, then event: done with usage, then data: [DONE]
+```
+
+What ships:
+
+- **Image** — `vllm/vllm-openai:v0.6.3.post1` (pinned; bump deliberately).
+- **Model cache** — named volume `vllm_cache` persists HuggingFace downloads across `compose down` so a 2 GB model weight doesn't re-pull every restart.
+- **GPU** — `deploy.resources.reservations.devices` requests one NVIDIA device. On a host without the NVIDIA container runtime this is silently ignored and vLLM boots in CPU mode (slow but functional for smoke tests).
+- **Healthcheck** — `curl -fsS http://localhost:8000/v1/models` with `start_period: 120s` to absorb cold load. Larger models may need a higher value.
+- **Hardening** — `cap_drop: [ALL]`, `no-new-privileges`, `tmpfs /tmp` (mirrors every other service per `SECURITY.md` M12).
+- **Network** — loopback-only host port (`:8000` → `127.0.0.1:8000`) for dev debugging; the backend reaches vLLM on the compose network via the `vllm` DNS alias.
+
+Tuning knobs (all `compose .env` overrides):
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `LLM_PROVIDER` | `openai` | `openai` (SDK) or `vllm` (raw HTTP) |
+| `LLM_BASE_URL` | `http://vllm:8000/v1` | URL of the chat-completions root |
+| `LLM_API_KEY` | empty | Bearer token; vLLM without `--api-key` accepts empty |
+| `LLM_MODEL` | `Qwen/Qwen2.5-3B-Instruct` | Forwarded as the request `model` field; must match `--served-model-name` |
+| `LLM_ALLOW_PRIVATE_URL` | `true` | Required when `LLM_BASE_URL` resolves to a private IP (the compose default) |
+| `VLLM_MODEL` | `Qwen/Qwen2.5-3B-Instruct` | HuggingFace repo id passed to `vllm serve --model` |
+| `HUGGING_FACE_HUB_TOKEN` | empty | Required for gated models (Llama, Mistral). Qwen2.5-3B is ungated |
+
+Gated-model caveat: Llama / Mistral / Gemma require (a) a HuggingFace account, (b) accepting the model's license on the model card, and (c) `HUGGING_FACE_HUB_TOKEN` on the vLLM container. Without the token vLLM fails the download with `403 Forbidden`.
+
+CPU caveat: a Qwen2.5-3B smoke test on CPU runs at ~3-8 tokens/sec after cold load — fine for "does it work?" verification, not a usable dev experience. For real iteration, run vLLM on a GPU host or switch to the smaller `Qwen/Qwen2.5-0.5B-Instruct` (~1 GB bf16).
+
+Safety: `LLM_BASE_URL` is validated at startup (scheme allowlist http/https, no userinfo, host refuses loopback / RFC1918 / link-local / multicast / unspecified unless `LLM_ALLOW_PRIVATE_URL=true`). The vLLM provider repeats the IP-class check inside its `http.Transport.DialContext` so DNS rebinding can't swap a public hostname's answer for a private IP between startup and the first dial. See `SECURITY.md` for the residual risk on the OpenAI provider path.
+
 ## Testing
 
 | Layer | Command | Notes |
