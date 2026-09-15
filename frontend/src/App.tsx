@@ -136,7 +136,7 @@ function App() {
     <div className="app-root">
       <PageMeta title={pageTitle} description={pageDescription} />
       <ToastContainer />
-      <nav className="sticky top-0 z-50 w-full border-b bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60">
+      <nav className="sticky top-0 z-50 w-full border-b bg-black">
         <div className="container mx-auto px-4 h-16 flex items-center justify-between">
           <div className="text-2xl font-bold bg-gradient-to-r from-primary to-accent bg-clip-text text-transparent">Nyx</div>
           <div className="flex items-center gap-4">
