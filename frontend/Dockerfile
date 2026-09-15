@@ -74,6 +74,6 @@ EXPOSE 8080
 # 5s timeout, 3 retries — three consecutive failures flips the
 # container to `unhealthy` so compose / k8s can reschedule.
 HEALTHCHECK --interval=30s --timeout=5s --retries=3 --start-period=10s \
-    CMD wget -q --spider http://localhost:8080/ || exit 1
+    CMD wget -q --spider http://127.0.0.1:8080/ || exit 1
 
 CMD ["nginx", "-g", "daemon off;"]
