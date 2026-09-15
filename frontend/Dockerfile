@@ -24,6 +24,12 @@ RUN npm run build
 # Production stage
 FROM nginx:stable-alpine
 
+# ARGs are scoped to the stage they're declared in; redeclare the
+# values the sed substitutions below need so the nginx config
+# lands with real upstreams instead of empty host parts.
+ARG JAEGER_HOST=jaeger
+ARG API_ORIGIN
+
 # Use a non-root user
 RUN touch /var/run/nginx.pid && \
     chown -R nginx:nginx /var/run/nginx.pid && \
