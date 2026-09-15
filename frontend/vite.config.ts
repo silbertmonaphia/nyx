@@ -2,9 +2,34 @@ import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 import path from "path";
 
+// Sentry plugin — conditionally registered. The plugin reads
+// SENTRY_AUTH_TOKEN / SENTRY_ORG / SENTRY_PROJECT from process.env
+// at build time and uploads sourcemaps to the matching project. We
+// only register it when the auth token is present so local builds
+// without a token still succeed (the plugin errors on a missing
+// token during the upload step). Sourcemap files are deleted from
+// the build output after upload so the nginx image never serves
+// the original source (SECURITY.md L5).
+const sentryPlugins: import("vite").PluginOption[] = [];
+if (
+  process.env.SENTRY_AUTH_TOKEN &&
+  process.env.SENTRY_ORG &&
+  process.env.SENTRY_PROJECT
+) {
+  const { sentryVitePlugin } = await import("@sentry/vite-plugin");
+  sentryPlugins.push(
+    sentryVitePlugin({
+      org: process.env.SENTRY_ORG,
+      project: process.env.SENTRY_PROJECT,
+      authToken: process.env.SENTRY_AUTH_TOKEN,
+      sourcemaps: { filesToDeleteAfterUpload: ["**/*.map"] },
+    }),
+  );
+}
+
 // https://vitejs.dev/config/
 export default defineConfig({
-  plugins: [react()],
+  plugins: [react(), ...sentryPlugins],
   resolve: {
     alias: {
       "~": path.resolve(__dirname, "./src"),

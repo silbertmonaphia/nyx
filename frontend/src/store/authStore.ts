@@ -3,6 +3,7 @@ import { persist, createJSONStorage } from "zustand/middleware";
 import axios from "axios";
 import type { User as ApiUser, AuthResponse } from "~/api/openapi";
 import { tokenStore } from "../services/api";
+import { setSentryUser } from "../services/sentry";
 
 // Wire type — sourced from the generated OpenAPI schema so the
 // frontend stays in lockstep with the backend.
@@ -67,11 +68,24 @@ export const useAuthStore = create<AuthState>()(
       user: null,
       isAuthenticated: false,
 
-      setAuth: (res) =>
+      setAuth: (res) => {
         set({
           user: res.user,
           isAuthenticated: true,
-        }),
+        });
+        // Wire Sentry user context on successful login, register,
+        // refresh, and /api/me reconciliation — all flows that
+        // resolve with a fresh user profile. setSentryUser noops
+        // when Sentry wasn't initialised, so the call is safe even
+        // when VITE_SENTRY_DSN is empty.
+        if (res.user) {
+          setSentryUser({
+            id: res.user.id,
+            email: res.user.email,
+            username: res.user.username,
+          });
+        }
+      },
 
       // logout clears local state immediately AND fires off a
       // background POST to /api/logout that revokes the supplied
@@ -91,6 +105,10 @@ export const useAuthStore = create<AuthState>()(
           user: null,
           isAuthenticated: false,
         });
+        // Clear Sentry user context so the next captured event
+        // carries no user info. setSentryUser(null) noops when
+        // Sentry wasn't initialised.
+        setSentryUser(null);
         // tokenStore is imported above — there's already a circular
         // module graph (services/api.ts imports useAuthStore too),
         // but ES modules tolerate the cycle because both sides

@@ -250,6 +250,18 @@ services:
         # proxy /otlp/ → JAEGER_HOST:4318 (same-origin, no CORS).
         - VITE_OTEL_ENABLED=${VITE_OTEL_ENABLED:-true}
         - VITE_OTEL_SERVICE_NAME=${VITE_OTEL_SERVICE_NAME:-nyx-frontend}
+        # Sentry — VITE_SENTRY_DSN is inlined into the SPA bundle.
+        # SENTRY_AUTH_TOKEN / SENTRY_ORG / SENTRY_PROJECT are build-time
+        # only (consumed by @sentry/vite-plugin for sourcemap upload).
+        # Operators set all four in their .env per environment.
+        # SENTRY_CSP_ORIGIN feeds the CSP connect-src directive via the
+        # __SENTRY_CSP_ORIGIN__ placeholder; default is the SaaS ingest
+        # host list — self-hosted operators override per environment.
+        - VITE_SENTRY_DSN=${VITE_SENTRY_DSN:-}
+        - SENTRY_AUTH_TOKEN=${SENTRY_AUTH_TOKEN:-}
+        - SENTRY_ORG=${SENTRY_ORG:-}
+        - SENTRY_PROJECT=${SENTRY_PROJECT:-nyx-frontend}
+        - SENTRY_CSP_ORIGIN=${SENTRY_CSP_ORIGIN:-https://*.ingest.sentry.io https://*.sentry.io}
     ports:
       - "80:8080"
     # JAEGER_HOST and API_ORIGIN are the only runtime env vars the

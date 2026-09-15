@@ -4,6 +4,7 @@ import { injectTraceparent } from "./telemetry";
 import { useUiStore } from "../store/uiStore";
 import { useAuthStore } from "../store/authStore";
 import { logger } from "./logger";
+import { captureSentryException } from "./sentry";
 import type { ApiError, AuthResponse } from "~/api/openapi";
 
 const api = axios.create({
@@ -333,6 +334,17 @@ api.interceptors.response.use(
           status,
           requestId,
           payload: sanitiseForLog(payload),
+        });
+        // Forward to Sentry. The raw error carries the full AxiosError
+        // shape (config, request, response) — Sentry does its own PII
+        // scrubbing on the wire. The sanitised payload rides on
+        // `extra` so operators can correlate Sentry events with the
+        // structured log lines without leaking PII into either
+        // pipeline. captureSentryException noops when initSentry()
+        // returned false (DSN absent).
+        captureSentryException(error, {
+          tags: { http_status: status },
+          extra: { requestId, payload: sanitiseForLog(payload) },
         });
         message = buildServerErrorToast(status, requestId);
       }

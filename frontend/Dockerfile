@@ -17,8 +17,18 @@ ARG VITE_OTEL_ENABLED
 ARG VITE_OTEL_SERVICE_NAME
 ARG JAEGER_HOST=jaeger
 ARG API_ORIGIN
+# Sentry — VITE_SENTRY_DSN is inlined into the bundle by Vite (the
+# `VITE_` prefix is what makes it client-visible). SENTRY_AUTH_TOKEN
+# / SENTRY_ORG / SENTRY_PROJECT are NOT VITE_-prefixed — they're
+# consumed by @sentry/vite-plugin at build time for sourcemap upload
+# and intentionally stay out of the bundle.
+ARG VITE_SENTRY_DSN
+ARG SENTRY_AUTH_TOKEN
+ARG SENTRY_ORG
+ARG SENTRY_PROJECT=nyx-frontend
 ENV VITE_OTEL_ENABLED=$VITE_OTEL_ENABLED \
-    VITE_OTEL_SERVICE_NAME=$VITE_OTEL_SERVICE_NAME
+    VITE_OTEL_SERVICE_NAME=$VITE_OTEL_SERVICE_NAME \
+    VITE_SENTRY_DSN=$VITE_SENTRY_DSN
 RUN npm run build
 
 # Production stage
@@ -29,6 +39,13 @@ FROM nginx:stable-alpine
 # lands with real upstreams instead of empty host parts.
 ARG JAEGER_HOST=jaeger
 ARG API_ORIGIN
+# Sentry CSP connect-src origins. Defaults to the SaaS host list so
+# the @sentry/react SDK's envelope POSTs to *.ingest.sentry.io +
+# *.sentry.io are allowed by CSP. Operators running a self-hosted
+# Sentry instance override this build-arg in compose (or pass
+# `--build-arg SENTRY_CSP_ORIGIN=...`) to point at their own host.
+# Mirrors the __API_ORIGIN__ substitution pattern above.
+ARG SENTRY_CSP_ORIGIN=https://*.ingest.sentry.io https://*.sentry.io
 
 # Use a non-root user
 RUN touch /var/run/nginx.pid && \
@@ -46,7 +63,8 @@ COPY --from=build /app/dist /usr/share/nginx/html
 COPY nginx.conf /etc/nginx/conf.d/default.conf
 
 RUN sed -i "s|__JAEGER_HOST__|${JAEGER_HOST}|g" /etc/nginx/conf.d/default.conf && \
-    sed -i "s|__API_ORIGIN__|${API_ORIGIN}|g" /etc/nginx/conf.d/default.conf
+    sed -i "s|__API_ORIGIN__|${API_ORIGIN}|g" /etc/nginx/conf.d/default.conf && \
+    sed -i "s|__SENTRY_CSP_ORIGIN__|${SENTRY_CSP_ORIGIN}|g" /etc/nginx/conf.d/default.conf
 
 # Syntactic guardrail: a stray typo in the nginx.conf template OR
 # in the sed substitution above (e.g. JAEGER_HOST set to an empty

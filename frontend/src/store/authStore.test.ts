@@ -2,6 +2,24 @@ import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest';
 import { useAuthStore, loginAxios } from './authStore';
 import type { User } from '~/api/openapi';
 
+// The auth store calls `setSentryUser` on login/register/refresh
+// reconciliation AND on logout. We mock the sentry service so a
+// future refactor that drops the call fails this test rather than
+// silently losing the user-tagged session. `setSentryUser` and
+// friends are vi.fn()s so we can assert call shape.
+// `captureSentryException` + `initSentry` are stubbed too so the
+// real @sentry/react doesn't load in this file.
+vi.mock('~/services/sentry', () => ({
+  setSentryUser: vi.fn(),
+  captureSentryException: vi.fn(),
+  initSentry: vi.fn(() => true),
+}));
+
+// Imported AFTER the vi.mock so the authStore module sees the
+// stubbed binding (vitest hoists vi.mock at file scope; the
+// explicit post-mock import keeps the intent visible).
+import { setSentryUser } from '~/services/sentry';
+
 const baseUser: User = {
   id: 1,
   username: 'tester',
@@ -25,6 +43,9 @@ function resetStore() {
 describe('useAuthStore', () => {
   beforeEach(() => {
     resetStore();
+    // Reset the Sentry user-tracking mock so per-test assertions
+    // don't bleed across `setAuth` / `logout` cases.
+    vi.mocked(setSentryUser).mockClear();
   });
 
   describe('setAuth', () => {
@@ -34,6 +55,17 @@ describe('useAuthStore', () => {
       const state = useAuthStore.getState();
       expect(state.user).toEqual(baseUser);
       expect(state.isAuthenticated).toBe(true);
+
+      // Sentry user context is tagged on every auth-resolving flow
+      // (login / register / refresh / /api/me reconciliation). The
+      // shape mirrors the wire envelope — only non-secret fields,
+      // matching sendDefaultPii:false in initSentry.
+      expect(setSentryUser).toHaveBeenCalledTimes(1);
+      expect(setSentryUser).toHaveBeenCalledWith({
+        id: baseUser.id,
+        email: baseUser.email,
+        username: baseUser.username,
+      });
     });
   });
 
@@ -72,6 +104,12 @@ describe('useAuthStore', () => {
       const state = useAuthStore.getState();
       expect(state.user).toBeNull();
       expect(state.isAuthenticated).toBe(false);
+
+      // Logout must clear the Sentry user context so the next
+      // captured event carries no user info. We assert exactly
+      // one `null` call here (the setAuth above is cleared by
+      // mockClear in beforeEach).
+      expect(setSentryUser).toHaveBeenCalledWith(null);
     });
 
     it('POSTs to /api/logout with the refresh token in the body (Bearer)', async () => {

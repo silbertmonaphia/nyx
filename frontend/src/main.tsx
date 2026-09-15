@@ -4,6 +4,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { ReactQueryDevtools } from '@tanstack/react-query-devtools'
 import './index.css'
 import { initTelemetry } from './services/telemetry'
+import { initSentry, captureSentryException } from './services/sentry'
 import { logger } from './services/logger'
 import { ErrorBoundary } from './components/app/ErrorBoundary'
 import App from './App.tsx'
@@ -18,6 +19,7 @@ const queryClient = new QueryClient({
 })
 
 initTelemetry()
+initSentry()
 
 // Catch uncaught errors so they show up in our log pipeline alongside
 // any active trace context. Registered before mount() so we capture
@@ -29,9 +31,13 @@ window.addEventListener('error', (e) =>
     lineno: e.lineno,
   }),
 )
-window.addEventListener('unhandledrejection', (e) =>
-  logger.error('unhandledrejection', { reason: String(e.reason) }),
-)
+window.addEventListener('unhandledrejection', (e) => {
+  logger.error('unhandledrejection', { reason: String(e.reason) })
+  // captureSentryException is a noop when initSentry() returned false
+  // (DSN absent), so the guard lives inside the helper — no need to
+  // check here.
+  captureSentryException(e.reason)
+})
 
 function mount() {
   const rootElement = document.getElementById('root');

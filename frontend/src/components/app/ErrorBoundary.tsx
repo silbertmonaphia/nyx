@@ -1,5 +1,6 @@
 import React from 'react';
 import { logger } from '~/services/logger';
+import { captureSentryException } from '~/services/sentry';
 
 /**
  * Render-fallback for any uncaught error inside the React tree.
@@ -45,6 +46,13 @@ export class ErrorBoundary extends React.Component<Props, State> {
       name: error.name,
       stack: error.stack,
       componentStack: info.componentStack,
+    });
+    // captureSentryException noops when initSentry() returned false
+    // (DSN absent) — see services/sentry.ts. Component stack rides
+    // on the contexts.react field so Sentry's UI renders the React
+    // tree alongside the JS stack.
+    captureSentryException(error, {
+      contexts: { react: { componentStack: info.componentStack } },
     });
   }
 
