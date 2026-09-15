@@ -203,13 +203,6 @@ function App() {
         </div>
 
         <div className="w-full max-w-2xl mx-auto flex flex-col items-center">
-          {showAuthForm && !isAuthenticated && (
-            <AuthForm 
-              onSuccess={() => setShowAuthForm(false)}
-              onCancel={() => setShowAuthForm(false)}
-            />
-          )}
-
           {isAuthenticated && showAddForm && (
             <MovieForm 
               title="New Movie"
@@ -254,6 +247,21 @@ function App() {
           />
         </div>
       </section>
+
+      <Dialog open={showAuthForm && !isAuthenticated} onOpenChange={setShowAuthForm}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Login or Register</DialogTitle>
+            <DialogDescription>
+              Sign in to your account, or create a new one to start curating.
+            </DialogDescription>
+          </DialogHeader>
+          <AuthForm
+            onSuccess={() => setShowAuthForm(false)}
+            onCancel={() => setShowAuthForm(false)}
+          />
+        </DialogContent>
+      </Dialog>
 
       <Dialog
         open={confirmDeleteId !== null}
