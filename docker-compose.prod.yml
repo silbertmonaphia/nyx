@@ -140,18 +140,17 @@ services:
     networks:
       - nyx_network
 
-  # OpenTelemetry tracing — Jaeger v1.62+ ingests OTLP/HTTP directly
-  # (no sidecar collector needed). Internal-only in prod: the nginx
-  # proxy inside the frontend container is the only ingress, so we
-  # don't expose :16686 / :4318 to the host. healthcheck uses the
-  # admin port (14269) so backend/frontend can wait for it.
+  # OpenTelemetry tracing — Jaeger v2 (single OTel Collector binary,
+  # image `jaegertracing/jaeger`). Default config enables OTLP
+  # receivers (4317 gRPC / 4318 HTTP) and `healthcheckv2` on
+  # :13133/status; no `--set` flags needed. Internal-only in prod:
+  # the nginx proxy inside the frontend container is the only
+  # ingress, so :16686 / :4318 are not exposed to the host.
   jaeger:
-    image: jaegertracing/all-in-one:1.62
+    image: jaegertracing/jaeger:2.18.0
     restart: always
-    environment:
-      - COLLECTOR_OTLP_ENABLED=true
     healthcheck:
-      test: ["CMD", "wget", "-qO-", "http://localhost:14269/status"]
+      test: ["CMD", "wget", "-qO-", "http://localhost:13133/status"]
       interval: 5s
       timeout: 3s
       retries: 10

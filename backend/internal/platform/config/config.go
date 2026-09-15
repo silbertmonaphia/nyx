@@ -235,7 +235,7 @@ func setDefaults() {
 	// OpenTelemetry tracing defaults. Disabled by default — every
 	// tracer.Start becomes a no-op and unit tests / testcontainers
 	// pay nothing. OTLP endpoint default points at the host loopback
-	// so a developer running `jaegertracing/all-in-one` locally can
+	// so a developer running `jaegertracing/jaeger` (v2) locally can
 	// flip OTEL_ENABLED=true without further config.
 	viper.SetDefault("OTEL_ENABLED", false)
 	viper.SetDefault("OTEL_SERVICE_NAME", "nyx-backend")

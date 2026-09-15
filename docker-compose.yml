@@ -54,29 +54,26 @@ services:
       timeout: 3s
       retries: 10
 
-  # OpenTelemetry tracing — Jaeger v1.62+ ingests OTLP/HTTP directly
-  # (no sidecar collector needed). COLLECTOR_OTLP_ENABLED turns the
-  # OTLP receiver on; the default UI lives on :16686 and the OTLP
-  # HTTP receiver on :4318. healthcheck uses the admin port (14269)
-  # so backend can wait for it via depends_on.
-  # SECURITY.md M12: minimal hardening — jaeger all-in-one is a Go
-  # binary that needs almost nothing. We keep the dev ports (16686
-  # UI, 4318 OTLP) bound on 0.0.0.0 because they're meant for host
-  # access; only DB/Redis got loopback-bound (H12).
+  # OpenTelemetry tracing — Jaeger v2 (single OTel Collector binary,
+  # image `jaegertracing/jaeger`). The default config enables the OTLP
+  # receivers (4317 gRPC / 4318 HTTP) and the `healthcheckv2`
+  # extension on :13133/status; no `--set` flags needed.
+  # SECURITY.md M12: minimal hardening — Jaeger v2 is a Go binary
+  # that needs almost nothing. We keep the dev ports (16686 UI, 4318
+  # OTLP) bound on 0.0.0.0 because they're meant for host access; only
+  # DB/Redis got loopback-bound (H12).
   jaeger:
-    image: jaegertracing/all-in-one:1.62
+    image: jaegertracing/jaeger:2.18.0
     restart: always
-    environment:
-      - COLLECTOR_OTLP_ENABLED=true
     ports:
       - "16686:16686" # UI (dev-only access — see H12 comment)
-      - "4318:4318"   # OTLP HTTP (dev-only access — see H12 comment)
+      - "4318:4318"   # OTLP HTTP (used by backend & SPA via compose network)
     cap_drop: [ALL]
     security_opt: ["no-new-privileges:true"]
     tmpfs:
       - /tmp
     healthcheck:
-      test: ["CMD", "wget", "-qO-", "http://localhost:14269/status"]
+      test: ["CMD", "wget", "-qO-", "http://localhost:13133/status"]
       interval: 5s
       timeout: 3s
       retries: 10

@@ -15,21 +15,19 @@ spec:
     spec:
       containers:
       - name: jaeger
-        # Jaeger all-in-one: OTLP/HTTP (4318) + OTLP/gRPC (4317) ingest,
-        # UI on 16686, admin on 14269. COLLECTOR_OTLP_ENABLED turns the
-        # OTLP receiver on.
-        image: jaegertracing/all-in-one:1.62
+        # Jaeger v2 (single OTel Collector binary, image
+        # `jaegertracing/jaeger`). Default config enables OTLP
+        # receivers (4317 gRPC / 4318 HTTP) and the `healthcheckv2`
+        # extension on :13133/status; no extra config needed.
+        image: jaegertracing/jaeger:2.18.0
         ports:
         - containerPort: 4317  # OTLP gRPC
         - containerPort: 4318  # OTLP HTTP
         - containerPort: 16686 # UI
-        - containerPort: 14269 # admin / health
-        env:
-        - name: COLLECTOR_OTLP_ENABLED
-          value: "true"
-        # NOTE: no persistent volume — Jaeger all-in-one uses in-memory
-        # storage by default. Spans are lost on pod restart. Swap to an
-        # external backend (ES/Cassandra/Kafka) if retention matters.
+        - containerPort: 13133 # healthcheckv2 (/status)
+        # NOTE: no persistent volume — Jaeger v2 uses in-memory
+        # storage by default. Spans are lost on pod restart. Swap to
+        # an external backend (ES/Cassandra/Kafka) if retention matters.
         resources:
           requests:
             cpu: 50m
@@ -39,14 +37,14 @@ spec:
             memory: 256Mi
         livenessProbe:
           httpGet:
-            path: /
-            port: 14269
+            path: /status
+            port: 13133
           initialDelaySeconds: 10
           periodSeconds: 20
         readinessProbe:
           httpGet:
-            path: /
-            port: 14269
+            path: /status
+            port: 13133
           initialDelaySeconds: 5
           periodSeconds: 10
 ---
@@ -68,7 +66,7 @@ spec:
   - name: ui
     port: 16686
     targetPort: 16686
-  - name: admin
-    port: 14269
-    targetPort: 14269
+  - name: health
+    port: 13133
+    targetPort: 13133
   type: ClusterIP
