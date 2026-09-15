@@ -43,7 +43,7 @@ services:
     # gives /data a scratch space for runtime bookkeeping. caps
     # trimmed to the bare minimum.
     cap_drop: [ALL]
-    cap_add: [SETUID, SETGID]
+    cap_add: [CHOWN, SETUID, SETGID]
     security_opt: ["no-new-privileges:true"]
     read_only: true
     tmpfs:
@@ -188,9 +188,9 @@ services:
     read_only: true
     tmpfs:
       - /tmp
-      - /var/cache/nginx
-      - /var/run
-      - /run
+      - /var/cache/nginx:mode=0777
+      - /var/run:mode=0777
+      - /run:mode=0777
 
   # Self-hosted vLLM (opt-in profile). Operators bring this up with
   # `docker compose --profile vllm up`. When inactive, the rest of
