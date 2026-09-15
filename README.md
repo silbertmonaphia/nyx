@@ -13,6 +13,54 @@ A minimalist media rating application — Go 1.26.1 API, React 19 SPA, PostgreSQ
 - **CI/CD** — GitHub Actions (lint + unit + integration + sqlc drift + e2e, plus a semantic-release job on push to `main` / `mvp`), `golangci-lint`, `husky` pre-commit + commit-msg hooks on the frontend. Commits are authored via `git cz` (commitizen + cz-customizable) and linted by `@commitlint/config-conventional`; semantic-release per-package versioning drives `backend@X.Y.Z` / `frontend@X.Y.Z` tags from Conventional Commit messages.
 - **Deploy** — Docker Compose for dev/prod, manifests in `k8s/`.
 
+## Architecture
+
+Production topology (Docker Compose / Kubernetes). In dev (`npm run dev` + `go run ./cmd/api`), nginx is bypassed — the SPA calls the API directly via Vite's dev proxy or CORS, and the browser reaches Jaeger on `localhost:4318`.
+
+```mermaid
+flowchart TB
+    subgraph Client["Client (browser)"]
+      SPA["React 19 SPA<br/>Vite 8 · TS · Tailwind v4<br/>axios · Zustand · TanStack Query"]
+      Sent["@sentry/react<br/>errors · perf · replay"]
+    end
+
+    subgraph Edge["nginx :80 — prod container"]
+      direction LR
+      N1["/        SPA static"]
+      N2["/api/*   → :8080"]
+      N3["/otlp/*  → :4318"]
+    end
+
+    subgraph API["Go API :8080"]
+      direction TB
+      H["huma v2 handlers<br/>chi v5 · OpenAPI 3.1"]
+      S["Services<br/>movie · user · auth · llm"]
+      R["Repositories<br/>sqlc · pgx/v5 · pgxpool"]
+    end
+
+    subgraph Stores["Data plane"]
+      PG[("PostgreSQL<br/>source of truth<br/>+ golang-migrate on boot")]
+      RD["Redis (optional)<br/>cache-aside · best-effort"]
+    end
+
+    LLM["LLM Provider (optional)<br/>vLLM · OpenAI<br/>text/event-stream"]
+    Jaeger["Jaeger :16686<br/>tracing UI"]
+    Sentry["Sentry<br/>frontend errors"]
+
+    SPA -->|"HTTPS · Bearer JWT<br/>W3C traceparent"| N2
+    SPA -->|"OTLP/HTTP"| N3
+    Sent -.-> Sentry
+
+    N2 --> H --> S --> R --> PG
+    S <-->|"get/set · SCAN+UNLINK"| RD
+    S -->|"chat completions"| LLM
+
+    N3 -->|"OTLP"| Jaeger
+    H -.->|"OTel spans"| Jaeger
+```
+
+Solid lines are request paths; dashed lines are telemetry / error reporting. Optional pieces (Redis, LLM, Jaeger, Sentry) are off by default and gated by their `*_ENABLED` flags.
+
 ## Repository Layout
 
 ```
