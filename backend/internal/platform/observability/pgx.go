@@ -9,7 +9,7 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
-	semconv "go.opentelemetry.io/otel/semconv/v1.26.0"
+	semconv "go.opentelemetry.io/otel/semconv/v1.43.0"
 	"go.opentelemetry.io/otel/trace"
 	"go.opentelemetry.io/otel/trace/noop"
 )
@@ -55,7 +55,7 @@ func (p *pgxTracer) TraceQueryStart(ctx context.Context, _ *pgx.Conn, data pgx.T
 	ctx, _ = p.tracer.Start(ctx, "pgx.query",
 		trace.WithSpanKind(trace.SpanKindClient),
 		trace.WithAttributes(
-			semconv.DBSystemPostgreSQL,
+			semconv.DBSystemNamePostgreSQL,
 			semconv.DBOperationName(firstSQLVerb(data.SQL)),
 		),
 	)
