@@ -214,10 +214,15 @@ services:
   # and a bump can change error JSON shape, default flags, or the
   # stream framing. Bump deliberately.
   #
-  # Cold start: Qwen3-4B-Instruct-2507 loads in ~40-120s on CPU and
-  # 15-40s on GPU. The 120s start_period on the healthcheck is
-  # generous for a 4B model — operators pointing at a larger model
-  # should raise it accordingly.
+  # Cold start: Qwen3-4B-Instruct-2507 takes ~30s on GPU after weight
+  # download when --enforce-eager is set (default here); without it,
+  # vLLM's V2 Model Runner captures cudagraphs for batch sizes
+  # 1..max-cuda-graph-bs (default 512) and cold start balloons to
+  # ~10-15 min on first run because each capture round-trips through
+  # the WSL2 GPU-PV DXGI shim. The 600s start_period + 600s of
+  # healthcheck retries covers both with ~5 min headroom. Operators
+  # who need the latency win can drop --enforce-eager; the bootstrap
+  # script waits up to 25 min for the longer cold path.
   #
   # GPU: deploy.resources.reservations.devices requests one
   # NVIDIA device. On a host without the NVIDIA container runtime
@@ -242,8 +247,35 @@ services:
       - "0.0.0.0"
       - "--port"
       - "8000"
+      # --enforce-eager skips cudagraph capture: sub-30s cold start
+      # at the cost of ~10-30% per-token latency on small batches.
+      # Comment out to re-enable cudagraphs once you measure the hit.
+      - "--enforce-eager"
     environment:
       - HUGGING_FACE_HUB_TOKEN=${HUGGING_FACE_HUB_TOKEN:-}
+      # HF_ENDPOINT routes HuggingFace API calls (config + weight fetches)
+      # through a mirror. Default https://hf-mirror.com because upstream
+      # https://huggingface.co is often filtered / unreachable from the
+      # Docker-bridge egress path even when the host can reach it (WSL2
+      # vpnkit NAT, corporate firewalls). Mirror covers Qwen / Llama /
+      # Mistra / etc. — override to empty in .env to use upstream.
+      - HF_ENDPOINT=${HF_ENDPOINT:-https://hf-mirror.com}
+      # Skip IPv6 retries: HF resolves to AAAA on most networks, but v6
+      # routing to the upstream is frequently broken even when v4 works.
+      # Without this, vLLM burns its 5-retry budget on doomed v6 SYN
+      # attempts before falling back to v4 — model download then aborts
+      # with ENETUNREACH.
+      - HF_HUB_DISABLE_IPV6=${HF_HUB_DISABLE_IPV6:-1}
+      # WSL2 with GPU-PV (driver exposes CUDA via libcuda.so in
+      # /usr/lib/wsl/lib, no /dev/nvidia*). vLLM disables pinned memory
+      # / UVA by default on WSL2 due to a small perf regression, but the
+      # v1 engine's staged-writes UvaBuffer requires UVA and aborts
+      # otherwise ("RuntimeError: UVA is not available" from
+      # vllm/v1/worker/gpu/buffer_utils.py). Set to 1 to enable. The
+      # flag's comment in vllm/envs.py scopes it to "CPU offloading or
+      # v2 model runner" — the v1 buffer may or may not honor it; if it
+      # doesn't, fall back to VLLM_USE_V1=0 in .env.
+      - VLLM_WSL2_ENABLE_PIN_MEMORY=${VLLM_WSL2_ENABLE_PIN_MEMORY:-1}
     ports:
       # Loopback only — vLLM is reached by the backend container
       # on the compose network, never from the host directly.
@@ -265,8 +297,16 @@ services:
       test: ["CMD-SHELL", "curl -fsS http://localhost:8000/v1/models > /dev/null || exit 1"]
       interval: 10s
       timeout: 5s
-      retries: 30
-      start_period: 120s
+      # Total budget = start_period (600s) + retries × interval = 600s +
+      # 600s = 1200s = 20 min. vLLM v0.29.0's V2 Model Runner captures
+      # cudagraphs for sizes up to 512 on first run — ~10-15 min cold
+      # on Blackwell + WSL2 GPU-PV because each capture round-trips
+      # through the DXGI shim. Subsequent restarts are faster (weights
+      # cached in the vllm_cache volume; only cudagraph capture
+      # repeats). Operators who want sub-minute cold starts at the cost
+      # of throughput can add `--enforce-eager` to the command list.
+      retries: 60
+      start_period: 600s
     cap_drop: [ALL]
     security_opt: ["no-new-privileges:true"]
     tmpfs:
