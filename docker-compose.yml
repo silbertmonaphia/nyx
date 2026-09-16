@@ -1,6 +1,12 @@
 services:
   db:
     image: postgres:17-alpine
+    # Local-dev resource caps. Generous enough that the dev stack
+    # stays healthy on a 16 GB laptop; tight enough to prevent a
+    # runaway query from starving the host. Override per-run with
+    # `docker compose up -d --scale <svc>=1 -m 2g <svc>`.
+    mem_limit: 1g
+    cpus: "1.00"
     restart: always
     env_file:
       - .env
@@ -34,6 +40,8 @@ services:
 
   redis:
     image: redis:7-alpine
+    mem_limit: 256m
+    cpus: "0.50"
     restart: always
     # SECURITY.md H12: same reasoning as the DB — loopback only.
     ports:
@@ -64,6 +72,8 @@ services:
   # DB/Redis got loopback-bound (H12).
   jaeger:
     image: jaegertracing/jaeger:2.18.0
+    mem_limit: 512m
+    cpus: "0.50"
     restart: always
     ports:
       - "16686:16686" # UI (dev-only access — see H12 comment)
@@ -83,6 +93,8 @@ services:
       context: ./backend
       args:
         - GOPROXY=${GOPROXY:-https://goproxy.cn,direct}
+    mem_limit: 512m
+    cpus: "1.00"
     ports:
       - "8080:8080"
     # env_file makes .env loading independent of the shell's CWD —
@@ -178,6 +190,8 @@ services:
         - SENTRY_ORG=${SENTRY_ORG:-}
         - SENTRY_PROJECT=${SENTRY_PROJECT:-nyx-frontend}
         - SENTRY_CSP_ORIGIN=${SENTRY_CSP_ORIGIN:-https://*.ingest.sentry.io https://*.sentry.io}
+    mem_limit: 128m
+    cpus: "0.25"
     environment:
       - VITE_OTEL_ENABLED=${VITE_OTEL_ENABLED:-true}
       - VITE_OTEL_SERVICE_NAME=${VITE_OTEL_SERVICE_NAME:-nyx-frontend}
@@ -239,6 +253,13 @@ services:
   # (read role is enough).
   vllm:
     image: vllm/vllm-openai:v0.29.0
+    # vLLM is the only realistic runaway on a dev host — model
+    # weights (~8 GB for Qwen3-4B in bf16) + KV cache + activations
+    # scale with context length. 16 GB / 4 CPU is a safe floor on a
+    # 32 GB laptop with `--enforce-eager`. Bump if you run longer
+    # contexts, larger models, or drop --enforce-eager.
+    mem_limit: 16g
+    cpus: "4.00"
     profiles: ["vllm"]
     restart: always
     command:
