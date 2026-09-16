@@ -148,10 +148,14 @@ describe('api response interceptor', () => {
     );
   });
 
-  it('never echoes the backend `error` field to the toast (H7)', async () => {
-    // SECURITY.md H7: the backend's error message is trusted less
-    // than client-side text. The toast shows a generic label + the
-    // request id; the full payload goes to the log pipeline only.
+  it('echoes the backend `error` field on 4xx so the user can act (H7)', async () => {
+    // SECURITY.md H7 carve-out: 4xx responses are API-contract
+    // failures with controlled, user-facing strings ("User already
+    // exists", "title is required", …). Surfacing them lets the
+    // user act on the failure (e.g. pick a different username)
+    // instead of seeing a generic "Server error (409)" and
+    // wondering if the backend is down. 5xx is still gated — see
+    // the next test.
     const error = Object.assign(new Error('Request failed'), {
       response: {
         status: 422,
@@ -164,18 +168,11 @@ describe('api response interceptor', () => {
     await expect(rejected(error)).rejects.toBe(error);
 
     expect(logout).not.toHaveBeenCalled();
-    // No echo of the server string.
-    expect(addToast).not.toHaveBeenCalledWith(
-      expect.stringContaining('title is required'),
-      'error',
-    );
-    // Generic label + request id is what the user sees.
-    expect(addToast).toHaveBeenCalledWith(
-      'Server error (422) (ref: req-abc-123)',
-      'error',
-    );
-    // Full payload (minus the request id which is logged alongside)
-    // is captured for the operator.
+    // The server's user-facing message is what the user sees —
+    // no generic label, no request id.
+    expect(addToast).toHaveBeenCalledWith('title is required', 'error');
+    // Full payload is still captured for the operator / Sentry so
+    // the safe-detail logging path is unchanged.
     expect(loggerError).toHaveBeenCalledWith(
       'api.error',
       expect.objectContaining({
@@ -184,6 +181,85 @@ describe('api response interceptor', () => {
         payload: expect.objectContaining({ error: 'title is required' }),
       }),
     );
+  });
+
+  it('surfaces a 409 conflict message on /register (H7 carve-out)', async () => {
+    // The motivating case: registering with a taken username
+    // returns { error: "User already exists", code: 409 }. The
+    // pre-carve-out toast ("Server error (409)") left the user
+    // wondering if the backend was down; now they get a
+    // actionable message and the request id is still attached to
+    // the log line.
+    const error = Object.assign(new Error('Request failed'), {
+      response: {
+        status: 409,
+        data: { error: 'User already exists', code: 409 },
+        headers: { 'x-request-id': 'req-409-xyz' },
+      },
+      config: {},
+    });
+
+    await expect(rejected(error)).rejects.toBe(error);
+
+    expect(addToast).toHaveBeenCalledWith('User already exists', 'error');
+    expect(loggerError).toHaveBeenCalledWith(
+      'api.error',
+      expect.objectContaining({
+        status: 409,
+        requestId: 'req-409-xyz',
+        payload: expect.objectContaining({ error: 'User already exists' }),
+      }),
+    );
+  });
+
+  it('keeps the generic "Server error" toast on 5xx (H7)', async () => {
+    // SECURITY.md H7: 5xx is treated as untrusted — a future
+    // regression could leak DB fragments, validator paths, or
+    // internal messages. The toast carries only the status + the
+    // request id, never the server's `error` field. The full
+    // payload still flows to the log pipeline.
+    const error = Object.assign(new Error('Request failed'), {
+      response: {
+        status: 500,
+        data: { error: 'pq: relation "users" does not exist' },
+        headers: { 'x-request-id': 'req-500-xyz' },
+      },
+      config: {},
+    });
+
+    await expect(rejected(error)).rejects.toBe(error);
+
+    expect(addToast).toHaveBeenCalledWith(
+      'Server error (500) (ref: req-500-xyz)',
+      'error',
+    );
+    expect(addToast).not.toHaveBeenCalledWith(
+      expect.stringContaining('relation "users"'),
+      'error',
+    );
+    expect(loggerError).toHaveBeenCalledWith(
+      'api.error',
+      expect.objectContaining({
+        status: 500,
+        payload: expect.objectContaining({
+          error: 'pq: relation "users" does not exist',
+        }),
+      }),
+    );
+  });
+
+  it('falls back to a generic toast on 4xx when the payload has no error field', async () => {
+    // Some proxies / CDN errors return a non-JSON or empty body on
+    // a 4xx. The toast must still be safe — generic label, no
+    // crash on undefined payload.
+    const error = Object.assign(new Error('Request failed'), {
+      response: { status: 400, data: undefined, headers: {} },
+      config: {},
+    });
+
+    await expect(rejected(error)).rejects.toBe(error);
+
+    expect(addToast).toHaveBeenCalledWith('Server error (400)', 'error');
   });
 
   it('falls back to "Server error (<status>)" with no request id when the header is absent', async () => {

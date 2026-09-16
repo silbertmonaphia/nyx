@@ -226,19 +226,30 @@ function getHeader(error: AxiosError, name: string): string | undefined {
 /**
  * Build the user-visible toast text for a non-401 server response.
  *
- * SECURITY.md H7: the backend's `error` field is NEVER echoed
- * directly — server-side strings are trusted less than client-side
- * ones (a future regression could leak DB fragments, validator
- * paths, or internal messages). The toast only carries a generic
- * label plus the request id, so the user has something to quote
- * when reporting an issue but the wire payload stays server-side.
- * The full payload is logged via the structured logger, where the
- * log-pipeline access controls apply.
+ * SECURITY.md H7: the backend's `error` field is treated as
+ * untrusted for 5xx (a future regression could leak DB fragments,
+ * validator paths, or internal messages). The toast only carries a
+ * generic label plus the request id, so the user has something to
+ * quote when reporting an issue but the wire payload stays
+ * server-side. The full payload is logged via the structured
+ * logger, where the log-pipeline access controls apply.
+ *
+ * 4xx is carved out: those responses are API-contract failures
+ * with controlled, user-facing strings ("User already exists",
+ * "Movie not found", "Invalid chat input", huma validation
+ * messages, …). Surfacing them lets the user act on the failure
+ * (e.g. pick a different username) instead of seeing a generic
+ * "Server error (409)" and wondering if the backend is down. The
+ * logged payload + Sentry capture are unchanged.
  */
 function buildServerErrorToast(
   status: number,
   requestId: string | undefined,
+  serverMessage: string | undefined,
 ): string {
+  if (status >= 400 && status < 500 && serverMessage) {
+    return serverMessage;
+  }
   const ref = requestId ? ` (ref: ${requestId})` : "";
   return `Server error (${status})${ref}`;
 }
@@ -346,7 +357,11 @@ api.interceptors.response.use(
           tags: { http_status: status },
           extra: { requestId, payload: sanitiseForLog(payload) },
         });
-        message = buildServerErrorToast(status, requestId);
+        message = buildServerErrorToast(
+          status,
+          requestId,
+          typeof payload?.error === "string" ? payload.error : undefined,
+        );
       }
     } else if (error.request) {
       message = "No response from server. Please check your connection.";

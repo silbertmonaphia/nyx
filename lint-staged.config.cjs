@@ -17,14 +17,20 @@ const frontendLockfile = path.join(frontendDir, 'package-lock.json');
 
 module.exports = {
   'frontend/src/**/*.{js,jsx,ts,tsx}': [
-    // Invoke the binaries by repo-relative path so they resolve
-    // regardless of where lint-staged spawns them (lint-staged runs
-    // from the repo root so pattern matching sees repo-relative
-    // paths; commands run from the same cwd, so a bare `eslint`
-    // would not find frontend/node_modules/.bin/eslint without
-    // `preferLocal` walking up — which it doesn't, here).
-    './frontend/node_modules/.bin/eslint --fix',
-    './frontend/node_modules/.bin/vitest related --run --passWithNoTests',
+    // eslint v9 auto-discovers eslint.config.js in cwd; we run
+    // lint-staged from the repo root (per .husky/pre-commit) so the
+    // config has to be passed explicitly. `--no-warn-ignored` keeps
+    // the output clean when a staged file is outside eslint's ts
+    // scope (vitest's `related` already filters by relatedness).
+    './frontend/node_modules/.bin/eslint --config frontend/eslint.config.js --fix --no-warn-ignored',
+    // vitest's `setupFiles` and `test` glob are resolved relative
+    // to its project root. `--root frontend` makes vitest resolve
+    // `./src/test/setup.js` to `frontend/src/test/setup.js` instead
+    // of `frontend/frontend/src/test/setup.js`. `--config` is
+    // resolved relative to `--root`, so the bare `vite.config.ts`
+    // path is enough (the config's `test:` block drives vitest's
+    // options — there's no separate `vitest.config.*` file).
+    './frontend/node_modules/.bin/vitest --root frontend --config vite.config.ts related --run --passWithNoTests',
   ],
   // Keep frontend/package-lock.json in sync with frontend/package.json
   // so the Dockerfile's `npm ci` doesn't fail at build time. Without
