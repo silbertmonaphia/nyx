@@ -49,7 +49,7 @@ describe('App', () => {
     });
   });
 
-  it('renders the main title', () => {
+  it('renders the brand in the nav', () => {
     render(<App />);
     expect(screen.getAllByText('Nyx').length).toBeGreaterThan(0);
   });

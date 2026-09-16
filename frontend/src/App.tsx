@@ -169,12 +169,7 @@ function App() {
       </nav>
 
       <section id="center" className="container mx-auto px-4 py-8">
-        <div className="max-w-2xl mx-auto text-center mb-12">
-          <h1 className="text-5xl md:text-7xl font-extrabold tracking-tight mb-4">Nyx</h1>
-          <p className="text-xl text-muted-foreground">Your minimalist movie guide</p>
-        </div>
-
-        <div className="w-full max-w-2xl mx-auto flex flex-col md:flex-row gap-4 items-center mb-8">
+        <div className="w-full max-w-2xl mx-auto flex flex-col md:flex-row gap-4 items-center mt-8 mb-8">
           <div className="relative w-full">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
             <Input
