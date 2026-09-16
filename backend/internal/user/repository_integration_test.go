@@ -138,30 +138,6 @@ func TestCreateUser_UsernameConstraintIntegration(t *testing.T) {
 	require.Error(t, err)
 	assert.True(t, errors.Is(err, ErrUsernameTaken),
 		"expected ErrUsernameTaken against real Postgres, got %v", err)
-	assert.False(t, errors.Is(err, ErrEmailTaken),
-		"username collision must not surface as ErrEmailTaken")
-}
-
-// TestCreateUser_EmailConstraintIntegration mirrors the username test
-// for the users_email_key unique index.
-func TestCreateUser_EmailConstraintIntegration(t *testing.T) {
-	if dbURL == "" {
-		t.Skip("PostgreSQL container not available; set SKIP_CONTAINERS=false to run integration tests")
-	}
-	ctx := context.Background()
-
-	repo := setupRefreshIntegrationTest(t)
-
-	first := &User{Username: "email-alice", Email: "shared@example.com", PasswordHash: "x"}
-	require.NoError(t, repo.CreateUser(ctx, first))
-
-	second := &User{Username: "email-bob", Email: "shared@example.com", PasswordHash: "x"}
-	err := repo.CreateUser(ctx, second)
-	require.Error(t, err)
-	assert.True(t, errors.Is(err, ErrEmailTaken),
-		"expected ErrEmailTaken against real Postgres, got %v", err)
-	assert.False(t, errors.Is(err, ErrUsernameTaken),
-		"email collision must not surface as ErrUsernameTaken")
 }
 
 // TestRefreshTokensIntegration is the round-trip integration check for

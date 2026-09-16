@@ -22,7 +22,7 @@ type RefreshToken struct {
 type User struct {
 	ID           int32
 	Username     string
-	Email        string
+	Email        pgtype.Text
 	PasswordHash string
 	CreatedAt    pgtype.Timestamptz
 	UpdatedAt    pgtype.Timestamptz

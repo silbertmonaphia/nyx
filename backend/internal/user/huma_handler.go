@@ -50,7 +50,7 @@ func RegisterUserOpsTest(api huma.API, h *Handler, tokens auth.TokenService) {
 		Method:      http.MethodPost,
 		Path:        "/api/register",
 		Summary:     "Register a user",
-		Description: "Create a new user account. Returns 409 when the username or email is already taken. The response body carries the access token, refresh token, token type, expiry, and user profile — clients store the tokens themselves.",
+		Description: "Create a new user account. Returns 409 when the username is already taken. The response body carries the access token, refresh token, token type, expiry, and user profile — clients store the tokens themselves.",
 		Tags:        []string{"auth"},
 		// Per-route tighter rate limit so a credential-stuffing or
 		// account-enumeration flood can't share the global IP

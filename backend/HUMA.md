@@ -36,7 +36,7 @@ fails CI when the committed copy is stale.
 | `internal/platform/api/response.go` | `ErrorResponse` struct: `{error, code, request_id, details}` envelope. Implements `huma.StatusError` so handlers can return it directly. `ClassifyAndLog` keeps raw error text off the wire; `WriteError` is the stdlib equivalent for middleware. |
 | `internal/platform/api/humaerror.go` | `OverrideHumaErrors()` — replaces `huma.NewError` / `huma.NewErrorWithContext` so every error produced by huma (validation, panic, the prebuilt 4xx helpers, handler-returned errors) flows through the legacy envelope. |
 | `internal/platform/api/map.go` | `MapError(ctx, err, safeDetail)` — the single handler-layer funnel. Looks up the error against registered domain sentinels and returns the matching `*ErrorResponse`; unknown errors fall back to a 500 envelope via `ClassifyAndLog`. Domains register their sentinels from `init()`. |
-| `internal/platform/pgerr/` | `pgerr.Map(err)` — repo-layer translator. Reads `pgconn.PgError.Code` + `ConstraintName` and returns the matching domain sentinel (`ErrUsernameTaken`, `ErrEmailTaken`, `ErrRefreshTokenCollision`); unknown PgErrors pass through unchanged so callers keep full context. |
+| `internal/platform/pgerr/` | `pgerr.Map(err)` — repo-layer translator. Reads `pgconn.PgError.Code` + `ConstraintName` and returns the matching domain sentinel (`ErrUsernameTaken`, `ErrRefreshTokenCollision`); unknown PgErrors pass through unchanged so callers keep full context. Email is no longer a unique column, so the email-collision translator was removed. |
 | `internal/platform/api/humaconfig.go` | `HumaConfig()` — the shared `huma.Config` (title, version, `BearerAuth` scheme, `OpenAPIPath`, `DocsPath`, formats). Used by both `cmd/api` and `cmd/openapi`. |
 | `internal/reqctx/` | Typed context keys (`RequestIDFromContext`, `UserIDFromContext`, `UsernameFromContext`, `ClientIPFromContext`). Leaf package — both middleware and api import it to break an import cycle. |
 | `internal/<feature>/huma_handler.go` | One file per feature: operation registration, input/output structs, handler functions. |
@@ -136,8 +136,9 @@ The error envelope is preserved end-to-end. Three ways to emit an error:
    The helper looks up the error against the registered domain sentinels
    (e.g. `movie.ErrNotFound`, `user.ErrInvalidCredentials`,
    `user.ErrUsernameTaken` for `users_username_key` unique violations,
-   `user.ErrEmailTaken` for `users_email_key`) and returns the matching
-   `*ErrorResponse`. Unknown errors fall back to a 500 envelope whose
+   `user.ErrRefreshTokenCollision` for `idx_refresh_tokens_token_hash`)
+   and returns the matching `*ErrorResponse`. Unknown errors fall back
+   to a 500 envelope whose
    `details` field is the static `safeDetail`; the raw error is logged at
    `Warn` with the request ID. Every existing handler is a one-liner on
    the error path:

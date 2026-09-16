@@ -252,7 +252,7 @@ See `k8s/*.yaml` for per-resource config.
 | Method | Path | Auth | Notes |
 |---|---|---|---|
 | GET | `/api/health` | — | Liveness + DB status |
-| POST | `/api/register` | — | Body `{username, email, password}`. Returns `{access_token, refresh_token, token_type: "Bearer", expires_at, user}` |
+| POST | `/api/register` | — | Body `{username, email?, password}` (email optional). Returns `{access_token, refresh_token, token_type: "Bearer", expires_at, user}` |
 | POST | `/api/login` | — | Body `{username, password}`. Returns the Bearer pair + user |
 | POST | `/api/refresh` | — | Body `{refresh_token}`. Returns a fresh Bearer pair + user. Reuse revokes the entire family |
 | POST | `/api/logout` | Bearer | Body `{refresh_token}`. Revokes only that row. Returns 204 |
@@ -271,7 +271,7 @@ The same spec is committed at `api/openapi.json` and regenerated offline with
   - Author via `git cz` (alias set up by `npm install`; runs commitizen + cz-customizable interactively). Plain `git commit -m` is also fine — the `.husky/commit-msg` hook runs `commitlint --edit` on the message file and rejects anything that doesn't match the schema.
   - Allowed scopes (kept in sync between `.cz-config.cjs` and `commitlint.config.js`): `backend`, `frontend`, `auth`, `infra`, `security`, `ci`, `docs`, `claude`, `env`, `observability`, `data`, `repo`.
   - Per-package releases: `semantic-release` (monorepo plugin) computes `backend@X.Y.Z` / `frontend@X.Y.Z` independently from commit paths, writes per-package `CHANGELOG.md`, stamps the new version into `ServiceVersion` + `frontend/package.json`, and pushes the release commit + tags. No npm publish.
-- **Errors** — domain sentinels (`movie.ErrNotFound`, `user.ErrInvalidCredentials`, `user.ErrUsernameTaken` / `ErrEmailTaken` / `ErrRefreshTokenCollision` translated from `pgconn.PgError` by `internal/platform/pgerr`, `auth.ErrInvalidToken`, …). Handlers funnel every error through `api.MapError(ctx, err, "Failed to <op>")` — unknown errors reuse `ClassifyAndLog` so internal error text never reaches the wire. Never string-compare error messages.
+- **Errors** — domain sentinels (`movie.ErrNotFound`, `user.ErrInvalidCredentials`, `user.ErrUsernameTaken` / `ErrRefreshTokenCollision` translated from `pgconn.PgError` by `internal/platform/pgerr`, `auth.ErrInvalidToken`, …). Handlers funnel every error through `api.MapError(ctx, err, "Failed to <op>")` — unknown errors reuse `ClassifyAndLog` so internal error text never reaches the wire. Never string-compare error messages.
 - **Cache** — best-effort. Mutations call `DeletePrefix("movies:")` (SCAN + UNLINK, non-blocking).
 - **Migrations** — `backend/migrations/00000N_description.{up,down}.sql`. Applied on every backend boot.
 

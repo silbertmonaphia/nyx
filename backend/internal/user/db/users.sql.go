@@ -159,7 +159,7 @@ RETURNING id, username, email, password_hash, created_at, updated_at, deleted_at
 
 type InsertUserParams struct {
 	Username     string
-	Email        string
+	Email        pgtype.Text
 	PasswordHash string
 }
 

@@ -180,6 +180,16 @@ func (s *service) accessExpires() time.Time {
 	return time.Now().Add(s.accessTTL)
 }
 
+// emailFromPtr flattens the optional huma *string Email field into
+// the plain string the API-shaped User carries (empty == unset,
+// which the repository converts to SQL NULL via textFromString).
+func emailFromPtr(p *string) string {
+	if p == nil {
+		return ""
+	}
+	return *p
+}
+
 func (s *service) Register(ctx context.Context, req RegisterRequest) (*AuthResult, error) {
 	ctx, span := s.tracer.Start(ctx, "user.Register", trace.WithSpanKind(trace.SpanKindInternal))
 	defer span.End()
@@ -191,18 +201,18 @@ func (s *service) Register(ctx context.Context, req RegisterRequest) (*AuthResul
 
 	u := &User{
 		Username:     req.Username,
-		Email:        req.Email,
+		Email:        emailFromPtr(req.Email),
 		PasswordHash: string(hashedPassword),
 	}
 
 	if err := s.repo.CreateUser(ctx, u); err != nil {
-		// Collapse the per-field unique-violation sentinels into a
-		// single ErrUserAlreadyExists. Without this, an attacker who
-		// probes registration can tell whether a *given* username or
-		// a *given* email is already in use (Login only collapses to
+		// Collapse the unique-violation sentinel into a single
+		// ErrUserAlreadyExists. Without this, an attacker who probes
+		// registration can tell whether a *given* username is
+		// already in use (Login only collapses to
 		// ErrInvalidCredentials; the two should be symmetric — see
 		// SECURITY.md H5).
-		if errors.Is(err, ErrUsernameTaken) || errors.Is(err, ErrEmailTaken) {
+		if errors.Is(err, ErrUsernameTaken) {
 			return nil, ErrUserAlreadyExists
 		}
 		return nil, err

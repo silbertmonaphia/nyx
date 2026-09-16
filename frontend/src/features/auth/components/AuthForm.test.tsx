@@ -70,7 +70,6 @@ describe('AuthForm', () => {
       await waitFor(() => {
         expect(mockedPost).toHaveBeenCalledWith('/login', {
           username: 'newbie',
-          email: '',
           password: 'hunter2',
         });
       });

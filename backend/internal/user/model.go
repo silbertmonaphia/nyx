@@ -5,7 +5,7 @@ import "time"
 type User struct {
 	ID           int        `json:"id" db:"id"`
 	Username     string     `json:"username" db:"username"`
-	Email        string     `json:"email" db:"email"`
+	Email        string     `json:"email,omitempty" db:"email"`
 	PasswordHash string     `json:"-" db:"password_hash"`
 	CreatedAt    time.Time  `json:"created_at" db:"created_at"`
 	UpdatedAt    time.Time  `json:"updated_at" db:"updated_at"`
@@ -23,7 +23,7 @@ type User struct {
 // scrypt without breaking clients (see SECURITY.md M7).
 type RegisterRequest struct {
 	Username string `json:"username" required:"true" minLength:"3" maxLength:"50"`
-	Email    string `json:"email" required:"true" format:"email"`
+	Email    *string `json:"email,omitempty"`
 	Password string `json:"password" required:"true" minLength:"6" maxLength:"128"`
 }
 

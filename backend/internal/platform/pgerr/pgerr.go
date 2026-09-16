@@ -39,7 +39,6 @@ const (
 //nolint:gosec // G101 false positive — these are SQL constraint names, not credentials.
 const (
 	ConstraintUsersUsername          = "users_username_key"
-	ConstraintUsersEmail             = "users_email_key"
 	ConstraintRefreshTokensTokenHash = "idx_refresh_tokens_token_hash"
 )
 
@@ -73,7 +72,6 @@ func Translate(err error) Translation {
 //
 // Recognized today:
 //   - 23505 + users_username_key          → user.ErrUsernameTaken
-//   - 23505 + users_email_key             → user.ErrEmailTaken
 //   - 23505 + idx_refresh_tokens_token_hash → user.ErrRefreshTokenCollision
 //
 // Domain sentinels are imported lazily through a registered matcher

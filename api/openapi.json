@@ -257,7 +257,6 @@
         "additionalProperties": false,
         "properties": {
           "email": {
-            "format": "email",
             "type": "string"
           },
           "password": {
@@ -273,7 +272,6 @@
         },
         "required": [
           "username",
-          "email",
           "password"
         ],
         "type": "object"
@@ -307,7 +305,6 @@
         "required": [
           "id",
           "username",
-          "email",
           "created_at",
           "updated_at"
         ],
@@ -772,7 +769,7 @@
     },
     "/api/register": {
       "post": {
-        "description": "Create a new user account. Returns 409 when the username or email is already taken. The response body carries the access token, refresh token, token type, expiry, and user profile — clients store the tokens themselves.",
+        "description": "Create a new user account. Returns 409 when the username is already taken. The response body carries the access token, refresh token, token type, expiry, and user profile — clients store the tokens themselves.",
         "operationId": "register",
         "requestBody": {
           "content": {

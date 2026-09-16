@@ -44,7 +44,17 @@ export const AuthForm: React.FC<AuthFormProps> = ({ onSuccess, onCancel }) => {
   const onSubmit = async (data: AuthFormData) => {
     try {
       const endpoint = isLogin ? "/login" : "/register";
-      const response = await api.post(endpoint, data);
+      // /login never accepts email on the wire; only /register does.
+      // The login payload below matches the backend LoginRequest
+      // shape exactly (Username + Password only).
+      const payload = isLogin
+        ? { username: data.username, password: data.password }
+        : {
+            username: data.username,
+            email: data.email,
+            password: data.password,
+          };
+      const response = await api.post(endpoint, payload);
       setAuth(response.data);
       addToast(
         isLogin ? "Successfully logged in!" : "Successfully registered!",

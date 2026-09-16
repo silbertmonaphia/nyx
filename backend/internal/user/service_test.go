@@ -147,7 +147,7 @@ func TestRegister_HappyPath(t *testing.T) {
 
 	res, err := svc.Register(context.Background(), RegisterRequest{
 		Username: "alice",
-		Email:    "alice@example.com",
+		Email:    emailPtr("alice@example.com"),
 		Password: "hunter2",
 	})
 	if err != nil {
@@ -174,36 +174,25 @@ func TestRegister_HappyPath(t *testing.T) {
 // attacker probing the registration endpoint can no longer tell
 // which field is already taken.
 func TestRegister_CollapsesUniqueViolationsToUserAlreadyExists(t *testing.T) {
-	cases := []struct {
-		name     string
-		sentinel error
-	}{
-		{"UsernameTaken", ErrUsernameTaken},
-		{"EmailTaken", ErrEmailTaken},
+	repo := &stubRepo{
+		createFn: func(_ context.Context, _ *User) error {
+			return ErrUsernameTaken
+		},
 	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			repo := &stubRepo{
-				createFn: func(_ context.Context, _ *User) error {
-					return tc.sentinel
-				},
-			}
-			svc := NewService(repo, newTestTokens(t), 15*time.Minute, 7*24*time.Hour, noop.NewTracerProvider().Tracer("test"))
+	svc := NewService(repo, newTestTokens(t), 15*time.Minute, 7*24*time.Hour, noop.NewTracerProvider().Tracer("test"))
 
-			_, err := svc.Register(context.Background(), RegisterRequest{
-				Username: "alice",
-				Email:    "alice@example.com",
-				Password: "hunter2",
-			})
-			if !errors.Is(err, ErrUserAlreadyExists) {
-				t.Errorf("expected ErrUserAlreadyExists to surface, got %v", err)
-			}
-			// The granular sentinel must NOT leak — that would defeat
-			// the whole point of the collapse.
-			if errors.Is(err, tc.sentinel) && tc.sentinel != ErrUserAlreadyExists {
-				t.Errorf("granular sentinel %v leaked through the collapse", tc.sentinel)
-			}
-		})
+	_, err := svc.Register(context.Background(), RegisterRequest{
+		Username: "alice",
+		Email:    emailPtr("alice@example.com"),
+		Password: "hunter2",
+	})
+	if !errors.Is(err, ErrUserAlreadyExists) {
+		t.Errorf("expected ErrUserAlreadyExists to surface, got %v", err)
+	}
+	// The granular sentinel must NOT leak — that would defeat the
+	// whole point of the collapse.
+	if errors.Is(err, ErrUsernameTaken) {
+		t.Errorf("granular sentinel ErrUsernameTaken leaked through the collapse")
 	}
 }
 
@@ -325,7 +314,7 @@ func TestRegister_RefreshCapEnforced(t *testing.T) {
 
 	if _, err := svc.Register(context.Background(), RegisterRequest{
 		Username: "alice",
-		Email:    "alice@example.com",
+		Email:    emailPtr("alice@example.com"),
 		Password: "hunter2",
 	}); err != nil {
 		t.Fatalf("Register: %v", err)
@@ -362,7 +351,7 @@ func TestRegister_BelowRefreshCapSkipsList(t *testing.T) {
 
 	if _, err := svc.Register(context.Background(), RegisterRequest{
 		Username: "alice",
-		Email:    "alice@example.com",
+		Email:    emailPtr("alice@example.com"),
 		Password: "hunter2",
 	}); err != nil {
 		t.Fatalf("Register: %v", err)
@@ -744,3 +733,9 @@ func TestLogout_RequiresRefreshToken(t *testing.T) {
 		t.Errorf("Logout with empty token should be nil (idempotent), got %v", err)
 	}
 }
+
+// emailPtr is a tiny helper for the RegisterRequest literals in this
+// file: RegisterRequest.Email is now *string (huma optional), and
+// `&"alice@example.com"`-style ad-hoc pointers would clutter every
+// fixture. The helper stays local to the test package.
+func emailPtr(s string) *string { return &s }

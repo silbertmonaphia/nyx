@@ -20,16 +20,15 @@ import (
 // failure should errors.Is against this value.
 //
 // ErrUserAlreadyExists is the public, wire-level collapsed form of
-// ErrUsernameTaken and ErrEmailTaken — registration no longer
-// distinguishes the two so an attacker can't enumerate which field
-// is already in use (see SECURITY.md H5). The two granular sentinels
-// remain as the *internal* failure modes from pgerr; the service
-// layer maps them both to ErrUserAlreadyExists before they reach
-// the handler.
+// ErrUsernameTaken — registration no longer distinguishes the
+// underlying unique constraint so an attacker can't enumerate
+// which username is already in use (see SECURITY.md H5). The
+// granular sentinel remains as the *internal* failure mode from
+// pgerr; the service layer maps it to ErrUserAlreadyExists before
+// it reaches the handler.
 var (
 	ErrUserNotFound          = errors.New("user not found")
 	ErrUsernameTaken         = errors.New("username already taken")
-	ErrEmailTaken            = errors.New("email already taken")
 	ErrUserAlreadyExists     = errors.New("user already exists")
 	ErrRefreshTokenCollision = errors.New("refresh token hash collision")
 	ErrRefreshTokenNotFound  = errors.New("refresh token not found")
@@ -38,14 +37,13 @@ var (
 // Register each user-domain sentinel with the api package so
 // MapError can render the right HTTP status + wire message. Runs at
 // process startup (init() order is undefined across packages but
-// each registration is independent). ErrUsernameTaken and
-// ErrEmailTaken still map to 409 — they're the internal collision
-// sentinels, surfaced only via the service layer's pre-check that
-// collapses them to ErrUserAlreadyExists before they hit the wire.
+// each registration is independent). ErrUsernameTaken still maps to
+// 409 — it's the internal collision sentinel, surfaced only via the
+// service layer's pre-check that collapses it to ErrUserAlreadyExists
+// before it hits the wire.
 func init() {
 	api.RegisterSentinel(ErrUserNotFound, http.StatusNotFound, "User not found")
 	api.RegisterSentinel(ErrUsernameTaken, http.StatusConflict, "User already exists")
-	api.RegisterSentinel(ErrEmailTaken, http.StatusConflict, "User already exists")
 	api.RegisterSentinel(ErrUserAlreadyExists, http.StatusConflict, "User already exists")
 	// ErrRefreshTokenCollision is a 500: a sha256 collision is ~10^-38
 	// per row. No clean 4xx story — log loud and let the client retry.
@@ -59,7 +57,6 @@ func init() {
 	// Switched on ConstraintName (not Code) so other domains that share
 	// the same SQLSTATE 23505 don't get hijacked.
 	pgerr.Register(pgerr.ConstraintUsersUsername, func() error { return ErrUsernameTaken })
-	pgerr.Register(pgerr.ConstraintUsersEmail, func() error { return ErrEmailTaken })
 	pgerr.Register(pgerr.ConstraintRefreshTokensTokenHash, func() error { return ErrRefreshTokenCollision })
 }
 
@@ -171,14 +168,13 @@ func NewRepository(q Querier) Repository {
 func (r *sqlRepository) CreateUser(ctx context.Context, u *User) error {
 	row, err := r.q.InsertUser(ctx, db.InsertUserParams{
 		Username:     u.Username,
-		Email:        u.Email,
+		Email:        textFromString(u.Email),
 		PasswordHash: u.PasswordHash,
 	})
 	if err != nil {
 		// pgerr.Map switches on ConstraintName so users_username_key
-		// → ErrUsernameTaken and users_email_key → ErrEmailTaken.
-		// Other errors (network drop, schema mismatch) pass through
-		// unchanged.
+		// → ErrUsernameTaken. Other errors (network drop, schema
+		// mismatch) pass through unchanged.
 		return pgerr.Map(err)
 	}
 	converted := toUser(row)
@@ -213,16 +209,19 @@ func (r *sqlRepository) GetUserByID(ctx context.Context, id int) (*User, error) 
 // toUser projects a sqlc-generated db.User into the API-shaped User.
 // The model differences are:
 //   - int32 (db) -> int (api)
+//   - pgtype.Text (nullable) -> string (empty when not set)
 //   - pgtype.Timestamptz -> time.Time / *time.Time
 //
 // PasswordHash and the always-present scalars pass through unchanged.
 // created_at/updated_at are NOT NULL in the schema, so we read .Time
-// directly; only deleted_at needs a Valid check.
+// directly; only deleted_at needs a Valid check. Email is an invalid
+// pgtype.Text for SQL NULL, so its zero-value String ("") is the right
+// "no email" sentinel — no explicit Valid check needed.
 func toUser(d db.User) User {
 	u := User{
 		ID:           int(d.ID),
 		Username:     d.Username,
-		Email:        d.Email,
+		Email:        d.Email.String,
 		PasswordHash: d.PasswordHash,
 		CreatedAt:    d.CreatedAt.Time,
 		UpdatedAt:    d.UpdatedAt.Time,
@@ -232,6 +231,19 @@ func toUser(d db.User) User {
 		u.DeletedAt = &t
 	}
 	return u
+}
+
+// textFromString returns an invalid pgtype.Text for "" so the SQL
+// column receives NULL rather than empty string. The DB column is
+// nullable, so an empty string and NULL are distinguishable; the API
+// model treats both as "no email" but storing NULL keeps the
+// wire-side `User.email == ""` mapping consistent with how
+// internal/movie handles optional text columns.
+func textFromString(s string) pgtype.Text {
+	if s == "" {
+		return pgtype.Text{}
+	}
+	return pgtype.Text{String: s, Valid: true}
 }
 
 // ---- Refresh-token implementations ----

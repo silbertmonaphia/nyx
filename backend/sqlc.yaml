@@ -27,6 +27,7 @@ sql:
       - "migrations/000004_create_users_table.up.sql"
       - "migrations/000005_add_deleted_at_to_users_table.up.sql"
       - "migrations/000008_create_refresh_tokens.up.sql"
+      - "migrations/000009_drop_users_email_uniqueness.up.sql"
     gen:
       go:
         package: "db"

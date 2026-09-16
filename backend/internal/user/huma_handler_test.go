@@ -169,7 +169,7 @@ func TestRegisterHandler_Created(t *testing.T) {
 	}
 	rr := postJSON(t, newTestRouterWithRepo(repo), "/api/register", RegisterRequest{
 		Username: testUsername,
-		Email:    "alice@example.com",
+		Email:    emailPtr("alice@example.com"),
 		Password: "hunter2",
 	})
 
@@ -223,7 +223,7 @@ func TestRegisterHandler_BodyCarriesTokens(t *testing.T) {
 	}
 	rr := postJSON(t, newTestRouterWithRepo(repo), "/api/register", RegisterRequest{
 		Username: testUsername,
-		Email:    "alice@example.com",
+		Email:    emailPtr("alice@example.com"),
 		Password: "hunter2",
 	})
 
@@ -251,26 +251,7 @@ func TestRegisterHandler_UsernameTakenReturns409(t *testing.T) {
 	}
 	rr := postJSON(t, newTestRouterWithRepo(repo), "/api/register", RegisterRequest{
 		Username: testUsername,
-		Email:    "alice@example.com",
-		Password: "hunter2",
-	})
-
-	env := decodeEnvelope(t, rr, http.StatusConflict)
-	if env.Message != "User already exists" {
-		t.Errorf("envelope.error = %q, want %q", env.Message, "User already exists")
-	}
-}
-
-// TestRegisterHandler_EmailTakenReturns409 mirrors the username case
-// to confirm the wire surface is identical — distinguishing the two
-// would defeat the H5 collapse.
-func TestRegisterHandler_EmailTakenReturns409(t *testing.T) {
-	repo := &stubRepo{
-		createFn: func(_ context.Context, _ *User) error { return ErrEmailTaken },
-	}
-	rr := postJSON(t, newTestRouterWithRepo(repo), "/api/register", RegisterRequest{
-		Username: testUsername,
-		Email:    "alice@example.com",
+		Email:    emailPtr("alice@example.com"),
 		Password: "hunter2",
 	})
 
@@ -315,27 +296,7 @@ func TestRegisterHandler_TooShortUsernameReturns400(t *testing.T) {
 	}
 	rr := postJSON(t, newTestRouterWithRepo(repo), "/api/register", RegisterRequest{
 		Username: "ab",
-		Email:    "alice@example.com",
-		Password: "hunter2",
-	})
-
-	decodeEnvelope(t, rr, http.StatusBadRequest)
-}
-
-// TestRegisterHandler_InvalidEmailReturns400 pins the huma format:"email"
-// tag on RegisterRequest.Email. A "not-an-email" payload must be
-// rejected before the service runs (otherwise the row insert would
-// fail with a 23514 check_violation and surface as 500).
-func TestRegisterHandler_InvalidEmailReturns400(t *testing.T) {
-	repo := &stubRepo{
-		createFn: func(_ context.Context, _ *User) error {
-			t.Error("repo.CreateUser must not be reached when email is invalid")
-			return nil
-		},
-	}
-	rr := postJSON(t, newTestRouterWithRepo(repo), "/api/register", RegisterRequest{
-		Username: testUsername,
-		Email:    "not-an-email",
+		Email:    emailPtr("alice@example.com"),
 		Password: "hunter2",
 	})
 
@@ -355,7 +316,7 @@ func TestRegisterHandler_TooShortPasswordReturns400(t *testing.T) {
 	}
 	rr := postJSON(t, newTestRouterWithRepo(repo), "/api/register", RegisterRequest{
 		Username: testUsername,
-		Email:    "alice@example.com",
+		Email:    emailPtr("alice@example.com"),
 		Password: "x",
 	})
 
@@ -372,7 +333,7 @@ func TestRegisterHandler_InternalErrorReturns500(t *testing.T) {
 	}
 	rr := postJSON(t, newTestRouterWithRepo(repo), "/api/register", RegisterRequest{
 		Username: testUsername,
-		Email:    "alice@example.com",
+		Email:    emailPtr("alice@example.com"),
 		Password: "hunter2",
 	})
 

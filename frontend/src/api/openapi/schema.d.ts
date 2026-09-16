@@ -24,6 +24,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/livez": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Liveness probe
+         * @description Shallow liveness check — returns 200 as long as the process is up. Does NOT probe the database or cache; use /api/health for a deep readiness signal.
+         */
+        get: operations["livez"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/login": {
         parameters: {
             query?: never;
@@ -163,7 +183,7 @@ export interface paths {
         put?: never;
         /**
          * Register a user
-         * @description Create a new user account. Returns 409 when the username or email is already taken. The response body carries the access token, refresh token, token type, expiry, and user profile — clients store the tokens themselves.
+         * @description Create a new user account. Returns 409 when the username is already taken. The response body carries the access token, refresh token, token type, expiry, and user profile — clients store the tokens themselves.
          */
         post: operations["register"];
         delete?: never;
@@ -207,6 +227,13 @@ export interface components {
             cache: string;
             /** @example up */
             database: string;
+        };
+        LivezResponse: {
+            /**
+             * @description Always 'ok' as long as the process is serving HTTP.
+             * @example ok
+             */
+            status: string;
         };
         LoginRequest: {
             password: string;
@@ -253,8 +280,7 @@ export interface components {
             refresh_token: string;
         };
         RegisterRequest: {
-            /** Format: email */
-            email: string;
+            email?: string;
             password: string;
             username: string;
         };
@@ -263,7 +289,7 @@ export interface components {
             created_at: string;
             /** Format: date-time */
             deleted_at?: string;
-            email: string;
+            email?: string;
             /** Format: int64 */
             id: number;
             /** Format: date-time */
@@ -295,6 +321,35 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HealthResponse"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    livez: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LivezResponse"];
                 };
             };
             /** @description Error */

@@ -94,27 +94,6 @@ func TestCreateUser_UsernameUniqueViolationMapsToErrUsernameTaken(t *testing.T) 
 	}
 }
 
-func TestCreateUser_EmailUniqueViolationMapsToErrEmailTaken(t *testing.T) {
-	stub := &stubQuerier{
-		insertErr: &pgconn.PgError{
-			Code:           "23505",
-			ConstraintName: "users_email_key",
-			Message:        "duplicate key value violates unique constraint",
-		},
-	}
-	repo := NewRepository(stub)
-
-	u := &User{Username: "bob", Email: "alice@example.com", PasswordHash: "hash"}
-	err := repo.CreateUser(context.Background(), u)
-
-	if !errors.Is(err, ErrEmailTaken) {
-		t.Errorf("expected ErrEmailTaken, got %v", err)
-	}
-	if errors.Is(err, ErrUsernameTaken) {
-		t.Errorf("email collision must not surface as ErrUsernameTaken")
-	}
-}
-
 func TestCreateUser_PropagatesNonUniqueErrors(t *testing.T) {
 	other := errors.New("connection refused")
 	stub := &stubQuerier{insertErr: other}
@@ -123,8 +102,8 @@ func TestCreateUser_PropagatesNonUniqueErrors(t *testing.T) {
 	u := &User{Username: "alice"}
 	err := repo.CreateUser(context.Background(), u)
 
-	if errors.Is(err, ErrUsernameTaken) || errors.Is(err, ErrEmailTaken) {
-		t.Errorf("non-unique error must not map to a user-collision sentinel")
+	if errors.Is(err, ErrUsernameTaken) {
+		t.Errorf("non-unique error must not map to ErrUsernameTaken")
 	}
 	if !errors.Is(err, other) {
 		t.Errorf("expected original error to propagate, got %v", err)
@@ -161,7 +140,7 @@ func TestCreateUser_HappyPath(t *testing.T) {
 		insertResp: db.User{
 			ID:        7,
 			Username:  "alice",
-			Email:     "alice@example.com",
+			Email:     pgtype.Text{String: "alice@example.com", Valid: true},
 			CreatedAt: pgtype.Timestamptz{Time: now, Valid: true},
 			UpdatedAt: pgtype.Timestamptz{Time: now, Valid: true},
 		},
