@@ -63,7 +63,6 @@ export const AuthForm: React.FC<AuthFormProps> = ({ onSuccess, onCancel }) => {
         <Input
           id="username"
           {...register("username")}
-          placeholder="Your username"
           aria-invalid={!!errors.username}
           className={errors.username ? "border-destructive" : ""}
         />
@@ -81,7 +80,6 @@ export const AuthForm: React.FC<AuthFormProps> = ({ onSuccess, onCancel }) => {
             id="email"
             type="email"
             {...register("email")}
-            placeholder="Your email address"
             aria-invalid={!!errors.email}
             className={errors.email ? "border-destructive" : ""}
           />
@@ -99,7 +97,6 @@ export const AuthForm: React.FC<AuthFormProps> = ({ onSuccess, onCancel }) => {
           id="password"
           type="password"
           {...register("password")}
-          placeholder="••••••••"
           aria-invalid={!!errors.password}
           className={errors.password ? "border-destructive" : ""}
         />
