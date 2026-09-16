@@ -231,9 +231,12 @@ services:
   #
   # Caching: the named vllm_cache volume persists HuggingFace
   # downloads across `compose down` so a 2 GB model weight doesn't
-  # re-pull every restart. HUGGING_FACE_HUB_TOKEN is optional —
-  # only needed for gated models (Llama, Mistral). The default
-  # Qwen2.5-3B-Instruct is Apache-2.0 and ungated.
+  # re-pull every restart. HUGGING_FACE_HUB_TOKEN is REQUIRED —
+  # HF's CAS endpoint (cas-server.xethub.hf.co) demands a token
+  # for all weight downloads, even ungated models like the default
+  # Qwen3-4B-Instruct-2507. Without it model load aborts with an
+  # auth error. Generate at https://huggingface.co/settings/tokens
+  # (read role is enough).
   vllm:
     image: vllm/vllm-openai:v0.29.0
     profiles: ["vllm"]
@@ -273,8 +276,10 @@ services:
       # otherwise ("RuntimeError: UVA is not available" from
       # vllm/v1/worker/gpu/buffer_utils.py). Set to 1 to enable. The
       # flag's comment in vllm/envs.py scopes it to "CPU offloading or
-      # v2 model runner" — the v1 buffer may or may not honor it; if it
-      # doesn't, fall back to VLLM_USE_V1=0 in .env.
+      # v2 model runner" but in practice it's also required by the v1
+      # staged-writes buffer on WSL2. NOTE: VLLM_USE_V1=0 is NOT a
+      # fallback — the V0 engine was removed in vLLM 0.9 and the var
+      # is no longer in envs.py on the 0.29.0 image we pin.
       - VLLM_WSL2_ENABLE_PIN_MEMORY=${VLLM_WSL2_ENABLE_PIN_MEMORY:-1}
     ports:
       # Loopback only — vLLM is reached by the backend container
