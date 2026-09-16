@@ -25,6 +25,7 @@ Frontend:
 - Dev: `cd frontend && npm run dev` → http://localhost:5173
 - Build / lint / unit tests: `npm run build` / `npm run lint` / `npm test`
 - E2E (needs backend up): `npm run test:e2e`
+- Adding a dep? Run `cd frontend && npm install --workspaces=false --package-lock-only` and commit `frontend/package-lock.json` alongside `package.json`. The pre-commit lint-staged hook does this automatically when it sees `frontend/package.json` staged; the `--workspaces=false` flag is required because `frontend` is declared as a workspace at the monorepo root.
 
 Full stack: `cp .env.example .env && sudo docker compose up --build -d`. DB host port is **5433** (mapped from container 5432).
 

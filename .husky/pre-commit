@@ -19,10 +19,19 @@ else
   echo "  CI still scans (see .github/workflows/gitleaks.yml)"
 fi
 
-# lint-staged config lives at root package.json; patterns match
-# frontend/src/**. lint-staged is a frontend-only devDep so it
-# resolves from frontend/node_modules/.bin — `cd frontend` for
-# the resolver, then lint-staged walks up to root to find its
-# config (the matcher paths are repo-relative, so `frontend/src/**`
-# still matches regardless of cwd).
-cd frontend && npx lint-staged
+# lint-staged config lives at lint-staged.config.cjs at the repo
+# root; patterns are repo-relative (e.g. `frontend/src/**`,
+# `frontend/package.json`). Run the binary directly from the repo
+# root so pattern matching sees staged paths as repo-relative
+# strings and minimatch resolves them correctly — running from
+# `frontend/` instead would make lint-staged see staged files as
+# absolute paths (`/home/smona/nyx/frontend/package.json`) and the
+# repo-relative patterns would silently fail to match (the original
+# `cd frontend && npx lint-staged` form had this bug; Sentry commit
+# 1258285 went through without lint-staged actually verifying
+# anything). The frontend/src tasks themselves prefix `cd frontend
+# &&` so eslint/vitest resolve their devDeps from
+# frontend/node_modules despite lint-staged running from the repo
+# root. lint-staged itself is a frontend-only devDep, so the binary
+# path is relative to that package.
+./frontend/node_modules/.bin/lint-staged

@@ -13,6 +13,8 @@ Set the four env vars in `.env` (see `.env.example`):
 
 Leave the three build-time vars empty for local dev builds without sourcemap upload — the Vite plugin only registers when all three are set, so an empty token is a noop rather than an error.
 
+> **Lockfile sync:** editing `frontend/package.json` (e.g. bumping `@sentry/react`) requires regenerating `frontend/package-lock.json` — the Dockerfile's `npm ci` rejects an out-of-sync lockfile and the next `docker compose build frontend` fails. The pre-commit lint-staged hook does this automatically when it sees `frontend/package.json` staged. See CLAUDE.md for the manual command.
+
 ## Self-hosted Sentry
 
 Operators running a self-hosted Sentry instance override two things in `docker-compose.yml` / `docker-compose.prod.yml`:
