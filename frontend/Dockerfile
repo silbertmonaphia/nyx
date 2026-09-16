@@ -5,7 +5,10 @@ WORKDIR /app
 
 # Copy package files and install dependencies
 # SECURITY.md H10: `npm ci` (deterministic, lockfile-driven) + skip the
-# audit/fund network calls. `package-lock.json` is committed at repo root.
+# audit/fund network calls. Build context is ./frontend, so the
+# lockfile `npm ci` reads is `frontend/package-lock.json` (the root
+# `package-lock.json` is for the monorepo's tooling scripts and does
+# not satisfy this `npm ci`). See CLAUDE.md for the lockfile-regen rule.
 COPY package*.json ./
 RUN npm ci --no-audit --no-fund
 
