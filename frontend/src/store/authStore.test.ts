@@ -23,7 +23,6 @@ import { setSentryUser } from '~/services/sentry';
 const baseUser: User = {
   id: 1,
   username: 'tester',
-  email: 'tester@example.com',
   created_at: '2024-01-01T00:00:00Z',
   updated_at: '2024-01-01T00:00:00Z',
 };
@@ -63,7 +62,6 @@ describe('useAuthStore', () => {
       expect(setSentryUser).toHaveBeenCalledTimes(1);
       expect(setSentryUser).toHaveBeenCalledWith({
         id: baseUser.id,
-        email: baseUser.email,
         username: baseUser.username,
       });
     });

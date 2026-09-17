@@ -61,8 +61,8 @@ export function initSentry(): boolean {
       replaysSessionSampleRate: 0,
       replaysOnErrorSampleRate: 1.0,
       // Never ship PII (cookies, IP, user-agent) by default. The
-      // explicit `setUser` calls below opt in the user id / email /
-      // username at login time.
+      // explicit `setUser` calls below opt in the user id / username
+      // at login time.
       sendDefaultPii: false,
       // release: deferred — CI plumbing tracked separately (see FUTURE_FRONTEND.md §9).
     });
@@ -77,14 +77,12 @@ export function initSentry(): boolean {
 
 /**
  * Tag the active Sentry session with a user. Mirrors the fields the
- * login / refresh wire envelope resolves with (id, email, username).
+ * login / refresh wire envelope resolves with (id, username).
  * Pass `null` to clear (logout). Noop when Sentry wasn't initialised
  * — call sites don't need to gate the call.
  */
 export function setSentryUser(
-  user:
-    | { id: number | string; email?: string | null; username: string }
-    | null,
+  user: { id: number | string; username: string } | null,
 ): void {
   if (!initialized) return;
   Sentry.setUser(user);

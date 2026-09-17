@@ -252,7 +252,7 @@ See `k8s/*.yaml` for per-resource config.
 | Method | Path | Auth | Notes |
 |---|---|---|---|
 | GET | `/api/health` | — | Liveness + DB status |
-| POST | `/api/register` | — | Body `{username, email?, password}` (email optional). Returns `{access_token, refresh_token, token_type: "Bearer", expires_at, user}` |
+| POST | `/api/register` | — | Body `{username, password}`. Returns `{access_token, refresh_token, token_type: "Bearer", expires_at, user}` |
 | POST | `/api/login` | — | Body `{username, password}`. Returns the Bearer pair + user |
 | POST | `/api/refresh` | — | Body `{refresh_token}`. Returns a fresh Bearer pair + user. Reuse revokes the entire family |
 | POST | `/api/logout` | Bearer | Body `{refresh_token}`. Revokes only that row. Returns 204 |

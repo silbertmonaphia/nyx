@@ -81,7 +81,6 @@ export const useAuthStore = create<AuthState>()(
         if (res.user) {
           setSentryUser({
             id: res.user.id,
-            email: res.user.email,
             username: res.user.username,
           });
         }

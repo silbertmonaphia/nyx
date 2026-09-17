@@ -21,7 +21,6 @@ const mockedPost = api.post as unknown as ReturnType<typeof vi.fn>;
 const baseUser: User = {
   id: 7,
   username: 'newbie',
-  email: 'newbie@example.com',
   created_at: '2024-01-01T00:00:00Z',
   updated_at: '2024-01-01T00:00:00Z',
 };
@@ -93,7 +92,7 @@ describe('AuthForm', () => {
   });
 
   describe('register', () => {
-    it('POSTs to /register with email + credentials', async () => {
+    it('POSTs to /register with username + password', async () => {
       mockedPost.mockResolvedValueOnce({ data: authResponse });
 
       render(<AuthForm onSuccess={onSuccess} onCancel={onCancel} />);
@@ -102,7 +101,6 @@ describe('AuthForm', () => {
       await userEvent.click(screen.getByRole('button', { name: /^register$/i }));
 
       await userEvent.type(screen.getByLabelText(/username/i), 'newbie');
-      await userEvent.type(screen.getByLabelText(/email/i), 'newbie@example.com');
       await userEvent.type(screen.getByLabelText(/password/i), 'hunter2');
 
       await userEvent.click(screen.getByRole('button', { name: /^register$/i }));
@@ -110,7 +108,6 @@ describe('AuthForm', () => {
       await waitFor(() => {
         expect(mockedPost).toHaveBeenCalledWith('/register', {
           username: 'newbie',
-          email: 'newbie@example.com',
           password: 'hunter2',
         });
       });

@@ -109,7 +109,7 @@ describe('sentry', () => {
 
   it('setSentryUser is a noop when Sentry is not initialised', async () => {
     const { setSentryUser } = await import('./sentry');
-    setSentryUser({ id: 1, username: 'tester', email: 'a@b' });
+    setSentryUser({ id: 1, username: 'tester' });
     expect(Sentry.setUser).not.toHaveBeenCalled();
   });
 
@@ -117,11 +117,10 @@ describe('sentry', () => {
     vi.stubEnv('VITE_SENTRY_DSN', 'https://public@sentry.io/1');
     const { initSentry, setSentryUser } = await import('./sentry');
     initSentry();
-    setSentryUser({ id: 42, username: 'alice', email: 'alice@nyx' });
+    setSentryUser({ id: 42, username: 'alice' });
     expect(Sentry.setUser).toHaveBeenCalledWith({
       id: 42,
       username: 'alice',
-      email: 'alice@nyx',
     });
   });
 

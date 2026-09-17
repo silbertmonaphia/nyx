@@ -280,7 +280,6 @@ export interface components {
             refresh_token: string;
         };
         RegisterRequest: {
-            email?: string;
             password: string;
             username: string;
         };
@@ -289,7 +288,6 @@ export interface components {
             created_at: string;
             /** Format: date-time */
             deleted_at?: string;
-            email?: string;
             /** Format: int64 */
             id: number;
             /** Format: date-time */

@@ -130,10 +130,10 @@ func TestCreateUser_UsernameConstraintIntegration(t *testing.T) {
 
 	repo := setupRefreshIntegrationTest(t)
 
-	first := &User{Username: "dup-username", Email: "first@example.com", PasswordHash: "x"}
+	first := &User{Username: "dup-username", PasswordHash: "x"}
 	require.NoError(t, repo.CreateUser(ctx, first))
 
-	second := &User{Username: "dup-username", Email: "second@example.com", PasswordHash: "x"}
+	second := &User{Username: "dup-username", PasswordHash: "x"}
 	err := repo.CreateUser(ctx, second)
 	require.Error(t, err)
 	assert.True(t, errors.Is(err, ErrUsernameTaken),
@@ -157,7 +157,6 @@ func TestRefreshTokensIntegration(t *testing.T) {
 
 		u := &User{
 			Username:     "alice",
-			Email:        "alice@example.com",
 			PasswordHash: "x",
 		}
 		require.NoError(t, repo.CreateUser(ctx, u))
@@ -180,7 +179,7 @@ func TestRefreshTokensIntegration(t *testing.T) {
 	t.Run("RotateMarksOldRevoked", func(t *testing.T) {
 		repo := setupRefreshIntegrationTest(t)
 
-		u := &User{Username: "bob", Email: "bob@example.com", PasswordHash: "x"}
+		u := &User{Username: "bob", PasswordHash: "x"}
 		require.NoError(t, repo.CreateUser(ctx, u))
 
 		expires := time.Now().Add(7 * 24 * time.Hour)
@@ -203,7 +202,7 @@ func TestRefreshTokensIntegration(t *testing.T) {
 	t.Run("RevokeFamily", func(t *testing.T) {
 		repo := setupRefreshIntegrationTest(t)
 
-		u := &User{Username: "carol", Email: "carol@example.com", PasswordHash: "x"}
+		u := &User{Username: "carol", PasswordHash: "x"}
 		require.NoError(t, repo.CreateUser(ctx, u))
 
 		expires := time.Now().Add(7 * 24 * time.Hour)

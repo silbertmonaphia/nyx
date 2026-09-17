@@ -83,7 +83,7 @@ func TestCreateUser_UsernameUniqueViolationMapsToErrUsernameTaken(t *testing.T) 
 	}
 	repo := NewRepository(stub)
 
-	u := &User{Username: "alice", Email: "alice@example.com", PasswordHash: "hash"}
+	u := &User{Username: "alice", PasswordHash: "hash"}
 	err := repo.CreateUser(context.Background(), u)
 
 	if !errors.Is(err, ErrUsernameTaken) {
@@ -140,14 +140,13 @@ func TestCreateUser_HappyPath(t *testing.T) {
 		insertResp: db.User{
 			ID:        7,
 			Username:  "alice",
-			Email:     pgtype.Text{String: "alice@example.com", Valid: true},
 			CreatedAt: pgtype.Timestamptz{Time: now, Valid: true},
 			UpdatedAt: pgtype.Timestamptz{Time: now, Valid: true},
 		},
 	}
 	repo := NewRepository(stub)
 
-	u := &User{Username: "alice", Email: "alice@example.com", PasswordHash: "hash"}
+	u := &User{Username: "alice", PasswordHash: "hash"}
 	if err := repo.CreateUser(context.Background(), u); err != nil {
 		t.Fatalf("CreateUser: %v", err)
 	}

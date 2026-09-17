@@ -180,16 +180,6 @@ func (s *service) accessExpires() time.Time {
 	return time.Now().Add(s.accessTTL)
 }
 
-// emailFromPtr flattens the optional huma *string Email field into
-// the plain string the API-shaped User carries (empty == unset,
-// which the repository converts to SQL NULL via textFromString).
-func emailFromPtr(p *string) string {
-	if p == nil {
-		return ""
-	}
-	return *p
-}
-
 func (s *service) Register(ctx context.Context, req RegisterRequest) (*AuthResult, error) {
 	ctx, span := s.tracer.Start(ctx, "user.Register", trace.WithSpanKind(trace.SpanKindInternal))
 	defer span.End()
@@ -201,7 +191,6 @@ func (s *service) Register(ctx context.Context, req RegisterRequest) (*AuthResul
 
 	u := &User{
 		Username:     req.Username,
-		Email:        emailFromPtr(req.Email),
 		PasswordHash: string(hashedPassword),
 	}
 

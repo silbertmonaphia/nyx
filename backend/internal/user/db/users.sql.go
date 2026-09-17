@@ -109,7 +109,7 @@ func (q *Queries) GetRefreshTokenByHash(ctx context.Context, tokenHash []byte) (
 }
 
 const getUserByID = `-- name: GetUserByID :one
-SELECT id, username, email, password_hash, created_at, updated_at, deleted_at
+SELECT id, username, password_hash, created_at, updated_at, deleted_at
 FROM users
 WHERE id = $1 AND deleted_at IS NULL
 `
@@ -120,7 +120,6 @@ func (q *Queries) GetUserByID(ctx context.Context, id int32) (User, error) {
 	err := row.Scan(
 		&i.ID,
 		&i.Username,
-		&i.Email,
 		&i.PasswordHash,
 		&i.CreatedAt,
 		&i.UpdatedAt,
@@ -130,7 +129,7 @@ func (q *Queries) GetUserByID(ctx context.Context, id int32) (User, error) {
 }
 
 const getUserByUsername = `-- name: GetUserByUsername :one
-SELECT id, username, email, password_hash, created_at, updated_at, deleted_at
+SELECT id, username, password_hash, created_at, updated_at, deleted_at
 FROM users
 WHERE username = $1 AND deleted_at IS NULL
 `
@@ -141,7 +140,6 @@ func (q *Queries) GetUserByUsername(ctx context.Context, username string) (User,
 	err := row.Scan(
 		&i.ID,
 		&i.Username,
-		&i.Email,
 		&i.PasswordHash,
 		&i.CreatedAt,
 		&i.UpdatedAt,
@@ -152,14 +150,13 @@ func (q *Queries) GetUserByUsername(ctx context.Context, username string) (User,
 
 const insertUser = `-- name: InsertUser :one
 
-INSERT INTO users (username, email, password_hash)
-VALUES ($1, $2, $3)
-RETURNING id, username, email, password_hash, created_at, updated_at, deleted_at
+INSERT INTO users (username, password_hash)
+VALUES ($1, $2)
+RETURNING id, username, password_hash, created_at, updated_at, deleted_at
 `
 
 type InsertUserParams struct {
 	Username     string
-	Email        pgtype.Text
 	PasswordHash string
 }
 
@@ -168,12 +165,11 @@ type InsertUserParams struct {
 // block is the @name annotation (which becomes the method name) and the
 // query type (`:one`, `:many`, `:exec`, `:execrows`).
 func (q *Queries) InsertUser(ctx context.Context, arg InsertUserParams) (User, error) {
-	row := q.db.QueryRow(ctx, insertUser, arg.Username, arg.Email, arg.PasswordHash)
+	row := q.db.QueryRow(ctx, insertUser, arg.Username, arg.PasswordHash)
 	var i User
 	err := row.Scan(
 		&i.ID,
 		&i.Username,
-		&i.Email,
 		&i.PasswordHash,
 		&i.CreatedAt,
 		&i.UpdatedAt,

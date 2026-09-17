@@ -37,7 +37,6 @@ func TestMapError_UserSentinels(t *testing.T) {
 	}{
 		{"UserNotFound", http.StatusNotFound, "User not found"},
 		{"UsernameTaken", http.StatusConflict, "Username already taken"},
-		{"EmailTaken", http.StatusConflict, "Email already taken"},
 		{"InvalidCredentials", http.StatusUnauthorized, "Invalid credentials"},
 		{"InvalidRefreshToken", http.StatusUnauthorized, "Invalid refresh token"},
 		{"RefreshTokenReuse", http.StatusUnauthorized, "Refresh token revoked"},

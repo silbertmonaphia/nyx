@@ -4,17 +4,17 @@
 -- query type (`:one`, `:many`, `:exec`, `:execrows`).
 
 -- name: InsertUser :one
-INSERT INTO users (username, email, password_hash)
-VALUES (@username, @email, @password_hash)
+INSERT INTO users (username, password_hash)
+VALUES (@username, @password_hash)
 RETURNING *;
 
 -- name: GetUserByUsername :one
-SELECT id, username, email, password_hash, created_at, updated_at, deleted_at
+SELECT id, username, password_hash, created_at, updated_at, deleted_at
 FROM users
 WHERE username = @username AND deleted_at IS NULL;
 
 -- name: GetUserByID :one
-SELECT id, username, email, password_hash, created_at, updated_at, deleted_at
+SELECT id, username, password_hash, created_at, updated_at, deleted_at
 FROM users
 WHERE id = @id AND deleted_at IS NULL;
 

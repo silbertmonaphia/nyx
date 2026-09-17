@@ -256,9 +256,6 @@
       "RegisterRequest": {
         "additionalProperties": false,
         "properties": {
-          "email": {
-            "type": "string"
-          },
           "password": {
             "maxLength": 128,
             "minLength": 6,
@@ -285,9 +282,6 @@
           },
           "deleted_at": {
             "format": "date-time",
-            "type": "string"
-          },
-          "email": {
             "type": "string"
           },
           "id": {

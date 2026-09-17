@@ -147,7 +147,6 @@ func TestRegister_HappyPath(t *testing.T) {
 
 	res, err := svc.Register(context.Background(), RegisterRequest{
 		Username: "alice",
-		Email:    emailPtr("alice@example.com"),
 		Password: "hunter2",
 	})
 	if err != nil {
@@ -169,10 +168,10 @@ func TestRegister_HappyPath(t *testing.T) {
 }
 
 // TestRegister_CollapsesUniqueViolationsToUserAlreadyExists pins the
-// H5 invariant: regardless of whether the username or the email
-// collides, the wire surface is a single ErrUserAlreadyExists. An
-// attacker probing the registration endpoint can no longer tell
-// which field is already taken.
+// H5 invariant: regardless of which unique constraint collides, the
+// wire surface is a single ErrUserAlreadyExists. An attacker probing
+// the registration endpoint can no longer tell which field is already
+// taken.
 func TestRegister_CollapsesUniqueViolationsToUserAlreadyExists(t *testing.T) {
 	repo := &stubRepo{
 		createFn: func(_ context.Context, _ *User) error {
@@ -183,7 +182,6 @@ func TestRegister_CollapsesUniqueViolationsToUserAlreadyExists(t *testing.T) {
 
 	_, err := svc.Register(context.Background(), RegisterRequest{
 		Username: "alice",
-		Email:    emailPtr("alice@example.com"),
 		Password: "hunter2",
 	})
 	if !errors.Is(err, ErrUserAlreadyExists) {
@@ -215,7 +213,6 @@ func TestLogin_HappyPath(t *testing.T) {
 			return &User{
 				ID:           7,
 				Username:     username,
-				Email:        "alice@example.com",
 				PasswordHash: string(hash),
 				CreatedAt:    time.Now(),
 			}, nil
@@ -314,7 +311,6 @@ func TestRegister_RefreshCapEnforced(t *testing.T) {
 
 	if _, err := svc.Register(context.Background(), RegisterRequest{
 		Username: "alice",
-		Email:    emailPtr("alice@example.com"),
 		Password: "hunter2",
 	}); err != nil {
 		t.Fatalf("Register: %v", err)
@@ -351,7 +347,6 @@ func TestRegister_BelowRefreshCapSkipsList(t *testing.T) {
 
 	if _, err := svc.Register(context.Background(), RegisterRequest{
 		Username: "alice",
-		Email:    emailPtr("alice@example.com"),
 		Password: "hunter2",
 	}); err != nil {
 		t.Fatalf("Register: %v", err)
@@ -431,7 +426,7 @@ func TestRefresh_HappyPath(t *testing.T) {
 			}, nil
 		},
 		getByIDFn: func(_ context.Context, id int) (*User, error) {
-			return &User{ID: id, Username: "alice", Email: "a@x.com"}, nil
+			return &User{ID: id, Username: "alice"}, nil
 		},
 	}
 	tokens := newTestTokens(t)
@@ -624,7 +619,7 @@ func TestLogout_Idempotent(t *testing.T) {
 // unchanged, and the returned user is passed back to the handler
 // verbatim. SECURITY.md L7.
 func TestGetByID_HappyPath(t *testing.T) {
-	want := &User{ID: 42, Username: "alice", Email: "alice@example.com"}
+	want := &User{ID: 42, Username: "alice"}
 	var seenID int
 	repo := &stubRepo{
 		getByIDFn: func(_ context.Context, id int) (*User, error) {
@@ -734,8 +729,3 @@ func TestLogout_RequiresRefreshToken(t *testing.T) {
 	}
 }
 
-// emailPtr is a tiny helper for the RegisterRequest literals in this
-// file: RegisterRequest.Email is now *string (huma optional), and
-// `&"alice@example.com"`-style ad-hoc pointers would clutter every
-// fixture. The helper stays local to the test package.
-func emailPtr(s string) *string { return &s }

@@ -70,7 +70,7 @@ Single source of truth for "what's done / what's next" across the stack. Tick an
 - [x] E2E — Playwright in `frontend/tests/e2e`.
 - [x] Backend lint — `golangci-lint` in CI.
 - [x] Frontend lint — `eslint` + `husky` pre-commit + `lint-staged`.
-- [x] User Domain Handler Test Coverage — `user/huma_handler_test.go` covers register/login happy paths, validation rejections (missing/short username, invalid email, short password), duplicate 409, unknown user 401, bad password 401, and 500 paths.
+- [x] User Domain Handler Test Coverage — `user/huma_handler_test.go` covers register/login happy paths, validation rejections (missing/short username, short password), duplicate 409, unknown user 401, bad password 401, and 500 paths.
 - [x] Kubernetes manifests — `Deployment`, `Service`, `Ingress`, `Secrets`, `StatefulSet` (Postgres), `Deployment` (Redis) in `k8s/`.
 - [x] Viper config — multi-source (env + `.env` + defaults).
 - [x] Commitlint hook — `.husky/commit-msg` runs `commitlint --edit` with `@commitlint/config-conventional`; `commitlint.config.js` pins the scope enum (`backend`, `frontend`, `auth`, `infra`, `security`, `ci`, `docs`, `claude`, `env`, `observability`, `data`, `repo`) and ignores merge/revert commits.

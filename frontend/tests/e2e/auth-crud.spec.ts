@@ -3,7 +3,6 @@ import { test, expect } from '@playwright/test';
 test.describe('Authentication and Movie CRUD', () => {
   const testUser = {
     username: `user_${Math.floor(Math.random() * 10000)}`,
-    email: `test_${Math.floor(Math.random() * 10000)}@example.com`,
     password: 'password123',
   };
 
@@ -18,7 +17,6 @@ test.describe('Authentication and Movie CRUD', () => {
     
     // Fill form
     await page.getByPlaceholder(/Your username/i).fill(testUser.username);
-    await page.getByPlaceholder(/Your email address/i).fill(testUser.email);
     await page.getByPlaceholder(/••••••••/i).fill(testUser.password);
     
     // Submit

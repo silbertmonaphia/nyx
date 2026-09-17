@@ -169,8 +169,7 @@ func TestRegisterHandler_Created(t *testing.T) {
 	}
 	rr := postJSON(t, newTestRouterWithRepo(repo), "/api/register", RegisterRequest{
 		Username: testUsername,
-		Email:    emailPtr("alice@example.com"),
-		Password: "hunter2",
+				Password: "hunter2",
 	})
 
 	if rr.Code != http.StatusCreated {
@@ -223,8 +222,7 @@ func TestRegisterHandler_BodyCarriesTokens(t *testing.T) {
 	}
 	rr := postJSON(t, newTestRouterWithRepo(repo), "/api/register", RegisterRequest{
 		Username: testUsername,
-		Email:    emailPtr("alice@example.com"),
-		Password: "hunter2",
+				Password: "hunter2",
 	})
 
 	var res AuthResponse
@@ -241,18 +239,17 @@ func TestRegisterHandler_BodyCarriesTokens(t *testing.T) {
 
 // TestRegisterHandler_UsernameTakenReturns409 pins the wiring of the
 // ErrUsernameTaken branch. Per H5, the wire message collapses to
-// "User already exists" regardless of which field collided — the
-// service-layer collapse ensures an attacker probing registration
-// can't tell whether the username or the email is the one already
-// in use (see SECURITY.md H5).
+// "User already exists" regardless of which unique constraint
+// collided — the service-layer collapse ensures an attacker probing
+// registration can't tell which field is already in use (see
+// SECURITY.md H5).
 func TestRegisterHandler_UsernameTakenReturns409(t *testing.T) {
 	repo := &stubRepo{
 		createFn: func(_ context.Context, _ *User) error { return ErrUsernameTaken },
 	}
 	rr := postJSON(t, newTestRouterWithRepo(repo), "/api/register", RegisterRequest{
 		Username: testUsername,
-		Email:    emailPtr("alice@example.com"),
-		Password: "hunter2",
+				Password: "hunter2",
 	})
 
 	env := decodeEnvelope(t, rr, http.StatusConflict)
@@ -273,7 +270,6 @@ func TestRegisterHandler_MissingFieldReturns400(t *testing.T) {
 	}
 	rr := postJSON(t, newTestRouterWithRepo(repo), "/api/register", map[string]any{
 		"username": testUsername,
-		"email":    "alice@example.com",
 	})
 
 	env := decodeEnvelope(t, rr, http.StatusBadRequest)
@@ -296,8 +292,7 @@ func TestRegisterHandler_TooShortUsernameReturns400(t *testing.T) {
 	}
 	rr := postJSON(t, newTestRouterWithRepo(repo), "/api/register", RegisterRequest{
 		Username: "ab",
-		Email:    emailPtr("alice@example.com"),
-		Password: "hunter2",
+				Password: "hunter2",
 	})
 
 	decodeEnvelope(t, rr, http.StatusBadRequest)
@@ -316,8 +311,7 @@ func TestRegisterHandler_TooShortPasswordReturns400(t *testing.T) {
 	}
 	rr := postJSON(t, newTestRouterWithRepo(repo), "/api/register", RegisterRequest{
 		Username: testUsername,
-		Email:    emailPtr("alice@example.com"),
-		Password: "x",
+				Password: "x",
 	})
 
 	decodeEnvelope(t, rr, http.StatusBadRequest)
@@ -333,8 +327,7 @@ func TestRegisterHandler_InternalErrorReturns500(t *testing.T) {
 	}
 	rr := postJSON(t, newTestRouterWithRepo(repo), "/api/register", RegisterRequest{
 		Username: testUsername,
-		Email:    emailPtr("alice@example.com"),
-		Password: "hunter2",
+				Password: "hunter2",
 	})
 
 	env := decodeEnvelope(t, rr, http.StatusInternalServerError)
@@ -361,7 +354,6 @@ func TestLoginHandler_OK(t *testing.T) {
 			return &User{
 				ID:           7,
 				Username:     username,
-				Email:        "alice@example.com",
 				PasswordHash: hash,
 			}, nil
 		},
@@ -515,7 +507,7 @@ func TestRefreshHandler_OK(t *testing.T) {
 			}, nil
 		},
 		getByIDFn: func(_ context.Context, id int) (*User, error) {
-			return &User{ID: id, Username: testUsername, Email: "a@x.com"}, nil
+			return &User{ID: id, Username: testUsername}, nil
 		},
 	}
 
@@ -798,7 +790,6 @@ func TestMeHandler_ReturnsProfile(t *testing.T) {
 			return &User{
 				ID:        7,
 				Username:  testUsername,
-				Email:     "alice@example.com",
 				CreatedAt: time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC),
 				UpdatedAt: time.Date(2024, 1, 2, 0, 0, 0, 0, time.UTC),
 			}, nil
@@ -820,7 +811,7 @@ func TestMeHandler_ReturnsProfile(t *testing.T) {
 	if err := json.Unmarshal(rr.Body.Bytes(), &body); err != nil {
 		t.Fatalf("unmarshal: %v; body=%s", err, rr.Body.String())
 	}
-	if body.ID != 7 || body.Username != testUsername || body.Email != "alice@example.com" {
+	if body.ID != 7 || body.Username != testUsername {
 		t.Errorf("body = %+v, want id=7 username=alice", body)
 	}
 	// The wire shape must NOT carry the password hash, even on

@@ -12,7 +12,6 @@ import { Label } from "~/components/ui/Label";
 
 const authSchema = z.object({
   username: z.string().min(3, "Username must be at least 3 characters"),
-  email: z.string().email("Invalid email address").optional().or(z.literal("")),
   password: z.string().min(6, "Password must be at least 6 characters"),
 });
 
@@ -36,7 +35,6 @@ export const AuthForm: React.FC<AuthFormProps> = ({ onSuccess, onCancel }) => {
     resolver: zodResolver(authSchema),
     defaultValues: {
       username: "",
-      email: "",
       password: "",
     },
   });
@@ -44,16 +42,7 @@ export const AuthForm: React.FC<AuthFormProps> = ({ onSuccess, onCancel }) => {
   const onSubmit = async (data: AuthFormData) => {
     try {
       const endpoint = isLogin ? "/login" : "/register";
-      // /login never accepts email on the wire; only /register does.
-      // The login payload below matches the backend LoginRequest
-      // shape exactly (Username + Password only).
-      const payload = isLogin
-        ? { username: data.username, password: data.password }
-        : {
-            username: data.username,
-            email: data.email,
-            password: data.password,
-          };
+      const payload = { username: data.username, password: data.password };
       const response = await api.post(endpoint, payload);
       setAuth(response.data);
       addToast(
@@ -82,24 +71,6 @@ export const AuthForm: React.FC<AuthFormProps> = ({ onSuccess, onCancel }) => {
           </p>
         )}
       </div>
-
-      {!isLogin && (
-        <div className="space-y-2 text-left">
-          <Label htmlFor="email">Email</Label>
-          <Input
-            id="email"
-            type="email"
-            {...register("email")}
-            aria-invalid={!!errors.email}
-            className={errors.email ? "border-destructive" : ""}
-          />
-          {errors.email && (
-            <p className="text-xs font-medium text-destructive">
-              {errors.email.message}
-            </p>
-          )}
-        </div>
-      )}
 
       <div className="space-y-2 text-left">
         <Label htmlFor="password">Password</Label>

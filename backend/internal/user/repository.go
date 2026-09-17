@@ -168,7 +168,6 @@ func NewRepository(q Querier) Repository {
 func (r *sqlRepository) CreateUser(ctx context.Context, u *User) error {
 	row, err := r.q.InsertUser(ctx, db.InsertUserParams{
 		Username:     u.Username,
-		Email:        textFromString(u.Email),
 		PasswordHash: u.PasswordHash,
 	})
 	if err != nil {
@@ -209,19 +208,15 @@ func (r *sqlRepository) GetUserByID(ctx context.Context, id int) (*User, error) 
 // toUser projects a sqlc-generated db.User into the API-shaped User.
 // The model differences are:
 //   - int32 (db) -> int (api)
-//   - pgtype.Text (nullable) -> string (empty when not set)
 //   - pgtype.Timestamptz -> time.Time / *time.Time
 //
 // PasswordHash and the always-present scalars pass through unchanged.
 // created_at/updated_at are NOT NULL in the schema, so we read .Time
-// directly; only deleted_at needs a Valid check. Email is an invalid
-// pgtype.Text for SQL NULL, so its zero-value String ("") is the right
-// "no email" sentinel — no explicit Valid check needed.
+// directly; only deleted_at needs a Valid check.
 func toUser(d db.User) User {
 	u := User{
 		ID:           int(d.ID),
 		Username:     d.Username,
-		Email:        d.Email.String,
 		PasswordHash: d.PasswordHash,
 		CreatedAt:    d.CreatedAt.Time,
 		UpdatedAt:    d.UpdatedAt.Time,
@@ -231,19 +226,6 @@ func toUser(d db.User) User {
 		u.DeletedAt = &t
 	}
 	return u
-}
-
-// textFromString returns an invalid pgtype.Text for "" so the SQL
-// column receives NULL rather than empty string. The DB column is
-// nullable, so an empty string and NULL are distinguishable; the API
-// model treats both as "no email" but storing NULL keeps the
-// wire-side `User.email == ""` mapping consistent with how
-// internal/movie handles optional text columns.
-func textFromString(s string) pgtype.Text {
-	if s == "" {
-		return pgtype.Text{}
-	}
-	return pgtype.Text{String: s, Valid: true}
 }
 
 // ---- Refresh-token implementations ----

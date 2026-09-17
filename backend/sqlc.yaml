@@ -28,6 +28,7 @@ sql:
       - "migrations/000005_add_deleted_at_to_users_table.up.sql"
       - "migrations/000008_create_refresh_tokens.up.sql"
       - "migrations/000009_drop_users_email_uniqueness.up.sql"
+      - "migrations/000010_drop_users_email_column.up.sql"
     gen:
       go:
         package: "db"
@@ -41,7 +42,6 @@ sql:
           id: "ID"
           user_id: "UserID"
           username: "Username"
-          email: "Email"
           password_hash: "PasswordHash"
           token_hash: "TokenHash"
           family_id: "FamilyID"
