@@ -117,7 +117,19 @@ sudo docker compose exec redis redis-cli KEYS 'movies:*'
 
 ## Local Development
 
-### Backend
+The repo ships with a root `Makefile` that orchestrates the two halves against the docker-compose infra. From the repo root:
+
+```bash
+make up     # docker compose up -d db redis jaeger (idempotent)
+make dev    # backend (go run) + frontend (vite) together, Ctrl+C cleans up
+make stop   # stop the dev processes
+make status # show infra + dev processes
+make down   # stop the infra containers
+```
+
+`make dev` writes backend output to `/tmp/nyx-backend.log` and frontend to `/tmp/nyx-frontend.log` (tail either independently). It overrides `DB_URL` so the locally-run backend hits the host-mapped `127.0.0.1:5433` rather than the in-network `db:5432` — no `.env` edits needed.
+
+### Backend (manual)
 
 ```bash
 cd backend
@@ -126,7 +138,7 @@ go run ./cmd/api
 # Add REDIS_ENABLED=true REDIS_URL=redis://localhost:6379 CACHE_TTL=5m for cache
 ```
 
-### Frontend
+### Frontend (manual)
 
 ```bash
 cd frontend

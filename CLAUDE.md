@@ -27,7 +27,16 @@ Frontend:
 - E2E (needs backend up): `npm run test:e2e`
 - Adding a dep? Run `cd frontend && npm install --workspaces=false --package-lock-only` and commit `frontend/package-lock.json` alongside `package.json`. The pre-commit lint-staged hook does this automatically when it sees `frontend/package.json` staged; the `--workspaces=false` flag is required because `frontend` is declared as a workspace at the monorepo root.
 
-Full stack: `cp .env.example .env && sudo docker compose up --build -d` boots `db` + `redis` + `jaeger`; backend and frontend run locally (`cd backend && go run ./cmd/api`, `cd frontend && npm run dev`). To bring the app containers up via compose instead, use `sudo docker compose --profile app up --build -d` (combine with `--profile vllm` to add the LLM). DB host port is **5433** (mapped from container 5432).
+Full stack: `cp .env.example .env && sudo docker compose up --build -d` boots `db` + `redis` + `jaeger`; backend and frontend run locally. To bring the app containers up via compose instead, use `sudo docker compose --profile app up --build -d` (combine with `--profile vllm` to add the LLM). DB host port is **5433** (mapped from container 5432).
+
+Local dev orchestrator (`Makefile` at repo root):
+
+- `make up` — `docker compose up -d db redis jaeger` (idempotent)
+- `make dev` — run backend (`go run ./cmd/api`) + frontend (`npm run dev`) together with shared Ctrl+C cleanup; logs to `/tmp/nyx-backend.log` and `/tmp/nyx-frontend.log`
+- `make stop` — kill the dev backend/frontend started by `make dev`
+- `make status` — show infra + dev processes
+- `make down` — stop the infra containers
+- `make logs` — tail infra logs
 
 ---
 
