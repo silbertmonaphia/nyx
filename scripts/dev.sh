@@ -39,7 +39,10 @@ fi
 # .env.example ships DB_URL with the in-network hostname `db:5432`,
 # which only resolves from inside the compose bridge. Override here
 # so the locally-run backend reaches the host-mapped port instead.
+# Same story for REDIS_URL — `redis:6379` only resolves on the
+# compose network; the host-mapped port is 6380 (see docker-compose.yml).
 export DB_URL='postgres://postgres:postgres@127.0.0.1:5433/nyx?sslmode=disable'
+export REDIS_URL='redis://127.0.0.1:6380'
 
 # --- start both, forward their stdout/stderr to per-process logs -----
 cleanup() {

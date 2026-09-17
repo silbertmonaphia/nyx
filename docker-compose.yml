@@ -44,8 +44,10 @@ services:
     cpus: "0.50"
     restart: always
     # SECURITY.md H12: same reasoning as the DB — loopback only.
+    # Host port 6380 (not the default 6379) so this doesn't collide
+    # with a native redis-server installed on the developer host.
     ports:
-      - "127.0.0.1:6379:6379"
+      - "127.0.0.1:6380:6379"
     # SECURITY.md M12: redis is intentionally read-only rootfs
     # because no persistence is enabled (no --save, no AOF). tmpfs
     # gives /data a scratch space for runtime bookkeeping. caps
