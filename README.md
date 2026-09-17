@@ -95,7 +95,10 @@ cp .env.example .env
 # 2. Build the backend binary locally (Alpine images need a static binary)
 (cd backend && CGO_ENABLED=0 go build -o main ./cmd/api)
 
-# 3. Start the full stack
+# 3. Start the stack (db + redis + jaeger). Backend and frontend run
+#    locally — see the Local Development section below. To bring them
+#    up via compose instead, use `--profile app` (combine with
+#    `--profile vllm` to also start the LLM container).
 sudo docker compose up --build -d
 ```
 

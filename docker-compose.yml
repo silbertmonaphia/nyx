@@ -89,6 +89,12 @@ services:
       retries: 10
 
   backend:
+    # Opt-in profile. Default `docker compose up` boots only the
+    # infra services (db / redis / jaeger); backend + frontend run
+    # locally via `cd backend && go run ./cmd/api` + `cd frontend &&
+    # npm run dev`. Use `--profile app` (alone or with `--profile
+    # vllm`) to bring the application containers up via compose.
+    profiles: ["app"]
     build:
       context: ./backend
       args:
@@ -159,6 +165,10 @@ services:
       - /tmp
 
   frontend:
+    # See `backend` above — both app containers sit behind the
+    # `app` profile so the default `docker compose up` only stands
+    # up infra (db / redis / jaeger).
+    profiles: ["app"]
     build:
       context: ./frontend
       args:
