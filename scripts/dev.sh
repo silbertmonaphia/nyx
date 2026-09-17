@@ -30,9 +30,13 @@ if [[ ! -f .env ]]; then
   exit 1
 fi
 
-if ! docker compose ps --status running db redis jaeger 2>/dev/null \
-     | grep -qE '^(db|redis|jaeger)\b'; then
-  echo "infra containers not running — run 'make up' (or 'docker compose up -d db redis jaeger') first" >&2
+running=$(docker compose ps --status running --format '{{.Service}}' 2>/dev/null | sort -u)
+missing=()
+for svc in db redis jaeger; do
+  grep -qxF "$svc" <<<"$running" || missing+=("$svc")
+done
+if (( ${#missing[@]} > 0 )); then
+  echo "infra containers not running: ${missing[*]} — run 'make up' (or 'docker compose up -d db redis jaeger') first" >&2
   exit 1
 fi
 
