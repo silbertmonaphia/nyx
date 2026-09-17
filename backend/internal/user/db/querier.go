@@ -17,16 +17,18 @@ type Querier interface {
 	// those are being pruned in the background goroutine — counting
 	// them would inflate the result and trigger spurious revokes.
 	CountActiveRefreshTokensByUser(ctx context.Context, userID int32) (int64, error)
-	// Atomic self-stamping: insert with family_id=0 placeholder, then
-	// update family_id to the inserted row's id, then SELECT out the
-	// updated row. The two-CTE shape (rather than UPDATE … RETURNING
-	// directly off the inserted CTE) avoids a same-table update snapshot
-	// issue that left the outer RETURNING with zero rows under real
-	// Postgres — the unit tests passed because they stubbed the query.
-	CreateRefreshToken(ctx context.Context, arg CreateRefreshTokenParams) (CreateRefreshTokenRow, error)
 	GetRefreshTokenByHash(ctx context.Context, tokenHash []byte) (RefreshToken, error)
 	GetUserByID(ctx context.Context, id int32) (User, error)
 	GetUserByUsername(ctx context.Context, username string) (User, error)
+	// Step 1 of the self-stamp: insert with family_id = 0 as a placeholder.
+	// The Repository runs this inside a transaction with
+	// StampRefreshTokenFamily so the freshly assigned id is visible to
+	// the second statement. Splitting the work across two statements
+	// avoids the PostgreSQL data-modifying CTE snapshot limitation
+	// (a sibling CTE's UPDATE cannot see its sibling CTE's INSERT
+	// because both share one statement-level snapshot) — the previous
+	// two-CTE shape returned zero rows under real Postgres.
+	InsertRefreshToken(ctx context.Context, arg InsertRefreshTokenParams) (int64, error)
 	// SQL queries for the user feature. Each block becomes a method on the
 	// generated internal/user/db.Querier interface. The first line of each
 	// block is the @name annotation (which becomes the method name) and the
@@ -52,6 +54,9 @@ type Querier interface {
 	// will see the second one with revoked_at NOT NULL and trigger reuse
 	// detection at the service layer.
 	RotateRefreshToken(ctx context.Context, arg RotateRefreshTokenParams) (RotateRefreshTokenRow, error)
+	// Step 2: set family_id to the row's own id. RETURNING gives back
+	// the full row so the caller doesn't need a second SELECT.
+	StampRefreshTokenFamily(ctx context.Context, id int64) (StampRefreshTokenFamilyRow, error)
 }
 
 var _ Querier = (*Queries)(nil)

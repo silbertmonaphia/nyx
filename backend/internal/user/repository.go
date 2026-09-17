@@ -83,11 +83,14 @@ type Querier interface {
 
 	// Refresh-token queries — see backend/queries/users.sql for the
 	// SQL bodies. Method names mirror the @name annotations verbatim
-	// so a service-layer mock can stub each one by name. The
-	// CTE-shaped queries (CreateRefreshToken, RotateRefreshToken) get
-	// their own generated row types; GetRefreshTokenByHash queries the
-	// table directly so it gets db.RefreshToken.
-	CreateRefreshToken(ctx context.Context, arg db.CreateRefreshTokenParams) (db.CreateRefreshTokenRow, error)
+	// so a service-layer mock can stub each one by name. The two
+	// self-stamp steps (InsertRefreshToken + StampRefreshTokenFamily)
+	// and RotateRefreshToken each return their own generated row
+	// type because of the explicit RETURNING column lists;
+	// GetRefreshTokenByHash queries the table directly so it gets
+	// db.RefreshToken.
+	InsertRefreshToken(ctx context.Context, arg db.InsertRefreshTokenParams) (int64, error)
+	StampRefreshTokenFamily(ctx context.Context, id int64) (db.StampRefreshTokenFamilyRow, error)
 	GetRefreshTokenByHash(ctx context.Context, tokenHash []byte) (db.RefreshToken, error)
 	RotateRefreshToken(ctx context.Context, arg db.RotateRefreshTokenParams) (db.RotateRefreshTokenRow, error)
 	RevokeRefreshTokenFamily(ctx context.Context, familyID int64) (int64, error)
@@ -135,9 +138,10 @@ type Repository interface {
 	GetUserByID(ctx context.Context, id int) (*User, error)
 
 	// Refresh-token operations. CreateRefreshToken mints a row whose
-	// family_id == its own id (self-stamped by the CTE). The caller is
-	// responsible for hashing the opaque token before passing it in;
-	// this layer never sees raw tokens.
+	// family_id == its own id (self-stamped by the repository via a
+	// two-statement transaction — see queries/users.sql for the
+	// rationale). The caller is responsible for hashing the opaque
+	// token before passing it in; this layer never sees raw tokens.
 	CreateRefreshToken(ctx context.Context, userID int, tokenHash []byte, expiresAt time.Time) (*RefreshTokenRow, error)
 	GetRefreshTokenByHash(ctx context.Context, tokenHash []byte) (*RefreshTokenRow, error)
 	// RotateRefreshToken inserts a new row in the same family as @oldID,
@@ -157,11 +161,39 @@ type Repository interface {
 	PurgeRefreshTokensOlderThan(ctx context.Context, cutoff time.Time) (int64, error)
 }
 
-type sqlRepository struct {
-	q Querier
+// Pool is the subset of *pgxpool.Pool the Repository needs. Both
+// *pgxpool.Pool and pgxmock.PgxPoolIface satisfy it (the latter is
+// the unit-test path; see repository_test.go). The interface embeds
+// db.DBTX so a Pool is automatically a valid argument to db.New —
+// no extra adapter is needed at the call site. Mirrors
+// internal/movie/repository.go's Pool so the two domains have
+// identical shapes.
+type Pool interface {
+	db.DBTX
+	BeginTx(ctx context.Context, opts pgx.TxOptions) (pgx.Tx, error)
+	Ping(ctx context.Context) error
+	Close()
 }
 
-func NewRepository(q Querier) Repository {
+type sqlRepository struct {
+	pool Pool        // nil for tx-bound or stub repositories
+	q    *db.Queries // sqlc-generated; WithTx returns *db.Queries
+}
+
+// NewRepository is the production constructor. It wires the
+// sqlc Querier to the pool so CreateRefreshToken can open a
+// transaction for the two-step self-stamp (see queries/users.sql
+// for why the work is split across two statements).
+func NewRepository(pool Pool) Repository {
+	return &sqlRepository{pool: pool, q: db.New(pool)}
+}
+
+// NewRepositoryFromQuerier is a test-only constructor that accepts
+// a pre-built *db.Queries (e.g. one wired to a stubQuerier for unit
+// tests). CreateRefreshToken is not usable in this mode because it
+// needs the pool to begin a transaction; tests that exercise the
+// CreateRefreshToken path go through NewRepository with a mock pool.
+func NewRepositoryFromQuerier(q *db.Queries) Repository {
 	return &sqlRepository{q: q}
 }
 
@@ -230,19 +262,50 @@ func toUser(d db.User) User {
 
 // ---- Refresh-token implementations ----
 
+// CreateRefreshToken mints a fresh refresh row with family_id stamped
+// to the row's own id (a brand-new family). The work is split across
+// two statements inside a transaction — see queries/users.sql for the
+// full rationale; the short version is that a single-statement CTE
+// pattern cannot see its own INSERT from its sibling UPDATE under
+// PostgreSQL data-modifying CTE snapshot semantics, so the previous
+// single-CTE implementation returned zero rows against real Postgres.
+//
+// pgerr.Map translates idx_refresh_tokens_token_hash collisions to
+// ErrRefreshTokenCollision (500); a sha256 collision is ~10^-38 per
+// row so this is defense-in-depth, not the happy path.
+//
+// Requires a Pool — calling CreateRefreshToken on a repository
+// built via NewRepositoryFromQuerier returns an error because the
+// transaction can't be opened. Production code always uses
+// NewRepository.
 func (r *sqlRepository) CreateRefreshToken(ctx context.Context, userID int, tokenHash []byte, expiresAt time.Time) (*RefreshTokenRow, error) {
-	row, err := r.q.CreateRefreshToken(ctx, db.CreateRefreshTokenParams{
+	if r.pool == nil {
+		return nil, errors.New("user.CreateRefreshToken requires a pool; use NewRepository, not NewRepositoryFromQuerier")
+	}
+	tx, err := r.pool.BeginTx(ctx, pgx.TxOptions{})
+	if err != nil {
+		return nil, err
+	}
+	// Defer Rollback after a successful Commit is a no-op.
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	qtx := r.q.WithTx(tx)
+	id, err := qtx.InsertRefreshToken(ctx, db.InsertRefreshTokenParams{
 		UserID:    toInt32(userID),
 		TokenHash: tokenHash,
 		ExpiresAt: pgtype.Timestamptz{Time: expiresAt, Valid: true},
 	})
 	if err != nil {
-		// pgerr.Map turns idx_refresh_tokens_token_hash collisions into
-		// ErrRefreshTokenCollision (500). A sha256 collision is ~10^-38
-		// per row; this exists for defense-in-depth, not the happy path.
 		return nil, pgerr.Map(err)
 	}
-	out := toRefreshTokenRowFromCreate(row)
+	row, err := qtx.StampRefreshTokenFamily(ctx, id)
+	if err != nil {
+		return nil, pgerr.Map(err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return nil, err
+	}
+	out := toRefreshTokenRowFromStamp(row)
 	return &out, nil
 }
 
@@ -319,12 +382,12 @@ func toRefreshTokenRow(d db.RefreshToken) RefreshTokenRow {
 	return out
 }
 
-// toRefreshTokenRowFromCreate is the projection for the CTE-shaped
-// CreateRefreshTokenRow that CreateRefreshToken returns. Structurally
-// identical to db.RefreshToken (same columns, same pgtype fields) —
-// kept as a separate function so future schema divergence is a
-// one-line fix.
-func toRefreshTokenRowFromCreate(d db.CreateRefreshTokenRow) RefreshTokenRow {
+// toRefreshTokenRowFromStamp is the projection for the
+// StampRefreshTokenFamilyRow that StampRefreshTokenFamily returns.
+// Structurally identical to db.RefreshToken (same columns, same
+// pgtype fields) — kept as a separate function so future schema
+// divergence is a one-line fix.
+func toRefreshTokenRowFromStamp(d db.StampRefreshTokenFamilyRow) RefreshTokenRow {
 	out := RefreshTokenRow{
 		ID:        d.ID,
 		UserID:    int(d.UserID),

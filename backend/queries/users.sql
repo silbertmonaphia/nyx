@@ -18,26 +18,26 @@ SELECT id, username, password_hash, created_at, updated_at, deleted_at
 FROM users
 WHERE id = @id AND deleted_at IS NULL;
 
--- name: CreateRefreshToken :one
--- Atomic self-stamping: insert with family_id=0 placeholder, then
--- update family_id to the inserted row's id, then SELECT out the
--- updated row. The two-CTE shape (rather than UPDATE … RETURNING
--- directly off the inserted CTE) avoids a same-table update snapshot
--- issue that left the outer RETURNING with zero rows under real
--- Postgres — the unit tests passed because they stubbed the query.
-WITH inserted AS (
-    INSERT INTO refresh_tokens (user_id, token_hash, family_id, expires_at)
-    VALUES (@user_id, @token_hash, 0, @expires_at)
-    RETURNING id
-),
-updated AS (
-    UPDATE refresh_tokens
-    SET family_id = inserted.id
-    FROM inserted
-    WHERE refresh_tokens.id = inserted.id
-    RETURNING refresh_tokens.*
-)
-SELECT * FROM updated;
+-- name: InsertRefreshToken :one
+-- Step 1 of the self-stamp: insert with family_id = 0 as a placeholder.
+-- The Repository runs this inside a transaction with
+-- StampRefreshTokenFamily so the freshly assigned id is visible to
+-- the second statement. Splitting the work across two statements
+-- avoids the PostgreSQL data-modifying CTE snapshot limitation
+-- (a sibling CTE's UPDATE cannot see its sibling CTE's INSERT
+-- because both share one statement-level snapshot) — the previous
+-- two-CTE shape returned zero rows under real Postgres.
+INSERT INTO refresh_tokens (user_id, token_hash, family_id, expires_at)
+VALUES (@user_id, @token_hash, 0, @expires_at)
+RETURNING id;
+
+-- name: StampRefreshTokenFamily :one
+-- Step 2: set family_id to the row's own id. RETURNING gives back
+-- the full row so the caller doesn't need a second SELECT.
+UPDATE refresh_tokens
+SET family_id = @id
+WHERE id = @id
+RETURNING id, user_id, family_id, replaced_by_id, expires_at, revoked_at, created_at;
 
 -- name: GetRefreshTokenByHash :one
 SELECT id, user_id, token_hash, family_id, replaced_by_id, expires_at, revoked_at, created_at

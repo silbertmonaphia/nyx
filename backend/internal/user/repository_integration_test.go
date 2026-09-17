@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"nyx/internal/platform/api"
-	userdb "nyx/internal/user/db"
 	"nyx/test"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -112,7 +111,7 @@ func setupRefreshIntegrationPool(t *testing.T) (*pgxpool.Pool, Repository) {
 
 	t.Cleanup(func() { pool.Close() })
 
-	repo := NewRepository(userdb.New(pool))
+	repo := NewRepository(pool)
 	return pool, repo
 }
 
@@ -211,14 +210,16 @@ func TestRefreshTokensIntegration(t *testing.T) {
 		_, err = repo.RotateRefreshToken(ctx, first.ID, u.ID, []byte("hash-d"), first.FamilyID, expires)
 		require.NoError(t, err)
 
-		// Revoke the entire family — both rows go from revoked_at IS
-		// NULL to revoked_at NOT NULL.
+		// Revoke the entire family. After the rotation the OLD row
+		// is already revoked by the RotateRefreshToken CTE, so only
+		// the NEW row remains with revoked_at IS NULL. The
+		// family-level revoke therefore flips one row.
 		affected, err := repo.RevokeRefreshTokenFamily(ctx, first.FamilyID)
 		require.NoError(t, err)
-		assert.Equal(t, int64(2), affected, "expected both rows to be revoked")
+		assert.Equal(t, int64(1), affected, "expected only the new row to need a family revoke (the old row was revoked by rotation)")
 
-		// Second call should be a no-op (both already revoked) — pin
-		// the rows-affected = 0 invariant.
+		// Second call should be a no-op (the new row is now also
+		// revoked) — pin the rows-affected = 0 invariant.
 		affected, err = repo.RevokeRefreshTokenFamily(ctx, first.FamilyID)
 		require.NoError(t, err)
 		assert.Equal(t, int64(0), affected)

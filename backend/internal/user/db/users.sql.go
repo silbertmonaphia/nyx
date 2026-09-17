@@ -31,61 +31,6 @@ func (q *Queries) CountActiveRefreshTokensByUser(ctx context.Context, userID int
 	return column_1, err
 }
 
-const createRefreshToken = `-- name: CreateRefreshToken :one
-WITH inserted AS (
-    INSERT INTO refresh_tokens (user_id, token_hash, family_id, expires_at)
-    VALUES ($1, $2, 0, $3)
-    RETURNING id
-),
-updated AS (
-    UPDATE refresh_tokens
-    SET family_id = inserted.id
-    FROM inserted
-    WHERE refresh_tokens.id = inserted.id
-    RETURNING refresh_tokens.id, refresh_tokens.user_id, refresh_tokens.token_hash, refresh_tokens.family_id, refresh_tokens.replaced_by_id, refresh_tokens.expires_at, refresh_tokens.revoked_at, refresh_tokens.created_at
-)
-SELECT id, user_id, token_hash, family_id, replaced_by_id, expires_at, revoked_at, created_at FROM updated
-`
-
-type CreateRefreshTokenParams struct {
-	UserID    int32
-	TokenHash []byte
-	ExpiresAt pgtype.Timestamptz
-}
-
-type CreateRefreshTokenRow struct {
-	ID           int64
-	UserID       int32
-	TokenHash    []byte
-	FamilyID     int64
-	ReplacedByID pgtype.Int8
-	ExpiresAt    pgtype.Timestamptz
-	RevokedAt    pgtype.Timestamptz
-	CreatedAt    pgtype.Timestamptz
-}
-
-// Atomic self-stamping: insert with family_id=0 placeholder, then
-// update family_id to the inserted row's id, then SELECT out the
-// updated row. The two-CTE shape (rather than UPDATE … RETURNING
-// directly off the inserted CTE) avoids a same-table update snapshot
-// issue that left the outer RETURNING with zero rows under real
-// Postgres — the unit tests passed because they stubbed the query.
-func (q *Queries) CreateRefreshToken(ctx context.Context, arg CreateRefreshTokenParams) (CreateRefreshTokenRow, error) {
-	row := q.db.QueryRow(ctx, createRefreshToken, arg.UserID, arg.TokenHash, arg.ExpiresAt)
-	var i CreateRefreshTokenRow
-	err := row.Scan(
-		&i.ID,
-		&i.UserID,
-		&i.TokenHash,
-		&i.FamilyID,
-		&i.ReplacedByID,
-		&i.ExpiresAt,
-		&i.RevokedAt,
-		&i.CreatedAt,
-	)
-	return i, err
-}
-
 const getRefreshTokenByHash = `-- name: GetRefreshTokenByHash :one
 SELECT id, user_id, token_hash, family_id, replaced_by_id, expires_at, revoked_at, created_at
 FROM refresh_tokens
@@ -146,6 +91,33 @@ func (q *Queries) GetUserByUsername(ctx context.Context, username string) (User,
 		&i.DeletedAt,
 	)
 	return i, err
+}
+
+const insertRefreshToken = `-- name: InsertRefreshToken :one
+INSERT INTO refresh_tokens (user_id, token_hash, family_id, expires_at)
+VALUES ($1, $2, 0, $3)
+RETURNING id
+`
+
+type InsertRefreshTokenParams struct {
+	UserID    int32
+	TokenHash []byte
+	ExpiresAt pgtype.Timestamptz
+}
+
+// Step 1 of the self-stamp: insert with family_id = 0 as a placeholder.
+// The Repository runs this inside a transaction with
+// StampRefreshTokenFamily so the freshly assigned id is visible to
+// the second statement. Splitting the work across two statements
+// avoids the PostgreSQL data-modifying CTE snapshot limitation
+// (a sibling CTE's UPDATE cannot see its sibling CTE's INSERT
+// because both share one statement-level snapshot) — the previous
+// two-CTE shape returned zero rows under real Postgres.
+func (q *Queries) InsertRefreshToken(ctx context.Context, arg InsertRefreshTokenParams) (int64, error) {
+	row := q.db.QueryRow(ctx, insertRefreshToken, arg.UserID, arg.TokenHash, arg.ExpiresAt)
+	var id int64
+	err := row.Scan(&id)
+	return id, err
 }
 
 const insertUser = `-- name: InsertUser :one
@@ -319,6 +291,40 @@ func (q *Queries) RotateRefreshToken(ctx context.Context, arg RotateRefreshToken
 		&i.ID,
 		&i.UserID,
 		&i.TokenHash,
+		&i.FamilyID,
+		&i.ReplacedByID,
+		&i.ExpiresAt,
+		&i.RevokedAt,
+		&i.CreatedAt,
+	)
+	return i, err
+}
+
+const stampRefreshTokenFamily = `-- name: StampRefreshTokenFamily :one
+UPDATE refresh_tokens
+SET family_id = $1
+WHERE id = $1
+RETURNING id, user_id, family_id, replaced_by_id, expires_at, revoked_at, created_at
+`
+
+type StampRefreshTokenFamilyRow struct {
+	ID           int64
+	UserID       int32
+	FamilyID     int64
+	ReplacedByID pgtype.Int8
+	ExpiresAt    pgtype.Timestamptz
+	RevokedAt    pgtype.Timestamptz
+	CreatedAt    pgtype.Timestamptz
+}
+
+// Step 2: set family_id to the row's own id. RETURNING gives back
+// the full row so the caller doesn't need a second SELECT.
+func (q *Queries) StampRefreshTokenFamily(ctx context.Context, id int64) (StampRefreshTokenFamilyRow, error) {
+	row := q.db.QueryRow(ctx, stampRefreshTokenFamily, id)
+	var i StampRefreshTokenFamilyRow
+	err := row.Scan(
+		&i.ID,
+		&i.UserID,
 		&i.FamilyID,
 		&i.ReplacedByID,
 		&i.ExpiresAt,

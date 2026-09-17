@@ -21,7 +21,6 @@ import (
 	"nyx/internal/platform/database"
 	"nyx/internal/platform/observability"
 	"nyx/internal/user"
-	userdb "nyx/internal/user/db"
 
 	"github.com/danielgtaylor/huma/v2/adapters/humachi"
 	"github.com/go-chi/chi/v5"
@@ -127,7 +126,7 @@ func main() {
 	// Initialize User domain. accessTTL / refreshTTL come from viper
 	// (JWT_ACCESS_TTL / JWT_REFRESH_TTL); config.Load has already
 	// validated them as positive durations and refresh > access.
-	userRepo := user.NewRepository(userdb.New(db))
+	userRepo := user.NewRepository(db)
 	userService := user.NewService(userRepo, tokens, accessTTL, refreshTTL, tracing.Provider.Tracer("nyx.user"))
 
 	// Background refresh-token cleanup. The goroutine sweeps for
