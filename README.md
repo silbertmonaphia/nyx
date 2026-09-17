@@ -89,8 +89,12 @@ nyx/
 ## Quick Start (Docker Compose)
 
 ```bash
-# 1. Configure env
-cp .env.example .env
+# 1. Configure env. Three files, one per layer — infra at the root,
+#    backend under backend/, frontend under frontend/. Each ships an
+#    `.env.example` to copy from.
+cp .env.example             .env              # infra: POSTGRES_*, HUGGING_FACE_HUB_TOKEN, VLLM_*
+cp backend/.env.example     backend/.env     # backend: JWT_SECRET, DB_URL, CORS_ALLOWED_ORIGINS, REDIS_*, OTEL_*, LLM_*
+cp frontend/.env.example    frontend/.env    # frontend: VITE_API_URL, VITE_OTEL_*, VITE_SENTRY_DSN
 
 # 2. Build the backend binary locally (Alpine images need a static binary)
 (cd backend && CGO_ENABLED=0 go build -o main ./cmd/api)
@@ -134,7 +138,7 @@ make down   # stop the infra containers
 ```bash
 cd backend
 go run ./cmd/api
-# Requires DB_URL, JWT_SECRET in env (or .env at repo root)
+# Requires DB_URL, JWT_SECRET in env (or backend/.env)
 # Add REDIS_ENABLED=true REDIS_URL=redis://localhost:6379 CACHE_TTL=5m for cache
 ```
 
@@ -157,7 +161,7 @@ To turn it on in dev:
 # 1. Start Jaeger (already part of `docker compose up`)
 sudo docker compose up jaeger -d
 
-# 2. Backend — env in repo-root .env or shell
+# 2. Backend — env in backend/.env or shell
 export OTEL_ENABLED=true
 export OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318
 cd backend && go run ./cmd/api
@@ -213,7 +217,7 @@ What ships:
 - **Hardening** — `cap_drop: [ALL]`, `no-new-privileges`, `tmpfs /tmp` (mirrors every other service per `SECURITY.md` M12).
 - **Network** — loopback-only host port (`:8000` → `127.0.0.1:8000`) for dev debugging; the backend reaches vLLM on the compose network via the `vllm` DNS alias.
 
-Tuning knobs (all `compose .env` overrides):
+Tuning knobs (all `backend/.env` overrides — the vLLM service itself reads `VLLM_*` from the root `.env`):
 
 | Variable | Default | Purpose |
 |---|---|---|

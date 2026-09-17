@@ -4,7 +4,7 @@ Browser-side error, performance, and session-replay sink for the Nyx SPA. Wired 
 
 ## Config
 
-Set the four env vars in `.env` (see `.env.example`):
+Set the four env vars in `frontend/.env` (see `frontend/.env.example`):
 
 - `VITE_SENTRY_DSN` — public DSN from the Sentry project (Settings → Client Keys). Inlined into the bundle at build time.
 - `SENTRY_AUTH_TOKEN` — build-time only; consumed by `@sentry/vite-plugin` to upload sourcemaps. Never shipped to the bundle.
