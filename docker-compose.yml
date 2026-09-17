@@ -99,52 +99,30 @@ services:
     profiles: ["app"]
     build:
       context: ./backend
+      # GOPROXY is only relevant at build time. It lives in
+      # `backend/.env.example` for the local dev workflow; compose
+      # doesn't read that file for build-arg substitution, so the
+      # default below is what always lands in the Dockerfile ARG.
+      # Operators needing a custom proxy: set GOPROXY in the shell
+      # before `docker compose build`, or override here directly.
       args:
         - GOPROXY=${GOPROXY:-https://goproxy.cn,direct}
     mem_limit: 512m
     cpus: "1.00"
     ports:
       - "8080:8080"
-    # env_file makes .env loading independent of the shell's CWD —
-    # compose always reads the file next to this compose file.
+    # Runtime config is fully sourced from `backend/.env` — every
+    # var listed in `backend/.env.example` (JWT_SECRET, DB_URL,
+    # CORS_ALLOWED_ORIGINS, REDIS_*, OTEL_*, LLM_*, etc.) flows
+    # through here. No `environment:` block on purpose: compose's
+    # `environment:` takes precedence over `env_file`, so leaving
+    # any literal here would lock operators out of overriding that
+    # var via `backend/.env`. Compose-specific defaults that differ
+    # from viper's defaults (e.g. REDIS_ENABLED, OTEL_ENABLED,
+    # LLM_PROVIDER, LLM_BASE_URL) are uncommented in
+    # `backend/.env.example`; copy + edit to opt in.
     env_file:
-      - .env
-    environment:
-      - DB_URL=${DB_URL}
-      - REDIS_URL=${REDIS_URL:-redis://redis:6379}
-      - REDIS_ENABLED=${REDIS_ENABLED:-true}
-      - CACHE_TTL=${CACHE_TTL:-5m}
-      - JWT_SECRET=${JWT_SECRET}
-      # OpenTelemetry — on by default in compose so spans flow into
-      # the local Jaeger UI without extra env-var setup. Override
-      # OTEL_ENABLED=false in .env to disable.
-      - OTEL_ENABLED=${OTEL_ENABLED:-true}
-      - OTEL_EXPORTER_OTLP_ENDPOINT=http://jaeger:4318
-      - OTEL_SERVICE_NAME=${OTEL_SERVICE_NAME:-nyx-backend}
-      # Cross-origin XHR — the SPA now hits the backend directly via
-      # VITE_API_URL=http://localhost:8080/api. The browser opens
-      # a CORS preflight; the backend's CORS_ALLOWED_ORIGINS allowlist
-      # gates cross-origin XHR. Bearer is a custom header, so the
-      # preflight carries Access-Control-Request-Headers:
-      # Authorization, and the allowlist closes the CSRF surface
-      # automatically.
-      - CORS_ALLOWED_ORIGINS=${CORS_ALLOWED_ORIGINS:-http://localhost:5173,http://localhost:8080}
-      # Self-hosted LLM (optional). Off by default — `docker compose up`
-      # boots the existing stack untouched. Operators opt in via
-      # `--profile vllm` (see the `vllm` service below). When the
-      # profile is active, LLM_BASE_URL points at the vLLM container
-      # on the default bridge network, LLM_ALLOW_PRIVATE_URL=true is
-      # required (the container hostname resolves to a private IP),
-      # and LLM_PROVIDER=vllm selects the new raw-HTTP client
-      # implemented in backend/internal/llm/vllm/. LLM_API_KEY is
-      # intentionally empty — vLLM started without --api-key accepts
-      # any Authorization header, including none.
-      - LLM_ENABLED=${LLM_ENABLED:-false}
-      - LLM_PROVIDER=${LLM_PROVIDER:-vllm}
-      - LLM_BASE_URL=${LLM_BASE_URL:-http://vllm:8000/v1}
-      - LLM_API_KEY=${LLM_API_KEY:-}
-      - LLM_MODEL=${LLM_MODEL:-Qwen/Qwen3-4B-Instruct-2507}
-      - LLM_ALLOW_PRIVATE_URL=${LLM_ALLOW_PRIVATE_URL:-true}
+      - backend/.env
     depends_on:
       db:
         condition: service_healthy
@@ -204,11 +182,18 @@ services:
         - SENTRY_CSP_ORIGIN=${SENTRY_CSP_ORIGIN:-https://*.ingest.sentry.io https://*.sentry.io}
     mem_limit: 128m
     cpus: "0.25"
+    # Runtime env comes from `frontend/.env`. Compose's build-arg
+    # substitution above doesn't read this file, so VITE_* baked
+    # into the SPA bundle is controlled by shell env at build time
+    # (12-factor); see `frontend/.env.example` for the mapping.
+    env_file:
+      - frontend/.env
+    # JAEGER_HOST is the only compose-specific runtime literal —
+    # the in-network hostname for the Jaeger container. Don't move
+    # it into `frontend/.env.example` because `jaeger` only resolves
+    # on the compose bridge; local dev runs against localhost.
     environment:
-      - VITE_OTEL_ENABLED=${VITE_OTEL_ENABLED:-true}
-      - VITE_OTEL_SERVICE_NAME=${VITE_OTEL_SERVICE_NAME:-nyx-frontend}
       - JAEGER_HOST=jaeger
-      - API_ORIGIN=${API_ORIGIN:-http://localhost:8080}
     # nginx runs as non-root (USER nginx in Dockerfile) so it can't bind
     # privileged port 80. The nginx.conf inside the container listens on 8080.
     ports:
