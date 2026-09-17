@@ -85,14 +85,38 @@ if needs_backend; then
     exit 1
   fi
 
-  # The backend's viper config reads .env relative to its CWD
-  # (`backend/.env`). When `go run` is invoked from `backend/`, that
-  # file doesn't exist — viper silently falls back to the default
-  # JWT_SECRET placeholder, which the auth package rejects at
-  # startup. `set -a` + source dumps every KEY=value from
-  # `backend/.env` into the spawned process's environment so viper
-  # picks them up regardless of CWD. Quoted values are handled by
-  # bash's normal parsing.
+  # Three .env files live in this repo; only `backend/.env` is
+  # sourced here. Why each of the other two is NOT:
+  #
+  #   - `backend/.env` (SOURCED): viper reads .env relative to the
+  #     backend's CWD. `go run` is invoked from `backend/`, so
+  #     viper would look for `backend/.env` — the file exists,
+  #     but viper only reads it if `viper.SetConfigFile` is
+  #     pointed at it explicitly (it is, in config.go) AND the
+  #     process's effective CWD matches. Sourcing dumps every
+  #     KEY=value into the spawned process's env, so viper's
+  #     `BindEnv` + `AutomaticEnv` pick them up regardless of
+  #     how the binary is invoked (cd backend || exec from
+  #     elsewhere). Without this, viper silently falls back to
+  #     the placeholder JWT_SECRET that auth.NewTokenService
+  #     then rejects — the backend crashes ~200 ms after spawn.
+  #
+  #   - `frontend/.env` (NOT SOURCED): Vite reads .env natively
+  #     by its own convention — `frontend/.env` flows straight
+  #     into `import.meta.env.VITE_*` at dev time. Re-sourcing
+  #     it in bash would be redundant AND would inject bare
+  #     (un-prefixed) vars into the npm process's env that
+  #     aren't supposed to be there.
+  #
+  #   - root `.env` (NOT SOURCED): consumed only by `docker
+  #     compose` for the `db` / `vllm` services. Neither the
+  #     backend nor the frontend process reads it; propagating
+  #     it would leak infra tokens (HUGGING_FACE_HUB_TOKEN)
+  #     into the backend's process env for no reason.
+  #
+  # `set -a` + `.` dumps every KEY=value into the spawned
+  # process's environment; bash's normal parsing handles quoted
+  # values.
   set -a
   # shellcheck disable=SC1091
   . ./backend/.env
