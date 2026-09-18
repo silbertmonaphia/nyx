@@ -137,9 +137,22 @@ function App() {
       <PageMeta title={pageTitle} description={pageDescription} />
       <ToastContainer />
       <nav className="sticky top-0 z-50 w-full border-b bg-black">
-        <div className="container mx-auto px-4 h-16 flex items-center justify-between">
-          <div className="text-2xl font-bold bg-gradient-to-r from-primary to-accent bg-clip-text text-transparent">Nyx</div>
-          <div className="flex items-center gap-4">
+        <div className="w-full px-6 h-16 grid grid-cols-[1fr_auto_1fr] items-center gap-4">
+          <div className="text-2xl font-bold bg-gradient-to-r from-primary to-accent bg-clip-text text-transparent justify-self-start">
+            Nyx
+          </div>
+          <div className="relative w-full max-w-3xl">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+            <Input
+              type="text"
+              placeholder="Search for feeds..."
+              value={searchTerm}
+              maxLength={200}
+              onChange={(e) => setSearchTerm(e.target.value)}
+              className="pl-10 h-10"
+            />
+          </div>
+          <div className="flex items-center gap-4 justify-self-end">
             {isAuthenticated ? (
               <>
                 <Button
@@ -170,17 +183,6 @@ function App() {
 
       <section id="center" className="container mx-auto px-4 py-8">
         <div className="w-full max-w-2xl mx-auto flex flex-col md:flex-row gap-4 items-center mt-8 mb-8">
-          <div className="relative w-full">
-            <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-            <Input
-              type="text"
-              placeholder="Search for feeds..."
-              value={searchTerm}
-              maxLength={200}
-              onChange={(e) => setSearchTerm(e.target.value)}
-              className="pl-10 h-12 text-lg rounded-xl"
-            />
-          </div>
           {isAuthenticated && (
             <Button
               size="lg"
