@@ -27,6 +27,29 @@ describe('FeedList', () => {
     expect(screen.getByText('Feed 2')).toBeInTheDocument();
   });
 
+  it('renders created and updated timestamps for each feed', () => {
+    render(
+      <FeedList
+        feeds={feeds}
+        loading={false}
+        searchTerm=""
+        hasMore={false}
+        isLoadingMore={false}
+        onLoadMore={vi.fn()}
+        onEdit={vi.fn()}
+        onDelete={vi.fn()}
+      />,
+    );
+    const createdLabels = screen.getAllByText(/^Created /);
+    const updatedLabels = screen.getAllByText(/^Updated /);
+    expect(createdLabels).toHaveLength(2);
+    expect(updatedLabels).toHaveLength(2);
+    // <time> elements expose dateTime so screen readers see ISO.
+    expect(createdLabels[0].tagName.toLowerCase()).toBe('time');
+    expect(createdLabels[0].getAttribute('datetime')).toBe('2024-01-01T00:00:00Z');
+    expect(updatedLabels[0].getAttribute('datetime')).toBe('2024-01-01T00:00:00Z');
+  });
+
   it('renders skeleton placeholders while loading', () => {
     render(
       <FeedList

@@ -3,6 +3,7 @@ import { Feed } from '../types/feed';
 import { Card, CardHeader, CardTitle, CardContent } from '~/components/ui/Card';
 import { Button } from '~/components/ui/Button';
 import { Pencil, Trash2 } from 'lucide-react';
+import { formatRelativeTime } from '~/utils/date';
 
 interface FeedItemProps {
   feed: Feed;
@@ -20,25 +21,50 @@ export const FeedItem: React.FC<FeedItemProps> = ({ feed, onEdit, onDelete }) =>
             ★ {feed.rating}
           </div>
         </div>
-        <div className="flex gap-1">
-          <Button
-            variant="ghost"
-            size="icon"
-            onClick={() => onEdit(feed)}
-            title="Edit"
-            className="h-8 w-8 text-muted-foreground hover:text-primary"
-          >
-            <Pencil className="h-4 w-4" />
-          </Button>
-          <Button
-            variant="ghost"
-            size="icon"
-            onClick={() => onDelete(feed.id)}
-            title="Delete"
-            className="h-8 w-8 text-muted-foreground hover:text-destructive"
-          >
-            <Trash2 className="h-4 w-4" />
-          </Button>
+        <div className="flex flex-col items-end gap-2">
+          {(feed.created_at || feed.updated_at) && (
+            <div
+              className="flex flex-col items-end text-xs text-muted-foreground leading-tight"
+              data-testid="feed-timestamps"
+            >
+              {feed.created_at && (
+                <time
+                  dateTime={feed.created_at}
+                  title={new Date(feed.created_at).toLocaleString()}
+                >
+                  Created {formatRelativeTime(feed.created_at)}
+                </time>
+              )}
+              {feed.updated_at && (
+                <time
+                  dateTime={feed.updated_at}
+                  title={new Date(feed.updated_at).toLocaleString()}
+                >
+                  Updated {formatRelativeTime(feed.updated_at)}
+                </time>
+              )}
+            </div>
+          )}
+          <div className="flex gap-1">
+            <Button
+              variant="ghost"
+              size="icon"
+              onClick={() => onEdit(feed)}
+              title="Edit"
+              className="h-8 w-8 text-muted-foreground hover:text-primary"
+            >
+              <Pencil className="h-4 w-4" />
+            </Button>
+            <Button
+              variant="ghost"
+              size="icon"
+              onClick={() => onDelete(feed.id)}
+              title="Delete"
+              className="h-8 w-8 text-muted-foreground hover:text-destructive"
+            >
+              <Trash2 className="h-4 w-4" />
+            </Button>
+          </div>
         </div>
       </CardHeader>
       <CardContent>
