@@ -144,6 +144,10 @@ describe('useAuthReconciliation', () => {
     // best-effort; the next user action will surface any real
     // auth failure via the normal response interceptor path.
     useAuthStore.getState().setAuth({ user: baseUser });
+    // Probe only fires when the tokenStore has an access token;
+    // mirror the production post-login state where setAuth is
+    // paired with a tokenStore.setTokens call.
+    tokenStore.setTokens('access.token', 'refresh.token');
 
     getSpy.mockRejectedValueOnce(new Error('Network Error'));
 
@@ -161,6 +165,9 @@ describe('useAuthReconciliation', () => {
     // Transient server failure: the tokens may still be
     // valid; logging the user out would be over-reaction.
     useAuthStore.getState().setAuth({ user: baseUser });
+    // Probe only fires when the tokenStore has an access token;
+    // mirror the production post-login state.
+    tokenStore.setTokens('access.token', 'refresh.token');
 
     const err = Object.assign(new Error('Server Error'), {
       response: { status: 503 },

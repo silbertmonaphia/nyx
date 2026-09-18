@@ -1,5 +1,6 @@
 import axios from "axios";
 import type { AxiosError, InternalAxiosRequestConfig } from "axios";
+import { context } from "@opentelemetry/api";
 import { injectTraceparent } from "./telemetry";
 import { useUiStore } from "../store/uiStore";
 import { useAuthStore } from "../store/authStore";
@@ -30,9 +31,29 @@ const api = axios.create({
 // 401 single-flight logic).
 //
 // sessionStorage is consulted on store init so a page reload within
-// the same tab keeps the session — per-tab, not shared across tabs.
-// Multi-tab sharing is a known limitation documented in FUTURE.md.
+// the same tab keeps the session. Cross-tab sync is handled via
+// BroadcastChannel — see FUTURE.md §"Multi-tab concurrent refresh
+// race" for the broader rationale (a stale sessionStorage in Tab B
+// would otherwise trigger family-revoke when Tab A's refresh
+// rotated the refresh token).
 const SESSION_STORAGE_KEY = "nyx-token-store";
+
+// BroadcastChannel name used for cross-tab token sync. Same-origin
+// only, transient (messages exist only while both tabs are alive)
+// — strictly safer than localStorage for token transport.
+const TOKEN_CHANNEL_NAME = "nyx-tokens";
+
+// How long a freshly-opened tab waits for a sync response from a
+// live peer before falling through to its own sessionStorage state.
+// Short enough to be invisible to users, long enough to win the
+// race against the first outbound auth request.
+const BOOT_TIMEOUT_MS = 200;
+
+interface SyncMessage {
+  type: "sync" | "request" | "clear";
+  at?: string;
+  rt?: string;
+}
 
 interface PersistedTokens {
   accessToken: string;
@@ -85,6 +106,54 @@ function clearSessionTokens(): void {
 let accessToken: string | null = null;
 let refreshToken: string | null = null;
 
+// Cross-tab token sync via BroadcastChannel. The channel is created
+// lazily on first use so tests / SSR / environments without
+// BroadcastChannel don't pay the constructor cost. Channel messages
+// are transient (delivered only while both tabs are listening) and
+// same-origin only — strictly safer than localStorage for token
+// transport; equivalent XSS exposure to sessionStorage.
+let tokenChannel: BroadcastChannel | null = null;
+function getChannel(): BroadcastChannel | null {
+  if (typeof BroadcastChannel === "undefined") return null;
+  if (!tokenChannel) {
+    tokenChannel = new BroadcastChannel(TOKEN_CHANNEL_NAME);
+    tokenChannel.addEventListener("message", onChannelMessage);
+  }
+  return tokenChannel;
+}
+
+// Boot handshake: a freshly-opened tab whose sessionStorage is
+// empty posts `{type:'request'}` and waits up to BOOT_TIMEOUT_MS
+// for a live peer to respond with `{type:'sync', at, rt}`. The
+// promise resolves early on any of:
+//   - the local sessionStorage already had tokens (no handshake
+//     needed; we are Tab A on F5)
+//   - a sync response arrived (we are Tab B and Tab A responded)
+//   - the timeout fires (no live peer; we are alone)
+// When the promise is resolved, every awaiter proceeds — typically
+// the reconciliation probe and the wrapped-api interceptor. Both
+// run before any auth-required request is sent, so by the time the
+// first request fires we've either adopted fresh tokens or
+// confirmed there are none.
+const RESOLVED: Promise<void> = Promise.resolve();
+let bootPromise: Promise<void> = RESOLVED;
+let resolveBoot: () => void = () => {};
+
+function armBootTimeout(): void {
+  if (bootPromise !== RESOLVED) return; // already armed
+  bootPromise = new Promise<void>((resolve) => {
+    resolveBoot = resolve;
+    setTimeout(resolve, BOOT_TIMEOUT_MS);
+  });
+}
+
+function settleBoot(): void {
+  if (bootPromise === RESOLVED) return;
+  resolveBoot();
+  bootPromise = RESOLVED;
+  resolveBoot = () => {};
+}
+
 export const tokenStore = {
   getAccessToken(): string | null {
     return accessToken;
@@ -92,27 +161,107 @@ export const tokenStore = {
   getRefreshToken(): string | null {
     return refreshToken;
   },
+  // Resolves once the cross-tab handshake has settled. Callers
+  // (reconciliation hook, request interceptor) await this before
+  // firing any auth-required request, so they see either the
+  // adopted peer tokens or a confirmed timeout.
+  whenReady(): Promise<void> {
+    return bootPromise;
+  },
   setTokens(at: string, rt: string): void {
     accessToken = at;
     refreshToken = rt;
     writeSessionTokens(at, rt);
+    // New tokens in this tab → broadcast to peers so a stale Tab B
+    // adopts them before its next refresh attempt. Settles the boot
+    // handshake immediately too (we have tokens; no need to wait).
+    settleBoot();
+    getChannel()?.postMessage({ type: "sync", at, rt } satisfies SyncMessage);
   },
   clear(): void {
     accessToken = null;
     refreshToken = null;
     clearSessionTokens();
+    // Tell peers to drop their copies too — closes the window
+    // where Tab B continues with stale tokens after Tab A logged
+    // out. Settle any in-flight boot handshake as well.
+    settleBoot();
+    getChannel()?.postMessage({ type: "clear" } satisfies SyncMessage);
   },
 };
+
+function onChannelMessage(ev: MessageEvent<unknown>): void {
+  const msg = ev.data as Partial<SyncMessage> | null;
+  if (!msg || typeof msg !== "object") return;
+  if (msg.type === "sync") {
+    if (
+      typeof msg.at === "string" &&
+      typeof msg.rt === "string" &&
+      msg.at !== "" &&
+      msg.rt !== ""
+    ) {
+      // Only adopt if we don't already have tokens — a Tab B that
+      // just hydrated from sessionStorage may have a copy the
+      // originating tab considers stale; the freshest broadcast
+      // wins, but if our local state is already populated we trust
+      // it (avoids a re-hydration race where a slow broadcast
+      // overwrites fresh tokens).
+      if (!accessToken) {
+        accessToken = msg.at;
+        refreshToken = msg.rt;
+        writeSessionTokens(msg.at, msg.rt);
+      }
+      settleBoot();
+    }
+  } else if (msg.type === "request") {
+    // A peer tab is asking whether anyone has live tokens. If we
+    // do, reply with our current pair. The reply is the source of
+    // the cross-tab sync — without it, the asking tab would
+    // time out and fall through to its empty sessionStorage.
+    if (accessToken && refreshToken) {
+      getChannel()?.postMessage({
+        type: "sync",
+        at: accessToken,
+        rt: refreshToken,
+      } satisfies SyncMessage);
+    }
+  } else if (msg.type === "clear") {
+    // A peer logged out. Drop our copies too so a refresh attempt
+    // on the now-orphaned refresh family doesn't trigger
+    // family-revoke (which would surface as a confusing 401 on the
+    // peer's next action).
+    accessToken = null;
+    refreshToken = null;
+    clearSessionTokens();
+    settleBoot();
+  }
+}
 
 // Hydrate from sessionStorage on module load so a page reload within
 // the same tab keeps the session. Subsequent setTokens / clear calls
 // keep the in-memory and sessionStorage views in lockstep.
+//
+// If sessionStorage had nothing (cold tab opened with no peer or no
+// prior session), arm the boot handshake: post a `request` and wait
+// up to BOOT_TIMEOUT_MS for a live peer to respond with its tokens.
 (function hydrate() {
   const persisted = readSessionTokens();
+  const ch = getChannel();
+  if (ch) ch.addEventListener("message", onChannelMessage);
   if (persisted) {
     accessToken = persisted.accessToken;
     refreshToken = persisted.refreshToken;
+    // No handshake needed; boot stays RESOLVED.
+    return;
   }
+  if (!ch) {
+    // No BroadcastChannel support — nothing to wait for. Boot
+    // stays RESOLVED so the first request fires immediately and
+    // surfaces the real (logged-out) state via the normal 401 path.
+    return;
+  }
+  armBootTimeout();
+  ch.postMessage({ type: "request" } satisfies SyncMessage);
 })();
 
 // Single-flight refresh: while a refresh is in flight, every other
@@ -189,19 +338,37 @@ export async function refreshTokensAndReplay(): Promise<boolean> {
  * login, refresh, health, get-feeds — work anonymously). The
  * traceparent stamping runs on every request including the 401
  * retry path.
+ *
+ * Awaits tokenStore.whenReady() so a freshly-opened tab has had a
+ * chance to adopt tokens from a live peer via BroadcastChannel
+ * before its first request fires. After boot resolves, whenReady
+ * returns the cached RESOLVED promise — subsequent requests pay
+ * only a microtask.
+ *
+ * Captures the active OTel context before the await and re-enters
+ * it for the synchronous stamp step: OTel's context propagation
+ * is synchronous, so the await would otherwise drop us out of the
+ * active span and `injectTraceparent` would no-op (the test for
+ * the traceparent shape would also flake). The captured-context
+ * pattern is the canonical way to bridge an `await` boundary
+ * without losing the parent span.
  */
 api.interceptors.request.use(
-  (config) => {
-    config.headers = config.headers ?? {};
-    injectTraceparent(config.headers);
-    const at = tokenStore.getAccessToken();
-    if (at) {
-      // axios stores headers on an AxiosHeaders instance; set() works
-      // for both the instance form and the plain-object form.
-      (config.headers as Record<string, string>).Authorization =
-        `Bearer ${at}`;
-    }
-    return config;
+  async (config) => {
+    const activeCtx = context.active();
+    await tokenStore.whenReady();
+    return context.with(activeCtx, () => {
+      config.headers = config.headers ?? {};
+      injectTraceparent(config.headers);
+      const at = tokenStore.getAccessToken();
+      if (at) {
+        // axios stores headers on an AxiosHeaders instance; set() works
+        // for both the instance form and the plain-object form.
+        (config.headers as Record<string, string>).Authorization =
+          `Bearer ${at}`;
+      }
+      return config;
+    });
   },
   (error) => Promise.reject(error),
 );

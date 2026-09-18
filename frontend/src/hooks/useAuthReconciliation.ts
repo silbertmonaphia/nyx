@@ -47,25 +47,40 @@ export function useAuthReconciliation(): void {
     const ctrl = new AbortController();
     const apiBase = import.meta.env.VITE_API_URL || 'http://localhost:8080/api';
 
-    void axios
-      .get<User>(`${apiBase}/me`, {
-        withCredentials: false,
-        signal: ctrl.signal,
-        // Dedicated axios flag — keeps the request out of the
-        // wrapped instance's response interceptor chain so a 401
-        // here doesn't trigger a refresh attempt and toast.
-        // Mirrors the `loginAxios` pattern used by `logout()`.
-        headers: tokenStore.getAccessToken()
-          ? { Authorization: `Bearer ${tokenStore.getAccessToken()}` }
-          : undefined,
-      })
-      .then((resp) => {
+    void (async () => {
+      // Wait for any in-flight cross-tab token handshake so we
+      // probe /api/me with tokens a peer tab just adopted, not the
+      // empty sessionStorage copy of a freshly-opened Tab B.
+      await tokenStore.whenReady();
+      if (cancelled) return;
+
+      // After the handshake settles, if we still have no access
+      // token there's no live session to validate against — every
+      // probe would 401 and the refresh path would fail (no rt).
+      // Clear the persisted ghost user so the UI matches reality
+      // instead of flashing logged-in then forcing a logout.
+      if (!tokenStore.getAccessToken()) {
+        useAuthStore.getState().logout();
+        return;
+      }
+
+      try {
+        const resp = await axios.get<User>(`${apiBase}/me`, {
+          withCredentials: false,
+          signal: ctrl.signal,
+          // Dedicated axios flag — keeps the request out of the
+          // wrapped instance's response interceptor chain so a 401
+          // here doesn't trigger a refresh attempt and toast.
+          // Mirrors the `loginAxios` pattern used by `logout()`.
+          headers: {
+            Authorization: `Bearer ${tokenStore.getAccessToken()}`,
+          },
+        });
         if (cancelled) return;
         // setAuth accepts the same shape as login/register, so the
         // server-truth user lands in the store unchanged.
         useAuthStore.getState().setAuth({ user: resp.data });
-      })
-      .catch(async (err: unknown) => {
+      } catch (err: unknown) {
         if (cancelled) return;
         // Don't treat aborted requests (StrictMode double-invoke,
         // unmount) as a logout signal.
@@ -110,7 +125,8 @@ export function useAuthReconciliation(): void {
           // technically valid. Log out.
           useAuthStore.getState().logout();
         }
-      });
+      }
+    })();
 
     return () => {
       cancelled = true;

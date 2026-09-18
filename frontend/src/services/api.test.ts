@@ -590,12 +590,15 @@ describe('api request interceptor (traceparent)', () => {
     spy.mockRestore();
   });
 
-  it('calls injectTraceparent on each request', () => {
+  it('calls injectTraceparent on each request', async () => {
     const config: { headers: Record<string, unknown> } = {
       headers: {},
     };
 
-    requestFulfilled(config as never);
+    // Interceptor awaits tokenStore.whenReady() before stamping
+    // headers — wait for that microtask chain to drain so the spy
+    // assertion runs after the body executes.
+    await requestFulfilled(config as never);
 
     expect(spy).toHaveBeenCalledTimes(1);
     // It receives the headers object. (Pre-cookie the path also
@@ -633,8 +636,11 @@ describe('api request interceptor (real traceparent shape)', () => {
     const config = { headers } as never;
 
     await new Promise<void>((resolve) => {
-      tr.startActiveSpan('outer', (span) => {
-        fulfilled(config);
+      tr.startActiveSpan('outer', async (span) => {
+        // Interceptor awaits tokenStore.whenReady() before
+        // stamping headers — wait for that microtask chain so
+        // span.end() runs after the header was injected.
+        await fulfilled(config);
         span.end();
         resolve();
       });
