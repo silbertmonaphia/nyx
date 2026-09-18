@@ -173,4 +173,69 @@ describe('FeedList', () => {
     expect(screen.getByRole('heading', { name: 'Edit Feed' })).toBeInTheDocument();
     expect(screen.getByPlaceholderText('Feed title')).toHaveValue('Feed 1');
   });
+
+  it('renders a fixed-height scrollable panel for the loaded state', () => {
+    render(
+      <FeedList
+        feeds={feeds}
+        loading={false}
+        searchTerm=""
+        hasMore={false}
+        isLoadingMore={false}
+        onLoadMore={vi.fn()}
+        editingFeed={null}
+        onUpdate={vi.fn()}
+        onCancelEdit={vi.fn()}
+        onEdit={vi.fn()}
+        onDelete={vi.fn()}
+      />,
+    );
+    const root = screen.getByTestId('feed-list');
+    expect(root.className).toMatch(/overflow-y-auto/);
+    expect(root.className).toMatch(/min-h-0/);
+    expect(root.className).toMatch(/flex-1/);
+  });
+
+  it('renders a fixed-height scrollable panel for the skeleton state', () => {
+    render(
+      <FeedList
+        feeds={[]}
+        loading={true}
+        searchTerm=""
+        hasMore={false}
+        isLoadingMore={false}
+        onLoadMore={vi.fn()}
+        editingFeed={null}
+        onUpdate={vi.fn()}
+        onCancelEdit={vi.fn()}
+        onEdit={vi.fn()}
+        onDelete={vi.fn()}
+      />,
+    );
+    const root = screen.getByTestId('feed-list-skeleton');
+    expect(root.className).toMatch(/overflow-y-auto/);
+    expect(root.className).toMatch(/min-h-0/);
+  });
+
+  it('renders a fixed-height scrollable panel for the empty state', () => {
+    render(
+      <FeedList
+        feeds={[]}
+        loading={false}
+        searchTerm="nope"
+        hasMore={false}
+        isLoadingMore={false}
+        onLoadMore={vi.fn()}
+        editingFeed={null}
+        onUpdate={vi.fn()}
+        onCancelEdit={vi.fn()}
+        onEdit={vi.fn()}
+        onDelete={vi.fn()}
+      />,
+    );
+    const root = screen.getByTestId('feed-list-empty');
+    expect(root.className).toMatch(/overflow-y-auto/);
+    expect(root.className).toMatch(/min-h-0/);
+    expect(screen.getByText('Feed "nope" not found')).toBeInTheDocument();
+  });
 });

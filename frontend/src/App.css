@@ -238,8 +238,6 @@
   display: flex;
   flex-direction: column;
   gap: 25px;
-  place-content: center;
-  place-items: center;
   flex-grow: 1;
 
   @media (max-width: 1024px) {

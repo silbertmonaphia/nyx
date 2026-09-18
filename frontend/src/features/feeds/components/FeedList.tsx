@@ -152,7 +152,7 @@ export const FeedList: React.FC<FeedListProps> = ({
     return (
       <div
         data-testid="feed-list-skeleton"
-        className="flex flex-col gap-4 w-full max-w-[600px] mb-8 text-left"
+        className="flex flex-col gap-4 w-full max-w-[600px] mb-8 text-left flex-1 min-h-0 overflow-y-auto"
       >
         <FeedListSkeleton />
       </div>
@@ -163,9 +163,11 @@ export const FeedList: React.FC<FeedListProps> = ({
     return (
       <div
         data-testid="feed-list-empty"
-        className="py-10 text-center text-muted-foreground rounded-lg border border-dashed border-border"
+        className="w-full max-w-[600px] flex-1 min-h-0 overflow-y-auto flex flex-col items-center justify-center"
       >
-        {searchTerm ? `Feed "${searchTerm}" not found` : 'No feeds found'}
+        <div className="w-full py-10 text-center text-muted-foreground rounded-lg border border-dashed border-border">
+          {searchTerm ? `Feed "${searchTerm}" not found` : 'No feeds found'}
+        </div>
       </div>
     );
   }
@@ -173,7 +175,7 @@ export const FeedList: React.FC<FeedListProps> = ({
   return (
     <div
       data-testid="feed-list"
-      className="flex flex-col gap-4 w-full max-w-[600px] mb-8 text-left"
+      className="flex flex-col gap-4 w-full max-w-[600px] mb-8 text-left flex-1 min-h-0 overflow-y-auto"
     >
       {feeds.map((feed) =>
         editingFeed?.id === feed.id ? (

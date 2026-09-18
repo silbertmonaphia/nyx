@@ -185,8 +185,8 @@ function App() {
         </div>
       </nav>
 
-      <section id="center" className="container mx-auto px-4 pb-8">
-        <div className="w-full max-w-2xl mx-auto flex flex-col items-center">
+      <section id="center" className="container mx-auto px-4 pb-8 flex flex-1 min-h-0 flex-col place-content-start items-stretch">
+        <div className="w-full max-w-2xl mx-auto flex flex-1 min-h-0 flex-col items-center">
           <FeedList
             feeds={feeds}
             loading={isLoading}

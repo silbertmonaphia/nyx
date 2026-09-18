@@ -2,7 +2,7 @@ import { Feed, NewFeed, PaginatedFeeds } from '../types/feed';
 import api from '~/services/api'; // Use the alias here
 import type { SortOrder } from '../store/feedUiStore';
 
-const DEFAULT_PAGE_SIZE = 20;
+const DEFAULT_PAGE_SIZE = 10;
 
 export const feedService = {
   async getFeeds(
