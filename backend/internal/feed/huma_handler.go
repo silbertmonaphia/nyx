@@ -178,7 +178,7 @@ type getFeedsInput struct {
 
 type getFeedsOutput struct{ Body FeedsPage }
 
-type createFeedInput struct{ Body Feed }
+type createFeedInput struct{ Body FeedInput }
 
 type createFeedOutput struct {
 	Status int `status:"201"`
@@ -187,7 +187,7 @@ type createFeedOutput struct {
 
 type updateFeedInput struct {
 	ID   int `path:"id" required:"true" minimum:"1"`
-	Body Feed
+	Body FeedInput
 }
 
 type updateFeedOutput struct{ Body Feed }
@@ -261,19 +261,28 @@ func (h *Handler) GetFeeds(ctx context.Context, in *getFeedsInput) (*getFeedsOut
 
 //nolint:revive // unexported-return is huma's idiomatic op pattern
 func (h *Handler) CreateFeed(ctx context.Context, in *createFeedInput) (*createFeedOutput, error) {
-	if err := h.service.CreateFeed(ctx, &in.Body); err != nil {
+	feed := &Feed{
+		Title:       in.Body.Title,
+		Description: in.Body.Description,
+		Rating:      in.Body.Rating,
+	}
+	if err := h.service.CreateFeed(ctx, feed); err != nil {
 		return nil, api.MapError(ctx, err, "Failed to create feed")
 	}
-	return &createFeedOutput{Status: http.StatusCreated, Body: in.Body}, nil
+	return &createFeedOutput{Status: http.StatusCreated, Body: *feed}, nil
 }
 
 //nolint:revive // unexported-return is huma's idiomatic op pattern
 func (h *Handler) UpdateFeed(ctx context.Context, in *updateFeedInput) (*updateFeedOutput, error) {
-	if err := h.service.UpdateFeed(ctx, in.ID, &in.Body); err != nil {
+	feed := &Feed{
+		Title:       in.Body.Title,
+		Description: in.Body.Description,
+		Rating:      in.Body.Rating,
+	}
+	if err := h.service.UpdateFeed(ctx, in.ID, feed); err != nil {
 		return nil, api.MapError(ctx, err, "Failed to update feed")
 	}
-	in.Body.ID = in.ID
-	return &updateFeedOutput{Body: in.Body}, nil
+	return &updateFeedOutput{Body: *feed}, nil
 }
 
 //nolint:revive // unexported-return is huma's idiomatic op pattern

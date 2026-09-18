@@ -23,7 +23,15 @@ export const feedService = {
   },
 
   async updateFeed(id: number, feed: Partial<Feed>): Promise<Feed> {
-    const response = await api.put(`/feeds/${id}`, feed);
+    // Strip server-controlled fields. Backend FeedInput has
+    // additionalProperties:false (huma strict-mode), so an extra
+    // id/created_at/updated_at/deleted_at in the PUT body would 400
+    // as "unexpected property" — pick only the user-editable subset.
+    const response = await api.put(`/feeds/${id}`, {
+      title: feed.title,
+      description: feed.description,
+      rating: feed.rating,
+    });
     return response.data;
   },
 

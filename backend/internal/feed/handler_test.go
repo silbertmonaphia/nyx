@@ -370,7 +370,7 @@ func TestCreateFeedHandler(t *testing.T) {
 	service := NewService(repo, cache.NewNoop(), time.Minute, noop.NewTracerProvider().Tracer("test"))
 	h := NewHandler(service)
 
-	newFeed := Feed{
+	newFeed := FeedInput{
 		Title:       "Interstellar",
 		Description: "Space exploration",
 		Rating:      8.6,
@@ -440,12 +440,89 @@ func TestCreateFeedHandlerValidation(t *testing.T) {
 	}
 }
 
+// TestCreateFeedHandlerUserPayload pins the regression where huma
+// validated the POST body against the response/persistence Feed
+// struct. Because Feed has non-pointer ID/CreatedAt/UpdatedAt, a body
+// carrying only the user-supplied {title, description, rating} was
+// rejected with "expected required property id/created_at/updated_at
+// to be present". The fix is FeedInput — a request DTO that excludes
+// the server-generated fields (matches the user-domain
+// RegisterRequest pattern).
+func TestCreateFeedHandlerUserPayload(t *testing.T) {
+	repo, mock := newMockRepo(t)
+	service := NewService(repo, cache.NewNoop(), time.Minute, noop.NewTracerProvider().Tracer("test"))
+	h := NewHandler(service)
+
+	now := time.Now()
+	mock.ExpectQuery(`INSERT INTO feeds`).
+		WithArgs("Inception", pgxmock.AnyArg(), pgxmock.AnyArg()).
+		WillReturnRows(pgxmock.NewRows([]string{"id", "title", "description", "rating", "created_at", "updated_at", "deleted_at"}).
+			AddRow(int32(7), "Inception", "Dream heist", 8.8, now, now, nil))
+
+	body, _ := json.Marshal(map[string]interface{}{
+		"title":       "Inception",
+		"description": "Dream heist",
+		"rating":      8.8,
+	})
+	tokens := newTestTokens(t)
+	router := setupTestRouter(h, tokens, true)
+	req, _ := http.NewRequest("POST", "/api/feeds", bytes.NewBuffer(body))
+	req.Header.Set("Authorization", "Bearer "+testAccessToken(t, tokens))
+	rr := httptest.NewRecorder()
+	router.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want 201; body=%s", rr.Code, rr.Body.String())
+	}
+	var f Feed
+	if err := json.Unmarshal(rr.Body.Bytes(), &f); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if f.ID != 7 || f.Title != "Inception" || f.Description != "Dream heist" || f.Rating != 8.8 {
+		t.Errorf("unexpected response: %+v", f)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Errorf("unmet pgxmock expectations: %v", err)
+	}
+}
+
+// TestCreateFeedHandlerMinimalPayload confirms description and rating
+// are optional on the request — only Title is required. The handler
+// should accept {title} alone and leave description="" / rating=0 on
+// the response (DB defaults; not validated client-side).
+func TestCreateFeedHandlerMinimalPayload(t *testing.T) {
+	repo, mock := newMockRepo(t)
+	service := NewService(repo, cache.NewNoop(), time.Minute, noop.NewTracerProvider().Tracer("test"))
+	h := NewHandler(service)
+
+	now := time.Now()
+	mock.ExpectQuery(`INSERT INTO feeds`).
+		WithArgs("Bare Minimum", pgxmock.AnyArg(), pgxmock.AnyArg()).
+		WillReturnRows(pgxmock.NewRows([]string{"id", "title", "description", "rating", "created_at", "updated_at", "deleted_at"}).
+			AddRow(int32(8), "Bare Minimum", "", 0, now, now, nil))
+
+	body, _ := json.Marshal(map[string]interface{}{"title": "Bare Minimum"})
+	tokens := newTestTokens(t)
+	router := setupTestRouter(h, tokens, true)
+	req, _ := http.NewRequest("POST", "/api/feeds", bytes.NewBuffer(body))
+	req.Header.Set("Authorization", "Bearer "+testAccessToken(t, tokens))
+	rr := httptest.NewRecorder()
+	router.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want 201; body=%s", rr.Code, rr.Body.String())
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Errorf("unmet pgxmock expectations: %v", err)
+	}
+}
+
 func TestUpdateFeedHandler(t *testing.T) {
 	repo, mock := newMockRepo(t)
 	service := NewService(repo, cache.NewNoop(), time.Minute, noop.NewTracerProvider().Tracer("test"))
 	h := NewHandler(service)
 
-	updatedFeed := Feed{
+	updatedFeed := FeedInput{
 		Title:       "Inception Updated",
 		Description: "A deeper dream.",
 		Rating:      9.0,
@@ -519,7 +596,7 @@ func TestUpdateFeedHandlerNotFound(t *testing.T) {
 	service := NewService(repo, cache.NewNoop(), time.Minute, noop.NewTracerProvider().Tracer("test"))
 	h := NewHandler(service)
 
-	updatedFeed := Feed{Title: "Anything", Rating: 5.0}
+	updatedFeed := FeedInput{Title: "Anything", Rating: 5.0}
 	body, _ := json.Marshal(updatedFeed)
 
 	mock.ExpectQuery(`UPDATE feeds SET title`).
@@ -584,7 +661,7 @@ func TestCreateFeedHandler_InternalErrorHidesInternalDetails(t *testing.T) {
 	service := NewService(repo, cache.NewNoop(), time.Minute, noop.NewTracerProvider().Tracer("test"))
 	h := NewHandler(service)
 
-	body, _ := json.Marshal(Feed{Title: "X", Rating: 5})
+	body, _ := json.Marshal(FeedInput{Title: "X", Rating: 5})
 	// pgx-style error text — contains SQL fragment & driver internals
 	// we explicitly must not leak to the client.
 	pgxLeak := fmt.Errorf("ERROR: relation %q does not exist (SQLSTATE 42P01)", "feeds")
@@ -629,7 +706,7 @@ func TestUpdateFeedHandler_InternalErrorHidesInternalDetails(t *testing.T) {
 	service := NewService(repo, cache.NewNoop(), time.Minute, noop.NewTracerProvider().Tracer("test"))
 	h := NewHandler(service)
 
-	body, _ := json.Marshal(Feed{Title: "X", Rating: 5})
+	body, _ := json.Marshal(FeedInput{Title: "X", Rating: 5})
 	mock.ExpectQuery(`UPDATE feeds SET title`).
 		WithArgs("X", pgxmock.AnyArg(), pgxmock.AnyArg(), int32(1)).
 		WillReturnError(errors.New("pq: SSL connection has been closed unexpectedly"))

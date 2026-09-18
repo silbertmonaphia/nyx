@@ -98,6 +98,30 @@
         ],
         "type": "object"
       },
+      "FeedInput": {
+        "additionalProperties": false,
+        "properties": {
+          "description": {
+            "maxLength": 1000,
+            "type": "string"
+          },
+          "rating": {
+            "format": "double",
+            "maximum": 10,
+            "minimum": 0,
+            "type": "number"
+          },
+          "title": {
+            "maxLength": 100,
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "title"
+        ],
+        "type": "object"
+      },
       "FeedsPage": {
         "additionalProperties": false,
         "properties": {
@@ -398,7 +422,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/Feed"
+                "$ref": "#/components/schemas/FeedInput"
               }
             }
           },
@@ -497,7 +521,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/Feed"
+                "$ref": "#/components/schemas/FeedInput"
               }
             }
           },

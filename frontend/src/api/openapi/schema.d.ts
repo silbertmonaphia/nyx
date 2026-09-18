@@ -226,6 +226,12 @@ export interface components {
             /** Format: date-time */
             updated_at: string;
         };
+        FeedInput: {
+            description?: string;
+            /** Format: double */
+            rating?: number;
+            title: string;
+        };
         FeedsPage: {
             data: components["schemas"]["Feed"][] | null;
             /** @example true */
@@ -348,7 +354,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["Feed"];
+                "application/json": components["schemas"]["FeedInput"];
             };
         };
         responses: {
@@ -383,7 +389,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["Feed"];
+                "application/json": components["schemas"]["FeedInput"];
             };
         };
         responses: {

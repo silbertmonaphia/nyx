@@ -7,7 +7,7 @@ import type { components } from './schema';
 
 export type Feed = components['schemas']['Feed'];
 export type FeedsPage = components['schemas']['FeedsPage'];
-export type FeedInput = components['schemas']['Feed'];
+export type FeedInput = components['schemas']['FeedInput'];
 export type User = components['schemas']['User'];
 export type AuthResponse = components['schemas']['AuthResponse'];
 export type LoginRequest = components['schemas']['LoginRequest'];
