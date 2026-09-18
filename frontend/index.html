@@ -59,6 +59,20 @@
     </style>
   </head>
   <body>
+    <script>
+      // Tailwind v4's `dark:` variant is gated on `.dark` being present
+      // up the tree (`@custom-variant dark (&:is(.dark *))` in index.css).
+      // The navbar uses `bg-black` unconditionally, so we MUST honor the
+      // user's prefers-color-scheme and toggle the theme class — otherwise
+      // foreground tokens resolve to their light values (dark text) on a
+      // permanently-black nav and typed input becomes invisible.
+      const mq = window.matchMedia('(prefers-color-scheme: dark)');
+      const apply = () => document.documentElement.classList.toggle('dark', mq.matches);
+      apply();
+      // Safari < 14 only fires addListener; modern browsers fire addEventListener.
+      if (mq.addEventListener) mq.addEventListener('change', apply);
+      else mq.addListener(apply);
+    </script>
     <div id="root">
       <div id="nyx-skeleton" aria-hidden="true">
         <div class="title">Nyx</div>
