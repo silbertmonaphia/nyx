@@ -1,40 +1,50 @@
 #!/bin/sh
-# docker-entrypoint.sh — bridge between Compose-mounted secrets and
-# the backend's env-var-driven config.
+# docker-entrypoint.sh — generic `_FILE` env bridge for the backend.
 #
 # The backend reads `DB_URL` and `JWT_SECRET` directly from the
 # environment (it has no _FILE support yet — tracked as a follow-up).
-# The prod compose mounts those values as Docker secret files at
-# /run/secrets/db_url and /run/secrets/jwt_secret (mode 0400). This
-# shim reads each secret file into its env var if and only if the
-# env var is currently unset, then exec's the backend. The result:
-# the secret never appears as an env literal in the image or in
-# `docker inspect`, and a missing secret fails closed (the backend
-# config loader rejects empty DB_URL and short/default JWT_SECRET).
+# Some orchestrators mount secrets as files (Docker Compose `secrets:`,
+# k8s `secretKeyRef` with a `volumes:` mount instead of `env:`, certain
+# sidecar patterns) and then point an env var at the file path. This
+# shim closes that gap: for each known secret, if `/run/secrets/<name>`
+# exists and is non-empty it is exported into the named env var before
+# the backend starts; otherwise the env var is left untouched so the
+# config loader's fail-closed check (empty / default / short) fires
+# normally.
 #
-# SECURITY.md M9: this script is the bridge that makes the
-# docker-compose.prod.yml `secrets:` block actually work. Without
-# it the compose file is half-wired — secrets mount, but nothing
-# reads them, and the backend fails closed at startup with a
-# confusing "env not set" error.
+# Today this shim is a no-op in every deployment path we ship:
+#   - dev compose (`docker-compose.yml`) does not mount the secrets
+#     block; operators supply DB_URL / JWT_SECRET via `.env`.
+#   - production runs on Kubernetes (`k8s/`); secrets are inlined into
+#     pod env via `secretKeyRef` (see `k8s/backend-deployment.yaml`),
+#     and `/run/secrets/*` is not mounted.
+# It is wired as the ENTRYPOINT in `backend/Dockerfile` so any future
+# orchestrator (or a return to compose-file secrets) gets the bridge
+# for free, and so SECURITY.md M9's evidence — that secret values never
+# appear as env literals in the image or in `docker inspect` — still
+# holds whenever the file-mount pattern is used.
+#
+# SECURITY.md M9: the bridge this script provides. Kept as the
+# authoritative answer to "where do mounted secrets get consumed?"
+# even while every current deployment skips it.
 #
 # Behaviour:
-#   - If /run/secrets/<name> exists, export <env>=$(cat ...) and
-#     `unset` the env var if the file is empty (so an empty secret
-#     is treated like an unset env — the config loader errors
-#     instead of starting with "" as a valid value).
-#   - If the secret file does NOT exist (e.g. dev compose, which
-#     doesn't mount the secrets block) leave the env alone — the
-#     operator must supply DB_URL / JWT_SECRET through .env or the
-#     shell.
+#   - If /run/secrets/<name> exists and is non-empty, export
+#     <env>=$(cat ...).
+#   - If /run/secrets/<name> exists but is empty, leave the env
+#     alone (the config loader rejects empty DB_URL and short /
+#     default JWT_SECRET, so the container fails closed at boot).
+#   - If /run/secrets/<name> does NOT exist, leave the env alone —
+#     the orchestrator is expected to have set it.
 #   - The final `exec "$@"` replaces the shell process with the
 #     backend binary so it receives PID 1 and signals (SIGTERM,
 #     SIGINT) propagate correctly.
 #
 # `set -e` is intentionally omitted at the top level — we want to
 # keep going through unset-env checks rather than abort on the
-# first missing file. The only fatal exit is the final `exec`, which
-# is the standard "binary not found" / "binary not executable" path.
+# first missing file. The only fatal exit is the final `exec`,
+# which is the standard "binary not found" / "binary not
+# executable" path.
 
 # DB_URL — fail-closed: empty file or missing file both leave the
 # env alone, and the config loader will reject the empty string.

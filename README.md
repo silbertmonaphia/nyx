@@ -11,7 +11,7 @@ A minimalist media rating application — Go 1.26.1 API, React 19 SPA, PostgreSQ
 - **Cache-aside** — Redis opt-in for `GET /api/feeds` (`REDIS_ENABLED=true`). Cache is best-effort; failures never fail the request.
 - **Observability** — Distributed tracing via OpenTelemetry (browser → nginx → Jaeger, all spans stitched by W3C `traceparent`), `/metrics` (Prometheus: HTTP request count/latency, cache hit/miss), structured JSON logging via `zerolog`, graceful shutdown.
 - **CI/CD** — GitHub Actions (lint + unit + integration + sqlc drift + e2e, plus a semantic-release job on push to `main` / `mvp`), `golangci-lint`, `husky` pre-commit + commit-msg hooks on the frontend. Commits are authored via `git cz` (commitizen + cz-customizable) and linted by `@commitlint/config-conventional`; semantic-release per-package versioning drives `backend@X.Y.Z` / `frontend@X.Y.Z` tags from Conventional Commit messages.
-- **Deploy** — Docker Compose for dev/prod, manifests in `k8s/`.
+- **Deploy** — Kubernetes manifests for production (`k8s/`); Docker Compose (`docker-compose.yml`) is dev-only.
 
 ## Architecture
 
@@ -82,8 +82,7 @@ nyx/
 │       └── utils/        # Helpers (cn, etc.)
 ├── k8s/                  # Deployment, Service, Ingress, Secrets manifests
 ├── openspec/             # OpenSpec change/spec records
-├── docker-compose.yml        # Dev stack
-└── docker-compose.prod.yml   # Production stack
+├── docker-compose.yml        # Dev stack only — production runs on k8s/
 ```
 
 ## Quick Start (Docker Compose)
@@ -248,16 +247,7 @@ Safety: `LLM_BASE_URL` is validated at startup (scheme allowlist http/https, no 
 | Frontend build | `cd frontend && npm run build` | |
 | E2E | `cd frontend && npm run test:e2e` | Playwright, needs backend running |
 
-## Production
-
-```bash
-VITE_API_URL=http://your-production-ip/api \
-  sudo docker compose -f docker-compose.prod.yml up -d --build
-```
-
-The app is served on port 80. API is proxied at `/api`.
-
-## Kubernetes
+## Production (Kubernetes)
 
 ```bash
 cp k8s/secrets.yaml.example k8s/secrets.yaml   # edit with base64-encoded secrets

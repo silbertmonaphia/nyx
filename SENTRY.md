@@ -17,7 +17,7 @@ Leave the three build-time vars empty for local dev builds without sourcemap upl
 
 ## Self-hosted Sentry
 
-Operators running a self-hosted Sentry instance override two things in `docker-compose.yml` / `docker-compose.prod.yml`:
+Operators running a self-hosted Sentry instance override two things in `docker-compose.yml` (and, for production, the equivalent env vars on the Kubernetes manifests in `k8s/`):
 
 - `VITE_SENTRY_DSN` — point at your self-hosted DSN.
 - `SENTRY_CSP_ORIGIN` — build-arg fed into the nginx `connect-src` directive via the `__SENTRY_CSP_ORIGIN__` placeholder. Default is the SaaS ingest host list (`https://*.ingest.sentry.io https://*.sentry.io`). Override with your self-hosted origin (e.g. `https://sentry.example.com`) or the browser refuses every envelope POST and Sentry silently noops in production.
