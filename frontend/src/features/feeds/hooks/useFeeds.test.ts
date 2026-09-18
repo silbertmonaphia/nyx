@@ -85,7 +85,7 @@ describe('useFeeds', () => {
         }),
       );
 
-      const payload: NewFeed = { title: 'Brand new', description: '', rating: 7 };
+      const payload: NewFeed = { title: 'Brand new', description: '' };
 
       act(() => {
         result.current.addFeed.mutate(payload);
@@ -143,7 +143,7 @@ describe('useFeeds', () => {
       );
 
       act(() => {
-        result.current.addFeed.mutate({ title: 'Brand new', description: '', rating: 7 });
+        result.current.addFeed.mutate({ title: 'Brand new', description: '' });
       });
 
       // Wait for the optimistic placeholder to land.
@@ -204,7 +204,7 @@ describe('useFeeds', () => {
 
       await act(async () => {
         try {
-          await result.current.addFeed.mutateAsync({ title: 'Brand new', description: '', rating: 7 });
+          await result.current.addFeed.mutateAsync({ title: 'Brand new', description: '' });
         } catch {
           // expected
         }

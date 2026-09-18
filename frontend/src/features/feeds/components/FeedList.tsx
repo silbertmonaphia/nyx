@@ -163,7 +163,7 @@ export const FeedList: React.FC<FeedListProps> = ({
     return (
       <div
         data-testid="feed-list-empty"
-        className="py-10 text-center text-muted-foreground bg-secondary/20 rounded-lg border border-dashed border-border"
+        className="py-10 text-center text-muted-foreground rounded-lg border border-dashed border-border"
       >
         {searchTerm ? `Feed "${searchTerm}" not found` : 'No feeds found'}
       </div>

@@ -77,6 +77,7 @@ export const useFeeds = (searchTerm: string, sortOrder: SortOrder = 'desc') => {
           if (!old || old.pages.length === 0) return old;
           const optimistic: Feed = {
             ...newFeed,
+            rating: 0, // form no longer collects rating; placeholder until server replaces this row
             id: -Date.now(), // negative id marks it as unconfirmed
             created_at: new Date().toISOString(),
             updated_at: new Date().toISOString(),

@@ -21,44 +21,33 @@ export const FeedForm: React.FC<FeedFormProps> = ({ feed, onSubmit, onCancel, ti
     handleSubmit,
     reset,
     formState: { errors },
-    watch,
   } = useForm<FeedFormData>({
     resolver: zodResolver(feedSchema),
     defaultValues: {
       title: '',
       description: '',
-      rating: 5.0,
     },
   });
-
-  // Watch the rating field to display its value
-  const currentRating = watch('rating');
 
   useEffect(() => {
     if (feed) {
       reset({
         title: feed.title,
         description: feed.description || '',
-        rating: feed.rating,
       });
     } else {
       reset({
         title: '',
         description: '',
-        rating: 5.0,
       });
     }
   }, [feed, reset]);
 
   const onFormSubmit = (data: FeedFormData) => {
-    const formattedData = {
-      ...data,
-      rating: typeof data.rating === 'string' ? parseFloat(data.rating) : data.rating
-    };
     if (feed) {
-      onSubmit({ ...feed, ...formattedData });
+      onSubmit({ ...feed, ...data });
     } else {
-      onSubmit(formattedData);
+      onSubmit(data);
     }
   };
 
@@ -91,23 +80,6 @@ export const FeedForm: React.FC<FeedFormProps> = ({ feed, onSubmit, onCancel, ti
               className={errors.description ? "border-destructive focus-visible:ring-destructive" : ""}
             />
             {errors.description && <p className="text-xs font-medium text-destructive">{errors.description.message}</p>}
-          </div>
-
-          <div className="space-y-2 text-left">
-            <div className="flex justify-between items-center">
-              <Label htmlFor="rating">Rating</Label>
-              <span className="text-sm font-bold text-primary">{currentRating}</span>
-            </div>
-            <input
-              {...register('rating')}
-              id="rating"
-              type="range"
-              min="0"
-              max="10"
-              step="0.1"
-              className="w-full h-2 bg-secondary rounded-lg appearance-none cursor-pointer accent-primary"
-            />
-            {errors.rating && <p className="text-xs font-medium text-destructive">{errors.rating.message}</p>}
           </div>
         </CardContent>
         <CardFooter className="flex gap-2">

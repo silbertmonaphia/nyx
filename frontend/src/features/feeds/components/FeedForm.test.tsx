@@ -31,7 +31,6 @@ describe('FeedForm', () => {
       expect(handleSubmit).toHaveBeenCalledWith({
         title: 'New Film',
         description: 'A great film.',
-        rating: 5,
       });
     });
   });
