@@ -183,14 +183,6 @@ function App() {
 
       <section id="center" className="container mx-auto px-4 py-8">
         <div className="w-full max-w-2xl mx-auto flex flex-col items-center">
-          {isAuthenticated && showAddForm && (
-            <FeedForm
-              title="New Feed"
-              onSubmit={handleAddOrUpdateFeed}
-              onCancel={resetFormState}
-            />
-          )}
-
           {isAuthenticated && editingFeed && (
             <FeedForm
               title="Edit Feed"
@@ -225,6 +217,14 @@ function App() {
               confirmDelete(id);
             }}
           />
+
+          {isAuthenticated && showAddForm && (
+            <FeedForm
+              title="New Feed"
+              onSubmit={handleAddOrUpdateFeed}
+              onCancel={resetFormState}
+            />
+          )}
 
           {isAuthenticated && (
             <Button
