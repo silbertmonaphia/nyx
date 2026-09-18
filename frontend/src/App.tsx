@@ -182,23 +182,6 @@ function App() {
       </nav>
 
       <section id="center" className="container mx-auto px-4 py-8">
-        <div className="w-full max-w-2xl mx-auto flex flex-col md:flex-row gap-4 items-center mt-8 mb-8">
-          {isAuthenticated && (
-            <Button
-              size="lg"
-              variant={showAddForm ? "outline" : "default"}
-              onClick={() => setShowAddForm(!showAddForm)}
-              className="w-full md:w-auto h-12 gap-2 rounded-xl"
-            >
-              {showAddForm ? (
-                <><X className="h-5 w-5" /> Cancel</>
-              ) : (
-                <><Plus className="h-5 w-5" /> Add Feed</>
-              )}
-            </Button>
-          )}
-        </div>
-
         <div className="w-full max-w-2xl mx-auto flex flex-col items-center">
           {isAuthenticated && showAddForm && (
             <FeedForm
@@ -242,6 +225,17 @@ function App() {
               confirmDelete(id);
             }}
           />
+
+          {isAuthenticated && (
+            <Button
+              size="icon"
+              onClick={() => setShowAddForm(!showAddForm)}
+              aria-label={showAddForm ? 'Cancel adding feed' : 'Add feed'}
+              className="self-end mt-4 h-14 w-14 rounded-full shadow-lg"
+            >
+              {showAddForm ? <X className="h-6 w-6" /> : <Plus className="h-6 w-6" />}
+            </Button>
+          )}
         </div>
       </section>
 

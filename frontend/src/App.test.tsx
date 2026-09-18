@@ -98,7 +98,7 @@ describe('App', () => {
 
     render(<App />);
 
-    await userEvent.click(screen.getByText('Add Feed'));
+    await userEvent.click(screen.getByRole('button', { name: /add feed/i }));
     await userEvent.type(screen.getByPlaceholderText('Feed title'), 'New Test Feed');
     await userEvent.click(screen.getByRole('button', { name: /save feed/i }));
 
@@ -355,7 +355,7 @@ describe('App', () => {
       });
       render(<App />);
       // The "Add Feed" button toggles showAddForm in the UI store.
-      fireEvent.click(screen.getByText('Add Feed'));
+      fireEvent.click(screen.getByRole('button', { name: /add feed/i }));
       expect(document.title).toBe('Add a feed — Nyx');
     });
 
