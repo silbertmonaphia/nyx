@@ -93,6 +93,8 @@ describe('useAuthReconciliation', () => {
       response: { status: 401 },
     });
     getSpy.mockRejectedValueOnce(err);
+    // Stub the refresh POST to fail too — refresh family is gone.
+    vi.spyOn(axios, 'post').mockRejectedValueOnce(new Error('Network Error'));
 
     renderHook(() => useAuthReconciliation());
 
@@ -100,6 +102,40 @@ describe('useAuthReconciliation', () => {
       expect(useAuthStore.getState().user).toBeNull();
       expect(useAuthStore.getState().isAuthenticated).toBe(false);
     });
+  });
+
+  it('refreshes tokens on a stale-access 401 and retries /api/me', async () => {
+    // The common refresh-F5 case: access token expired in
+    // sessionStorage but the refresh token is still good. The
+    // initial /api/me 401 must NOT log the user out — it must
+    // try a refresh, then retry /api/me with the fresh access
+    // token, and only then settle on setAuth.
+    useAuthStore.getState().setAuth({ user: baseUser });
+    tokenStore.setTokens('stale.access', 'good.refresh');
+
+    const staleErr = Object.assign(new Error('Unauthorized'), {
+      response: { status: 401 },
+    });
+    getSpy.mockRejectedValueOnce(staleErr);
+    getSpy.mockResolvedValueOnce({ data: baseUser } as never);
+    vi.spyOn(axios, 'post').mockResolvedValueOnce({
+      data: {
+        access_token: 'fresh.access',
+        refresh_token: 'fresh.refresh',
+        user: baseUser,
+      },
+    } as never);
+
+    renderHook(() => useAuthReconciliation());
+
+    await waitFor(() => {
+      expect(useAuthStore.getState().user).toEqual(baseUser);
+      expect(useAuthStore.getState().isAuthenticated).toBe(true);
+    });
+    expect(getSpy).toHaveBeenCalledTimes(2); // initial + retry
+    // The retry must stamp the *fresh* access token, not the
+    // stale one we just got rejected for.
+    expect(tokenStore.getAccessToken()).toBe('fresh.access');
   });
 
   it('leaves the persisted user alone on a network failure', async () => {
