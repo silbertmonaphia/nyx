@@ -5,7 +5,7 @@ import { useChatStore } from './chatStore';
 import type { ChatEvent } from '../types/chat';
 
 // Auto-mock the service so we can yield hand-crafted streams per
-// test. Mirrors the pattern in useMovies.test.ts.
+// test. Mirrors the pattern in useFeeds.test.ts.
 vi.mock('../services/chatService');
 
 const mockedService = chatService as unknown as {
@@ -23,7 +23,7 @@ function resetStore() {
 /**
  * Async generator that yields the given events, then waits on a
  * held promise until the test resolves it. This is the same
- * hold-promise-open pattern useMovies.test.ts uses — it lets the
+ * hold-promise-open pattern useFeeds.test.ts uses — it lets the
  * test drive `act` while the stream is in flight so we can
  * observe the intermediate state.
  */

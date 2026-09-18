@@ -1,30 +1,30 @@
 import React, { useEffect, useRef } from 'react';
-import { Movie } from '../types/movie';
+import { Feed } from '../types/feed';
 import { Card, CardHeader, CardTitle, CardContent } from '~/components/ui/Card';
 import { Button } from '~/components/ui/Button';
 import { Pencil, Trash2 } from 'lucide-react';
 
-interface MovieItemProps {
-  movie: Movie;
-  onEdit: (movie: Movie) => void;
+interface FeedItemProps {
+  feed: Feed;
+  onEdit: (feed: Feed) => void;
   onDelete: (id: number) => void;
 }
 
-export const MovieItem: React.FC<MovieItemProps> = ({ movie, onEdit, onDelete }) => {
+export const FeedItem: React.FC<FeedItemProps> = ({ feed, onEdit, onDelete }) => {
   return (
     <Card className="hover:shadow-md transition-shadow">
       <CardHeader className="flex flex-row items-start justify-between space-y-0 pb-2">
         <div className="space-y-1">
-          <CardTitle className="text-xl">{movie.title}</CardTitle>
+          <CardTitle className="text-xl">{feed.title}</CardTitle>
           <div className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-semibold bg-primary/10 text-primary">
-            ★ {movie.rating}
+            ★ {feed.rating}
           </div>
         </div>
         <div className="flex gap-1">
           <Button
             variant="ghost"
             size="icon"
-            onClick={() => onEdit(movie)}
+            onClick={() => onEdit(feed)}
             title="Edit"
             className="h-8 w-8 text-muted-foreground hover:text-primary"
           >
@@ -33,7 +33,7 @@ export const MovieItem: React.FC<MovieItemProps> = ({ movie, onEdit, onDelete })
           <Button
             variant="ghost"
             size="icon"
-            onClick={() => onDelete(movie.id)}
+            onClick={() => onDelete(feed.id)}
             title="Delete"
             className="h-8 w-8 text-muted-foreground hover:text-destructive"
           >
@@ -43,7 +43,7 @@ export const MovieItem: React.FC<MovieItemProps> = ({ movie, onEdit, onDelete })
       </CardHeader>
       <CardContent>
         <p className="text-sm text-muted-foreground leading-relaxed">
-          {movie.description}
+          {feed.description}
         </p>
       </CardContent>
     </Card>
@@ -67,7 +67,7 @@ const SkeletonCard: React.FC = () => (
   </Card>
 );
 
-const MovieListSkeleton: React.FC = () => (
+const FeedListSkeleton: React.FC = () => (
   <>
     {Array.from({ length: 3 }).map((_, i) => (
       <SkeletonCard key={i} />
@@ -75,19 +75,19 @@ const MovieListSkeleton: React.FC = () => (
   </>
 );
 
-interface MovieListProps {
-  movies: Movie[];
+interface FeedListProps {
+  feeds: Feed[];
   loading: boolean;
   searchTerm: string;
   hasMore: boolean;
   isLoadingMore: boolean;
   onLoadMore: () => void;
-  onEdit: (movie: Movie) => void;
+  onEdit: (feed: Feed) => void;
   onDelete: (id: number) => void;
 }
 
-export const MovieList: React.FC<MovieListProps> = ({
-  movies,
+export const FeedList: React.FC<FeedListProps> = ({
+  feeds,
   loading,
   searchTerm,
   hasMore,
@@ -118,42 +118,42 @@ export const MovieList: React.FC<MovieListProps> = ({
   if (loading) {
     return (
       <div
-        data-testid="movie-list-skeleton"
+        data-testid="feed-list-skeleton"
         className="flex flex-col gap-4 w-full max-w-[600px] my-8 text-left"
       >
-        <MovieListSkeleton />
+        <FeedListSkeleton />
       </div>
     );
   }
 
-  if (movies.length === 0) {
+  if (feeds.length === 0) {
     return (
       <div
-        data-testid="movie-list-empty"
+        data-testid="feed-list-empty"
         className="py-10 text-center text-muted-foreground bg-secondary/20 rounded-lg border border-dashed border-border"
       >
-        No movies found {searchTerm && `matching "${searchTerm}"`}
+        No feeds found {searchTerm && `matching "${searchTerm}"`}
       </div>
     );
   }
 
   return (
     <div
-      data-testid="movie-list"
+      data-testid="feed-list"
       className="flex flex-col gap-4 w-full max-w-[600px] my-8 text-left"
     >
-      {movies.map((movie) => (
-        <MovieItem
-          key={movie.id}
-          movie={movie}
+      {feeds.map((feed) => (
+        <FeedItem
+          key={feed.id}
+          feed={feed}
           onEdit={onEdit}
           onDelete={onDelete}
         />
       ))}
       {hasMore && (
         <>
-          {isLoadingMore && <MovieListSkeleton />}
-          <div ref={sentinelRef} data-testid="movie-list-sentinel" className="h-1" />
+          {isLoadingMore && <FeedListSkeleton />}
+          <div ref={sentinelRef} data-testid="feed-list-sentinel" className="h-1" />
         </>
       )}
     </div>

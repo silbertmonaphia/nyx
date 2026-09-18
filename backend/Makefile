@@ -43,7 +43,7 @@ sqlc:
 # changed a query/schema without re-running `make sqlc`.
 sqlc-diff:
 	sqlc generate
-	git diff --exit-code internal/movie/db internal/user/db
+	git diff --exit-code internal/feed/db internal/user/db
 
 sqlc-version:
 	sqlc version

@@ -7,8 +7,8 @@ A minimalist media rating application — Go 1.26.1 API, React 19 SPA, PostgreSQ
 - **Clean-arch backend** — `chi v5` router + `huma v2` for declarative, OpenAPI 3.1-emitting HTTP handlers. SQL is type-safe via `sqlc` + `pgx/v5` + `pgxpool`.
 - **Modern frontend** — React 19 + Vite 8 + TypeScript, Tailwind CSS v4, Radix UI primitives (shadcn-style), TanStack Query, Zustand, React Hook Form + Zod, axios.
 - **Auth** — JWT access tokens (default 15m) paired with rotated refresh tokens (default 7d, opaque, sha256-hashed, family-level reuse detection). Auth endpoints (`/api/register`, `/api/login`, `/api/refresh`) return `{access_token, refresh_token, token_type: "Bearer", expires_at, user}` in the body; every protected endpoint expects `Authorization: Bearer <access_token>`. `/api/logout` + `/api/refresh` send `{refresh_token}` in the body. Bcrypt-hashed passwords. The SPA stores tokens in a module-level `tokenStore` (in-memory + `sessionStorage`); the Zustand `authStore` persist carries only `user`. Native clients (iOS / Android / Unity / Unreal / console SDKs) speak the identical wire contract — only the token storage differs. Production topology: SPA at `app.nyx.com`, API at `api.nyx.com` (separate Ingress hosts); Bearer is a custom header → CORS preflight = CSRF defence, no token flow needed.
-- **Pagination** — `GET /api/movies` returns `{data, page, page_size, total, has_more}`. Default 20, max 100.
-- **Cache-aside** — Redis opt-in for `GET /api/movies` (`REDIS_ENABLED=true`). Cache is best-effort; failures never fail the request.
+- **Pagination** — `GET /api/feeds` returns `{data, page, page_size, total, has_more}`. Default 20, max 100.
+- **Cache-aside** — Redis opt-in for `GET /api/feeds` (`REDIS_ENABLED=true`). Cache is best-effort; failures never fail the request.
 - **Observability** — Distributed tracing via OpenTelemetry (browser → nginx → Jaeger, all spans stitched by W3C `traceparent`), `/metrics` (Prometheus: HTTP request count/latency, cache hit/miss), structured JSON logging via `zerolog`, graceful shutdown.
 - **CI/CD** — GitHub Actions (lint + unit + integration + sqlc drift + e2e, plus a semantic-release job on push to `main` / `mvp`), `golangci-lint`, `husky` pre-commit + commit-msg hooks on the frontend. Commits are authored via `git cz` (commitizen + cz-customizable) and linted by `@commitlint/config-conventional`; semantic-release per-package versioning drives `backend@X.Y.Z` / `frontend@X.Y.Z` tags from Conventional Commit messages.
 - **Deploy** — Docker Compose for dev/prod, manifests in `k8s/`.
@@ -34,7 +34,7 @@ flowchart TB
     subgraph API["Go API :8080"]
       direction TB
       H["huma v2 handlers<br/>chi v5 · OpenAPI 3.1"]
-      S["Services<br/>movie · user · auth · llm"]
+      S["Services<br/>feed · user · auth · llm"]
       R["Repositories<br/>sqlc · pgx/v5 · pgxpool"]
     end
 
@@ -67,13 +67,13 @@ Solid lines are request paths; dashed lines are telemetry / error reporting. Opt
 nyx/
 ├── backend/              # Go API server
 │   ├── cmd/api/          # Entry point (main.go)
-│   ├── internal/         # cmd/api, middleware, movie/, user/, platform/, reqctx/
+│   ├── internal/         # cmd/api, middleware, feed/, user/, platform/, reqctx/
 │   ├── migrations/       # golang-migrate, applied on every backend boot
 │   ├── queries/          # sqlc input (.sql)
-│   └── internal/{movie,user}/db/  # sqlc output (regenerated via `make sqlc`)
+│   └── internal/{feed,user}/db/  # sqlc output (regenerated via `make sqlc`)
 ├── frontend/             # React SPA
 │   └── src/
-│       ├── features/     # Domain-driven modules (movies/, auth/)
+│       ├── features/     # Domain-driven modules (feeds/, auth/)
 │       ├── components/   # Shared UI primitives (Button, Dialog, Card, …)
 │       ├── services/     # API client (axios)
 │       ├── store/        # Zustand stores
@@ -107,7 +107,7 @@ sudo docker compose up --build -d
 ```
 
 - Frontend: <http://localhost:5173>
-- API: <http://localhost:8080/api/movies>
+- API: <http://localhost:8080/api/feeds>
 - API docs (Stoplight Elements): <http://localhost:8080/api/swagger>
 - PostgreSQL: `localhost:5433` (mapped from container `5432`)
 
@@ -116,7 +116,7 @@ sudo docker compose up --build -d
 PGPASSWORD=postgres psql -h localhost -p 5433 -U postgres -d nyx
 
 # Redis (if REDIS_ENABLED=true)
-sudo docker compose exec redis redis-cli KEYS 'movies:*'
+sudo docker compose exec redis redis-cli KEYS 'feeds:*'
 ```
 
 ## Local Development
@@ -175,8 +175,8 @@ cd frontend && npm run dev
 # 4. Open the Jaeger UI
 open http://localhost:16686
 # Service dropdown → "nyx-frontend". Click any trace and the tree shows:
-#   HTTP POST /api/movies
-#   ├── nyx.movie.Create (service span)
+#   HTTP POST /api/feeds
+#   ├── nyx.feed.Create (service span)
 #   └── pgx.query (db.operation = INSERT)
 ```
 
@@ -275,10 +275,10 @@ See `k8s/*.yaml` for per-resource config.
 | POST | `/api/login` | — | Body `{username, password}`. Returns the Bearer pair + user |
 | POST | `/api/refresh` | — | Body `{refresh_token}`. Returns a fresh Bearer pair + user. Reuse revokes the entire family |
 | POST | `/api/logout` | Bearer | Body `{refresh_token}`. Revokes only that row. Returns 204 |
-| GET | `/api/movies` | — | `?q=`, `?page=`, `?page_size=` |
-| POST | `/api/movies` | JWT | |
-| PUT | `/api/movies/{id}` | JWT | |
-| DELETE | `/api/movies/{id}` | JWT | |
+| GET | `/api/feeds` | — | `?q=`, `?page=`, `?page_size=` |
+| POST | `/api/feeds` | JWT | |
+| PUT | `/api/feeds/{id}` | JWT | |
+| DELETE | `/api/feeds/{id}` | JWT | |
 
 Full schema: `http://localhost:8080/api/swagger/doc.json` (interactive docs at `/api/swagger`).
 The same spec is committed at `api/openapi.json` and regenerated offline with
@@ -290,8 +290,8 @@ The same spec is committed at `api/openapi.json` and regenerated offline with
   - Author via `git cz` (alias set up by `npm install`; runs commitizen + cz-customizable interactively). Plain `git commit -m` is also fine — the `.husky/commit-msg` hook runs `commitlint --edit` on the message file and rejects anything that doesn't match the schema.
   - Allowed scopes (kept in sync between `.cz-config.cjs` and `commitlint.config.js`): `backend`, `frontend`, `auth`, `infra`, `security`, `ci`, `docs`, `claude`, `env`, `observability`, `data`, `repo`.
   - Per-package releases: `semantic-release` (monorepo plugin) computes `backend@X.Y.Z` / `frontend@X.Y.Z` independently from commit paths, writes per-package `CHANGELOG.md`, stamps the new version into `ServiceVersion` + `frontend/package.json`, and pushes the release commit + tags. No npm publish.
-- **Errors** — domain sentinels (`movie.ErrNotFound`, `user.ErrInvalidCredentials`, `user.ErrUsernameTaken` / `ErrRefreshTokenCollision` translated from `pgconn.PgError` by `internal/platform/pgerr`, `auth.ErrInvalidToken`, …). Handlers funnel every error through `api.MapError(ctx, err, "Failed to <op>")` — unknown errors reuse `ClassifyAndLog` so internal error text never reaches the wire. Never string-compare error messages.
-- **Cache** — best-effort. Mutations call `DeletePrefix("movies:")` (SCAN + UNLINK, non-blocking).
+- **Errors** — domain sentinels (`feed.ErrNotFound`, `user.ErrInvalidCredentials`, `user.ErrUsernameTaken` / `ErrRefreshTokenCollision` translated from `pgconn.PgError` by `internal/platform/pgerr`, `auth.ErrInvalidToken`, …). Handlers funnel every error through `api.MapError(ctx, err, "Failed to <op>")` — unknown errors reuse `ClassifyAndLog` so internal error text never reaches the wire. Never string-compare error messages.
+- **Cache** — best-effort. Mutations call `DeletePrefix("feeds:")` (SCAN + UNLINK, non-blocking).
 - **Migrations** — `backend/migrations/00000N_description.{up,down}.sql`. Applied on every backend boot.
 
 ## Roadmap

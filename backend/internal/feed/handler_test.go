@@ -1,4 +1,4 @@
-package movie
+package feed
 
 import (
 	"bytes"
@@ -24,7 +24,7 @@ import (
 	"go.opentelemetry.io/otel/trace/noop"
 )
 
-// setupTestRouter builds a chi + huma router wired with the same movie
+// setupTestRouter builds a chi + huma router wired with the same feed
 // operations as the real API. We deliberately skip Prometheus, RequestID,
 // Logging, CORS, and RateLimit — those have their own tests and add
 // noise (and one goroutine in the case of RateLimit) to every handler
@@ -55,7 +55,7 @@ func setupTestRouter(h *Handler, tokens auth.TokenService, withAuth bool) *chi.M
 		Formats:       huma.DefaultFormats,
 		DefaultFormat: "application/json",
 	})
-	RegisterMovieOpsTest(hapi, h, tokens, withAuth)
+	RegisterFeedOpsTest(hapi, h, tokens, withAuth)
 	return router
 }
 
@@ -193,7 +193,7 @@ func TestLivezHandlerReturnsOK(t *testing.T) {
 	}
 }
 
-func TestGetMoviesHandler(t *testing.T) {
+func TestGetFeedsHandler(t *testing.T) {
 	repo, mock := newMockRepo(t)
 	service := NewService(repo, cache.NewNoop(), time.Minute, noop.NewTracerProvider().Tracer("test"))
 	h := NewHandler(service)
@@ -203,18 +203,18 @@ func TestGetMoviesHandler(t *testing.T) {
 		AddRow(int32(1), "Inception", "A thief who steals corporate secrets through the use of dream-sharing technology.", 8.8, now, now, nil).
 		AddRow(int32(2), "The Matrix", "A computer hacker learns from mysterious rebels about the true nature of his reality.", 8.7, now, now, nil)
 
-	// GetAll opens a tx, runs QueryMoviesPage + CountMovies, commits.
+	// GetAll opens a tx, runs QueryFeedsPage + CountFeeds, commits.
 	mock.ExpectBegin()
-	mock.ExpectQuery(`SELECT id, title, description, rating, created_at, updated_at, deleted_at FROM movies`).
+	mock.ExpectQuery(`SELECT id, title, description, rating, created_at, updated_at, deleted_at FROM feeds`).
 		WithArgs(pgxmock.AnyArg(), int32(0), int32(20)). // query=NULL, offset=0, page_size=20
 		WillReturnRows(rows)
-	mock.ExpectQuery(`SELECT COUNT\(\*\) FROM movies`).
+	mock.ExpectQuery(`SELECT COUNT\(\*\) FROM feeds`).
 		WithArgs(pgxmock.AnyArg()).
 		WillReturnRows(pgxmock.NewRows([]string{"count"}).AddRow(int64(25)))
 	mock.ExpectCommit()
 
 	router := setupTestRouter(h, newTestTokens(t), false)
-	req, _ := http.NewRequest("GET", "/api/movies", nil)
+	req, _ := http.NewRequest("GET", "/api/feeds", nil)
 	rr := httptest.NewRecorder()
 	router.ServeHTTP(rr, req)
 
@@ -222,12 +222,12 @@ func TestGetMoviesHandler(t *testing.T) {
 		t.Errorf("handler returned wrong status code: got %v want %v", rr.Code, http.StatusOK)
 	}
 
-	var page MoviesPage
+	var page FeedsPage
 	if err := json.Unmarshal(rr.Body.Bytes(), &page); err != nil {
 		t.Fatalf("unmarshal envelope: %v", err)
 	}
 	if len(page.Data) != 2 {
-		t.Errorf("expected 2 movies, got %v", len(page.Data))
+		t.Errorf("expected 2 feeds, got %v", len(page.Data))
 	}
 	if page.Page != 1 || page.PageSize != 20 || page.Total != 25 {
 		t.Errorf("unexpected page meta: page=%d page_size=%d total=%d", page.Page, page.PageSize, page.Total)
@@ -240,7 +240,7 @@ func TestGetMoviesHandler(t *testing.T) {
 	}
 }
 
-func TestGetMoviesHandlerPaginationParams(t *testing.T) {
+func TestGetFeedsHandlerPaginationParams(t *testing.T) {
 	repo, mock := newMockRepo(t)
 	service := NewService(repo, cache.NewNoop(), time.Minute, noop.NewTracerProvider().Tracer("test"))
 	h := NewHandler(service)
@@ -248,16 +248,16 @@ func TestGetMoviesHandlerPaginationParams(t *testing.T) {
 	rows := pgxmock.NewRows([]string{"id", "title", "description", "rating", "created_at", "updated_at", "deleted_at"})
 
 	mock.ExpectBegin()
-	mock.ExpectQuery(`SELECT id, title, description, rating, created_at, updated_at, deleted_at FROM movies`).
+	mock.ExpectQuery(`SELECT id, title, description, rating, created_at, updated_at, deleted_at FROM feeds`).
 		WithArgs(pgxmock.AnyArg(), int32(10), int32(5)). // page=3, page_size=5 => offset=10
 		WillReturnRows(rows)
-	mock.ExpectQuery(`SELECT COUNT\(\*\) FROM movies`).
+	mock.ExpectQuery(`SELECT COUNT\(\*\) FROM feeds`).
 		WithArgs(pgxmock.AnyArg()).
 		WillReturnRows(pgxmock.NewRows([]string{"count"}).AddRow(int64(0)))
 	mock.ExpectCommit()
 
 	router := setupTestRouter(h, newTestTokens(t), false)
-	req, _ := http.NewRequest("GET", "/api/movies?page=3&page_size=5", nil)
+	req, _ := http.NewRequest("GET", "/api/feeds?page=3&page_size=5", nil)
 	rr := httptest.NewRecorder()
 	router.ServeHTTP(rr, req)
 
@@ -265,7 +265,7 @@ func TestGetMoviesHandlerPaginationParams(t *testing.T) {
 		t.Errorf("handler returned wrong status code: got %v want %v", rr.Code, http.StatusOK)
 	}
 
-	var page MoviesPage
+	var page FeedsPage
 	if err := json.Unmarshal(rr.Body.Bytes(), &page); err != nil {
 		t.Fatalf("unmarshal envelope: %v", err)
 	}
@@ -280,7 +280,7 @@ func TestGetMoviesHandlerPaginationParams(t *testing.T) {
 	}
 }
 
-func TestGetMoviesHandlerPageSizeClamped(t *testing.T) {
+func TestGetFeedsHandlerPageSizeClamped(t *testing.T) {
 	repo, mock := newMockRepo(t)
 	service := NewService(repo, cache.NewNoop(), time.Minute, noop.NewTracerProvider().Tracer("test"))
 	h := NewHandler(service)
@@ -288,16 +288,16 @@ func TestGetMoviesHandlerPageSizeClamped(t *testing.T) {
 	rows := pgxmock.NewRows([]string{"id", "title", "description", "rating", "created_at", "updated_at", "deleted_at"})
 
 	mock.ExpectBegin()
-	mock.ExpectQuery(`SELECT id, title, description, rating, created_at, updated_at, deleted_at FROM movies`).
+	mock.ExpectQuery(`SELECT id, title, description, rating, created_at, updated_at, deleted_at FROM feeds`).
 		WithArgs(pgxmock.AnyArg(), int32(0), int32(100)). // page_size=500 clamps to 100
 		WillReturnRows(rows)
-	mock.ExpectQuery(`SELECT COUNT\(\*\) FROM movies`).
+	mock.ExpectQuery(`SELECT COUNT\(\*\) FROM feeds`).
 		WithArgs(pgxmock.AnyArg()).
 		WillReturnRows(pgxmock.NewRows([]string{"count"}).AddRow(int64(0)))
 	mock.ExpectCommit()
 
 	router := setupTestRouter(h, newTestTokens(t), false)
-	req, _ := http.NewRequest("GET", "/api/movies?page_size=500", nil)
+	req, _ := http.NewRequest("GET", "/api/feeds?page_size=500", nil)
 	rr := httptest.NewRecorder()
 	router.ServeHTTP(rr, req)
 
@@ -305,7 +305,7 @@ func TestGetMoviesHandlerPageSizeClamped(t *testing.T) {
 		t.Errorf("handler returned wrong status code: got %v want %v", rr.Code, http.StatusOK)
 	}
 
-	var page MoviesPage
+	var page FeedsPage
 	if err := json.Unmarshal(rr.Body.Bytes(), &page); err != nil {
 		t.Fatalf("unmarshal envelope: %v", err)
 	}
@@ -317,7 +317,7 @@ func TestGetMoviesHandlerPageSizeClamped(t *testing.T) {
 	}
 }
 
-func TestGetMoviesHandlerSearch(t *testing.T) {
+func TestGetFeedsHandlerSearch(t *testing.T) {
 	repo, mock := newMockRepo(t)
 	service := NewService(repo, cache.NewNoop(), time.Minute, noop.NewTracerProvider().Tracer("test"))
 	h := NewHandler(service)
@@ -333,16 +333,16 @@ func TestGetMoviesHandlerSearch(t *testing.T) {
 	// pgx's encoder — AnyArg keeps the test focused on the SQL
 	// contract and the offset/page_size order.
 	mock.ExpectBegin()
-	mock.ExpectQuery(`SELECT id, title, description, rating, created_at, updated_at, deleted_at FROM movies`).
+	mock.ExpectQuery(`SELECT id, title, description, rating, created_at, updated_at, deleted_at FROM feeds`).
 		WithArgs(pgxmock.AnyArg(), int32(0), int32(20)).
 		WillReturnRows(rows)
-	mock.ExpectQuery(`SELECT COUNT\(\*\) FROM movies`).
+	mock.ExpectQuery(`SELECT COUNT\(\*\) FROM feeds`).
 		WithArgs(pgxmock.AnyArg()).
 		WillReturnRows(pgxmock.NewRows([]string{"count"}).AddRow(int64(1)))
 	mock.ExpectCommit()
 
 	router := setupTestRouter(h, newTestTokens(t), false)
-	req, _ := http.NewRequest("GET", "/api/movies?q=matrix", nil)
+	req, _ := http.NewRequest("GET", "/api/feeds?q=matrix", nil)
 	rr := httptest.NewRecorder()
 	router.ServeHTTP(rr, req)
 
@@ -350,12 +350,12 @@ func TestGetMoviesHandlerSearch(t *testing.T) {
 		t.Errorf("handler returned wrong status code: got %v want %v", rr.Code, http.StatusOK)
 	}
 
-	var page MoviesPage
+	var page FeedsPage
 	if err := json.Unmarshal(rr.Body.Bytes(), &page); err != nil {
 		t.Fatalf("unmarshal envelope: %v", err)
 	}
 	if len(page.Data) != 1 || page.Data[0].Title != "The Matrix Reloaded" {
-		t.Errorf("expected one Matrix movie, got %+v", page.Data)
+		t.Errorf("expected one Matrix feed, got %+v", page.Data)
 	}
 	if page.Total != 1 {
 		t.Errorf("expected total=1, got %d", page.Total)
@@ -365,17 +365,17 @@ func TestGetMoviesHandlerSearch(t *testing.T) {
 	}
 }
 
-func TestCreateMovieHandler(t *testing.T) {
+func TestCreateFeedHandler(t *testing.T) {
 	repo, mock := newMockRepo(t)
 	service := NewService(repo, cache.NewNoop(), time.Minute, noop.NewTracerProvider().Tracer("test"))
 	h := NewHandler(service)
 
-	newMovie := Movie{
+	newFeed := Feed{
 		Title:       "Interstellar",
 		Description: "Space exploration",
 		Rating:      8.6,
 	}
-	body, _ := json.Marshal(newMovie)
+	body, _ := json.Marshal(newFeed)
 
 	now := time.Now()
 	// sqlc-generated INSERT uses RETURNING * (all 7 columns) and pgx
@@ -383,14 +383,14 @@ func TestCreateMovieHandler(t *testing.T) {
 	// pin the title (non-nullable) and match the others with AnyArg
 	// to keep the test focused on the SQL contract, not on pgx's
 	// internal value encoding.
-	mock.ExpectQuery(`INSERT INTO movies`).
-		WithArgs(newMovie.Title, pgxmock.AnyArg(), pgxmock.AnyArg()).
+	mock.ExpectQuery(`INSERT INTO feeds`).
+		WithArgs(newFeed.Title, pgxmock.AnyArg(), pgxmock.AnyArg()).
 		WillReturnRows(pgxmock.NewRows([]string{"id", "title", "description", "rating", "created_at", "updated_at", "deleted_at"}).
-			AddRow(int32(1), newMovie.Title, newMovie.Description, newMovie.Rating, now, now, nil))
+			AddRow(int32(1), newFeed.Title, newFeed.Description, newFeed.Rating, now, now, nil))
 
 	tokens := newTestTokens(t)
 	router := setupTestRouter(h, tokens, true)
-	req, _ := http.NewRequest("POST", "/api/movies", bytes.NewBuffer(body))
+	req, _ := http.NewRequest("POST", "/api/feeds", bytes.NewBuffer(body))
 	req.Header.Set("Authorization", "Bearer "+testAccessToken(t, tokens))
 	rr := httptest.NewRecorder()
 	router.ServeHTTP(rr, req)
@@ -399,19 +399,19 @@ func TestCreateMovieHandler(t *testing.T) {
 		t.Errorf("handler returned wrong status code: got %v want %v", rr.Code, http.StatusCreated)
 	}
 
-	var m Movie
-	if err := json.Unmarshal(rr.Body.Bytes(), &m); err != nil {
+	var f Feed
+	if err := json.Unmarshal(rr.Body.Bytes(), &f); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
-	if m.ID != 1 {
-		t.Errorf("expected ID 1, got %v", m.ID)
+	if f.ID != 1 {
+		t.Errorf("expected ID 1, got %v", f.ID)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Errorf("unmet pgxmock expectations: %v", err)
 	}
 }
 
-func TestCreateMovieHandlerValidation(t *testing.T) {
+func TestCreateFeedHandlerValidation(t *testing.T) {
 	h := NewHandler(nil) // service not needed; validation rejects before the repo is called
 	router := setupTestRouter(h, newTestTokens(t), false)
 
@@ -420,7 +420,7 @@ func TestCreateMovieHandlerValidation(t *testing.T) {
 		"title":  "",
 		"rating": 5.0,
 	})
-	req, _ := http.NewRequest("POST", "/api/movies", bytes.NewBuffer(body))
+	req, _ := http.NewRequest("POST", "/api/feeds", bytes.NewBuffer(body))
 	rr := httptest.NewRecorder()
 	router.ServeHTTP(rr, req)
 	if rr.Code != http.StatusBadRequest {
@@ -432,7 +432,7 @@ func TestCreateMovieHandlerValidation(t *testing.T) {
 		"title":  "Test",
 		"rating": 11.0,
 	})
-	req, _ = http.NewRequest("POST", "/api/movies", bytes.NewBuffer(body))
+	req, _ = http.NewRequest("POST", "/api/feeds", bytes.NewBuffer(body))
 	rr = httptest.NewRecorder()
 	router.ServeHTTP(rr, req)
 	if rr.Code != http.StatusBadRequest {
@@ -440,17 +440,17 @@ func TestCreateMovieHandlerValidation(t *testing.T) {
 	}
 }
 
-func TestUpdateMovieHandler(t *testing.T) {
+func TestUpdateFeedHandler(t *testing.T) {
 	repo, mock := newMockRepo(t)
 	service := NewService(repo, cache.NewNoop(), time.Minute, noop.NewTracerProvider().Tracer("test"))
 	h := NewHandler(service)
 
-	updatedMovie := Movie{
+	updatedFeed := Feed{
 		Title:       "Inception Updated",
 		Description: "A deeper dream.",
 		Rating:      9.0,
 	}
-	body, _ := json.Marshal(updatedMovie)
+	body, _ := json.Marshal(updatedFeed)
 
 	now := time.Now()
 	// sqlc-generated UPDATE uses RETURNING * (all 7 columns).
@@ -458,14 +458,14 @@ func TestUpdateMovieHandler(t *testing.T) {
 	// pgtype.Float8 wrappers; matching by type in the test is
 	// brittle (and orthogonal to what we're testing), so we use
 	// AnyArg() for the nullable fields and pin the int32 ID.
-	mock.ExpectQuery(`UPDATE movies SET title`).
-		WithArgs(updatedMovie.Title, pgxmock.AnyArg(), pgxmock.AnyArg(), int32(1)).
+	mock.ExpectQuery(`UPDATE feeds SET title`).
+		WithArgs(updatedFeed.Title, pgxmock.AnyArg(), pgxmock.AnyArg(), int32(1)).
 		WillReturnRows(pgxmock.NewRows([]string{"id", "title", "description", "rating", "created_at", "updated_at", "deleted_at"}).
-			AddRow(int32(1), updatedMovie.Title, updatedMovie.Description, updatedMovie.Rating, now, now, nil))
+			AddRow(int32(1), updatedFeed.Title, updatedFeed.Description, updatedFeed.Rating, now, now, nil))
 
 	tokens := newTestTokens(t)
 	router := setupTestRouter(h, tokens, true)
-	req, _ := http.NewRequest("PUT", "/api/movies/1", bytes.NewBuffer(body))
+	req, _ := http.NewRequest("PUT", "/api/feeds/1", bytes.NewBuffer(body))
 	req.Header.Set("Authorization", "Bearer "+testAccessToken(t, tokens))
 	rr := httptest.NewRecorder()
 	router.ServeHTTP(rr, req)
@@ -474,30 +474,30 @@ func TestUpdateMovieHandler(t *testing.T) {
 		t.Errorf("handler returned wrong status code: got %v want %v", rr.Code, http.StatusOK)
 	}
 
-	var m Movie
-	if err := json.Unmarshal(rr.Body.Bytes(), &m); err != nil {
+	var f Feed
+	if err := json.Unmarshal(rr.Body.Bytes(), &f); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
-	if m.ID != 1 || m.Title != updatedMovie.Title {
-		t.Errorf("expected ID 1 and title %v, got ID %v and title %v", updatedMovie.Title, m.ID, m.Title)
+	if f.ID != 1 || f.Title != updatedFeed.Title {
+		t.Errorf("expected ID 1 and title %v, got ID %v and title %v", updatedFeed.Title, f.ID, f.Title)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Errorf("unmet pgxmock expectations: %v", err)
 	}
 }
 
-func TestDeleteMovieHandler(t *testing.T) {
+func TestDeleteFeedHandler(t *testing.T) {
 	repo, mock := newMockRepo(t)
 	service := NewService(repo, cache.NewNoop(), time.Minute, noop.NewTracerProvider().Tracer("test"))
 	h := NewHandler(service)
 
-	mock.ExpectExec(`UPDATE movies SET deleted_at`).
+	mock.ExpectExec(`UPDATE feeds SET deleted_at`).
 		WithArgs(int32(1)).
 		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
 
 	tokens := newTestTokens(t)
 	router := setupTestRouter(h, tokens, true)
-	req, _ := http.NewRequest("DELETE", "/api/movies/1", nil)
+	req, _ := http.NewRequest("DELETE", "/api/feeds/1", nil)
 	req.Header.Set("Authorization", "Bearer "+testAccessToken(t, tokens))
 	rr := httptest.NewRecorder()
 	router.ServeHTTP(rr, req)
@@ -510,57 +510,57 @@ func TestDeleteMovieHandler(t *testing.T) {
 	}
 }
 
-// TestUpdateMovieHandlerNotFound exercises the new errors.Is(err,
+// TestUpdateFeedHandlerNotFound exercises the new errors.Is(err,
 // ErrNotFound) path. The repo returns pgx.ErrNoRows from the
 // sqlc-generated :one query when the row is missing, and the
 // handler maps that to HTTP 404.
-func TestUpdateMovieHandlerNotFound(t *testing.T) {
+func TestUpdateFeedHandlerNotFound(t *testing.T) {
 	repo, mock := newMockRepo(t)
 	service := NewService(repo, cache.NewNoop(), time.Minute, noop.NewTracerProvider().Tracer("test"))
 	h := NewHandler(service)
 
-	updatedMovie := Movie{Title: "Anything", Rating: 5.0}
-	body, _ := json.Marshal(updatedMovie)
+	updatedFeed := Feed{Title: "Anything", Rating: 5.0}
+	body, _ := json.Marshal(updatedFeed)
 
-	mock.ExpectQuery(`UPDATE movies SET title`).
-		WithArgs(updatedMovie.Title, pgxmock.AnyArg(), pgxmock.AnyArg(), int32(999)).
+	mock.ExpectQuery(`UPDATE feeds SET title`).
+		WithArgs(updatedFeed.Title, pgxmock.AnyArg(), pgxmock.AnyArg(), int32(999)).
 		WillReturnError(pgx.ErrNoRows)
 
 	tokens := newTestTokens(t)
 	router := setupTestRouter(h, tokens, true)
-	req, _ := http.NewRequest("PUT", "/api/movies/999", bytes.NewBuffer(body))
+	req, _ := http.NewRequest("PUT", "/api/feeds/999", bytes.NewBuffer(body))
 	req.Header.Set("Authorization", "Bearer "+testAccessToken(t, tokens))
 	rr := httptest.NewRecorder()
 	router.ServeHTTP(rr, req)
 
 	if rr.Code != http.StatusNotFound {
-		t.Errorf("expected status 404 for missing movie, got %v", rr.Code)
+		t.Errorf("expected status 404 for missing feed, got %v", rr.Code)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Errorf("unmet pgxmock expectations: %v", err)
 	}
 }
 
-// TestDeleteMovieHandlerNotFound exercises the new RowsAffected==0
+// TestDeleteFeedHandlerNotFound exercises the new RowsAffected==0
 // path in the repo. The handler maps ErrNotFound to HTTP 404.
-func TestDeleteMovieHandlerNotFound(t *testing.T) {
+func TestDeleteFeedHandlerNotFound(t *testing.T) {
 	repo, mock := newMockRepo(t)
 	service := NewService(repo, cache.NewNoop(), time.Minute, noop.NewTracerProvider().Tracer("test"))
 	h := NewHandler(service)
 
-	mock.ExpectExec(`UPDATE movies SET deleted_at`).
+	mock.ExpectExec(`UPDATE feeds SET deleted_at`).
 		WithArgs(int32(999)).
 		WillReturnResult(pgxmock.NewResult("UPDATE", 0))
 
 	tokens := newTestTokens(t)
 	router := setupTestRouter(h, tokens, true)
-	req, _ := http.NewRequest("DELETE", "/api/movies/999", nil)
+	req, _ := http.NewRequest("DELETE", "/api/feeds/999", nil)
 	req.Header.Set("Authorization", "Bearer "+testAccessToken(t, tokens))
 	rr := httptest.NewRecorder()
 	router.ServeHTTP(rr, req)
 
 	if rr.Code != http.StatusNotFound {
-		t.Errorf("expected status 404 for missing movie, got %v", rr.Code)
+		t.Errorf("expected status 404 for missing feed, got %v", rr.Code)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Errorf("unmet pgxmock expectations: %v", err)
@@ -574,27 +574,27 @@ func TestErrNotFoundIsError(t *testing.T) {
 	}
 }
 
-// TestCreateMovieHandler_InternalErrorHidesInternalDetails pins the
+// TestCreateFeedHandler_InternalErrorHidesInternalDetails pins the
 // safe-detail guarantee of commit 4: when the repo returns a non-
 // sentinel error, the response body must carry a static wire message
 // (now "Internal server error" via MapError) and must NOT echo the
 // underlying pgx error.
-func TestCreateMovieHandler_InternalErrorHidesInternalDetails(t *testing.T) {
+func TestCreateFeedHandler_InternalErrorHidesInternalDetails(t *testing.T) {
 	repo, mock := newMockRepo(t)
 	service := NewService(repo, cache.NewNoop(), time.Minute, noop.NewTracerProvider().Tracer("test"))
 	h := NewHandler(service)
 
-	body, _ := json.Marshal(Movie{Title: "X", Rating: 5})
+	body, _ := json.Marshal(Feed{Title: "X", Rating: 5})
 	// pgx-style error text — contains SQL fragment & driver internals
 	// we explicitly must not leak to the client.
-	pgxLeak := fmt.Errorf("ERROR: relation %q does not exist (SQLSTATE 42P01)", "movies")
-	mock.ExpectQuery(`INSERT INTO movies`).
+	pgxLeak := fmt.Errorf("ERROR: relation %q does not exist (SQLSTATE 42P01)", "feeds")
+	mock.ExpectQuery(`INSERT INTO feeds`).
 		WithArgs("X", pgxmock.AnyArg(), pgxmock.AnyArg()).
 		WillReturnError(pgxLeak)
 
 	tokens := newTestTokens(t)
 	router := setupTestRouter(h, tokens, true)
-	req, _ := http.NewRequest("POST", "/api/movies", bytes.NewBuffer(body))
+	req, _ := http.NewRequest("POST", "/api/feeds", bytes.NewBuffer(body))
 	req.Header.Set("Authorization", "Bearer "+testAccessToken(t, tokens))
 	rr := httptest.NewRecorder()
 	router.ServeHTTP(rr, req)
@@ -610,8 +610,8 @@ func TestCreateMovieHandler_InternalErrorHidesInternalDetails(t *testing.T) {
 	if env.Message != "Internal server error" {
 		t.Errorf("envelope.error = %q, want %q", env.Message, "Internal server error")
 	}
-	if env.Details != "Failed to create movie" {
-		t.Errorf("envelope.details = %v, want %q", env.Details, "Failed to create movie")
+	if env.Details != "Failed to create feed" {
+		t.Errorf("envelope.details = %v, want %q", env.Details, "Failed to create feed")
 	}
 	if strings.Contains(rr.Body.String(), "42P01") || strings.Contains(rr.Body.String(), "SQLSTATE") {
 		t.Errorf("response leaks pgx internals: %s", rr.Body.String())
@@ -621,22 +621,22 @@ func TestCreateMovieHandler_InternalErrorHidesInternalDetails(t *testing.T) {
 	}
 }
 
-// TestUpdateMovieHandler_InternalErrorHidesInternalDetails covers the
+// TestUpdateFeedHandler_InternalErrorHidesInternalDetails covers the
 // non-sentinel update branch — same wire contract as create, funneled
 // through MapError.
-func TestUpdateMovieHandler_InternalErrorHidesInternalDetails(t *testing.T) {
+func TestUpdateFeedHandler_InternalErrorHidesInternalDetails(t *testing.T) {
 	repo, mock := newMockRepo(t)
 	service := NewService(repo, cache.NewNoop(), time.Minute, noop.NewTracerProvider().Tracer("test"))
 	h := NewHandler(service)
 
-	body, _ := json.Marshal(Movie{Title: "X", Rating: 5})
-	mock.ExpectQuery(`UPDATE movies SET title`).
+	body, _ := json.Marshal(Feed{Title: "X", Rating: 5})
+	mock.ExpectQuery(`UPDATE feeds SET title`).
 		WithArgs("X", pgxmock.AnyArg(), pgxmock.AnyArg(), int32(1)).
 		WillReturnError(errors.New("pq: SSL connection has been closed unexpectedly"))
 
 	tokens := newTestTokens(t)
 	router := setupTestRouter(h, tokens, true)
-	req, _ := http.NewRequest("PUT", "/api/movies/1", bytes.NewBuffer(body))
+	req, _ := http.NewRequest("PUT", "/api/feeds/1", bytes.NewBuffer(body))
 	req.Header.Set("Authorization", "Bearer "+testAccessToken(t, tokens))
 	rr := httptest.NewRecorder()
 	router.ServeHTTP(rr, req)
@@ -647,30 +647,30 @@ func TestUpdateMovieHandler_InternalErrorHidesInternalDetails(t *testing.T) {
 
 	var env api.ErrorResponse
 	if err := json.Unmarshal(rr.Body.Bytes(), &env); err != nil {
-		t.Fatalf("unmarshal envelope: %v", err)
+		t.Fatalf("unmarshal envelope: %v; body=%s", err, rr.Body.String())
 	}
-	if env.Details != "Failed to update movie" {
-		t.Errorf("envelope.details = %v, want %q", env.Details, "Failed to update movie")
+	if env.Details != "Failed to update feed" {
+		t.Errorf("envelope.details = %v, want %q", env.Details, "Failed to update feed")
 	}
 	if strings.Contains(rr.Body.String(), "SSL connection") {
 		t.Errorf("response leaks pgx/SSL error text: %s", rr.Body.String())
 	}
 }
 
-// TestDeleteMovieHandler_InternalErrorHidesInternalDetails covers the
+// TestDeleteFeedHandler_InternalErrorHidesInternalDetails covers the
 // non-sentinel delete branch, funneled through MapError.
-func TestDeleteMovieHandler_InternalErrorHidesInternalDetails(t *testing.T) {
+func TestDeleteFeedHandler_InternalErrorHidesInternalDetails(t *testing.T) {
 	repo, mock := newMockRepo(t)
 	service := NewService(repo, cache.NewNoop(), time.Minute, noop.NewTracerProvider().Tracer("test"))
 	h := NewHandler(service)
 
-	mock.ExpectExec(`UPDATE movies SET deleted_at`).
+	mock.ExpectExec(`UPDATE feeds SET deleted_at`).
 		WithArgs(int32(1)).
 		WillReturnError(errors.New("bcrypt: secret mismatch"))
 
 	tokens := newTestTokens(t)
 	router := setupTestRouter(h, tokens, true)
-	req, _ := http.NewRequest("DELETE", "/api/movies/1", nil)
+	req, _ := http.NewRequest("DELETE", "/api/feeds/1", nil)
 	req.Header.Set("Authorization", "Bearer "+testAccessToken(t, tokens))
 	rr := httptest.NewRecorder()
 	router.ServeHTTP(rr, req)
@@ -681,10 +681,10 @@ func TestDeleteMovieHandler_InternalErrorHidesInternalDetails(t *testing.T) {
 
 	var env api.ErrorResponse
 	if err := json.Unmarshal(rr.Body.Bytes(), &env); err != nil {
-		t.Fatalf("unmarshal envelope: %v", err)
+		t.Fatalf("unmarshal envelope: %v; body=%s", err, rr.Body.String())
 	}
-	if env.Details != "Failed to delete movie" {
-		t.Errorf("envelope.details = %v, want %q", env.Details, "Failed to delete movie")
+	if env.Details != "Failed to delete feed" {
+		t.Errorf("envelope.details = %v, want %q", env.Details, "Failed to delete feed")
 	}
 	if strings.Contains(rr.Body.String(), "bcrypt") {
 		t.Errorf("response leaks library internals: %s", rr.Body.String())

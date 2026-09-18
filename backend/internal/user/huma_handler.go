@@ -40,8 +40,8 @@ func RegisterUserOps(api huma.API, h *Handler, tokens auth.TokenService) {
 
 // RegisterUserOpsTest registers the same operations as RegisterUserOps.
 // It exists so handler tests can build a lean chi + huma stack against
-// the exact production operation set (mirroring movie's
-// RegisterMovieOpsTest). Unlike movie there is no `withAuth` flag:
+// the exact production operation set (mirroring feed's
+// RegisterFeedOpsTest). Unlike feed there is no `withAuth` flag:
 // register, login, and refresh are public by design, so there is no
 // JWT middleware to toggle. Logout is always auth-required.
 func RegisterUserOpsTest(api huma.API, h *Handler, tokens auth.TokenService) {
@@ -150,7 +150,7 @@ type logoutInput struct{ Body LogoutRequest }
 
 // logoutOutput returns 204 with no body. With only Status set,
 // huma generates a 204 response with no content schema (mirroring
-// deleteMovieOutput in internal/movie/huma_handler.go).
+// deleteFeedOutput in internal/feed/huma_handler.go).
 type logoutOutput struct {
 	Status int `status:"204"`
 }

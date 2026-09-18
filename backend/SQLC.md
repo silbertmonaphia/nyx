@@ -2,7 +2,7 @@
 
 This document explains how to add or change a SQL query in the Nyx backend.
 The data access layer is [sqlc][sqlc]-generated; the generated code lives in
-`internal/{movie,user}/db/` and is committed.
+`internal/{feed,user}/db/` and is committed.
 
 [sqlc]: https://docs.sqlc.dev/
 
@@ -26,10 +26,10 @@ committed. Wire this into CI next to the existing `go test` step.
 
 | Path | Role |
 |---|---|
-| `backend/sqlc.yaml` | Generator config. One SQL block per feature package (`movie`, `user`). |
-| `backend/queries/movies.sql` | All queries for the movie feature. |
+| `backend/sqlc.yaml` | Generator config. One SQL block per feature package (`feed`, `user`). |
+| `backend/queries/feeds.sql` | All queries for the feed feature. |
 | `backend/queries/users.sql` | All queries for the user feature. |
-| `backend/internal/movie/db/` | Generated: `db.go`, `models.go`, `movies.sql.go`, `querier.go`. **Do not edit.** |
+| `backend/internal/feed/db/` | Generated: `db.go`, `models.go`, `feeds.sql.go`, `querier.go`. **Do not edit.** |
 | `backend/internal/user/db/` | Generated: `db.go`, `models.go`, `users.sql.go`, `querier.go`. **Do not edit.** |
 | `backend/migrations/*.up.sql` | Schema. sqlc reads these to type-check queries; no DDL is generated. |
 
@@ -45,9 +45,9 @@ inject a stub.
    `:batch`, `:batchone`, `:batchmany`.
 
    ```sql
-   -- name: GetMovieByID :one
+   -- name: GetFeedByID :one
    SELECT id, title, description, rating, created_at, updated_at, deleted_at
-   FROM movies
+   FROM feeds
    WHERE id = @id AND deleted_at IS NULL;
    ```
 
@@ -56,8 +56,8 @@ inject a stub.
      with one field per named parameter.
    - For nullable inputs, use `sqlc.narg('name')`. It returns `NULL` when the
      caller leaves the field zero-valued, which lets a single query cover the
-     "no filter" and "with filter" cases — see `QueryMoviesPage` /
-     `CountMovies` for the canonical pattern.
+     "no filter" and "with filter" cases — see `QueryFeedsPage` /
+     `CountFeeds` for the canonical pattern.
    - For non-nullable inputs, use `sqlc.arg('name')`.
    - Add the table to `sqlc.yaml`'s `schema:` list if you change the migration
      layout. The default already lists every migration under `migrations/`.
@@ -74,9 +74,9 @@ inject a stub.
 The `sqlc.narg('query')` pattern is how the search branch of `GetAll` works:
 
 ```sql
--- name: QueryMoviesPage :many
+-- name: QueryFeedsPage :many
 SELECT ...
-FROM movies
+FROM feeds
 WHERE (
         sqlc.narg('query')::text IS NULL          -- no filter
         OR title       ILIKE sqlc.narg('query')   -- LIKE title
@@ -104,12 +104,12 @@ if err != nil { return err }
 defer func() { _ = tx.Rollback(ctx) }() // no-op after a successful Commit
 
 qtx := db.New(pool).WithTx(tx)
-items, err := qtx.QueryMoviesPage(ctx, db.QueryMoviesPageParams{...})
+items, err := qtx.QueryFeedsPage(ctx, db.QueryFeedsPageParams{...})
 // ...
 return tx.Commit(ctx)
 ```
 
-The `movie.sqlRepository.GetAll` method uses this exact pattern so its
+The `feed.sqlRepository.GetAll` method uses this exact pattern so its
 `SELECT` and `COUNT(*) See the same snapshot.
 
 ## Schema changes
@@ -125,16 +125,16 @@ If you add or modify a migration under `migrations/`:
 
 - `:one` queries that match zero rows return `pgx.ErrNoRows`. Use
   `errors.Is(err, pgx.ErrNoRows)` to detect this. See
-  `movie/sqlRepository.Update` for the canonical mapping (the repo translates
+  `feed/sqlRepository.Update` for the canonical mapping (the repo translates
   the error into its own `ErrNotFound` sentinel so handlers stay decoupled
   from pgx).
 - `:execrows` queries return a `pgconn.CommandTag`. Use
   `commandTag.RowsAffected() == 0` to detect zero rows. See
-  `movie/sqlRepository.Delete`.
+  `feed/sqlRepository.Delete`.
 
 ## Troubleshooting
 
-**"package internal/movie/db: no queries found"** — sqlc found no query blocks
+**"package internal/feed/db: no queries found"** — sqlc found no query blocks
 in the `.sql` file. Every block must begin with a `--- name: ... :<kind>`
 header line.
 
@@ -168,5 +168,5 @@ Add a `make sqlc-diff` step after `go test`:
 ```
 
 It runs `sqlc generate` and `git diff --exit-code` on
-`internal/movie/db`/`internal/user/db`. A failure here means someone changed a
+`internal/feed/db`/`internal/user/db`. A failure here means someone changed a
 query without regenerating, or vice versa.

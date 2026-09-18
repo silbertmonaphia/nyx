@@ -20,7 +20,7 @@ import (
 	"os"
 	"time"
 
-	"nyx/internal/movie"
+	"nyx/internal/feed"
 	"nyx/internal/platform/api"
 	"nyx/internal/platform/auth"
 	"nyx/internal/user"
@@ -82,7 +82,7 @@ func generateSpec() ([]byte, error) {
 
 	// nil services: registration only reads struct tags, the handler
 	// funcs are never called.
-	movie.RegisterMovieOps(humaAPI, movie.NewHandler(nil), tokens)
+	feed.RegisterFeedOps(humaAPI, feed.NewHandler(nil), tokens)
 	user.RegisterUserOps(humaAPI, user.NewHandler(nil), tokens)
 
 	b, err := json.MarshalIndent(humaAPI.OpenAPI(), "", "  ")

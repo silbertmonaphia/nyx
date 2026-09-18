@@ -19,7 +19,7 @@ import (
 // It records every call so assertions can verify the service
 // forwarded the right Messages, and lets each test seed a canned
 // callback sequence + return value. Mirrors the stubRepo pattern in
-// internal/movie/service_test.go — no mocking framework, just a
+// internal/feed/service_test.go — no mocking framework, just a
 // struct with function fields.
 type stubProvider struct {
 	calls      int

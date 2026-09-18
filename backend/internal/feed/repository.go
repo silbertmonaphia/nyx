@@ -1,4 +1,4 @@
-package movie
+package feed
 
 import (
 	"context"
@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"net/http"
 
-	"nyx/internal/movie/db"
+	"nyx/internal/feed/db"
 	"nyx/internal/platform/api"
 	"nyx/internal/platform/pgerr"
 
@@ -14,18 +14,18 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
-// Page is one page of movies plus the metadata the handler needs to
+// Page is one page of feeds plus the metadata the handler needs to
 // render pagination controls.
 type Page struct {
-	Items    []Movie
+	Items    []Feed
 	Total    int
 	Page     int
 	PageSize int
 }
 
-// toInt32 narrows an int to int32. Movie rows use SERIAL PKs and
+// toInt32 narrows an int to int32. Feed rows use SERIAL PKs and
 // pagination is hard-capped at 100 by the handler, so offset/pageSize
-// and movie IDs are well below math.MaxInt32. If a hostile client
+// and feed IDs are well below math.MaxInt32. If a hostile client
 // somehow passed values above that, pgx would either wrap to a
 // negative int32 (no rows match) or fail with a value-out-of-range
 // SQLSTATE.
@@ -47,21 +47,21 @@ type Pool interface {
 
 // ErrNotFound is returned by Update and Delete when no row matched.
 // The handler layer maps this to HTTP 404; everything else becomes
-// 500. Migrated from the old `err.Error() == "movie not found"`
+// 500. Migrated from the old `err.Error() == "feed not found"`
 // string compare in handler.go.
-var ErrNotFound = errors.New("movie not found")
+var ErrNotFound = errors.New("feed not found")
 
-// Register the movie-domain sentinel with api.MapError. The
+// Register the feed-domain sentinel with api.MapError. The
 // repository is the only place that owns ErrNotFound — the handler
 // simply funnels every error through api.MapError.
 func init() {
-	api.RegisterSentinel(ErrNotFound, http.StatusNotFound, "Movie not found")
+	api.RegisterSentinel(ErrNotFound, http.StatusNotFound, "Feed not found")
 }
 
 type Repository interface {
 	GetAll(ctx context.Context, query string, page, pageSize int) (*Page, error)
-	Create(ctx context.Context, m *Movie) error
-	Update(ctx context.Context, id int, m *Movie) error
+	Create(ctx context.Context, m *Feed) error
+	Update(ctx context.Context, id int, m *Feed) error
 	Delete(ctx context.Context, id int) error
 	Ping(ctx context.Context) error
 }
@@ -85,7 +85,7 @@ func NewRepositoryFromQuerier(q *db.Queries) Repository {
 	return &sqlRepository{q: q}
 }
 
-// GetAll returns one paginated page of movies. SELECT and COUNT run
+// GetAll returns one paginated page of feeds. SELECT and COUNT run
 // in a single transaction so the page count and the items stay
 // consistent even under concurrent writes. The repo caller is
 // responsible for clamping page/pageSize; defaults are applied
@@ -114,7 +114,7 @@ func (r *sqlRepository) GetAll(ctx context.Context, queryParam string, page, pag
 	}
 
 	if r.pool == nil {
-		return nil, errors.New("movie.GetAll requires a pool; use NewRepository, not NewRepositoryFromQuerier")
+		return nil, errors.New("feed.GetAll requires a pool; use NewRepository, not NewRepositoryFromQuerier")
 	}
 
 	tx, err := r.pool.BeginTx(ctx, pgx.TxOptions{})
@@ -126,7 +126,7 @@ func (r *sqlRepository) GetAll(ctx context.Context, queryParam string, page, pag
 
 	qtx := r.q.WithTx(tx)
 
-	items, err := qtx.QueryMoviesPage(ctx, db.QueryMoviesPageParams{
+	items, err := qtx.QueryFeedsPage(ctx, db.QueryFeedsPageParams{
 		Query:    queryArg,
 		Offset:   toInt32(offset),
 		PageSize: toInt32(pageSize),
@@ -134,7 +134,7 @@ func (r *sqlRepository) GetAll(ctx context.Context, queryParam string, page, pag
 	if err != nil {
 		return nil, err
 	}
-	total, err := qtx.CountMovies(ctx, queryArg)
+	total, err := qtx.CountFeeds(ctx, queryArg)
 	if err != nil {
 		return nil, err
 	}
@@ -144,33 +144,33 @@ func (r *sqlRepository) GetAll(ctx context.Context, queryParam string, page, pag
 	}
 
 	return &Page{
-		Items:    toMovies(items),
+		Items:    toFeeds(items),
 		Total:    int(total),
 		Page:     page,
 		PageSize: pageSize,
 	}, nil
 }
 
-func (r *sqlRepository) Create(ctx context.Context, m *Movie) error {
-	row, err := r.q.InsertMovie(ctx, db.InsertMovieParams{
+func (r *sqlRepository) Create(ctx context.Context, m *Feed) error {
+	row, err := r.q.InsertFeed(ctx, db.InsertFeedParams{
 		Title:       m.Title,
 		Description: textFromString(m.Description),
 		Rating:      float8FromValue(m.Rating),
 	})
 	if err != nil {
 		// pgerr.Map is a no-op for errors it doesn't recognize; today
-		// the movies table has no unique/FK/CHECK constraints so
+		// the feeds table has no unique/FK/CHECK constraints so
 		// every SQL error passes through unchanged. Wiring it
 		// preemptively means new constraints added in future
 		// migrations get translated for free.
 		return pgerr.Map(err)
 	}
-	*m = toMovie(row)
+	*m = toFeed(row)
 	return nil
 }
 
-func (r *sqlRepository) Update(ctx context.Context, id int, m *Movie) error {
-	row, err := r.q.UpdateMovie(ctx, db.UpdateMovieParams{
+func (r *sqlRepository) Update(ctx context.Context, id int, m *Feed) error {
+	row, err := r.q.UpdateFeed(ctx, db.UpdateFeedParams{
 		Title:       m.Title,
 		Description: textFromString(m.Description),
 		Rating:      float8FromValue(m.Rating),
@@ -182,12 +182,12 @@ func (r *sqlRepository) Update(ctx context.Context, id int, m *Movie) error {
 		}
 		return pgerr.Map(err)
 	}
-	*m = toMovie(row)
+	*m = toFeed(row)
 	return nil
 }
 
 func (r *sqlRepository) Delete(ctx context.Context, id int) error {
-	rows, err := r.q.SoftDeleteMovie(ctx, toInt32(id))
+	rows, err := r.q.SoftDeleteFeed(ctx, toInt32(id))
 	if err != nil {
 		return pgerr.Map(err)
 	}
@@ -204,15 +204,15 @@ func (r *sqlRepository) Ping(ctx context.Context) error {
 	return r.pool.Ping(ctx)
 }
 
-// toMovie projects a sqlc-generated db.Movie into the API-shaped
-// Movie. The model differences are:
+// toFeed projects a sqlc-generated db.Feed into the API-shaped
+// Feed. The model differences are:
 //   - int32 (db) -> int (api)
 //   - pgtype.Text (nullable) -> string (empty when not set)
 //   - pgtype.Float8 (nullable) -> float64 (zero when not set;
 //     the API model uses a non-pointer rating, so NULL is lossy)
 //   - pgtype.Timestamptz -> time.Time / *time.Time
-func toMovie(d db.Movie) Movie {
-	m := Movie{
+func toFeed(d db.Feed) Feed {
+	m := Feed{
 		ID:        int(d.ID),
 		Title:     d.Title,
 		CreatedAt: d.CreatedAt.Time,
@@ -231,10 +231,10 @@ func toMovie(d db.Movie) Movie {
 	return m
 }
 
-func toMovies(ds []db.Movie) []Movie {
-	out := make([]Movie, len(ds))
+func toFeeds(ds []db.Feed) []Feed {
+	out := make([]Feed, len(ds))
 	for i, d := range ds {
-		out[i] = toMovie(d)
+		out[i] = toFeed(d)
 	}
 	return out
 }

@@ -32,7 +32,7 @@ const (
 )
 
 // Canonical constraint names from the migrations. The pgerr package
-// does not depend on the user/movie packages — these constants are the
+// does not depend on the user/feed packages — these constants are the
 // shared vocabulary. Renaming a constraint in a future migration
 // requires updating the matching constant here.
 //

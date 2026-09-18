@@ -64,15 +64,15 @@ func TestMapError_UserSentinels(t *testing.T) {
 	}
 }
 
-func TestMapError_MovieNotFound(t *testing.T) {
-	notFound := registerTestSentinel(t, http.StatusNotFound, "Movie not found")
+func TestMapError_FeedNotFound(t *testing.T) {
+	notFound := registerTestSentinel(t, http.StatusNotFound, "Feed not found")
 
 	got := MapError(context.Background(), notFound, "safe")
 	if got.Code != http.StatusNotFound {
 		t.Errorf("Code = %d, want %d", got.Code, http.StatusNotFound)
 	}
-	if got.Message != "Movie not found" {
-		t.Errorf("Message = %q, want %q", got.Message, "Movie not found")
+	if got.Message != "Feed not found" {
+		t.Errorf("Message = %q, want %q", got.Message, "Feed not found")
 	}
 }
 
@@ -117,7 +117,7 @@ func TestMapError_UnknownErrorReturnsSafeDetail(t *testing.T) {
 func TestMapError_WrappedSentinel(t *testing.T) {
 	// err.Is walks the chain; a fmt.Errorf("...: %w", sentinel) wrap
 	// still lands on the right mapping.
-	sentinel := registerTestSentinel(t, http.StatusNotFound, "Movie not found")
+	sentinel := registerTestSentinel(t, http.StatusNotFound, "Feed not found")
 	wrapped := fmt.Errorf("begin tx: %w", sentinel)
 
 	got := MapError(context.Background(), wrapped, "safe")
@@ -153,7 +153,7 @@ func TestMapError_PreservesRequestIDInLog(t *testing.T) {
 }
 
 func TestMapError_StampsRequestID(t *testing.T) {
-	sentinel := registerTestSentinel(t, http.StatusNotFound, "Movie not found")
+	sentinel := registerTestSentinel(t, http.StatusNotFound, "Feed not found")
 	ctx := reqctx.WithRequestID(context.Background(), "req-stamp-1")
 
 	got := MapError(ctx, sentinel, "ignored")

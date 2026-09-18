@@ -35,7 +35,7 @@ func TestTraceQueryStartEnd_HappyPath(t *testing.T) {
 	tr := NewPgxTracer(tp)
 
 	ctx := tr.TraceQueryStart(context.Background(), nil, pgx.TraceQueryStartData{
-		SQL: "SELECT id FROM movies WHERE id = $1",
+		SQL: "SELECT id FROM feeds WHERE id = $1",
 	})
 	tr.TraceQueryEnd(ctx, nil, pgx.TraceQueryEndData{}) // no error
 
@@ -47,8 +47,8 @@ func TestTraceQueryStartEnd_HappyPath(t *testing.T) {
 		t.Errorf("span.Name = %q, want %q", name, "pgx.query")
 	}
 	attrs := attrMap(span.Attributes())
-	if got := attrs["db.system"]; got != "postgresql" {
-		t.Errorf("db.system = %v, want postgresql", got)
+	if got := attrs["db.system.name"]; got != "postgresql" {
+		t.Errorf("db.system.name = %v, want postgresql", got)
 	}
 	if got := attrs["db.operation.name"]; got != "SELECT" {
 		t.Errorf("db.operation.name = %v, want SELECT", got)
@@ -66,7 +66,7 @@ func TestTraceQueryEnd_ErrorPgError(t *testing.T) {
 	wrapped := fmt.Errorf("insert: %w", pgErr)
 
 	ctx := tr.TraceQueryStart(context.Background(), nil, pgx.TraceQueryStartData{
-		SQL: "INSERT INTO movies (title) VALUES ($1)",
+		SQL: "INSERT INTO feeds (title) VALUES ($1)",
 	})
 	tr.TraceQueryEnd(ctx, nil, pgx.TraceQueryEndData{Err: wrapped})
 

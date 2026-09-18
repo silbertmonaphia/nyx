@@ -1,16 +1,17 @@
 version: "2"
 sql:
   - engine: "postgresql"
-    queries: "queries/movies.sql"
+    queries: "queries/feeds.sql"
     schema:
       - "migrations/000001_create_movies_table.up.sql"
       - "migrations/000003_add_audit_fields_to_movies_table.up.sql"
       - "migrations/000006_add_movies_indexes.up.sql"
       - "migrations/000007_add_movies_description_trgm_index.up.sql"
+      - "migrations/000011_rename_movies_to_feeds.up.sql"
     gen:
       go:
         package: "db"
-        out: "internal/movie/db"
+        out: "internal/feed/db"
         sql_package: "pgx/v5"
         emit_interface: true
         emit_json_tags: false

@@ -1,18 +1,18 @@
 import { render, screen } from '@testing-library/react';
-import { MovieList } from './MovieList';
-import { Movie } from '../types/movie';
+import { FeedList } from './FeedList';
+import { Feed } from '../types/feed';
 import { vi } from 'vitest';
 
-describe('MovieList', () => {
-  const movies: Movie[] = [
-    { id: 1, title: 'Movie 1', description: 'Desc 1', rating: 8, created_at: '2024-01-01T00:00:00Z', updated_at: '2024-01-01T00:00:00Z' },
-    { id: 2, title: 'Movie 2', description: 'Desc 2', rating: 9, created_at: '2024-01-01T00:00:00Z', updated_at: '2024-01-01T00:00:00Z' },
+describe('FeedList', () => {
+  const feeds: Feed[] = [
+    { id: 1, title: 'Feed 1', description: 'Desc 1', rating: 8, created_at: '2024-01-01T00:00:00Z', updated_at: '2024-01-01T00:00:00Z' },
+    { id: 2, title: 'Feed 2', description: 'Desc 2', rating: 9, created_at: '2024-01-01T00:00:00Z', updated_at: '2024-01-01T00:00:00Z' },
   ];
 
-  it('renders a list of movies', () => {
+  it('renders a list of feeds', () => {
     render(
-      <MovieList
-        movies={movies}
+      <FeedList
+        feeds={feeds}
         loading={false}
         searchTerm=""
         hasMore={false}
@@ -22,15 +22,15 @@ describe('MovieList', () => {
         onDelete={vi.fn()}
       />,
     );
-    expect(screen.getByTestId('movie-list')).toBeInTheDocument();
-    expect(screen.getByText('Movie 1')).toBeInTheDocument();
-    expect(screen.getByText('Movie 2')).toBeInTheDocument();
+    expect(screen.getByTestId('feed-list')).toBeInTheDocument();
+    expect(screen.getByText('Feed 1')).toBeInTheDocument();
+    expect(screen.getByText('Feed 2')).toBeInTheDocument();
   });
 
   it('renders skeleton placeholders while loading', () => {
     render(
-      <MovieList
-        movies={[]}
+      <FeedList
+        feeds={[]}
         loading={true}
         searchTerm=""
         hasMore={false}
@@ -40,13 +40,13 @@ describe('MovieList', () => {
         onDelete={vi.fn()}
       />,
     );
-    expect(screen.getByTestId('movie-list-skeleton')).toBeInTheDocument();
+    expect(screen.getByTestId('feed-list-skeleton')).toBeInTheDocument();
   });
 
-  it('renders no movies found message', () => {
+  it('renders no feeds found message', () => {
     render(
-      <MovieList
-        movies={[]}
+      <FeedList
+        feeds={[]}
         loading={false}
         searchTerm="nonexistent"
         hasMore={false}
@@ -56,13 +56,13 @@ describe('MovieList', () => {
         onDelete={vi.fn()}
       />,
     );
-    expect(screen.getByText('No movies found matching "nonexistent"')).toBeInTheDocument();
+    expect(screen.getByText('No feeds found matching "nonexistent"')).toBeInTheDocument();
   });
 
   it('renders the empty state without the search qualifier when no search term', () => {
     render(
-      <MovieList
-        movies={[]}
+      <FeedList
+        feeds={[]}
         loading={false}
         searchTerm=""
         hasMore={false}
@@ -72,13 +72,13 @@ describe('MovieList', () => {
         onDelete={vi.fn()}
       />,
     );
-    expect(screen.getByText('No movies found')).toBeInTheDocument();
+    expect(screen.getByText('No feeds found')).toBeInTheDocument();
   });
 
   it('renders the infinite-scroll sentinel when there is more data', () => {
     render(
-      <MovieList
-        movies={movies}
+      <FeedList
+        feeds={feeds}
         loading={false}
         searchTerm=""
         hasMore={true}
@@ -88,13 +88,13 @@ describe('MovieList', () => {
         onDelete={vi.fn()}
       />,
     );
-    expect(screen.getByTestId('movie-list-sentinel')).toBeInTheDocument();
+    expect(screen.getByTestId('feed-list-sentinel')).toBeInTheDocument();
   });
 
   it('does not render the sentinel when there is no more data', () => {
     render(
-      <MovieList
-        movies={movies}
+      <FeedList
+        feeds={feeds}
         loading={false}
         searchTerm=""
         hasMore={false}
@@ -104,6 +104,6 @@ describe('MovieList', () => {
         onDelete={vi.fn()}
       />,
     );
-    expect(screen.queryByTestId('movie-list-sentinel')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('feed-list-sentinel')).not.toBeInTheDocument();
   });
 });

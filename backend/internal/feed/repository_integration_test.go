@@ -1,4 +1,4 @@
-package movie
+package feed
 
 import (
 	"context"
@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"nyx/internal/movie/db"
+	"nyx/internal/feed/db"
 	"nyx/internal/platform/api"
 	"nyx/test"
 
@@ -100,7 +100,7 @@ func setupIntegrationTest(t *testing.T) (*pgxpool.Pool, Repository) {
 	require.NoError(t, err)
 
 	// Clean up tables before each test to ensure isolation.
-	_, err = pool.Exec(context.Background(), "DELETE FROM movies")
+	_, err = pool.Exec(context.Background(), "DELETE FROM feeds")
 	require.NoError(t, err)
 
 	t.Cleanup(func() { pool.Close() })
@@ -115,56 +115,56 @@ func TestRepositoryIntegration(t *testing.T) {
 	}
 	ctx := context.Background()
 
-	t.Run("CreateMovie", func(t *testing.T) {
+	t.Run("CreateFeed", func(t *testing.T) {
 		_, repo := setupIntegrationTest(t)
 
-		movie := &Movie{
+		feed := &Feed{
 			Title:       "The Matrix",
 			Description: "A computer hacker learns about the true nature of reality",
 			Rating:      8.7,
 		}
 
-		err := repo.Create(ctx, movie)
+		err := repo.Create(ctx, feed)
 		require.NoError(t, err)
-		assert.NotZero(t, movie.ID)
-		assert.NotZero(t, movie.CreatedAt)
-		assert.NotZero(t, movie.UpdatedAt)
+		assert.NotZero(t, feed.ID)
+		assert.NotZero(t, feed.CreatedAt)
+		assert.NotZero(t, feed.UpdatedAt)
 	})
 
-	t.Run("GetAllMovies", func(t *testing.T) {
+	t.Run("GetAllFeeds", func(t *testing.T) {
 		_, repo := setupIntegrationTest(t)
 
-		// Create test movies
-		movies := []*Movie{
-			{Title: "Movie 1", Description: "Description 1", Rating: 7.5},
-			{Title: "Movie 2", Description: "Description 2", Rating: 8.0},
-			{Title: "Movie 3", Description: "Description 3", Rating: 9.0},
+		// Create test feeds
+		feeds := []*Feed{
+			{Title: "Feed 1", Description: "Description 1", Rating: 7.5},
+			{Title: "Feed 2", Description: "Description 2", Rating: 8.0},
+			{Title: "Feed 3", Description: "Description 3", Rating: 9.0},
 		}
 
-		for _, m := range movies {
-			err := repo.Create(ctx, m)
+		for _, f := range feeds {
+			err := repo.Create(ctx, f)
 			require.NoError(t, err)
 		}
 
-		// Get all movies
-		allMovies, err := repo.GetAll(ctx, "", 1, 100)
+		// Get all feeds
+		allFeeds, err := repo.GetAll(ctx, "", 1, 100)
 		require.NoError(t, err)
-		assert.Len(t, allMovies.Items, 3)
-		assert.Equal(t, 3, allMovies.Total)
+		assert.Len(t, allFeeds.Items, 3)
+		assert.Equal(t, 3, allFeeds.Total)
 	})
 
-	t.Run("SearchMovies", func(t *testing.T) {
+	t.Run("SearchFeeds", func(t *testing.T) {
 		_, repo := setupIntegrationTest(t)
 
-		// Create test movies
-		movies := []*Movie{
+		// Create test feeds
+		feeds := []*Feed{
 			{Title: "The Matrix", Description: "Sci-fi action", Rating: 8.7},
 			{Title: "Inception", Description: "Mind-bending thriller", Rating: 8.8},
 			{Title: "Interstellar", Description: "Space exploration", Rating: 8.6},
 		}
 
-		for _, m := range movies {
-			err := repo.Create(ctx, m)
+		for _, f := range feeds {
+			err := repo.Create(ctx, f)
 			require.NoError(t, err)
 		}
 
@@ -186,21 +186,21 @@ func TestRepositoryIntegration(t *testing.T) {
 		assert.Empty(t, results.Items)
 	})
 
-	t.Run("UpdateMovie", func(t *testing.T) {
+	t.Run("UpdateFeed", func(t *testing.T) {
 		_, repo := setupIntegrationTest(t)
 
-		// Create a movie
-		movie := &Movie{
+		// Create a feed
+		feed := &Feed{
 			Title:       "Original Title",
 			Description: "Original description",
 			Rating:      7.0,
 		}
-		err := repo.Create(ctx, movie)
+		err := repo.Create(ctx, feed)
 		require.NoError(t, err)
-		originalID := movie.ID
+		originalID := feed.ID
 
-		// Update the movie
-		updated := &Movie{
+		// Update the feed
+		updated := &Feed{
 			Title:       "Updated Title",
 			Description: "Updated description",
 			Rating:      9.5,
@@ -210,49 +210,49 @@ func TestRepositoryIntegration(t *testing.T) {
 		require.NoError(t, err)
 
 		// Verify update
-		allMovies, err := repo.GetAll(ctx, "", 1, 100)
+		allFeeds, err := repo.GetAll(ctx, "", 1, 100)
 		require.NoError(t, err)
-		assert.Len(t, allMovies.Items, 1)
-		assert.Equal(t, "Updated Title", allMovies.Items[0].Title)
-		assert.Equal(t, "Updated description", allMovies.Items[0].Description)
-		assert.Equal(t, 9.5, allMovies.Items[0].Rating)
+		assert.Len(t, allFeeds.Items, 1)
+		assert.Equal(t, "Updated Title", allFeeds.Items[0].Title)
+		assert.Equal(t, "Updated description", allFeeds.Items[0].Description)
+		assert.Equal(t, 9.5, allFeeds.Items[0].Rating)
 	})
 
-	t.Run("UpdateMovieNotFound", func(t *testing.T) {
+	t.Run("UpdateFeedNotFound", func(t *testing.T) {
 		_, repo := setupIntegrationTest(t)
 
-		movie := &Movie{
+		feed := &Feed{
 			Title:  "Test",
 			Rating: 7.0,
 		}
 
-		err := repo.Update(ctx, 999, movie)
+		err := repo.Update(ctx, 999, feed)
 		assert.Error(t, err)
 		assert.ErrorIs(t, err, ErrNotFound)
 	})
 
-	t.Run("DeleteMovie", func(t *testing.T) {
+	t.Run("DeleteFeed", func(t *testing.T) {
 		_, repo := setupIntegrationTest(t)
 
-		// Create a movie
-		movie := &Movie{
+		// Create a feed
+		feed := &Feed{
 			Title:  "To Delete",
 			Rating: 7.0,
 		}
-		err := repo.Create(ctx, movie)
+		err := repo.Create(ctx, feed)
 		require.NoError(t, err)
 
-		// Delete the movie
-		err = repo.Delete(ctx, movie.ID)
+		// Delete the feed
+		err = repo.Delete(ctx, feed.ID)
 		require.NoError(t, err)
 
-		// Verify soft delete (movie should not appear in results)
-		allMovies, err := repo.GetAll(ctx, "", 1, 100)
+		// Verify soft delete (feed should not appear in results)
+		allFeeds, err := repo.GetAll(ctx, "", 1, 100)
 		require.NoError(t, err)
-		assert.Empty(t, allMovies.Items)
+		assert.Empty(t, allFeeds.Items)
 	})
 
-	t.Run("DeleteMovieNotFound", func(t *testing.T) {
+	t.Run("DeleteFeedNotFound", func(t *testing.T) {
 		_, repo := setupIntegrationTest(t)
 
 		err := repo.Delete(ctx, 999)
@@ -288,21 +288,21 @@ func TestRepositoryWithTransactions(t *testing.T) {
 		// Get repository with transaction
 		txRepo := NewRepositoryFromQuerier(db.New(pool).WithTx(tx))
 
-		// Create a movie in transaction
-		movie := &Movie{
+		// Create a feed in transaction
+		feed := &Feed{
 			Title:  "Transaction Test",
 			Rating: 8.0,
 		}
-		err = txRepo.Create(ctx, movie)
+		err = txRepo.Create(ctx, feed)
 		require.NoError(t, err)
 
 		// Rollback
 		require.NoError(t, tx.Rollback(ctx))
 
-		// Verify movie was not created
-		allMovies, err := repo.GetAll(ctx, "", 1, 100)
+		// Verify feed was not created
+		allFeeds, err := repo.GetAll(ctx, "", 1, 100)
 		require.NoError(t, err)
-		assert.Empty(t, allMovies.Items)
+		assert.Empty(t, allFeeds.Items)
 	})
 
 	t.Run("TransactionCommit", func(t *testing.T) {
@@ -315,21 +315,21 @@ func TestRepositoryWithTransactions(t *testing.T) {
 		// Get repository with transaction
 		txRepo := NewRepositoryFromQuerier(db.New(pool).WithTx(tx))
 
-		// Create a movie in transaction
-		movie := &Movie{
+		// Create a feed in transaction
+		feed := &Feed{
 			Title:  "Transaction Commit Test",
 			Rating: 8.5,
 		}
-		err = txRepo.Create(ctx, movie)
+		err = txRepo.Create(ctx, feed)
 		require.NoError(t, err)
 
 		// Commit
 		require.NoError(t, tx.Commit(ctx))
 
-		// Verify movie was created
-		allMovies, err := repo.GetAll(ctx, "", 1, 100)
+		// Verify feed was created
+		allFeeds, err := repo.GetAll(ctx, "", 1, 100)
 		require.NoError(t, err)
-		assert.Len(t, allMovies.Items, 1)
-		assert.Equal(t, "Transaction Commit Test", allMovies.Items[0].Title)
+		assert.Len(t, allFeeds.Items, 1)
+		assert.Equal(t, "Transaction Commit Test", allFeeds.Items[0].Title)
 	})
 }

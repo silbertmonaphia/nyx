@@ -8,7 +8,7 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
-type Movie struct {
+type Feed struct {
 	ID          int32
 	Title       string
 	Description pgtype.Text

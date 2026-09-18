@@ -32,8 +32,8 @@ func TestGenerateSpec(t *testing.T) {
 
 	for _, p := range []string{
 		"/api/health",
-		"/api/movies",
-		"/api/movies/{id}",
+		"/api/feeds",
+		"/api/feeds/{id}",
 		"/api/login",
 		"/api/register",
 	} {

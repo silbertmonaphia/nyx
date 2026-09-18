@@ -21,7 +21,7 @@ Feature-first. New code lives under `src/features/<feature>/{components,hooks,se
 
 ```
 frontend/src/
-├── features/{movies,auth}/
+├── features/{feeds,auth}/
 ├── components/{app,ui}/          # ui = shared primitives; app = composition
 ├── hooks/                        # cross-feature hooks (useDebounce, …)
 ├── services/api.ts               # configured axios instance
@@ -36,20 +36,20 @@ Reuse existing primitives — do not introduce new UI libraries:
 - Radix-based UI in `src/components/ui/`: `Button`, `Card`, `Dialog`, `Input`, `Label`, `Textarea`, `ToastContainer`, plus `Slot` and `<PageMeta>` (React 19 metadata).
 - `cn()` from `src/utils/`.
 - Configured axios at `src/services/api.ts` (auth header injection + global toasts + refresh-on-401).
-- Zustand stores in `src/store/`: `useAuthStore`, `useUiStore`, `useMovieUiStore`.
+- Zustand stores in `src/store/`: `useAuthStore`, `useUiStore`, `useFeedUiStore`.
 - Vite alias `~` → `src/`. Use `~/features/...` imports.
 
 ## Patterns
 
 ### Server state — TanStack Query
 
-- Keys must include the search term and page: `['movies', searchTerm, page, pageSize]`.
+- Keys must include the search term and page: `['feeds', searchTerm, page, pageSize]`.
 - Pagination via `useInfiniteQuery`. Expose `page`, `pageSize`, `total`, `hasMore`, `isLoadingMore`, `loadMore`. Backend envelope is `{data, page, page_size, total, has_more}`.
 - Mutations: `onMutate` for optimistic update with rollback in `onError` and reconciliation in `onSettled`. Placeholder ids use `-Date.now()` (negative sentinels). Update/delete must **refuse negative ids** — they are pending placeholders, not real records.
 
 ### Forms — react-hook-form + zod
 
-Schemas live with the feature in `features/<feature>/types.ts`. Use `@hookform/resolvers/zod` to wire them into `<form>`. Reference impl: `src/features/movies/components/MovieForm.tsx`.
+Schemas live with the feature in `features/<feature>/types.ts`. Use `@hookform/resolvers/zod` to wire them into `<form>`. Reference impl: `src/features/feeds/components/FeedForm.tsx`.
 
 ### Auth + refresh tokens
 
@@ -74,7 +74,7 @@ Per-page `<title>` and `<meta name="description">` via the `<PageMeta>` wrapper 
 
 ## Tests
 
-Vitest + React Testing Library + `@testing-library/user-event`. New components ship with at least a render test. Reference impl: `src/features/movies/hooks/useMovies.test.ts`. `IntersectionObserver` polyfill is loaded by `src/test/setup.js`; that setup also excludes `**/tests/e2e/**` (Playwright owns that path).
+Vitest + React Testing Library + `@testing-library/user-event`. New components ship with at least a render test. Reference impl: `src/features/feeds/hooks/useFeeds.test.ts`. `IntersectionObserver` polyfill is loaded by `src/test/setup.js`; that setup also excludes `**/tests/e2e/**` (Playwright owns that path).
 
 Required test surfaces for auth changes:
 - `authStore`: `setAuth` from login/register/refresh, `setAccessToken` preserves refresh token + user, `logout` clears all four fields, `partialize` excludes `isAuthenticated`.

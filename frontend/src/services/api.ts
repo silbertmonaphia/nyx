@@ -186,7 +186,7 @@ export async function refreshTokensAndReplay(): Promise<boolean> {
  * Request interceptor: stamps the W3C traceparent + the Bearer
  * access token on every outbound request. The Bearer stamp is a
  * no-op when no token is present (the public endpoints — register,
- * login, refresh, health, get-movies — work anonymously). The
+ * login, refresh, health, get-feeds — work anonymously). The
  * traceparent stamping runs on every request including the 401
  * retry path.
  */
@@ -236,7 +236,7 @@ function getHeader(error: AxiosError, name: string): string | undefined {
  *
  * 4xx is carved out: those responses are API-contract failures
  * with controlled, user-facing strings ("User already exists",
- * "Movie not found", "Invalid chat input", huma validation
+ * "Feed not found", "Invalid chat input", huma validation
  * messages, …). Surfacing them lets the user act on the failure
  * (e.g. pick a different username) instead of seeing a generic
  * "Server error (409)" and wondering if the backend is down. The

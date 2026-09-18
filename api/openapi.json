@@ -53,6 +53,100 @@
         ],
         "type": "object"
       },
+      "Feed": {
+        "additionalProperties": false,
+        "properties": {
+          "created_at": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "deleted_at": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "description": {
+            "maxLength": 1000,
+            "type": "string"
+          },
+          "id": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "rating": {
+            "format": "double",
+            "maximum": 10,
+            "minimum": 0,
+            "type": "number"
+          },
+          "title": {
+            "maxLength": 100,
+            "minLength": 1,
+            "type": "string"
+          },
+          "updated_at": {
+            "format": "date-time",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "title",
+          "description",
+          "rating",
+          "created_at",
+          "updated_at"
+        ],
+        "type": "object"
+      },
+      "FeedsPage": {
+        "additionalProperties": false,
+        "properties": {
+          "data": {
+            "items": {
+              "$ref": "#/components/schemas/Feed"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "has_more": {
+            "examples": [
+              true
+            ],
+            "type": "boolean"
+          },
+          "page": {
+            "examples": [
+              1
+            ],
+            "format": "int64",
+            "type": "integer"
+          },
+          "page_size": {
+            "examples": [
+              20
+            ],
+            "format": "int64",
+            "type": "integer"
+          },
+          "total": {
+            "examples": [
+              42
+            ],
+            "format": "int64",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "data",
+          "page",
+          "page_size",
+          "total",
+          "has_more"
+        ],
+        "type": "object"
+      },
       "HealthResponse": {
         "additionalProperties": false,
         "properties": {
@@ -147,100 +241,6 @@
         ],
         "type": "object"
       },
-      "Movie": {
-        "additionalProperties": false,
-        "properties": {
-          "created_at": {
-            "format": "date-time",
-            "type": "string"
-          },
-          "deleted_at": {
-            "format": "date-time",
-            "type": "string"
-          },
-          "description": {
-            "maxLength": 1000,
-            "type": "string"
-          },
-          "id": {
-            "format": "int64",
-            "type": "integer"
-          },
-          "rating": {
-            "format": "double",
-            "maximum": 10,
-            "minimum": 0,
-            "type": "number"
-          },
-          "title": {
-            "maxLength": 100,
-            "minLength": 1,
-            "type": "string"
-          },
-          "updated_at": {
-            "format": "date-time",
-            "type": "string"
-          }
-        },
-        "required": [
-          "id",
-          "title",
-          "description",
-          "rating",
-          "created_at",
-          "updated_at"
-        ],
-        "type": "object"
-      },
-      "MoviesPage": {
-        "additionalProperties": false,
-        "properties": {
-          "data": {
-            "items": {
-              "$ref": "#/components/schemas/Movie"
-            },
-            "type": [
-              "array",
-              "null"
-            ]
-          },
-          "has_more": {
-            "examples": [
-              true
-            ],
-            "type": "boolean"
-          },
-          "page": {
-            "examples": [
-              1
-            ],
-            "format": "int64",
-            "type": "integer"
-          },
-          "page_size": {
-            "examples": [
-              20
-            ],
-            "format": "int64",
-            "type": "integer"
-          },
-          "total": {
-            "examples": [
-              42
-            ],
-            "format": "int64",
-            "type": "integer"
-          }
-        },
-        "required": [
-          "data",
-          "page",
-          "page_size",
-          "total",
-          "has_more"
-        ],
-        "type": "object"
-      },
       "RefreshRequest": {
         "additionalProperties": false,
         "properties": {
@@ -321,6 +321,221 @@
   },
   "openapi": "3.1.0",
   "paths": {
+    "/api/feeds": {
+      "get": {
+        "description": "Returns a paginated list of feeds, optionally filtered by a search term matched against title and description.",
+        "operationId": "get-feeds",
+        "parameters": [
+          {
+            "description": "Case-insensitive search term matched against title and description.",
+            "explode": false,
+            "in": "query",
+            "name": "q",
+            "schema": {
+              "description": "Case-insensitive search term matched against title and description.",
+              "maxLength": 200,
+              "type": "string"
+            }
+          },
+          {
+            "description": "1-based page index.",
+            "explode": false,
+            "in": "query",
+            "name": "page",
+            "schema": {
+              "default": 1,
+              "description": "1-based page index.",
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Items per page; clamped to a server-side maximum of 100.",
+            "explode": false,
+            "in": "query",
+            "name": "page_size",
+            "schema": {
+              "default": 20,
+              "description": "Items per page; clamped to a server-side maximum of 100.",
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FeedsPage"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "List feeds",
+        "tags": [
+          "feeds"
+        ]
+      },
+      "post": {
+        "description": "Creates a new feed record. Requires a valid JWT in the Authorization header.",
+        "operationId": "create-feed",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Feed"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Feed"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Create a feed",
+        "tags": [
+          "feeds"
+        ]
+      }
+    },
+    "/api/feeds/{id}": {
+      "delete": {
+        "description": "Soft-deletes a feed record. Requires a valid JWT.",
+        "operationId": "delete-feed",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "No Content"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Delete a feed",
+        "tags": [
+          "feeds"
+        ]
+      },
+      "put": {
+        "description": "Updates the title, description, or rating of an existing feed. Requires a valid JWT.",
+        "operationId": "update-feed",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Feed"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Feed"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Update a feed",
+        "tags": [
+          "feeds"
+        ]
+      }
+    },
     "/api/health": {
       "get": {
         "description": "Reports the status of the API, the database connection, and the cache.",
@@ -501,221 +716,6 @@
         "summary": "Get current user",
         "tags": [
           "auth"
-        ]
-      }
-    },
-    "/api/movies": {
-      "get": {
-        "description": "Returns a paginated list of movies, optionally filtered by a search term matched against title and description.",
-        "operationId": "get-movies",
-        "parameters": [
-          {
-            "description": "Case-insensitive search term matched against title and description.",
-            "explode": false,
-            "in": "query",
-            "name": "q",
-            "schema": {
-              "description": "Case-insensitive search term matched against title and description.",
-              "maxLength": 200,
-              "type": "string"
-            }
-          },
-          {
-            "description": "1-based page index.",
-            "explode": false,
-            "in": "query",
-            "name": "page",
-            "schema": {
-              "default": 1,
-              "description": "1-based page index.",
-              "format": "int64",
-              "minimum": 1,
-              "type": "integer"
-            }
-          },
-          {
-            "description": "Items per page; clamped to a server-side maximum of 100.",
-            "explode": false,
-            "in": "query",
-            "name": "page_size",
-            "schema": {
-              "default": 20,
-              "description": "Items per page; clamped to a server-side maximum of 100.",
-              "format": "int64",
-              "minimum": 1,
-              "type": "integer"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/MoviesPage"
-                }
-              }
-            },
-            "description": "OK"
-          },
-          "default": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            },
-            "description": "Error"
-          }
-        },
-        "summary": "List movies",
-        "tags": [
-          "movies"
-        ]
-      },
-      "post": {
-        "description": "Creates a new movie record. Requires a valid JWT in the Authorization header.",
-        "operationId": "create-movie",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/Movie"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Movie"
-                }
-              }
-            },
-            "description": "OK"
-          },
-          "default": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            },
-            "description": "Error"
-          }
-        },
-        "security": [
-          {
-            "BearerAuth": []
-          }
-        ],
-        "summary": "Create a movie",
-        "tags": [
-          "movies"
-        ]
-      }
-    },
-    "/api/movies/{id}": {
-      "delete": {
-        "description": "Soft-deletes a movie record. Requires a valid JWT.",
-        "operationId": "delete-movie",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "id",
-            "required": true,
-            "schema": {
-              "format": "int64",
-              "minimum": 1,
-              "type": "integer"
-            }
-          }
-        ],
-        "responses": {
-          "204": {
-            "description": "No Content"
-          },
-          "default": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            },
-            "description": "Error"
-          }
-        },
-        "security": [
-          {
-            "BearerAuth": []
-          }
-        ],
-        "summary": "Delete a movie",
-        "tags": [
-          "movies"
-        ]
-      },
-      "put": {
-        "description": "Updates the title, description, or rating of an existing movie. Requires a valid JWT.",
-        "operationId": "update-movie",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "id",
-            "required": true,
-            "schema": {
-              "format": "int64",
-              "minimum": 1,
-              "type": "integer"
-            }
-          }
-        ],
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/Movie"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Movie"
-                }
-              }
-            },
-            "description": "OK"
-          },
-          "default": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            },
-            "description": "Error"
-          }
-        },
-        "security": [
-          {
-            "BearerAuth": []
-          }
-        ],
-        "summary": "Update a movie",
-        "tags": [
-          "movies"
         ]
       }
     },

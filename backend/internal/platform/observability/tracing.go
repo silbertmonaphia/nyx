@@ -40,7 +40,7 @@ var ServiceVersion = "9.9.9"
 //
 // Provider is the otel.TracerProvider to install as the global
 // (otel.SetTracerProvider) and to hand out via .Tracer("...") for
-// per-domain spans (movie, user, pgx).
+// per-domain spans (feed, user, pgx).
 //
 // Shutdown flushes any buffered spans; safe to call when tracing is
 // disabled (returns nil immediately).

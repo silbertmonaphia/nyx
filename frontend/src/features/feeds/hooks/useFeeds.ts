@@ -5,32 +5,32 @@ import {
   type InfiniteData,
 } from '@tanstack/react-query';
 import { useMemo } from 'react';
-import { movieService } from '../services/movieService';
-import { Movie, NewMovie, PaginatedMovies } from '../types/movie';
+import { feedService } from '../services/feedService';
+import { Feed, NewFeed, PaginatedFeeds } from '../types/feed';
 
-const MOVIES_QUERY_KEY = 'movies' as const;
+const FEEDS_QUERY_KEY = 'feeds' as const;
 const PAGE_SIZE = 20;
 
 // Negative ids are placeholders for rows that have not yet been
-// confirmed by the server (see addMovie's optimistic update). They
+// confirmed by the server (see addFeed's optimistic update). They
 // must never be sent to the API.
 const isOptimisticId = (id: number) => id < 0;
 
-// The generated OpenAPI types declare `MoviesPage.data` as `Movie[] | null`
+// The generated OpenAPI types declare `FeedsPage.data` as `Feed[] | null`
 // because huma emits `"type": ["array", "null"]` for the slice. The backend
-// always sends a non-null array (`NewMoviesPage` coerces nil to []), so the
+// always sends a non-null array (`NewFeedsPage` coerces nil to []), so the
 // nullable type is a schema artefact rather than something the wire
 // actually carries. Coerce at the boundary so the optimistic-update
 // callbacks can keep working with plain arrays.
-const pageData = (page: PaginatedMovies): Movie[] => page.data ?? [];
+const pageData = (page: PaginatedFeeds): Feed[] => page.data ?? [];
 
-interface MoviesContext {
+interface FeedsContext {
   previous: Array<[readonly unknown[], unknown]> | undefined;
 }
 
-export const useMovies = (searchTerm: string) => {
+export const useFeeds = (searchTerm: string) => {
   const queryClient = useQueryClient();
-  const queryKey = [MOVIES_QUERY_KEY, searchTerm] as const;
+  const queryKey = [FEEDS_QUERY_KEY, searchTerm] as const;
 
   const {
     data,
@@ -39,9 +39,9 @@ export const useMovies = (searchTerm: string) => {
     isFetchingNextPage,
     isLoading,
     isError,
-  } = useInfiniteQuery<PaginatedMovies, Error, InfiniteData<PaginatedMovies>, typeof queryKey, number>({
+  } = useInfiniteQuery<PaginatedFeeds, Error, InfiniteData<PaginatedFeeds>, typeof queryKey, number>({
     queryKey,
-    queryFn: ({ pageParam }) => movieService.getMovies(searchTerm, pageParam, PAGE_SIZE),
+    queryFn: ({ pageParam }) => feedService.getFeeds(searchTerm, pageParam, PAGE_SIZE),
     initialPageParam: 1,
     getNextPageParam: (last) => (last ? (last.has_more ? last.page + 1 : undefined) : undefined),
     staleTime: 30_000,
@@ -50,9 +50,9 @@ export const useMovies = (searchTerm: string) => {
     gcTime: 30 * 60 * 1000,
   });
 
-  const movies = useMemo<Movie[]>(
-    // `data` is `Movie[] | null` in the OpenAPI schema; the backend always
-    // emits a non-null array (see NewMoviesPage in model.go), but the spec
+  const feeds = useMemo<Feed[]>(
+    // `data` is `Feed[] | null` in the OpenAPI schema; the backend always
+    // emits a non-null array (see NewFeedsPage in model.go), but the spec
     // doesn't pin that down, so we coalesce defensively.
     () => data?.pages?.flatMap((p) => p.data ?? []) ?? [],
     [data],
@@ -62,17 +62,17 @@ export const useMovies = (searchTerm: string) => {
 
   // ---- Mutations with optimistic updates ----------------------------------
 
-  const addMovie = useMutation<Movie, Error, NewMovie, MoviesContext>({
-    mutationFn: (newMovie) => movieService.addMovie(newMovie),
-    onMutate: async (newMovie) => {
+  const addFeed = useMutation<Feed, Error, NewFeed, FeedsContext>({
+    mutationFn: (newFeed) => feedService.addFeed(newFeed),
+    onMutate: async (newFeed) => {
       await queryClient.cancelQueries({ queryKey });
       const previous = queryClient.getQueriesData({ queryKey });
-      queryClient.setQueriesData<InfiniteData<PaginatedMovies>>(
+      queryClient.setQueriesData<InfiniteData<PaginatedFeeds>>(
         { queryKey },
         (old) => {
           if (!old || old.pages.length === 0) return old;
-          const optimistic: Movie = {
-            ...newMovie,
+          const optimistic: Feed = {
+            ...newFeed,
             id: -Date.now(), // negative id marks it as unconfirmed
             created_at: new Date().toISOString(),
             updated_at: new Date().toISOString(),
@@ -93,7 +93,7 @@ export const useMovies = (searchTerm: string) => {
       // Swap the optimistic placeholder (negative id) for the real row
       // returned by the server so subsequent edit/delete targets the
       // persisted id. Failures still flow through onError → onSettled.
-      queryClient.setQueriesData<InfiniteData<PaginatedMovies>>(
+      queryClient.setQueriesData<InfiniteData<PaginatedFeeds>>(
         { queryKey },
         (old) => {
           if (!old) return old;
@@ -101,7 +101,7 @@ export const useMovies = (searchTerm: string) => {
             ...old,
             pages: old.pages.map((page) => ({
               ...page,
-              data: pageData(page).map((m) => (isOptimisticId(m.id) ? created : m)),
+              data: pageData(page).map((f) => (isOptimisticId(f.id) ? created : f)),
             })),
           };
         },
@@ -117,20 +117,20 @@ export const useMovies = (searchTerm: string) => {
     },
   });
 
-  const updateMovie = useMutation<Movie, Error, Movie, MoviesContext>({
-    mutationFn: (movie) => {
-      if (isOptimisticId(movie.id)) {
+  const updateFeed = useMutation<Feed, Error, Feed, FeedsContext>({
+    mutationFn: (feed) => {
+      if (isOptimisticId(feed.id)) {
         // Refuse to PUT a placeholder id — the server has no row to
-        // update. The optimistic row will be replaced by addMovie's
+        // update. The optimistic row will be replaced by addFeed's
         // onSuccess once the create mutation settles.
-        return Promise.reject(new Error('Cannot update a movie before it has been created'));
+        return Promise.reject(new Error('Cannot update a feed before it has been created'));
       }
-      return movieService.updateMovie(movie.id, movie);
+      return feedService.updateFeed(feed.id, feed);
     },
     onMutate: async (updated) => {
       await queryClient.cancelQueries({ queryKey });
       const previous = queryClient.getQueriesData({ queryKey });
-      queryClient.setQueriesData<InfiniteData<PaginatedMovies>>(
+      queryClient.setQueriesData<InfiniteData<PaginatedFeeds>>(
         { queryKey },
         (old) => {
           if (!old) return old;
@@ -138,7 +138,7 @@ export const useMovies = (searchTerm: string) => {
             ...old,
             pages: old.pages.map((page) => ({
               ...page,
-              data: pageData(page).map((m) => (m.id === updated.id ? { ...m, ...updated } : m)),
+              data: pageData(page).map((f) => (f.id === updated.id ? { ...f, ...updated } : f)),
             })),
           };
         },
@@ -155,7 +155,7 @@ export const useMovies = (searchTerm: string) => {
     },
   });
 
-  const deleteMovie = useMutation<void, Error, number, MoviesContext>({
+  const deleteFeed = useMutation<void, Error, number, FeedsContext>({
     mutationFn: (id) => {
       if (isOptimisticId(id)) {
         // The row never reached the server. Removing it locally is
@@ -163,12 +163,12 @@ export const useMovies = (searchTerm: string) => {
         // call that would 404 on a negative id.
         return Promise.resolve();
       }
-      return movieService.deleteMovie(id);
+      return feedService.deleteFeed(id);
     },
     onMutate: async (id) => {
       await queryClient.cancelQueries({ queryKey });
       const previous = queryClient.getQueriesData({ queryKey });
-      queryClient.setQueriesData<InfiniteData<PaginatedMovies>>(
+      queryClient.setQueriesData<InfiniteData<PaginatedFeeds>>(
         { queryKey },
         (old) => {
           if (!old) return old;
@@ -176,7 +176,7 @@ export const useMovies = (searchTerm: string) => {
             ...old,
             pages: old.pages.map((page) => ({
               ...page,
-              data: pageData(page).filter((m) => m.id !== id),
+              data: pageData(page).filter((f) => f.id !== id),
               total: Math.max(0, page.total - 1),
             })),
           };
@@ -195,15 +195,15 @@ export const useMovies = (searchTerm: string) => {
   });
 
   return {
-    movies,
+    feeds,
     totalCount,
     isLoading,
     isError,
     hasMore: !!hasNextPage,
     isLoadingMore: isFetchingNextPage,
     loadMore: fetchNextPage,
-    addMovie,
-    updateMovie,
-    deleteMovie,
+    addFeed,
+    updateFeed,
+    deleteFeed,
   };
 };

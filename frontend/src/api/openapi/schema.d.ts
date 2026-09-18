@@ -4,6 +4,54 @@
  */
 
 export interface paths {
+    "/api/feeds": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List feeds
+         * @description Returns a paginated list of feeds, optionally filtered by a search term matched against title and description.
+         */
+        get: operations["get-feeds"];
+        put?: never;
+        /**
+         * Create a feed
+         * @description Creates a new feed record. Requires a valid JWT in the Authorization header.
+         */
+        post: operations["create-feed"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/feeds/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Update a feed
+         * @description Updates the title, description, or rating of an existing feed. Requires a valid JWT.
+         */
+        put: operations["update-feed"];
+        post?: never;
+        /**
+         * Delete a feed
+         * @description Soft-deletes a feed record. Requires a valid JWT.
+         */
+        delete: operations["delete-feed"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/health": {
         parameters: {
             query?: never;
@@ -104,54 +152,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/movies": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * List movies
-         * @description Returns a paginated list of movies, optionally filtered by a search term matched against title and description.
-         */
-        get: operations["get-movies"];
-        put?: never;
-        /**
-         * Create a movie
-         * @description Creates a new movie record. Requires a valid JWT in the Authorization header.
-         */
-        post: operations["create-movie"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/movies/{id}": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        /**
-         * Update a movie
-         * @description Updates the title, description, or rating of an existing movie. Requires a valid JWT.
-         */
-        put: operations["update-movie"];
-        post?: never;
-        /**
-         * Delete a movie
-         * @description Soft-deletes a movie record. Requires a valid JWT.
-         */
-        delete: operations["delete-movie"];
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/api/refresh": {
         parameters: {
             query?: never;
@@ -212,6 +212,40 @@ export interface components {
             error: string;
             request_id?: string;
         };
+        Feed: {
+            /** Format: date-time */
+            created_at: string;
+            /** Format: date-time */
+            deleted_at?: string;
+            description: string;
+            /** Format: int64 */
+            id: number;
+            /** Format: double */
+            rating: number;
+            title: string;
+            /** Format: date-time */
+            updated_at: string;
+        };
+        FeedsPage: {
+            data: components["schemas"]["Feed"][] | null;
+            /** @example true */
+            has_more: boolean;
+            /**
+             * Format: int64
+             * @example 1
+             */
+            page: number;
+            /**
+             * Format: int64
+             * @example 20
+             */
+            page_size: number;
+            /**
+             * Format: int64
+             * @example 42
+             */
+            total: number;
+        };
         HealthResponse: {
             services: components["schemas"]["HealthServices"];
             /**
@@ -242,40 +276,6 @@ export interface components {
         LogoutRequest: {
             refresh_token: string;
         };
-        Movie: {
-            /** Format: date-time */
-            created_at: string;
-            /** Format: date-time */
-            deleted_at?: string;
-            description: string;
-            /** Format: int64 */
-            id: number;
-            /** Format: double */
-            rating: number;
-            title: string;
-            /** Format: date-time */
-            updated_at: string;
-        };
-        MoviesPage: {
-            data: components["schemas"]["Movie"][] | null;
-            /** @example true */
-            has_more: boolean;
-            /**
-             * Format: int64
-             * @example 1
-             */
-            page: number;
-            /**
-             * Format: int64
-             * @example 20
-             */
-            page_size: number;
-            /**
-             * Format: int64
-             * @example 42
-             */
-            total: number;
-        };
         RefreshRequest: {
             refresh_token: string;
         };
@@ -303,6 +303,139 @@ export interface components {
 }
 export type $defs = Record<string, never>;
 export interface operations {
+    "get-feeds": {
+        parameters: {
+            query?: {
+                /** @description Case-insensitive search term matched against title and description. */
+                q?: string;
+                /** @description 1-based page index. */
+                page?: number;
+                /** @description Items per page; clamped to a server-side maximum of 100. */
+                page_size?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FeedsPage"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    "create-feed": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["Feed"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Feed"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    "update-feed": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["Feed"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Feed"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    "delete-feed": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description No Content */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
     health: {
         parameters: {
             query?: never;
@@ -442,139 +575,6 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["User"];
                 };
-            };
-            /** @description Error */
-            default: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorResponse"];
-                };
-            };
-        };
-    };
-    "get-movies": {
-        parameters: {
-            query?: {
-                /** @description Case-insensitive search term matched against title and description. */
-                q?: string;
-                /** @description 1-based page index. */
-                page?: number;
-                /** @description Items per page; clamped to a server-side maximum of 100. */
-                page_size?: number;
-            };
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description OK */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["MoviesPage"];
-                };
-            };
-            /** @description Error */
-            default: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorResponse"];
-                };
-            };
-        };
-    };
-    "create-movie": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["Movie"];
-            };
-        };
-        responses: {
-            /** @description OK */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["Movie"];
-                };
-            };
-            /** @description Error */
-            default: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorResponse"];
-                };
-            };
-        };
-    };
-    "update-movie": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                id: number;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["Movie"];
-            };
-        };
-        responses: {
-            /** @description OK */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["Movie"];
-                };
-            };
-            /** @description Error */
-            default: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorResponse"];
-                };
-            };
-        };
-    };
-    "delete-movie": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                id: number;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description No Content */
-            204: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
             };
             /** @description Error */
             default: {

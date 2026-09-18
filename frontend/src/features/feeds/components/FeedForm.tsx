@@ -1,29 +1,29 @@
 import React, { useEffect } from 'react';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
-import { Movie, movieSchema, MovieFormData } from '../types/movie';
+import { Feed, feedSchema, FeedFormData } from '../types/feed';
 import { Button } from '~/components/ui/Button';
 import { Input } from '~/components/ui/Input';
 import { Textarea } from '~/components/ui/Textarea';
 import { Label } from '~/components/ui/Label';
 import { Card, CardHeader, CardTitle, CardContent, CardFooter } from '~/components/ui/Card';
 
-interface MovieFormProps {
-  movie?: Movie | null;
-  onSubmit: (data: MovieFormData | Movie) => void;
+interface FeedFormProps {
+  feed?: Feed | null;
+  onSubmit: (data: FeedFormData | Feed) => void;
   onCancel: () => void;
   title: string;
 }
 
-export const MovieForm: React.FC<MovieFormProps> = ({ movie, onSubmit, onCancel, title }) => {
+export const FeedForm: React.FC<FeedFormProps> = ({ feed, onSubmit, onCancel, title }) => {
   const {
     register,
     handleSubmit,
     reset,
     formState: { errors },
     watch,
-  } = useForm<MovieFormData>({
-    resolver: zodResolver(movieSchema),
+  } = useForm<FeedFormData>({
+    resolver: zodResolver(feedSchema),
     defaultValues: {
       title: '',
       description: '',
@@ -35,11 +35,11 @@ export const MovieForm: React.FC<MovieFormProps> = ({ movie, onSubmit, onCancel,
   const currentRating = watch('rating');
 
   useEffect(() => {
-    if (movie) {
+    if (feed) {
       reset({
-        title: movie.title,
-        description: movie.description || '',
-        rating: movie.rating,
+        title: feed.title,
+        description: feed.description || '',
+        rating: feed.rating,
       });
     } else {
       reset({
@@ -48,22 +48,22 @@ export const MovieForm: React.FC<MovieFormProps> = ({ movie, onSubmit, onCancel,
         rating: 5.0,
       });
     }
-  }, [movie, reset]);
+  }, [feed, reset]);
 
-  const onFormSubmit = (data: MovieFormData) => {
+  const onFormSubmit = (data: FeedFormData) => {
     const formattedData = {
       ...data,
       rating: typeof data.rating === 'string' ? parseFloat(data.rating) : data.rating
     };
-    if (movie) {
-      onSubmit({ ...movie, ...formattedData });
+    if (feed) {
+      onSubmit({ ...feed, ...formattedData });
     } else {
       onSubmit(formattedData);
     }
   };
 
   return (
-    <Card className={`w-full max-w-[600px] my-4 ${movie ? 'border-primary shadow-md' : ''}`}>
+    <Card className={`w-full max-w-[600px] my-4 ${feed ? 'border-primary shadow-md' : ''}`}>
       <CardHeader>
         <CardTitle>{title}</CardTitle>
       </CardHeader>
@@ -74,7 +74,7 @@ export const MovieForm: React.FC<MovieFormProps> = ({ movie, onSubmit, onCancel,
             <Input
               id="title"
               {...register('title')}
-              placeholder="Movie title"
+              placeholder="Feed title"
               aria-invalid={!!errors.title}
               className={errors.title ? "border-destructive focus-visible:ring-destructive" : ""}
             />
@@ -112,7 +112,7 @@ export const MovieForm: React.FC<MovieFormProps> = ({ movie, onSubmit, onCancel,
         </CardContent>
         <CardFooter className="flex gap-2">
           <Button type="submit" className="flex-1">
-            {movie ? 'Update Movie' : 'Save Movie'}
+            {feed ? 'Update Feed' : 'Save Feed'}
           </Button>
           <Button type="button" variant="outline" onClick={onCancel} className="flex-1">
             Cancel

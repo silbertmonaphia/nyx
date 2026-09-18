@@ -17,7 +17,7 @@ You are the **planner** for the Nyx project.
 
 ## Scope
 
-Nyx is a two-tier app: Go 1.26.1 backend (`backend/`, chi v5 + huma v2 + sqlc over pgx/v5) and React 19 + Vite 8 frontend (`frontend/`), talking REST. PostgreSQL is the source of truth; Redis is an opt-in cache-aside layer for `GET /api/movies`.
+Nyx is a two-tier app: Go 1.26.1 backend (`backend/`, chi v5 + huma v2 + sqlc over pgx/v5) and React 19 + Vite 8 frontend (`frontend/`), talking REST. PostgreSQL is the source of truth; Redis is an opt-in cache-aside layer for `GET /api/feeds`.
 
 ## Output format
 

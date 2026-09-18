@@ -22,7 +22,7 @@ import (
 // (skipped under SKIP_CONTAINERS=true). Tests below self-skip when
 // dbURL is empty.
 //
-// Mirrors the pattern in repository_integration_test.go of the movie
+// Mirrors the pattern in repository_integration_test.go of the feed
 // domain.
 var (
 	testDB *test.TestDB
@@ -31,7 +31,7 @@ var (
 
 func TestMain(m *testing.M) {
 	// Install the huma error override before any handler test builds
-	// its router. Same reason as the movie package: huma's default
+	// its router. Same reason as the feed package: huma's default
 	// error constructors don't speak the legacy envelope, so we route
 	// them through api.ErrorResponse.
 	api.OverrideHumaErrors()

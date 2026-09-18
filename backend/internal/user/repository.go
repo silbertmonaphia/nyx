@@ -166,7 +166,7 @@ type Repository interface {
 // the unit-test path; see repository_test.go). The interface embeds
 // db.DBTX so a Pool is automatically a valid argument to db.New —
 // no extra adapter is needed at the call site. Mirrors
-// internal/movie/repository.go's Pool so the two domains have
+// internal/feed/repository.go's Pool so the two domains have
 // identical shapes.
 type Pool interface {
 	db.DBTX

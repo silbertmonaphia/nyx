@@ -50,40 +50,40 @@ operation carries its inputs/outputs via struct tags; huma reads those
 tags to drive request parsing, validation, and OpenAPI generation.
 
 ```go
-// internal/movie/huma_handler.go
-type getMovieInput struct {
+// internal/feed/huma_handler.go
+type getFeedInput struct {
     ID int `path:"id" required:"true" minimum:"1"`
 }
 
-type getMovieOutput struct{ Body Movie }
+type getFeedOutput struct{ Body Feed }
 
-func RegisterMovieOps(api huma.API, h *Handler) {
+func RegisterFeedOps(api huma.API, h *Handler) {
     // ... existing operations ...
 
     huma.Register(api, huma.Operation{
-        OperationID: "get-movie",
+        OperationID: "get-feed",
         Method:      http.MethodGet,
-        Path:        "/api/movies/{id}",
-        Summary:     "Get a movie",
-        Description: "Returns a single movie by ID.",
-        Tags:        []string{"movies"},
-    }, h.GetMovie)
+        Path:        "/api/feeds/{id}",
+        Summary:     "Get a feed",
+        Description: "Returns a single feed by ID.",
+        Tags:        []string{"feeds"},
+    }, h.GetFeed)
 }
 
-func (h *Handler) GetMovie(ctx context.Context, in *getMovieInput) (*getMovieOutput, error) {
-    m, err := h.service.GetMovie(ctx, in.ID)
+func (h *Handler) GetFeed(ctx context.Context, in *getFeedInput) (*getFeedOutput, error) {
+    f, err := h.service.GetFeed(ctx, in.ID)
     if err != nil {
-        // movie.ErrNotFound is registered via movie's init() block
-        // (→ 404 "Movie not found"); unknown errors fall back to 500.
-        return nil, api.MapError(ctx, err, "Failed to get movie")
+        // feed.ErrNotFound is registered via feed's init() block
+        // (→ 404 "Feed not found"); unknown errors fall back to 500.
+        return nil, api.MapError(ctx, err, "Failed to get feed")
     }
-    return &getMovieOutput{Body: *m}, nil
+    return &getFeedOutput{Body: *f}, nil
 }
 ```
 
 Rules:
 
-- **Paths are full URLs.** Register at `/api/movies/{id}`, not `/movies/{id}`.
+- **Paths are full URLs.** Register at `/api/feeds/{id}`, not `/feeds/{id}`.
   The OpenAPI spec paths match the URL paths exactly, so no `Servers`
   override is needed.
 - **Path params** use `chi`'s `{name}` syntax. Huma reads them from
@@ -91,7 +91,7 @@ Rules:
   `path:"id"`.
 - **Query params** use `query:"name"`. Add `required:"true"` if the
   request must include them.
-- **Body params** are placed in a `Body` field (`struct { Body Movie }`).
+- **Body params** are placed in a `Body` field (`struct { Body Feed }`).
   Huma parses the JSON body into the field's type and validates against
   the type's struct tags.
 - **Validation tags** follow huma's dialect — see
@@ -103,7 +103,7 @@ Rules:
   \`status:"201"\`` field on the output struct. Huma picks the field by
   the `status` tag; the literal value is what gets written.
 - **Operation IDs** must be unique across the API. Convention:
-  `<verb>-<resource>` (`get-movie`, `create-movie`, etc.).
+  `<verb>-<resource>` (`get-feed`, `create-feed`, etc.).
 - **Tags** group operations in the docs UI.
 
 ## Protected operations
@@ -115,13 +115,13 @@ the "Body parsed before auth" note in `cmd/api/main.go` for why a
 
 ```go
 huma.Register(api, huma.Operation{
-    OperationID: "delete-movie",
+    OperationID: "delete-feed",
     Method:      http.MethodDelete,
-    Path:        "/api/movies/{id}",
-    Tags:        []string{"movies"},
+    Path:        "/api/feeds/{id}",
+    Tags:        []string{"feeds"},
     Security:    []map[string][]string{{"BearerAuth": {}}},
     Middlewares: huma.Middlewares{middleware.HumaAuth()},
-}, h.DeleteMovie)
+}, h.DeleteFeed)
 ```
 
 `HumaAuth()` validates the `Authorization: Bearer <token>` header and
@@ -134,7 +134,7 @@ The error envelope is preserved end-to-end. Three ways to emit an error:
 
 1. **From a handler (preferred)** — call `api.MapError(ctx, err, safeDetail)`.
    The helper looks up the error against the registered domain sentinels
-   (e.g. `movie.ErrNotFound`, `user.ErrInvalidCredentials`,
+   (e.g. `feed.ErrNotFound`, `user.ErrInvalidCredentials`,
    `user.ErrUsernameTaken` for `users_username_key` unique violations,
    `user.ErrRefreshTokenCollision` for `idx_refresh_tokens_token_hash`)
    and returns the matching `*ErrorResponse`. Unknown errors fall back
@@ -168,7 +168,7 @@ The error envelope is preserved end-to-end. Three ways to emit an error:
 
    ```go
    return nil, &api.ErrorResponse{
-       Message: "Movie not found",
+       Message: "Feed not found",
        Code:    http.StatusNotFound,
    }
    ```
@@ -178,7 +178,7 @@ The error envelope is preserved end-to-end. Three ways to emit an error:
 
 `api.OverrideHumaErrors()` must be called once at process startup before
 any `huma.Register` call. Tests that build their own huma API install it
-in their `TestMain` (see `internal/movie/repository_integration_test.go`).
+in their `TestMain` (see `internal/feed/repository_integration_test.go`).
 
 ## OpenAPI / docs
 
@@ -239,10 +239,10 @@ have a test-only registration variant that lets you skip the JWT
 middleware:
 
 ```go
-// internal/movie/huma_handler.go
-func RegisterMovieOpsTest(api huma.API, h *Handler, withAuth bool) { ... }
+// internal/feed/huma_handler.go
+func RegisterFeedOpsTest(api huma.API, h *Handler, withAuth bool) { ... }
 
-// internal/movie/handler_test.go
+// internal/feed/handler_test.go
 router := setupTestRouter(h, true) // true = withAuth
 req.Header.Set("Authorization", testJWTAuthHeader(t))
 ```
@@ -285,7 +285,7 @@ called with `auth=true` but the test forgot to call
 tests that don't exercise auth.
 
 **Spec path doesn't match URL** — operation paths are full URLs
-(`/api/movies`), not relative. Don't add an `api.Group("/api")` prefix.
+(`/api/feeds`), not relative. Don't add an `api.Group("/api")` prefix.
 
 ## Streaming endpoints (SSE)
 

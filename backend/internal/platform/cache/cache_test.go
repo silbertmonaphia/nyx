@@ -121,9 +121,9 @@ func TestRedisCacheDeletePrefix(t *testing.T) {
 	ctx := context.Background()
 
 	keys := []string{
-		"movies:q=:p=1:s=20",
-		"movies:q=foo:p=1:s=20",
-		"movies:q=foo:p=2:s=20",
+		"feeds:q=:p=1:s=20",
+		"feeds:q=foo:p=1:s=20",
+		"feeds:q=foo:p=2:s=20",
 		"other:key",
 	}
 	for _, k := range keys {
@@ -132,7 +132,7 @@ func TestRedisCacheDeletePrefix(t *testing.T) {
 		}
 	}
 
-	if err := c.DeletePrefix(ctx, "movies:"); err != nil {
+	if err := c.DeletePrefix(ctx, "feeds:"); err != nil {
 		t.Fatalf("DeletePrefix: %v", err)
 	}
 

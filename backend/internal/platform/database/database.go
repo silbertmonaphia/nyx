@@ -1,6 +1,6 @@
 // Package database opens the application's Postgres connection pool and
 // applies the SQL migrations on startup. The pool is a *pgxpool.Pool; the
-// per-feature repositories (movie, user) construct a sqlc Querier on top
+// per-feature repositories (feed, user) construct a sqlc Querier on top
 // of it.
 package database
 

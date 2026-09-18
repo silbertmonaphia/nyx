@@ -1,10 +1,10 @@
 import React, { useState } from 'react';
 import './App.css';
-import { Movie, NewMovie } from './features/movies/types/movie';
-import { useMovies } from './features/movies/hooks/useMovies';
-import { MovieList } from './features/movies/components/MovieList';
-import { MovieForm } from './features/movies/components/MovieForm';
-import { useMovieUiStore } from './features/movies/store/movieUiStore';
+import { Feed, NewFeed } from './features/feeds/types/feed';
+import { useFeeds } from './features/feeds/hooks/useFeeds';
+import { FeedList } from './features/feeds/components/FeedList';
+import { FeedForm } from './features/feeds/components/FeedForm';
+import { useFeedUiStore } from './features/feeds/store/feedUiStore';
 import { useDebounce } from './hooks/useDebounce';
 import { useAuthReconciliation } from './hooks/useAuthReconciliation';
 import { ToastContainer } from './components/app/ToastContainer';
@@ -26,9 +26,9 @@ import { PageMeta } from './components/app/PageMeta';
 import { logger } from './services/logger';
 import { ChatPanel } from './features/chat/components/ChatPanel';
 
-const DEFAULT_TITLE = 'Nyx — Your minimalist movie guide';
+const DEFAULT_TITLE = 'Nyx — Your minimalist feed guide';
 const DEFAULT_DESCRIPTION =
-  'A minimalist movie guide for discovering, tracking, and curating the films you love.';
+  'A minimalist feed for discovering, tracking, and curating the films you love.';
 
 function App() {
   const {
@@ -36,10 +36,10 @@ function App() {
     setSearchTerm,
     showAddForm,
     setShowAddForm,
-    editingMovie,
-    setEditingMovie,
+    editingFeed,
+    setEditingFeed,
     resetFormState,
-  } = useMovieUiStore();
+  } = useFeedUiStore();
 
   const { isAuthenticated, user, logout } = useAuthStore();
   const [showAuthForm, setShowAuthForm] = useState(false);
@@ -52,32 +52,32 @@ function App() {
 
   // The input stays fully controlled by `searchTerm` (instant typing),
   // but the network query only fires once the user has paused for
-  // 300ms. Driving `useMovies` off the debounced value keeps the
+  // 300ms. Driving `useFeeds` off the debounced value keeps the
   // query key in sync with what we actually fetched, so the empty-state
   // qualifier and the loaded list agree.
   const debouncedSearchTerm = useDebounce(searchTerm, 300);
 
   const {
-    movies,
+    feeds,
     isLoading,
     hasMore,
     isLoadingMore,
     loadMore,
-    addMovie,
-    updateMovie,
-    deleteMovie,
-  } = useMovies(debouncedSearchTerm);
+    addFeed,
+    updateFeed,
+    deleteFeed,
+  } = useFeeds(debouncedSearchTerm);
 
-  const handleAddOrUpdateMovie = async (movieData: NewMovie | Movie) => {
+  const handleAddOrUpdateFeed = async (feedData: NewFeed | Feed) => {
     try {
-      if ('id' in movieData) {
-        await updateMovie.mutateAsync(movieData);
+      if ('id' in feedData) {
+        await updateFeed.mutateAsync(feedData);
       } else {
-        await addMovie.mutateAsync(movieData);
+        await addFeed.mutateAsync(feedData);
       }
       resetFormState();
     } catch (err) {
-      logger.error('Error saving movie', { error: String(err) });
+      logger.error('Error saving feed', { error: String(err) });
     }
   };
 
@@ -91,16 +91,16 @@ function App() {
     // closes the dialog, but the React re-render is async, so a
     // second click on the same tick can still reach this handler
     // with the stale `confirmDeleteId`. The disabled prop on the
-    // confirm button (`deleteMovie.isPending`) is the primary
+    // confirm button (`deleteFeed.isPending`) is the primary
     // defense — this branch is the belt-and-suspenders backstop.
     // SECURITY.md L9.
-    if (deleteMovie.isPending) return;
+    if (deleteFeed.isPending) return;
     const id = confirmDeleteId;
     setConfirmDeleteId(null);
     try {
-      await deleteMovie.mutateAsync(id);
+      await deleteFeed.mutateAsync(id);
     } catch (err) {
-      logger.error('Error deleting movie', { error: String(err) });
+      logger.error('Error deleting feed', { error: String(err) });
     }
   };
 
@@ -109,10 +109,10 @@ function App() {
   // edit > add > auth > search > default — a modal that opens over a search
   // should still announce itself in the title.
   const trimmedSearch = debouncedSearchTerm.trim();
-  const pageTitle = editingMovie
-    ? `Edit "${editingMovie.title}" — Nyx`
+  const pageTitle = editingFeed
+    ? `Edit "${editingFeed.title}" — Nyx`
     : showAddForm && isAuthenticated
-    ? 'Add a movie — Nyx'
+    ? 'Add a feed — Nyx'
     : showAuthForm && !isAuthenticated
     ? 'Sign in — Nyx'
     : chatOpen && isAuthenticated
@@ -120,12 +120,12 @@ function App() {
     : trimmedSearch
     ? `"${trimmedSearch}" — Search — Nyx`
     : DEFAULT_TITLE;
-  const pageDescription = editingMovie
-    ? `Edit the details of "${editingMovie.title}" in your Nyx movie collection.`
+  const pageDescription = editingFeed
+    ? `Edit the details of "${editingFeed.title}" in your Nyx feed.`
     : showAddForm && isAuthenticated
-    ? 'Add a new movie to your Nyx collection.'
+    ? 'Add a new entry to your Nyx feed.'
     : showAuthForm && !isAuthenticated
-    ? 'Sign in or create a Nyx account to curate your movie list.'
+    ? 'Sign in or create a Nyx account to curate your feed.'
     : chatOpen && isAuthenticated
     ? 'Stream a chat with the Nyx assistant.'
     : trimmedSearch
@@ -174,7 +174,7 @@ function App() {
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
             <Input
               type="text"
-              placeholder="Search for movies..."
+              placeholder="Search for feeds..."
               value={searchTerm}
               maxLength={200}
               onChange={(e) => setSearchTerm(e.target.value)}
@@ -182,7 +182,7 @@ function App() {
             />
           </div>
           {isAuthenticated && (
-            <Button 
+            <Button
               size="lg"
               variant={showAddForm ? "outline" : "default"}
               onClick={() => setShowAddForm(!showAddForm)}
@@ -191,7 +191,7 @@ function App() {
               {showAddForm ? (
                 <><X className="h-5 w-5" /> Cancel</>
               ) : (
-                <><Plus className="h-5 w-5" /> Add Movie</>
+                <><Plus className="h-5 w-5" /> Add Feed</>
               )}
             </Button>
           )}
@@ -199,41 +199,41 @@ function App() {
 
         <div className="w-full max-w-2xl mx-auto flex flex-col items-center">
           {isAuthenticated && showAddForm && (
-            <MovieForm 
-              title="New Movie"
-              onSubmit={handleAddOrUpdateMovie}
+            <FeedForm
+              title="New Feed"
+              onSubmit={handleAddOrUpdateFeed}
               onCancel={resetFormState}
             />
           )}
 
-          {isAuthenticated && editingMovie && (
-            <MovieForm 
-              title="Edit Movie"
-              movie={editingMovie}
-              onSubmit={handleAddOrUpdateMovie}
+          {isAuthenticated && editingFeed && (
+            <FeedForm
+              title="Edit Feed"
+              feed={editingFeed}
+              onSubmit={handleAddOrUpdateFeed}
               onCancel={resetFormState}
             />
           )}
 
-          <MovieList
-            movies={movies}
+          <FeedList
+            feeds={feeds}
             loading={isLoading}
             searchTerm={searchTerm}
             hasMore={hasMore}
             isLoadingMore={isLoadingMore}
             onLoadMore={loadMore}
-            onEdit={(movie) => {
+            onEdit={(feed) => {
               if (!isAuthenticated) {
-                useUiStore.getState().addToast('Please login to edit movies', 'info');
+                useUiStore.getState().addToast('Please login to edit feeds', 'info');
                 setShowAuthForm(true);
                 return;
               }
-              setEditingMovie(movie);
+              setEditingFeed(feed);
               window.scrollTo({ top: 0, behavior: 'smooth' });
             }}
             onDelete={(id) => {
               if (!isAuthenticated) {
-                useUiStore.getState().addToast('Please login to delete movies', 'info');
+                useUiStore.getState().addToast('Please login to delete feeds', 'info');
                 setShowAuthForm(true);
                 return;
               }
@@ -266,9 +266,9 @@ function App() {
       >
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>Delete movie</DialogTitle>
+            <DialogTitle>Delete feed</DialogTitle>
             <DialogDescription>
-              This will remove the movie from your list. This action cannot be undone.
+              This will remove the feed from your list. This action cannot be undone.
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>
@@ -278,10 +278,10 @@ function App() {
             <Button
               variant="destructive"
               onClick={executeDelete}
-              disabled={deleteMovie.isPending}
+              disabled={deleteFeed.isPending}
               data-testid="confirm-delete"
             >
-              {deleteMovie.isPending ? 'Deleting…' : 'Delete'}
+              {deleteFeed.isPending ? 'Deleting…' : 'Delete'}
             </Button>
           </DialogFooter>
         </DialogContent>

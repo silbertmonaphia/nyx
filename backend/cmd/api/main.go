@@ -9,11 +9,11 @@ import (
 	"time"
 
 	"nyx/internal/chat"
+	"nyx/internal/feed"
 	"nyx/internal/llm"
 	"nyx/internal/llm/openai"
 	"nyx/internal/llm/vllm"
 	"nyx/internal/middleware"
-	"nyx/internal/movie"
 	"nyx/internal/platform/api"
 	"nyx/internal/platform/auth"
 	"nyx/internal/platform/cache"
@@ -118,10 +118,10 @@ func main() {
 		log.Fatal().Err(err).Msg("Invalid CACHE_TTL")
 	}
 
-	// Initialize Movie domain
-	movieRepo := movie.NewRepository(db)
-	movieService := movie.NewService(movieRepo, cacheClient, cacheTTL, tracing.Provider.Tracer("nyx.movie"))
-	movieHandler := movie.NewHandler(movieService)
+	// Initialize Feed domain
+	feedRepo := feed.NewRepository(db)
+	feedService := feed.NewService(feedRepo, cacheClient, cacheTTL, tracing.Provider.Tracer("nyx.feed"))
+	feedHandler := feed.NewHandler(feedService)
 
 	// Initialize User domain. accessTTL / refreshTTL come from viper
 	// (JWT_ACCESS_TTL / JWT_REFRESH_TTL); config.Load has already
@@ -185,7 +185,7 @@ func main() {
 	// artifact cannot drift from what the server serves.
 	humaAPI := humachi.New(router, api.HumaConfig())
 
-	movie.RegisterMovieOps(humaAPI, movieHandler, tokens)
+	feed.RegisterFeedOps(humaAPI, feedHandler, tokens)
 	user.RegisterUserOps(humaAPI, userHandler, tokens)
 
 	// Chat domain. Opt-in via LLM_ENABLED; when off, no route is

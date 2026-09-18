@@ -1,4 +1,4 @@
-package movie
+package feed
 
 import (
 	"context"
@@ -23,10 +23,10 @@ func (s *stubRepo) GetAll(ctx context.Context, query string, page, pageSize int)
 	s.getAllCalls++
 	return s.getAllResp, s.getAllErr
 }
-func (s *stubRepo) Create(context.Context, *Movie) error      { return nil }
-func (s *stubRepo) Update(context.Context, int, *Movie) error { return nil }
-func (s *stubRepo) Delete(context.Context, int) error         { return nil }
-func (s *stubRepo) Ping(context.Context) error                { return nil }
+func (s *stubRepo) Create(context.Context, *Feed) error      { return nil }
+func (s *stubRepo) Update(context.Context, int, *Feed) error { return nil }
+func (s *stubRepo) Delete(context.Context, int) error        { return nil }
+func (s *stubRepo) Ping(context.Context) error               { return nil }
 
 func newServiceWithCache(t *testing.T) (Service, *stubRepo, *miniredis.Miniredis) {
 	t.Helper()
@@ -41,25 +41,25 @@ func newServiceWithCache(t *testing.T) (Service, *stubRepo, *miniredis.Miniredis
 	return svc, repo, mr
 }
 
-func TestGetMovies_CacheMissThenHit(t *testing.T) {
+func TestGetFeeds_CacheMissThenHit(t *testing.T) {
 	svc, repo, _ := newServiceWithCache(t)
 	ctx := context.Background()
 
 	repo.getAllResp = &Page{
-		Items:    []Movie{{ID: 1, Title: "The Matrix", Rating: 8.7}},
+		Items:    []Feed{{ID: 1, Title: "The Matrix", Rating: 8.7}},
 		Total:    1,
 		Page:     1,
 		PageSize: 20,
 	}
 
-	if _, err := svc.GetMovies(ctx, "", 1, 20); err != nil {
+	if _, err := svc.GetFeeds(ctx, "", 1, 20); err != nil {
 		t.Fatalf("first call: %v", err)
 	}
 	if repo.getAllCalls != 1 {
 		t.Errorf("expected 1 repo call after miss, got %d", repo.getAllCalls)
 	}
 
-	if _, err := svc.GetMovies(ctx, "", 1, 20); err != nil {
+	if _, err := svc.GetFeeds(ctx, "", 1, 20); err != nil {
 		t.Fatalf("second call: %v", err)
 	}
 	if repo.getAllCalls != 1 {
@@ -67,19 +67,19 @@ func TestGetMovies_CacheMissThenHit(t *testing.T) {
 	}
 }
 
-func TestGetMovies_CacheKeyIncludesSearch(t *testing.T) {
+func TestGetFeeds_CacheKeyIncludesSearch(t *testing.T) {
 	svc, repo, _ := newServiceWithCache(t)
 	ctx := context.Background()
 
-	repo.getAllResp = &Page{Items: []Movie{}, Total: 0, Page: 1, PageSize: 20}
+	repo.getAllResp = &Page{Items: []Feed{}, Total: 0, Page: 1, PageSize: 20}
 
-	if _, err := svc.GetMovies(ctx, "", 1, 20); err != nil {
+	if _, err := svc.GetFeeds(ctx, "", 1, 20); err != nil {
 		t.Fatalf("call 1: %v", err)
 	}
-	if _, err := svc.GetMovies(ctx, "matrix", 1, 20); err != nil {
+	if _, err := svc.GetFeeds(ctx, "matrix", 1, 20); err != nil {
 		t.Fatalf("call 2: %v", err)
 	}
-	if _, err := svc.GetMovies(ctx, "", 1, 20); err != nil {
+	if _, err := svc.GetFeeds(ctx, "", 1, 20); err != nil {
 		t.Fatalf("call 3: %v", err)
 	}
 	if repo.getAllCalls != 2 {
@@ -91,12 +91,12 @@ func TestMutations_InvalidateCache(t *testing.T) {
 	svc, repo, _ := newServiceWithCache(t)
 	ctx := context.Background()
 
-	repo.getAllResp = &Page{Items: []Movie{{ID: 1, Title: "A"}}, Total: 1, Page: 1, PageSize: 20}
+	repo.getAllResp = &Page{Items: []Feed{{ID: 1, Title: "A"}}, Total: 1, Page: 1, PageSize: 20}
 
-	if _, err := svc.GetMovies(ctx, "", 1, 20); err != nil {
+	if _, err := svc.GetFeeds(ctx, "", 1, 20); err != nil {
 		t.Fatalf("warm cache: %v", err)
 	}
-	if _, err := svc.GetMovies(ctx, "", 1, 20); err != nil {
+	if _, err := svc.GetFeeds(ctx, "", 1, 20); err != nil {
 		t.Fatalf("read after warm: %v", err)
 	}
 	if repo.getAllCalls != 1 {
@@ -104,10 +104,10 @@ func TestMutations_InvalidateCache(t *testing.T) {
 	}
 
 	// Mutation should invalidate the cache prefix, forcing a fresh DB read.
-	if err := svc.CreateMovie(ctx, &Movie{Title: "B"}); err != nil {
+	if err := svc.CreateFeed(ctx, &Feed{Title: "B"}); err != nil {
 		t.Fatalf("create: %v", err)
 	}
-	if _, err := svc.GetMovies(ctx, "", 1, 20); err != nil {
+	if _, err := svc.GetFeeds(ctx, "", 1, 20); err != nil {
 		t.Fatalf("read after invalidate: %v", err)
 	}
 	if repo.getAllCalls != 2 {
@@ -134,9 +134,9 @@ func TestMutationCacheFailure_DoesNotFailRequest(t *testing.T) {
 	svc, repo, mr := newServiceWithCache(t)
 	ctx := context.Background()
 
-	repo.getAllResp = &Page{Items: []Movie{{ID: 1, Title: "A"}}, Total: 1, Page: 1, PageSize: 20}
+	repo.getAllResp = &Page{Items: []Feed{{ID: 1, Title: "A"}}, Total: 1, Page: 1, PageSize: 20}
 
-	if _, err := svc.GetMovies(ctx, "", 1, 20); err != nil {
+	if _, err := svc.GetFeeds(ctx, "", 1, 20); err != nil {
 		t.Fatalf("warm cache: %v", err)
 	}
 
@@ -144,7 +144,7 @@ func TestMutationCacheFailure_DoesNotFailRequest(t *testing.T) {
 	// service must not propagate that error.
 	mr.Close()
 
-	if err := svc.CreateMovie(ctx, &Movie{Title: "B"}); err != nil {
+	if err := svc.CreateFeed(ctx, &Feed{Title: "B"}); err != nil {
 		t.Fatalf("create should not fail when cache invalidation fails: %v", err)
 	}
 }

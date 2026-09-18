@@ -257,7 +257,7 @@ func setDefaults() {
 	viper.SetDefault("LLM_MAX_STREAM_DURATION", "10m")
 	viper.SetDefault("LLM_ALLOW_PRIVATE_URL", false)
 	// LLM_SYSTEM_PROMPT is left empty by default — the chat
-	// service falls back to a hard-coded "movie catalog
+	// service falls back to a hard-coded "feed catalog
 	// assistant" prompt when the operator hasn't customised it.
 }
 

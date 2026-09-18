@@ -333,7 +333,7 @@ func (h *happyTokens) ValidateToken(string) (*auth.Claims, error) {
 // ---- Huma-shaped auth middleware ----
 
 // TestHumaAuth_InvalidTokenHidesInternalDetails covers the huma adapter
-// path used as per-operation middleware on protected movie routes.
+// path used as per-operation middleware on protected feed routes.
 // Same wire contract: static "invalid token" in details, raw error
 // suppressed to zerolog.
 //

@@ -22,7 +22,7 @@ Clean architecture wired in `backend/cmd/api/main.go`:
 
 ```
 config.Load → DB (pgxpool + golang-migrate) → cache → TokenService
-  → domain services (movie, user) → chi v5 router (huma v2 adapter) → http.Server
+  → domain services (feed, user) → chi v5 router (huma v2 adapter) → http.Server
   → graceful shutdown on SIGTERM/SIGINT
 ```
 
@@ -33,8 +33,8 @@ config.Load → DB (pgxpool + golang-migrate) → cache → TokenService
 
 ## Routes
 
-- Public read: `GET /api/health`, `GET /api/movies`, `GET /api/movies/{id}`.
-- Auth write: `POST /api/movies`, `PUT /api/movies/{id}`, `DELETE /api/movies/{id}` — JWT-guarded.
+- Public read: `GET /api/health`, `GET /api/feeds`, `GET /api/feeds/{id}`.
+- Auth write: `POST /api/feeds`, `PUT /api/feeds/{id}`, `DELETE /api/feeds/{id}` — JWT-guarded.
 - Auth lifecycle: `POST /api/register`, `POST /api/login`, `POST /api/refresh` (opaque refresh token), `POST /api/logout` (revokes the supplied token's family).
 - Docs: `/api/swagger`, `/api/swagger/doc.json`, `/api/swagger/doc.yaml`.
 - Metrics: `/metrics` (Prometheus).
@@ -43,7 +43,7 @@ config.Load → DB (pgxpool + golang-migrate) → cache → TokenService
 
 ### Errors — domain sentinels only
 
-Use sentinels: `movie.ErrNotFound`, `movie.ErrValidation`, `user.ErrInvalidCredentials`, `user.ErrDuplicate`, `auth.ErrInvalidToken`, `auth.ErrExpiredToken`. Callers use `errors.Is`. Handlers translate to HTTP via the central mapper in `internal/platform/api`. **Never** `err.Error() == "..."` or `strings.Contains` — the legacy pattern is gone.
+Use sentinels: `feed.ErrNotFound`, `feed.ErrValidation`, `user.ErrInvalidCredentials`, `user.ErrDuplicate`, `auth.ErrInvalidToken`, `auth.ErrExpiredToken`. Callers use `errors.Is`. Handlers translate to HTTP via the central mapper in `internal/platform/api`. **Never** `err.Error() == "..."` or `strings.Contains` — the legacy pattern is gone.
 
 ### Safe response details — `api.ClassifyAndLog`
 
@@ -65,7 +65,7 @@ It logs the wrapped error with the request ID at `Warn` and returns the static `
 
 ### Cache is best-effort
 
-Every cache call site swallows errors with `log.Warn` and never fails the request. Keys: `movies:q={query}:p={page}:s={size}`. Mutations call `DeletePrefix("movies:")` (SCAN + UNLINK, non-blocking). The invariant lives in `internal/platform/cache/` — read it before adding new cache methods.
+Every cache call site swallows errors with `log.Warn` and never fails the request. Keys: `feeds:q={query}:p={page}:s={size}`. Mutations call `DeletePrefix("feeds:")` (SCAN + UNLINK, non-blocking). The invariant lives in `internal/platform/cache/` — read it before adding new cache methods.
 
 ### DB access via sqlc
 
@@ -80,7 +80,7 @@ Both `make sqlc` and `make sqlc-diff` are allowlisted. `Edit(backend/internal/**
 
 ### Pagination
 
-`GET /api/movies?page=N&page_size=M` → `{data, page, page_size, total, has_more}`. Default 20, max 100. Enforce limits in the service, not in the handler.
+`GET /api/feeds?page=N&page_size=M` → `{data, page, page_size, total, has_more}`. Default 20, max 100. Enforce limits in the service, not in the handler.
 
 ### Config
 
@@ -97,7 +97,7 @@ viper (`internal/platform/config/config.go`). Env vars + `.env` auto-loaded. Req
 ## Tests
 
 - `pgxmock` for handlers/services; `miniredis` for cache. Same package as the code under test.
-- `backend/internal/movie/repository_integration_test.go` boots a Postgres testcontainer in `TestMain`. Integration tests self-skip via `t.Skip()` when `dbURL == ""` — **never** reintroduce an early `os.Exit(0)` in `TestMain`; it silently skips unit tests.
+- `backend/internal/feed/repository_integration_test.go` boots a Postgres testcontainer in `TestMain`. Integration tests self-skip via `t.Skip()` when `dbURL == ""` — **never** reintroduce an early `os.Exit(0)` in `TestMain`; it silently skips unit tests.
 - Unit-only run: `cd backend && SKIP_CONTAINERS=true go test ./...`
 - Full run: `cd backend && go test ./...` (needs Docker for testcontainers).
 - Auth flows: cover `/api/refresh` happy path, unknown refresh token (401), reused/revoked refresh token (401 + family revocation), `/api/logout` 204 + idempotency, access-expired `WWW-Authenticate` challenge shape.

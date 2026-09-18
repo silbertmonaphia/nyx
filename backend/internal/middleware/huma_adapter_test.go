@@ -91,7 +91,7 @@ func TestHumaAuth_BearerHeaderAccepted(t *testing.T) {
 // TestHumaAuth_ClaimsStampedOnContext pins the identity-propagation
 // contract on the huma path: the resolved user_id and username
 // reach the handler via reqctx.UserIDFromContext /
-// UsernameFromContext. Downstream handlers (Me, Logout, movie ops)
+// UsernameFromContext. Downstream handlers (Me, Logout, feed ops)
 // read these to authorise their work — if the stamping breaks, the
 // handler would still run (with uid=0) and silently corrupt state.
 func TestHumaAuth_ClaimsStampedOnContext(t *testing.T) {

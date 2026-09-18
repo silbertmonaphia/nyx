@@ -8,7 +8,7 @@ import (
 
 // Tracing returns a middleware that opens an OTel server span per
 // HTTP request. Span name is the chi route template (e.g.
-// "GET /api/movies/{id}"), falling back to the raw URL path for
+// "GET /api/feeds/{id}"), falling back to the raw URL path for
 // requests that didn't match any registered route. Using the
 // template keeps span cardinality bounded — Jaeger / Tempo don't
 // explode into one series per id.

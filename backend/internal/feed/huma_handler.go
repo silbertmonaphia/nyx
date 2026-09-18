@@ -1,4 +1,4 @@
-package movie
+package feed
 
 import (
 	"context"
@@ -12,8 +12,8 @@ import (
 	"nyx/internal/platform/auth"
 )
 
-// Handler exposes movie domain operations. It is constructed in main.go
-// from a Service and registered onto a huma API via RegisterMovieOps.
+// Handler exposes feed domain operations. It is constructed in main.go
+// from a Service and registered onto a huma API via RegisterFeedOps.
 type Handler struct {
 	service Service
 }
@@ -30,7 +30,7 @@ func NewHandler(service Service) *Handler {
 	return &Handler{service: service}
 }
 
-// RegisterMovieOps wires the movie endpoints onto a huma API. Each
+// RegisterFeedOps wires the feed endpoints onto a huma API. Each
 // operation declares its inputs/outputs via huma struct tags so the
 // generated OpenAPI 3.1 doc stays in sync with the wire contract. The
 // mutating operations carry the Auth middleware in Operation.Middlewares
@@ -40,16 +40,16 @@ func NewHandler(service Service) *Handler {
 // flag so the middleware can read the token from the httpOnly
 // cookie first (with Authorization: Bearer as the deprecation-
 // window fallback).
-func RegisterMovieOps(api huma.API, h *Handler, tokens auth.TokenService) {
-	RegisterMovieOpsTest(api, h, tokens, true)
+func RegisterFeedOps(api huma.API, h *Handler, tokens auth.TokenService) {
+	RegisterFeedOpsTest(api, h, tokens, true)
 }
 
-// RegisterMovieOpsTest is the test-friendly variant of RegisterMovieOps.
+// RegisterFeedOpsTest is the test-friendly variant of RegisterFeedOps.
 // When `withAuth` is false, the protected operations are registered
 // without the JWT middleware so tests can exercise the handler logic
 // without minting tokens. Production code should always call
-// RegisterMovieOps (which forces withAuth=true).
-func RegisterMovieOpsTest(api huma.API, h *Handler, tokens auth.TokenService, withAuth bool) {
+// RegisterFeedOps (which forces withAuth=true).
+func RegisterFeedOpsTest(api huma.API, h *Handler, tokens auth.TokenService, withAuth bool) {
 	huma.Register(api, huma.Operation{
 		OperationID: "health",
 		Method:      http.MethodGet,
@@ -78,50 +78,50 @@ func RegisterMovieOpsTest(api huma.API, h *Handler, tokens auth.TokenService, wi
 	})
 
 	huma.Register(api, huma.Operation{
-		OperationID: "get-movies",
+		OperationID: "get-feeds",
 		Method:      http.MethodGet,
-		Path:        "/api/movies",
-		Summary:     "List movies",
-		Description: "Returns a paginated list of movies, optionally filtered by a search term matched against title and description.",
-		Tags:        []string{"movies"},
-	}, h.GetMovies)
+		Path:        "/api/feeds",
+		Summary:     "List feeds",
+		Description: "Returns a paginated list of feeds, optionally filtered by a search term matched against title and description.",
+		Tags:        []string{"feeds"},
+	}, h.GetFeeds)
 
 	huma.Register(api, huma.Operation{
-		OperationID: "create-movie",
+		OperationID: "create-feed",
 		Method:      http.MethodPost,
-		Path:        "/api/movies",
-		Summary:     "Create a movie",
-		Description: "Creates a new movie record. Requires a valid JWT in the Authorization header.",
-		Tags:        []string{"movies"},
+		Path:        "/api/feeds",
+		Summary:     "Create a feed",
+		Description: "Creates a new feed record. Requires a valid JWT in the Authorization header.",
+		Tags:        []string{"feeds"},
 		Security:    []map[string][]string{{"BearerAuth": {}}},
 		Middlewares: protectedMiddlewares(tokens, withAuth),
-	}, h.CreateMovie)
+	}, h.CreateFeed)
 
 	huma.Register(api, huma.Operation{
-		OperationID: "update-movie",
+		OperationID: "update-feed",
 		Method:      http.MethodPut,
-		Path:        "/api/movies/{id}",
-		Summary:     "Update a movie",
-		Description: "Updates the title, description, or rating of an existing movie. Requires a valid JWT.",
-		Tags:        []string{"movies"},
+		Path:        "/api/feeds/{id}",
+		Summary:     "Update a feed",
+		Description: "Updates the title, description, or rating of an existing feed. Requires a valid JWT.",
+		Tags:        []string{"feeds"},
 		Security:    []map[string][]string{{"BearerAuth": {}}},
 		Middlewares: protectedMiddlewares(tokens, withAuth),
-	}, h.UpdateMovie)
+	}, h.UpdateFeed)
 
 	huma.Register(api, huma.Operation{
-		OperationID: "delete-movie",
+		OperationID: "delete-feed",
 		Method:      http.MethodDelete,
-		Path:        "/api/movies/{id}",
-		Summary:     "Delete a movie",
-		Description: "Soft-deletes a movie record. Requires a valid JWT.",
-		Tags:        []string{"movies"},
+		Path:        "/api/feeds/{id}",
+		Summary:     "Delete a feed",
+		Description: "Soft-deletes a feed record. Requires a valid JWT.",
+		Tags:        []string{"feeds"},
 		Security:    []map[string][]string{{"BearerAuth": {}}},
 		Middlewares: protectedMiddlewares(tokens, withAuth),
-	}, h.DeleteMovie)
+	}, h.DeleteFeed)
 }
 
 // protectedMiddlewares returns the per-operation middleware list for
-// the protected movie operations. With withAuth=true it builds the JWT
+// the protected feed operations. With withAuth=true it builds the JWT
 // validator middleware from tokens; otherwise the list is empty so
 // tests can exercise the handler without minting tokens. The
 // validator reads Authorization: Bearer (RFC 6750) — same contract
@@ -167,7 +167,7 @@ type livezResponse struct {
 	Status string `json:"status" example:"ok" doc:"Always 'ok' as long as the process is serving HTTP."`
 }
 
-type getMoviesInput struct {
+type getFeedsInput struct {
 	// maxLength caps the search term so a multi-MB query string can't
 	// reach Postgres. Huma emits a 400 on inputs over the limit before
 	// the handler runs (see SECURITY.md M6).
@@ -176,31 +176,31 @@ type getMoviesInput struct {
 	PageSize int    `query:"page_size" required:"false" default:"20" minimum:"1" doc:"Items per page; clamped to a server-side maximum of 100."`
 }
 
-type getMoviesOutput struct{ Body MoviesPage }
+type getFeedsOutput struct{ Body FeedsPage }
 
-type createMovieInput struct{ Body Movie }
+type createFeedInput struct{ Body Feed }
 
-type createMovieOutput struct {
+type createFeedOutput struct {
 	Status int `status:"201"`
-	Body   Movie
+	Body   Feed
 }
 
-type updateMovieInput struct {
+type updateFeedInput struct {
 	ID   int `path:"id" required:"true" minimum:"1"`
-	Body Movie
+	Body Feed
 }
 
-type updateMovieOutput struct{ Body Movie }
+type updateFeedOutput struct{ Body Feed }
 
-type deleteMovieInput struct {
+type deleteFeedInput struct {
 	ID int `path:"id" required:"true" minimum:"1"`
 }
 
-// deleteMovieOutput intentionally has no Body field — huma returns 204
+// deleteFeedOutput intentionally has no Body field — huma returns 204
 // with an empty body when DefaultStatus = 204 and the Output is the
 // zero value.
 
-type deleteMovieOutput struct{}
+type deleteFeedOutput struct{}
 
 // ---- Handler functions ----
 
@@ -239,7 +239,7 @@ func (h *Handler) Health(ctx context.Context, _ *struct{}) (*healthOutput, error
 }
 
 //nolint:revive // unexported-return is huma's idiomatic op pattern
-func (h *Handler) GetMovies(ctx context.Context, in *getMoviesInput) (*getMoviesOutput, error) {
+func (h *Handler) GetFeeds(ctx context.Context, in *getFeedsInput) (*getFeedsOutput, error) {
 	page := in.Page
 	if page < 1 {
 		page = 1
@@ -252,34 +252,34 @@ func (h *Handler) GetMovies(ctx context.Context, in *getMoviesInput) (*getMovies
 		pageSize = 100
 	}
 
-	result, err := h.service.GetMovies(ctx, in.Q, page, pageSize)
+	result, err := h.service.GetFeeds(ctx, in.Q, page, pageSize)
 	if err != nil {
-		return nil, api.MapError(ctx, err, "Failed to retrieve movies")
+		return nil, api.MapError(ctx, err, "Failed to retrieve feeds")
 	}
-	return &getMoviesOutput{Body: NewMoviesPage(result)}, nil
+	return &getFeedsOutput{Body: NewFeedsPage(result)}, nil
 }
 
 //nolint:revive // unexported-return is huma's idiomatic op pattern
-func (h *Handler) CreateMovie(ctx context.Context, in *createMovieInput) (*createMovieOutput, error) {
-	if err := h.service.CreateMovie(ctx, &in.Body); err != nil {
-		return nil, api.MapError(ctx, err, "Failed to create movie")
+func (h *Handler) CreateFeed(ctx context.Context, in *createFeedInput) (*createFeedOutput, error) {
+	if err := h.service.CreateFeed(ctx, &in.Body); err != nil {
+		return nil, api.MapError(ctx, err, "Failed to create feed")
 	}
-	return &createMovieOutput{Status: http.StatusCreated, Body: in.Body}, nil
+	return &createFeedOutput{Status: http.StatusCreated, Body: in.Body}, nil
 }
 
 //nolint:revive // unexported-return is huma's idiomatic op pattern
-func (h *Handler) UpdateMovie(ctx context.Context, in *updateMovieInput) (*updateMovieOutput, error) {
-	if err := h.service.UpdateMovie(ctx, in.ID, &in.Body); err != nil {
-		return nil, api.MapError(ctx, err, "Failed to update movie")
+func (h *Handler) UpdateFeed(ctx context.Context, in *updateFeedInput) (*updateFeedOutput, error) {
+	if err := h.service.UpdateFeed(ctx, in.ID, &in.Body); err != nil {
+		return nil, api.MapError(ctx, err, "Failed to update feed")
 	}
 	in.Body.ID = in.ID
-	return &updateMovieOutput{Body: in.Body}, nil
+	return &updateFeedOutput{Body: in.Body}, nil
 }
 
 //nolint:revive // unexported-return is huma's idiomatic op pattern
-func (h *Handler) DeleteMovie(ctx context.Context, in *deleteMovieInput) (*deleteMovieOutput, error) {
-	if err := h.service.DeleteMovie(ctx, in.ID); err != nil {
-		return nil, api.MapError(ctx, err, "Failed to delete movie")
+func (h *Handler) DeleteFeed(ctx context.Context, in *deleteFeedInput) (*deleteFeedOutput, error) {
+	if err := h.service.DeleteFeed(ctx, in.ID); err != nil {
+		return nil, api.MapError(ctx, err, "Failed to delete feed")
 	}
-	return &deleteMovieOutput{}, nil
+	return &deleteFeedOutput{}, nil
 }

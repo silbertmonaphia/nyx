@@ -31,13 +31,13 @@ func TestMain(m *testing.M) {
 func TestOverrideHumaErrors_HandlerReturnedError(t *testing.T) {
 	router := newTestRouter(func(_ context.Context, _ *struct{}) (*struct{}, error) {
 		return nil, &ErrorResponse{
-			Message: "Movie not found",
+			Message: "Feed not found",
 			Code:    http.StatusNotFound,
 		}
 	})
 
 	rr := fire(router, http.MethodGet, "/api/ping", nil)
-	assertEnvelope(t, rr, http.StatusNotFound, "Movie not found")
+	assertEnvelope(t, rr, http.StatusNotFound, "Feed not found")
 }
 
 // TestOverrideHumaErrors_ValidationRemaps422To400 verifies huma's

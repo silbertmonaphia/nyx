@@ -3,7 +3,7 @@
 // streams responses back as Server-Sent Events.
 //
 // The package follows the same model/service/handler split as the
-// movie and user domains. The handler diverges from the others in
+// feed and user domains. The handler diverges from the others in
 // one way: it is mounted directly on chi (not huma), because huma
 // v2 has no first-class SSE. The route still runs inside the
 // project's standard middleware chain (RequestID → Recoverer →

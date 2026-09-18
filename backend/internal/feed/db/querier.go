@@ -11,10 +11,10 @@ import (
 )
 
 type Querier interface {
-	CountMovies(ctx context.Context, query pgtype.Text) (int64, error)
-	InsertMovie(ctx context.Context, arg InsertMovieParams) (Movie, error)
-	// SQL queries for the movie feature. Each block becomes a method on the
-	// generated internal/movie/db.Querier interface. The first line of each
+	CountFeeds(ctx context.Context, query pgtype.Text) (int64, error)
+	InsertFeed(ctx context.Context, arg InsertFeedParams) (Feed, error)
+	// SQL queries for the feed feature. Each block becomes a method on the
+	// generated internal/feed/db.Querier interface. The first line of each
 	// block is the @name annotation (which becomes the method name) and the
 	// query type (`:one`, `:many`, `:exec`, `:execrows`).
 	//
@@ -22,9 +22,9 @@ type Querier interface {
 	// `query` parameter, which short-circuits the LIKE clauses via the
 	// `IS NULL OR ...` pattern. When the caller sets it, the caller is
 	// responsible for wrapping the search term in `%` wildcards.
-	QueryMoviesPage(ctx context.Context, arg QueryMoviesPageParams) ([]Movie, error)
-	SoftDeleteMovie(ctx context.Context, id int32) (int64, error)
-	UpdateMovie(ctx context.Context, arg UpdateMovieParams) (Movie, error)
+	QueryFeedsPage(ctx context.Context, arg QueryFeedsPageParams) ([]Feed, error)
+	SoftDeleteFeed(ctx context.Context, id int32) (int64, error)
+	UpdateFeed(ctx context.Context, arg UpdateFeedParams) (Feed, error)
 }
 
 var _ Querier = (*Queries)(nil)

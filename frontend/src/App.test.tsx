@@ -2,32 +2,32 @@ import { render, screen, waitFor, act, fireEvent } from '@testing-library/react'
 import userEvent from '@testing-library/user-event';
 import App from './App';
 import { vi, describe, it, expect, beforeEach } from 'vitest';
-import { useMovies } from './features/movies/hooks/useMovies';
+import { useFeeds } from './features/feeds/hooks/useFeeds';
 import { useAuthStore } from './store/authStore';
-import { useMovieUiStore } from './features/movies/store/movieUiStore';
+import { useFeedUiStore } from './features/feeds/store/feedUiStore';
 
-vi.mock('./features/movies/hooks/useMovies');
+vi.mock('./features/feeds/hooks/useFeeds');
 vi.mock('./store/authStore');
 
-const mockUseMovies = useMovies as any;
+const mockUseFeeds = useFeeds as any;
 const mockUseAuthStore = useAuthStore as any;
 
-const baseMovies = {
-  movies: [],
+const baseFeeds = {
+  feeds: [],
   totalCount: 0,
   isLoading: false,
   isError: false,
   hasMore: false,
   isLoadingMore: false,
   loadMore: vi.fn(),
-  addMovie: { mutateAsync: vi.fn() },
-  updateMovie: { mutateAsync: vi.fn() },
-  deleteMovie: { mutateAsync: vi.fn() },
+  addFeed: { mutateAsync: vi.fn() },
+  updateFeed: { mutateAsync: vi.fn() },
+  deleteFeed: { mutateAsync: vi.fn() },
 };
 
 describe('App', () => {
   beforeEach(() => {
-    mockUseMovies.mockReturnValue({ ...baseMovies });
+    mockUseFeeds.mockReturnValue({ ...baseFeeds });
     // SECURITY.md L7: useAuthReconciliation reads
     // `useAuthStore.getState().user` on mount, so the mock must
     // expose getState alongside the hook return value. Without
@@ -42,10 +42,10 @@ describe('App', () => {
     mockUseAuthStore.getState = vi.fn().mockReturnValue(baseAuth);
     // Reset the Zustand UI store so search/auth/edit state from a previous
     // test doesn't leak into the next one.
-    useMovieUiStore.setState({
+    useFeedUiStore.setState({
       searchTerm: '',
       showAddForm: false,
-      editingMovie: null,
+      editingFeed: null,
     });
   });
 
@@ -55,97 +55,97 @@ describe('App', () => {
   });
 
   it('displays loading skeleton initially', () => {
-    mockUseMovies.mockReturnValue({ ...baseMovies, isLoading: true });
+    mockUseFeeds.mockReturnValue({ ...baseFeeds, isLoading: true });
     render(<App />);
-    expect(screen.getByTestId('movie-list-skeleton')).toBeInTheDocument();
+    expect(screen.getByTestId('feed-list-skeleton')).toBeInTheDocument();
   });
 
-  it('fetches and displays movies', async () => {
-    const movies = [
-      { id: 1, title: 'Test Movie 1', description: 'Desc 1', rating: 8 },
-      { id: 2, title: 'Test Movie 2', description: 'Desc 2', rating: 9 },
+  it('fetches and displays feeds', async () => {
+    const feeds = [
+      { id: 1, title: 'Test Feed 1', description: 'Desc 1', rating: 8 },
+      { id: 2, title: 'Test Feed 2', description: 'Desc 2', rating: 9 },
     ];
-    mockUseMovies.mockReturnValue({ ...baseMovies, movies });
+    mockUseFeeds.mockReturnValue({ ...baseFeeds, feeds });
 
     render(<App />);
 
     await waitFor(() => {
-      expect(screen.getByText('Test Movie 1')).toBeInTheDocument();
-      expect(screen.getByText('Test Movie 2')).toBeInTheDocument();
+      expect(screen.getByText('Test Feed 1')).toBeInTheDocument();
+      expect(screen.getByText('Test Feed 2')).toBeInTheDocument();
     });
   });
 
-  it('shows "No movies found" message when there are no movies', async () => {
+  it('shows "No feeds found" message when there are no feeds', async () => {
     render(<App />);
 
     await waitFor(() => {
-      expect(screen.getByText('No movies found')).toBeInTheDocument();
+      expect(screen.getByText('No feeds found')).toBeInTheDocument();
     });
   });
 
-  it('can add a new movie (when authenticated)', async () => {
+  it('can add a new feed (when authenticated)', async () => {
     mockUseAuthStore.mockReturnValue({
       isAuthenticated: true,
       user: { id: 1, username: 'testuser' },
       logout: vi.fn(),
     });
 
-    const addMovieMock = vi.fn().mockResolvedValue({});
-    mockUseMovies.mockReturnValue({
-      ...baseMovies,
-      addMovie: { mutateAsync: addMovieMock },
+    const addFeedMock = vi.fn().mockResolvedValue({});
+    mockUseFeeds.mockReturnValue({
+      ...baseFeeds,
+      addFeed: { mutateAsync: addFeedMock },
     });
 
     render(<App />);
 
-    await userEvent.click(screen.getByText('Add Movie'));
-    await userEvent.type(screen.getByPlaceholderText('Movie title'), 'New Test Movie');
-    await userEvent.click(screen.getByRole('button', { name: /save movie/i }));
+    await userEvent.click(screen.getByText('Add Feed'));
+    await userEvent.type(screen.getByPlaceholderText('Feed title'), 'New Test Feed');
+    await userEvent.click(screen.getByRole('button', { name: /save feed/i }));
 
     await waitFor(() => {
-      expect(addMovieMock).toHaveBeenCalledWith(
-        expect.objectContaining({ title: 'New Test Movie' }),
+      expect(addFeedMock).toHaveBeenCalledWith(
+        expect.objectContaining({ title: 'New Test Feed' }),
       );
     });
   });
 
-  it('can start editing a movie (when authenticated)', async () => {
+  it('can start editing a feed (when authenticated)', async () => {
     mockUseAuthStore.mockReturnValue({
       isAuthenticated: true,
       user: { id: 1, username: 'testuser' },
       logout: vi.fn(),
     });
 
-    const movies = [{ id: 1, title: 'Movie to Edit', description: 'Desc', rating: 5 }];
-    mockUseMovies.mockReturnValue({ ...baseMovies, movies });
+    const feeds = [{ id: 1, title: 'Feed to Edit', description: 'Desc', rating: 5 }];
+    mockUseFeeds.mockReturnValue({ ...baseFeeds, feeds });
 
     render(<App />);
 
-    await waitFor(() => screen.getByText('Movie to Edit'));
+    await waitFor(() => screen.getByText('Feed to Edit'));
     await userEvent.click(screen.getByTitle('Edit'));
 
-    expect(screen.getByRole('heading', { name: 'Edit Movie' })).toBeInTheDocument();
-    expect(screen.getByPlaceholderText('Movie title')).toHaveValue('Movie to Edit');
+    expect(screen.getByRole('heading', { name: 'Edit Feed' })).toBeInTheDocument();
+    expect(screen.getByPlaceholderText('Feed title')).toHaveValue('Feed to Edit');
   });
 
-  it('can delete a movie via the confirm dialog (when authenticated)', async () => {
+  it('can delete a feed via the confirm dialog (when authenticated)', async () => {
     mockUseAuthStore.mockReturnValue({
       isAuthenticated: true,
       user: { id: 1, username: 'testuser' },
       logout: vi.fn(),
     });
 
-    const deleteMovieMock = vi.fn().mockResolvedValue({});
-    const movies = [{ id: 1, title: 'Movie to Delete', description: 'Desc', rating: 5 }];
-    mockUseMovies.mockReturnValue({
-      ...baseMovies,
-      movies,
-      deleteMovie: { mutateAsync: deleteMovieMock },
+    const deleteFeedMock = vi.fn().mockResolvedValue({});
+    const feeds = [{ id: 1, title: 'Feed to Delete', description: 'Desc', rating: 5 }];
+    mockUseFeeds.mockReturnValue({
+      ...baseFeeds,
+      feeds,
+      deleteFeed: { mutateAsync: deleteFeedMock },
     });
 
     render(<App />);
 
-    await waitFor(() => screen.getByText('Movie to Delete'));
+    await waitFor(() => screen.getByText('Feed to Delete'));
     await userEvent.click(screen.getByTitle('Delete'));
 
     // The Radix dialog should now be open; click the confirm button.
@@ -153,7 +153,7 @@ describe('App', () => {
     await userEvent.click(confirmButton);
 
     await waitFor(() => {
-      expect(deleteMovieMock).toHaveBeenCalledWith(1);
+      expect(deleteFeedMock).toHaveBeenCalledWith(1);
     });
   });
 
@@ -164,29 +164,29 @@ describe('App', () => {
       logout: vi.fn(),
     });
 
-    const deleteMovieMock = vi.fn().mockResolvedValue({});
-    const movies = [{ id: 1, title: 'Movie to Keep', description: 'Desc', rating: 5 }];
-    mockUseMovies.mockReturnValue({
-      ...baseMovies,
-      movies,
-      deleteMovie: { mutateAsync: deleteMovieMock },
+    const deleteFeedMock = vi.fn().mockResolvedValue({});
+    const feeds = [{ id: 1, title: 'Feed to Keep', description: 'Desc', rating: 5 }];
+    mockUseFeeds.mockReturnValue({
+      ...baseFeeds,
+      feeds,
+      deleteFeed: { mutateAsync: deleteFeedMock },
     });
 
     render(<App />);
 
-    await waitFor(() => screen.getByText('Movie to Keep'));
+    await waitFor(() => screen.getByText('Feed to Keep'));
     await userEvent.click(screen.getByTitle('Delete'));
 
     const cancelButton = await screen.findByRole('button', { name: /cancel/i });
     await userEvent.click(cancelButton);
 
-    expect(deleteMovieMock).not.toHaveBeenCalled();
+    expect(deleteFeedMock).not.toHaveBeenCalled();
   });
 
-  it('only fires deleteMovie.mutateAsync once when the confirm button is double-clicked rapidly', async () => {
+  it('only fires deleteFeed.mutateAsync once when the confirm button is double-clicked rapidly', async () => {
     // SECURITY.md L9: the destructive confirm button must not be
     // re-fireable mid-mutation. The fix has two layers: the
-    // button is `disabled={deleteMovie.isPending}` and the
+    // button is `disabled={deleteFeed.isPending}` and the
     // executeDelete handler short-circuits if a delete is already
     // in flight. Either guard alone would close the hole; both
     // together cover the case where React hasn't flushed the
@@ -203,17 +203,17 @@ describe('App', () => {
     // normally resolve; we override it to a never-resolving
     // promise so the disabled-button assertion is meaningful.
     let resolveDelete: (() => void) | null = null;
-    const deleteMovieMock = vi.fn(
+    const deleteFeedMock = vi.fn(
       () => new Promise<void>((resolve) => {
         resolveDelete = resolve;
       }),
     );
-    const movies = [{ id: 1, title: 'Movie to Delete', description: 'Desc', rating: 5 }];
-    mockUseMovies.mockReturnValue({
-      ...baseMovies,
-      movies,
-      deleteMovie: {
-        mutateAsync: deleteMovieMock,
+    const feeds = [{ id: 1, title: 'Feed to Delete', description: 'Desc', rating: 5 }];
+    mockUseFeeds.mockReturnValue({
+      ...baseFeeds,
+      feeds,
+      deleteFeed: {
+        mutateAsync: deleteFeedMock,
         // useMutation exposes `isPending`; we model the in-flight
         // state for the duration of the test.
         isPending: true,
@@ -222,18 +222,18 @@ describe('App', () => {
 
     render(<App />);
 
-    await waitFor(() => screen.getByText('Movie to Delete'));
+    await waitFor(() => screen.getByText('Feed to Delete'));
     await userEvent.click(screen.getByTitle('Delete'));
 
     // The dialog renders; the confirm button is disabled because
-    // deleteMovie.isPending is true (we modeled it that way for
+    // deleteFeed.isPending is true (we modeled it that way for
     // this test — covers the disabled-while-pending half).
     const confirmButton = await screen.findByTestId('confirm-delete');
     expect(confirmButton).toBeDisabled();
 
     // Sanity: pressing the disabled button is a no-op.
     await userEvent.click(confirmButton);
-    expect(deleteMovieMock).not.toHaveBeenCalled();
+    expect(deleteFeedMock).not.toHaveBeenCalled();
 
     // Cleanup: resolve the pending promise so vitest doesn't warn
     // about an unhandled rejection.
@@ -250,11 +250,11 @@ describe('App', () => {
       logout: vi.fn(),
     });
 
-    const movies = [{ id: 1, title: 'In Flight', description: 'Desc', rating: 5 }];
-    mockUseMovies.mockReturnValue({
-      ...baseMovies,
-      movies,
-      deleteMovie: {
+    const feeds = [{ id: 1, title: 'In Flight', description: 'Desc', rating: 5 }];
+    mockUseFeeds.mockReturnValue({
+      ...baseFeeds,
+      feeds,
+      deleteFeed: {
         mutateAsync: vi.fn(() => new Promise<void>(() => {})),
         isPending: true,
       },
@@ -276,9 +276,9 @@ describe('App', () => {
 
     render(<App />);
 
-    const input = screen.getByPlaceholderText('Search for movies...');
+    const input = screen.getByPlaceholderText('Search for feeds...');
 
-    // The first argument to useMovies is the search term it will key
+    // The first argument to useFeeds is the search term it will key
     // its query on. If the bug were present, every keystroke would
     // surface a new value here, which is what triggers a refetch.
     // With the debounce, the value stays at '' until the timer fires.
@@ -289,17 +289,17 @@ describe('App', () => {
     fireEvent.change(input, { target: { value: 'matri' } });
     fireEvent.change(input, { target: { value: 'matrix' } });
 
-    const lastCallArg = mockUseMovies.mock.calls.at(-1)?.[0];
+    const lastCallArg = mockUseFeeds.mock.calls.at(-1)?.[0];
     expect(lastCallArg).toBe('');
 
     // Drain the debounce window. After it elapses, App should have
-    // re-rendered with the debounced value and called useMovies with
+    // re-rendered with the debounced value and called useFeeds with
     // the settled string.
     await act(async () => {
       vi.advanceTimersByTime(300);
     });
 
-    expect(mockUseMovies.mock.calls.at(-1)?.[0]).toBe('matrix');
+    expect(mockUseFeeds.mock.calls.at(-1)?.[0]).toBe('matrix');
 
     vi.useRealTimers();
   });
@@ -312,14 +312,14 @@ describe('App', () => {
 
     it('uses the default Nyx title when nothing else is going on', () => {
       render(<App />);
-      expect(document.title).toBe('Nyx — Your minimalist movie guide');
+      expect(document.title).toBe('Nyx — Your minimalist feed guide');
     });
 
     it('reflects the debounced search term, not the raw input', async () => {
       vi.useFakeTimers();
       render(<App />);
 
-      const input = screen.getByPlaceholderText('Search for movies...');
+      const input = screen.getByPlaceholderText('Search for feeds...');
 
       // Type "matrix" one char at a time. The title should NOT update
       // mid-typing — that's what the debounce is for.
@@ -330,7 +330,7 @@ describe('App', () => {
       fireEvent.change(input, { target: { value: 'matri' } });
       fireEvent.change(input, { target: { value: 'matrix' } });
 
-      expect(document.title).toBe('Nyx — Your minimalist movie guide');
+      expect(document.title).toBe('Nyx — Your minimalist feed guide');
 
       await act(async () => {
         vi.advanceTimersByTime(300);
@@ -347,38 +347,38 @@ describe('App', () => {
       expect(document.title).toBe('Sign in — Nyx');
     });
 
-    it('uses the add-movie title when the add form is open (authenticated)', () => {
+    it('uses the add-feed title when the add form is open (authenticated)', () => {
       mockUseAuthStore.mockReturnValue({
         isAuthenticated: true,
         user: { id: 1, username: 'testuser' },
         logout: vi.fn(),
       });
       render(<App />);
-      // The "Add Movie" button toggles showAddForm in the UI store.
-      fireEvent.click(screen.getByText('Add Movie'));
-      expect(document.title).toBe('Add a movie — Nyx');
+      // The "Add Feed" button toggles showAddForm in the UI store.
+      fireEvent.click(screen.getByText('Add Feed'));
+      expect(document.title).toBe('Add a feed — Nyx');
     });
 
-    it('uses the edit-movie title when editing', () => {
+    it('uses the edit-feed title when editing', () => {
       mockUseAuthStore.mockReturnValue({
         isAuthenticated: true,
         user: { id: 1, username: 'testuser' },
         logout: vi.fn(),
       });
-      const movies = [
-        { id: 1, title: 'Movie to Edit', description: 'Desc', rating: 5, created_at: '2024-01-01T00:00:00Z', updated_at: '2024-01-01T00:00:00Z' },
+      const feeds = [
+        { id: 1, title: 'Feed to Edit', description: 'Desc', rating: 5, created_at: '2024-01-01T00:00:00Z', updated_at: '2024-01-01T00:00:00Z' },
       ];
-      mockUseMovies.mockReturnValue({ ...baseMovies, movies });
+      mockUseFeeds.mockReturnValue({ ...baseFeeds, feeds });
 
       render(<App />);
 
       // Drive editing via the UI store directly — same effect as clicking
-      // the row's edit button, but skips MovieList's internal handlers.
+      // the row's edit button, but skips FeedList's internal handlers.
       act(() => {
-        useMovieUiStore.getState().setEditingMovie(movies[0]);
+        useFeedUiStore.getState().setEditingFeed(feeds[0]);
       });
 
-      expect(document.title).toBe('Edit "Movie to Edit" — Nyx');
+      expect(document.title).toBe('Edit "Feed to Edit" — Nyx');
     });
   });
 });
