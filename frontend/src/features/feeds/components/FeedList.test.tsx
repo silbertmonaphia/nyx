@@ -91,7 +91,7 @@ describe('FeedList', () => {
         onDelete={vi.fn()}
       />,
     );
-    expect(screen.getByText('No feeds found matching "nonexistent"')).toBeInTheDocument();
+    expect(screen.getByText('Feed "nonexistent" not found')).toBeInTheDocument();
   });
 
   it('renders the empty state without the search qualifier when no search term', () => {

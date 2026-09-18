@@ -1,5 +1,5 @@
 import React, { useEffect, useRef } from 'react';
-import { Feed } from '../types/feed';
+import { Feed, NewFeed } from '../types/feed';
 import { Card, CardHeader, CardTitle, CardContent } from '~/components/ui/Card';
 import { Button } from '~/components/ui/Button';
 import { Pencil, Trash2 } from 'lucide-react';
@@ -110,7 +110,7 @@ interface FeedListProps {
   isLoadingMore: boolean;
   onLoadMore: () => void;
   editingFeed: Feed | null;
-  onUpdate: (data: Feed) => void;
+  onUpdate: (data: NewFeed | Feed) => void;
   onCancelEdit: () => void;
   onEdit: (feed: Feed) => void;
   onDelete: (id: number) => void;
@@ -152,7 +152,7 @@ export const FeedList: React.FC<FeedListProps> = ({
     return (
       <div
         data-testid="feed-list-skeleton"
-        className="flex flex-col gap-4 w-full max-w-[600px] my-8 text-left"
+        className="flex flex-col gap-4 w-full max-w-[600px] mb-8 text-left"
       >
         <FeedListSkeleton />
       </div>
@@ -165,7 +165,7 @@ export const FeedList: React.FC<FeedListProps> = ({
         data-testid="feed-list-empty"
         className="py-10 text-center text-muted-foreground bg-secondary/20 rounded-lg border border-dashed border-border"
       >
-        No feeds found {searchTerm && `matching "${searchTerm}"`}
+        {searchTerm ? `Feed "${searchTerm}" not found` : 'No feeds found'}
       </div>
     );
   }
@@ -173,7 +173,7 @@ export const FeedList: React.FC<FeedListProps> = ({
   return (
     <div
       data-testid="feed-list"
-      className="flex flex-col gap-4 w-full max-w-[600px] my-8 text-left"
+      className="flex flex-col gap-4 w-full max-w-[600px] mb-8 text-left"
     >
       {feeds.map((feed) =>
         editingFeed?.id === feed.id ? (
