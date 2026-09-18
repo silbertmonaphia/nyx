@@ -61,6 +61,7 @@ function App() {
 
   const {
     feeds,
+    totalCount,
     isLoading,
     hasMore,
     isLoadingMore,
@@ -189,6 +190,7 @@ function App() {
         <div className="w-full max-w-2xl mx-auto flex flex-1 min-h-0 flex-col items-center">
           <FeedList
             feeds={feeds}
+            totalCount={totalCount}
             loading={isLoading}
             searchTerm={searchTerm}
             hasMore={hasMore}

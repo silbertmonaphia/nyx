@@ -104,6 +104,7 @@ const FeedListSkeleton: React.FC = () => (
 
 interface FeedListProps {
   feeds: Feed[];
+  totalCount: number;
   loading: boolean;
   searchTerm: string;
   hasMore: boolean;
@@ -116,8 +117,26 @@ interface FeedListProps {
   onDelete: (id: number) => void;
 }
 
+const FeedCount: React.FC<{ loaded: number; total: number }> = ({ loaded, total }) => {
+  // Render the loaded count and, when pagination is in play (loaded < total),
+  // append "of N" so the user knows there is more on the next page.
+  const moreOnTheWay = total > loaded;
+  return (
+    <div
+      data-testid="feed-count"
+      className="text-xs text-muted-foreground self-start"
+      aria-live="polite"
+    >
+      {moreOnTheWay
+        ? `${loaded} of ${total} feeds loaded`
+        : `${loaded} ${loaded === 1 ? 'feed' : 'feeds'} loaded`}
+    </div>
+  );
+};
+
 export const FeedList: React.FC<FeedListProps> = ({
   feeds,
+  totalCount,
   loading,
   searchTerm,
   hasMore,
@@ -177,6 +196,7 @@ export const FeedList: React.FC<FeedListProps> = ({
       data-testid="feed-list"
       className="flex flex-col gap-4 w-full max-w-[600px] mb-8 text-left flex-1 min-h-0 overflow-y-auto"
     >
+      <FeedCount loaded={feeds.length} total={totalCount} />
       {feeds.map((feed) =>
         editingFeed?.id === feed.id ? (
           <FeedForm

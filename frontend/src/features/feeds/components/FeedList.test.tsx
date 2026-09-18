@@ -13,6 +13,7 @@ describe('FeedList', () => {
     render(
       <FeedList
         feeds={feeds}
+        totalCount={feeds.length}
         loading={false}
         searchTerm=""
         hasMore={false}
@@ -34,6 +35,7 @@ describe('FeedList', () => {
     render(
       <FeedList
         feeds={feeds}
+        totalCount={feeds.length}
         loading={false}
         searchTerm=""
         hasMore={false}
@@ -60,6 +62,7 @@ describe('FeedList', () => {
     render(
       <FeedList
         feeds={[]}
+        totalCount={0}
         loading={true}
         searchTerm=""
         hasMore={false}
@@ -79,6 +82,7 @@ describe('FeedList', () => {
     render(
       <FeedList
         feeds={[]}
+        totalCount={0}
         loading={false}
         searchTerm="nonexistent"
         hasMore={false}
@@ -98,6 +102,7 @@ describe('FeedList', () => {
     render(
       <FeedList
         feeds={[]}
+        totalCount={0}
         loading={false}
         searchTerm=""
         hasMore={false}
@@ -117,6 +122,7 @@ describe('FeedList', () => {
     render(
       <FeedList
         feeds={feeds}
+        totalCount={feeds.length}
         loading={false}
         searchTerm=""
         hasMore={true}
@@ -136,6 +142,7 @@ describe('FeedList', () => {
     render(
       <FeedList
         feeds={feeds}
+        totalCount={feeds.length}
         loading={false}
         searchTerm=""
         hasMore={false}
@@ -155,6 +162,7 @@ describe('FeedList', () => {
     render(
       <FeedList
         feeds={feeds}
+        totalCount={feeds.length}
         loading={false}
         searchTerm=""
         hasMore={false}
@@ -178,6 +186,7 @@ describe('FeedList', () => {
     render(
       <FeedList
         feeds={feeds}
+        totalCount={feeds.length}
         loading={false}
         searchTerm=""
         hasMore={false}
@@ -200,6 +209,7 @@ describe('FeedList', () => {
     render(
       <FeedList
         feeds={[]}
+        totalCount={0}
         loading={true}
         searchTerm=""
         hasMore={false}
@@ -221,6 +231,7 @@ describe('FeedList', () => {
     render(
       <FeedList
         feeds={[]}
+        totalCount={0}
         loading={false}
         searchTerm="nope"
         hasMore={false}
@@ -237,5 +248,65 @@ describe('FeedList', () => {
     expect(root.className).toMatch(/overflow-y-auto/);
     expect(root.className).toMatch(/min-h-0/);
     expect(screen.getByText('Feed "nope" not found')).toBeInTheDocument();
+  });
+
+  it('renders the loaded feed count above the list', () => {
+    render(
+      <FeedList
+        feeds={feeds}
+        totalCount={2}
+        loading={false}
+        searchTerm=""
+        hasMore={false}
+        isLoadingMore={false}
+        onLoadMore={vi.fn()}
+        editingFeed={null}
+        onUpdate={vi.fn()}
+        onCancelEdit={vi.fn()}
+        onEdit={vi.fn()}
+        onDelete={vi.fn()}
+      />,
+    );
+    expect(screen.getByTestId('feed-count')).toHaveTextContent('2 feeds loaded');
+  });
+
+  it('renders "1 feed loaded" (singular) when only one feed is loaded', () => {
+    render(
+      <FeedList
+        feeds={[feeds[0]]}
+        totalCount={1}
+        loading={false}
+        searchTerm=""
+        hasMore={false}
+        isLoadingMore={false}
+        onLoadMore={vi.fn()}
+        editingFeed={null}
+        onUpdate={vi.fn()}
+        onCancelEdit={vi.fn()}
+        onEdit={vi.fn()}
+        onDelete={vi.fn()}
+      />,
+    );
+    expect(screen.getByTestId('feed-count')).toHaveTextContent('1 feed loaded');
+  });
+
+  it('renders "X of Y feeds loaded" when more pages remain', () => {
+    render(
+      <FeedList
+        feeds={feeds}
+        totalCount={42}
+        loading={false}
+        searchTerm=""
+        hasMore={true}
+        isLoadingMore={false}
+        onLoadMore={vi.fn()}
+        editingFeed={null}
+        onUpdate={vi.fn()}
+        onCancelEdit={vi.fn()}
+        onEdit={vi.fn()}
+        onDelete={vi.fn()}
+      />,
+    );
+    expect(screen.getByTestId('feed-count')).toHaveTextContent('2 of 42 feeds loaded');
   });
 });
