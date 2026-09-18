@@ -12,7 +12,7 @@ import (
 )
 
 type Service interface {
-	GetFeeds(ctx context.Context, query string, page, pageSize int) (*Page, error)
+	GetFeeds(ctx context.Context, query string, page, pageSize int, order SortOrder) (*Page, error)
 	CreateFeed(ctx context.Context, m *Feed) error
 	UpdateFeed(ctx context.Context, id int, m *Feed) error
 	DeleteFeed(ctx context.Context, id int) error
@@ -44,18 +44,18 @@ func NewService(repo Repository, c cache.Cache, ttl time.Duration, tracer trace.
 // here can leave a stale entry in the cache for up to CACHE_TTL. We rely
 // on TTL expiry as the eventual safety net rather than synchronising
 // the read and write paths.
-func (s *feedService) GetFeeds(ctx context.Context, query string, page, pageSize int) (*Page, error) {
+func (s *feedService) GetFeeds(ctx context.Context, query string, page, pageSize int, order SortOrder) (*Page, error) {
 	ctx, span := s.tracer.Start(ctx, "feed.GetFeeds", trace.WithSpanKind(trace.SpanKindInternal))
 	defer span.End()
 
-	key := cacheKey(query, page, pageSize)
+	key := cacheKey(query, page, pageSize, order)
 
 	var cached Page
 	if hit, err := s.cache.Get(ctx, key, &cached); err == nil && hit {
 		return &cached, nil
 	}
 
-	result, err := s.repo.GetAll(ctx, query, page, pageSize)
+	result, err := s.repo.GetAll(ctx, query, page, pageSize, order)
 	if err != nil {
 		return nil, err
 	}
@@ -123,6 +123,6 @@ func (s *feedService) invalidate(ctx context.Context) {
 	}
 }
 
-func cacheKey(query string, page, pageSize int) string {
-	return fmt.Sprintf("feeds:q=%s:p=%d:s=%d", query, page, pageSize)
+func cacheKey(query string, page, pageSize int, order SortOrder) string {
+	return fmt.Sprintf("feeds:q=%s:p=%d:s=%d:o=%s", query, page, pageSize, order)
 }

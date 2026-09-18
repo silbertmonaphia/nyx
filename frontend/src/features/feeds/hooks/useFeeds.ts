@@ -7,6 +7,7 @@ import {
 import { useMemo } from 'react';
 import { feedService } from '../services/feedService';
 import { Feed, NewFeed, PaginatedFeeds } from '../types/feed';
+import type { SortOrder } from '../store/feedUiStore';
 
 const FEEDS_QUERY_KEY = 'feeds' as const;
 const PAGE_SIZE = 20;
@@ -28,9 +29,12 @@ interface FeedsContext {
   previous: Array<[readonly unknown[], unknown]> | undefined;
 }
 
-export const useFeeds = (searchTerm: string) => {
+export const useFeeds = (searchTerm: string, sortOrder: SortOrder = 'desc') => {
   const queryClient = useQueryClient();
-  const queryKey = [FEEDS_QUERY_KEY, searchTerm] as const;
+  // sortOrder is part of the key so flipping the toggle triggers
+  // a refetch against the opposite-direction cache and never serves
+  // a stale page from the other sort.
+  const queryKey = [FEEDS_QUERY_KEY, searchTerm, sortOrder] as const;
 
   const {
     data,
@@ -41,7 +45,7 @@ export const useFeeds = (searchTerm: string) => {
     isError,
   } = useInfiniteQuery<PaginatedFeeds, Error, InfiniteData<PaginatedFeeds>, typeof queryKey, number>({
     queryKey,
-    queryFn: ({ pageParam }) => feedService.getFeeds(searchTerm, pageParam, PAGE_SIZE),
+    queryFn: ({ pageParam }) => feedService.getFeeds(searchTerm, pageParam, PAGE_SIZE, sortOrder),
     initialPageParam: 1,
     getNextPageParam: (last) => (last ? (last.has_more ? last.page + 1 : undefined) : undefined),
     staleTime: 30_000,

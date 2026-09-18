@@ -114,6 +114,59 @@ func (q *Queries) QueryFeedsPage(ctx context.Context, arg QueryFeedsPageParams) 
 	return items, nil
 }
 
+const queryFeedsPageAsc = `-- name: QueryFeedsPageAsc :many
+SELECT id, title, description, rating, created_at, updated_at, deleted_at
+FROM feeds
+WHERE (
+        $1::text IS NULL
+        OR title       ILIKE $1
+        OR description ILIKE $1
+      )
+  AND deleted_at IS NULL
+ORDER BY created_at ASC, id ASC
+LIMIT  $3::int
+OFFSET $2::int
+`
+
+type QueryFeedsPageAscParams struct {
+	Query    pgtype.Text
+	Offset   int32
+	PageSize int32
+}
+
+// Ascending counterpart of QueryFeedsPage. Two separate queries keep
+// the ORDER BY literal (sqlc doesn't interpolate direction tokens),
+// and let the planner pick a different index if one ever lands for
+// ASC. The id tiebreaker flips to ASC so pagination stays consistent
+// within a sort direction.
+func (q *Queries) QueryFeedsPageAsc(ctx context.Context, arg QueryFeedsPageAscParams) ([]Feed, error) {
+	rows, err := q.db.Query(ctx, queryFeedsPageAsc, arg.Query, arg.Offset, arg.PageSize)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []Feed{}
+	for rows.Next() {
+		var i Feed
+		if err := rows.Scan(
+			&i.ID,
+			&i.Title,
+			&i.Description,
+			&i.Rating,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.DeletedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const softDeleteFeed = `-- name: SoftDeleteFeed :execrows
 UPDATE feeds
 SET deleted_at = CURRENT_TIMESTAMP

@@ -21,6 +21,24 @@ ORDER BY created_at DESC, id DESC
 LIMIT  sqlc.arg('page_size')::int
 OFFSET sqlc.arg('offset')::int;
 
+-- name: QueryFeedsPageAsc :many
+-- Ascending counterpart of QueryFeedsPage. Two separate queries keep
+-- the ORDER BY literal (sqlc doesn't interpolate direction tokens),
+-- and let the planner pick a different index if one ever lands for
+-- ASC. The id tiebreaker flips to ASC so pagination stays consistent
+-- within a sort direction.
+SELECT id, title, description, rating, created_at, updated_at, deleted_at
+FROM feeds
+WHERE (
+        sqlc.narg('query')::text IS NULL
+        OR title       ILIKE sqlc.narg('query')
+        OR description ILIKE sqlc.narg('query')
+      )
+  AND deleted_at IS NULL
+ORDER BY created_at ASC, id ASC
+LIMIT  sqlc.arg('page_size')::int
+OFFSET sqlc.arg('offset')::int;
+
 -- name: CountFeeds :one
 SELECT COUNT(*)
 FROM feeds

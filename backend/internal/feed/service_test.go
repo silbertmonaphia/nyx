@@ -19,7 +19,7 @@ type stubRepo struct {
 	getAllErr   error
 }
 
-func (s *stubRepo) GetAll(ctx context.Context, query string, page, pageSize int) (*Page, error) {
+func (s *stubRepo) GetAll(ctx context.Context, query string, page, pageSize int, order SortOrder) (*Page, error) {
 	s.getAllCalls++
 	return s.getAllResp, s.getAllErr
 }
@@ -52,14 +52,14 @@ func TestGetFeeds_CacheMissThenHit(t *testing.T) {
 		PageSize: 20,
 	}
 
-	if _, err := svc.GetFeeds(ctx, "", 1, 20); err != nil {
+	if _, err := svc.GetFeeds(ctx, "", 1, 20, SortDesc); err != nil {
 		t.Fatalf("first call: %v", err)
 	}
 	if repo.getAllCalls != 1 {
 		t.Errorf("expected 1 repo call after miss, got %d", repo.getAllCalls)
 	}
 
-	if _, err := svc.GetFeeds(ctx, "", 1, 20); err != nil {
+	if _, err := svc.GetFeeds(ctx, "", 1, 20, SortDesc); err != nil {
 		t.Fatalf("second call: %v", err)
 	}
 	if repo.getAllCalls != 1 {
@@ -73,17 +73,41 @@ func TestGetFeeds_CacheKeyIncludesSearch(t *testing.T) {
 
 	repo.getAllResp = &Page{Items: []Feed{}, Total: 0, Page: 1, PageSize: 20}
 
-	if _, err := svc.GetFeeds(ctx, "", 1, 20); err != nil {
+	if _, err := svc.GetFeeds(ctx, "", 1, 20, SortDesc); err != nil {
 		t.Fatalf("call 1: %v", err)
 	}
-	if _, err := svc.GetFeeds(ctx, "matrix", 1, 20); err != nil {
+	if _, err := svc.GetFeeds(ctx, "matrix", 1, 20, SortDesc); err != nil {
 		t.Fatalf("call 2: %v", err)
 	}
-	if _, err := svc.GetFeeds(ctx, "", 1, 20); err != nil {
+	if _, err := svc.GetFeeds(ctx, "", 1, 20, SortDesc); err != nil {
 		t.Fatalf("call 3: %v", err)
 	}
 	if repo.getAllCalls != 2 {
 		t.Errorf("expected 2 repo calls (different keys miss, same key hits), got %d", repo.getAllCalls)
+	}
+}
+
+// TestGetFeeds_CacheKeyIncludesOrder guards against an ASC/DESC cache
+// collision: if both directions share a cache key, the second caller
+// gets the wrong ordering until the TTL expires.
+func TestGetFeeds_CacheKeyIncludesOrder(t *testing.T) {
+	svc, repo, _ := newServiceWithCache(t)
+	ctx := context.Background()
+
+	repo.getAllResp = &Page{Items: []Feed{}, Total: 0, Page: 1, PageSize: 20}
+
+	if _, err := svc.GetFeeds(ctx, "", 1, 20, SortDesc); err != nil {
+		t.Fatalf("desc call: %v", err)
+	}
+	if _, err := svc.GetFeeds(ctx, "", 1, 20, SortAsc); err != nil {
+		t.Fatalf("asc call: %v", err)
+	}
+	if _, err := svc.GetFeeds(ctx, "", 1, 20, SortDesc); err != nil {
+		t.Fatalf("desc repeat: %v", err)
+	}
+	// Two distinct keys: desc + asc each miss once; desc repeat hits.
+	if repo.getAllCalls != 2 {
+		t.Errorf("expected 2 repo calls (ASC and DESC are separate cache keys), got %d", repo.getAllCalls)
 	}
 }
 
@@ -93,10 +117,10 @@ func TestMutations_InvalidateCache(t *testing.T) {
 
 	repo.getAllResp = &Page{Items: []Feed{{ID: 1, Title: "A"}}, Total: 1, Page: 1, PageSize: 20}
 
-	if _, err := svc.GetFeeds(ctx, "", 1, 20); err != nil {
+	if _, err := svc.GetFeeds(ctx, "", 1, 20, SortDesc); err != nil {
 		t.Fatalf("warm cache: %v", err)
 	}
-	if _, err := svc.GetFeeds(ctx, "", 1, 20); err != nil {
+	if _, err := svc.GetFeeds(ctx, "", 1, 20, SortDesc); err != nil {
 		t.Fatalf("read after warm: %v", err)
 	}
 	if repo.getAllCalls != 1 {
@@ -107,7 +131,7 @@ func TestMutations_InvalidateCache(t *testing.T) {
 	if err := svc.CreateFeed(ctx, &Feed{Title: "B"}); err != nil {
 		t.Fatalf("create: %v", err)
 	}
-	if _, err := svc.GetFeeds(ctx, "", 1, 20); err != nil {
+	if _, err := svc.GetFeeds(ctx, "", 1, 20, SortDesc); err != nil {
 		t.Fatalf("read after invalidate: %v", err)
 	}
 	if repo.getAllCalls != 2 {
@@ -136,7 +160,7 @@ func TestMutationCacheFailure_DoesNotFailRequest(t *testing.T) {
 
 	repo.getAllResp = &Page{Items: []Feed{{ID: 1, Title: "A"}}, Total: 1, Page: 1, PageSize: 20}
 
-	if _, err := svc.GetFeeds(ctx, "", 1, 20); err != nil {
+	if _, err := svc.GetFeeds(ctx, "", 1, 20, SortDesc); err != nil {
 		t.Fatalf("warm cache: %v", err)
 	}
 

@@ -318,6 +318,8 @@ export interface operations {
                 page?: number;
                 /** @description Items per page; clamped to a server-side maximum of 100. */
                 page_size?: number;
+                /** @description Sort direction: 'desc' returns newest first (default), 'asc' returns oldest first. */
+                order?: "asc" | "desc";
             };
             header?: never;
             path?: never;

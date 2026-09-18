@@ -51,6 +51,28 @@ type Pool interface {
 // string compare in handler.go.
 var ErrNotFound = errors.New("feed not found")
 
+// SortOrder is the listing direction for paginated feed queries.
+// Desc is the default (newest first); Asc flips to oldest first.
+// The wire contract is the lowercase string values below.
+type SortOrder string
+
+const (
+	SortDesc SortOrder = "desc"
+	SortAsc  SortOrder = "asc"
+)
+
+// Sort returns the SortOrder for an unknown input, falling back to
+// the safe default (Desc). The handler uses this to coerce a free-form
+// `?order=` query parameter without 400ing on a typo.
+func ParseSortOrder(s string) SortOrder {
+	switch SortOrder(s) {
+	case SortAsc:
+		return SortAsc
+	default:
+		return SortDesc
+	}
+}
+
 // Register the feed-domain sentinel with api.MapError. The
 // repository is the only place that owns ErrNotFound — the handler
 // simply funnels every error through api.MapError.
@@ -59,7 +81,7 @@ func init() {
 }
 
 type Repository interface {
-	GetAll(ctx context.Context, query string, page, pageSize int) (*Page, error)
+	GetAll(ctx context.Context, query string, page, pageSize int, order SortOrder) (*Page, error)
 	Create(ctx context.Context, m *Feed) error
 	Update(ctx context.Context, id int, m *Feed) error
 	Delete(ctx context.Context, id int) error
@@ -94,7 +116,7 @@ func NewRepositoryFromQuerier(q *db.Queries) Repository {
 // GetAll requires a Pool — calling it on a repository built via
 // NewRepositoryFromQuerier returns an error. Production code always
 // uses NewRepository.
-func (r *sqlRepository) GetAll(ctx context.Context, queryParam string, page, pageSize int) (*Page, error) {
+func (r *sqlRepository) GetAll(ctx context.Context, queryParam string, page, pageSize int, order SortOrder) (*Page, error) {
 	if page < 1 {
 		page = 1
 	}
@@ -126,11 +148,25 @@ func (r *sqlRepository) GetAll(ctx context.Context, queryParam string, page, pag
 
 	qtx := r.q.WithTx(tx)
 
-	items, err := qtx.QueryFeedsPage(ctx, db.QueryFeedsPageParams{
-		Query:    queryArg,
-		Offset:   toInt32(offset),
-		PageSize: toInt32(pageSize),
-	})
+	// Two sqlc queries keep the ORDER BY literal (sqlc doesn't
+	// interpolate direction tokens); pick the matching one. Any
+	// unknown SortOrder falls through to DESC via ParseSortOrder at
+	// the handler boundary, so this branch only sees ASC or DESC.
+	var items []db.Feed
+	switch order {
+	case SortAsc:
+		items, err = qtx.QueryFeedsPageAsc(ctx, db.QueryFeedsPageAscParams{
+			Query:    queryArg,
+			Offset:   toInt32(offset),
+			PageSize: toInt32(pageSize),
+		})
+	default:
+		items, err = qtx.QueryFeedsPage(ctx, db.QueryFeedsPageParams{
+			Query:    queryArg,
+			Offset:   toInt32(offset),
+			PageSize: toInt32(pageSize),
+		})
+	}
 	if err != nil {
 		return nil, err
 	}

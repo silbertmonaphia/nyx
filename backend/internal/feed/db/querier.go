@@ -23,6 +23,12 @@ type Querier interface {
 	// `IS NULL OR ...` pattern. When the caller sets it, the caller is
 	// responsible for wrapping the search term in `%` wildcards.
 	QueryFeedsPage(ctx context.Context, arg QueryFeedsPageParams) ([]Feed, error)
+	// Ascending counterpart of QueryFeedsPage. Two separate queries keep
+	// the ORDER BY literal (sqlc doesn't interpolate direction tokens),
+	// and let the planner pick a different index if one ever lands for
+	// ASC. The id tiebreaker flips to ASC so pagination stays consistent
+	// within a sort direction.
+	QueryFeedsPageAsc(ctx context.Context, arg QueryFeedsPageAscParams) ([]Feed, error)
 	SoftDeleteFeed(ctx context.Context, id int32) (int64, error)
 	UpdateFeed(ctx context.Context, arg UpdateFeedParams) (Feed, error)
 }

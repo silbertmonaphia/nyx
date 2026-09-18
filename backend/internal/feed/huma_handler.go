@@ -174,6 +174,10 @@ type getFeedsInput struct {
 	Q        string `query:"q" required:"false" maxLength:"200" doc:"Case-insensitive search term matched against title and description."`
 	Page     int    `query:"page" required:"false" default:"1" minimum:"1" doc:"1-based page index."`
 	PageSize int    `query:"page_size" required:"false" default:"20" minimum:"1" doc:"Items per page; clamped to a server-side maximum of 100."`
+	// Sort direction. Huma emits a 400 for values outside the enum
+	// before the handler runs; unknown-but-non-empty strings are
+	// coerced to the safe default (desc) inside ParseSortOrder.
+	Order string `query:"order" required:"false" enum:"asc,desc" default:"desc" doc:"Sort direction: 'desc' returns newest first (default), 'asc' returns oldest first."`
 }
 
 type getFeedsOutput struct{ Body FeedsPage }
@@ -252,7 +256,7 @@ func (h *Handler) GetFeeds(ctx context.Context, in *getFeedsInput) (*getFeedsOut
 		pageSize = 100
 	}
 
-	result, err := h.service.GetFeeds(ctx, in.Q, page, pageSize)
+	result, err := h.service.GetFeeds(ctx, in.Q, page, pageSize, ParseSortOrder(in.Order))
 	if err != nil {
 		return nil, api.MapError(ctx, err, "Failed to retrieve feeds")
 	}

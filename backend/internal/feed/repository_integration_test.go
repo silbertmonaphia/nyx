@@ -147,10 +147,34 @@ func TestRepositoryIntegration(t *testing.T) {
 		}
 
 		// Get all feeds
-		allFeeds, err := repo.GetAll(ctx, "", 1, 100)
+		allFeeds, err := repo.GetAll(ctx, "", 1, 100, SortDesc)
 		require.NoError(t, err)
 		assert.Len(t, allFeeds.Items, 3)
 		assert.Equal(t, 3, allFeeds.Total)
+	})
+
+	t.Run("GetAllFeedsAscReturnsOldestFirst", func(t *testing.T) {
+		// Sleep between inserts so created_at strictly increases.
+		// Serial inserts within the same microsecond would tie and
+		// fall back to the id tiebreaker — same outcome for ASC vs
+		// DESC, but the explicit sleep makes the test self-documenting.
+		_, repo := setupIntegrationTest(t)
+
+		first := &Feed{Title: "Oldest", Description: "first", Rating: 5.0}
+		require.NoError(t, repo.Create(ctx, first))
+		time.Sleep(10 * time.Millisecond)
+		mid := &Feed{Title: "Middle", Description: "second", Rating: 6.0}
+		require.NoError(t, repo.Create(ctx, mid))
+		time.Sleep(10 * time.Millisecond)
+		last := &Feed{Title: "Newest", Description: "third", Rating: 7.0}
+		require.NoError(t, repo.Create(ctx, last))
+
+		asc, err := repo.GetAll(ctx, "", 1, 100, SortAsc)
+		require.NoError(t, err)
+		require.Len(t, asc.Items, 3)
+		assert.Equal(t, "Oldest", asc.Items[0].Title)
+		assert.Equal(t, "Middle", asc.Items[1].Title)
+		assert.Equal(t, "Newest", asc.Items[2].Title)
 	})
 
 	t.Run("SearchFeeds", func(t *testing.T) {
@@ -169,19 +193,19 @@ func TestRepositoryIntegration(t *testing.T) {
 		}
 
 		// Search by title
-		results, err := repo.GetAll(ctx, "matrix", 1, 20)
+		results, err := repo.GetAll(ctx, "matrix", 1, 20, SortDesc)
 		require.NoError(t, err)
 		assert.Len(t, results.Items, 1)
 		assert.Equal(t, "The Matrix", results.Items[0].Title)
 
 		// Search by description
-		results, err = repo.GetAll(ctx, "thriller", 1, 20)
+		results, err = repo.GetAll(ctx, "thriller", 1, 20, SortDesc)
 		require.NoError(t, err)
 		assert.Len(t, results.Items, 1)
 		assert.Equal(t, "Inception", results.Items[0].Title)
 
 		// Search with no matches
-		results, err = repo.GetAll(ctx, "nonexistent", 1, 20)
+		results, err = repo.GetAll(ctx, "nonexistent", 1, 20, SortDesc)
 		require.NoError(t, err)
 		assert.Empty(t, results.Items)
 	})
@@ -210,7 +234,7 @@ func TestRepositoryIntegration(t *testing.T) {
 		require.NoError(t, err)
 
 		// Verify update
-		allFeeds, err := repo.GetAll(ctx, "", 1, 100)
+		allFeeds, err := repo.GetAll(ctx, "", 1, 100, SortDesc)
 		require.NoError(t, err)
 		assert.Len(t, allFeeds.Items, 1)
 		assert.Equal(t, "Updated Title", allFeeds.Items[0].Title)
@@ -247,7 +271,7 @@ func TestRepositoryIntegration(t *testing.T) {
 		require.NoError(t, err)
 
 		// Verify soft delete (feed should not appear in results)
-		allFeeds, err := repo.GetAll(ctx, "", 1, 100)
+		allFeeds, err := repo.GetAll(ctx, "", 1, 100, SortDesc)
 		require.NoError(t, err)
 		assert.Empty(t, allFeeds.Items)
 	})
@@ -300,7 +324,7 @@ func TestRepositoryWithTransactions(t *testing.T) {
 		require.NoError(t, tx.Rollback(ctx))
 
 		// Verify feed was not created
-		allFeeds, err := repo.GetAll(ctx, "", 1, 100)
+		allFeeds, err := repo.GetAll(ctx, "", 1, 100, SortDesc)
 		require.NoError(t, err)
 		assert.Empty(t, allFeeds.Items)
 	})
@@ -327,7 +351,7 @@ func TestRepositoryWithTransactions(t *testing.T) {
 		require.NoError(t, tx.Commit(ctx))
 
 		// Verify feed was created
-		allFeeds, err := repo.GetAll(ctx, "", 1, 100)
+		allFeeds, err := repo.GetAll(ctx, "", 1, 100, SortDesc)
 		require.NoError(t, err)
 		assert.Len(t, allFeeds.Items, 1)
 		assert.Equal(t, "Transaction Commit Test", allFeeds.Items[0].Title)

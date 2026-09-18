@@ -317,6 +317,62 @@ func TestGetFeedsHandlerPageSizeClamped(t *testing.T) {
 	}
 }
 
+func TestGetFeedsHandlerOrderAscUsesAscQuery(t *testing.T) {
+	// ?order=asc must route to the ASC sqlc query. The mock
+	// expectations target the ORDER BY ASC literal; if the handler
+	// fell through to the DESC query (regression) the
+	// ExpectationsWereMet check would fail.
+	repo, mock := newMockRepo(t)
+	service := NewService(repo, cache.NewNoop(), time.Minute, noop.NewTracerProvider().Tracer("test"))
+	h := NewHandler(service)
+
+	now := time.Now()
+	rows := pgxmock.NewRows([]string{"id", "title", "description", "rating", "created_at", "updated_at", "deleted_at"}).
+		AddRow(int32(1), "Oldest", "first", 5.0, now, now, nil)
+
+	mock.ExpectBegin()
+	mock.ExpectQuery(`SELECT id, title, description, rating, created_at, updated_at, deleted_at FROM feeds`).
+		WithArgs(pgxmock.AnyArg(), int32(0), int32(20)).
+		WillReturnRows(rows)
+	mock.ExpectQuery(`SELECT COUNT\(\*\) FROM feeds`).
+		WithArgs(pgxmock.AnyArg()).
+		WillReturnRows(pgxmock.NewRows([]string{"count"}).AddRow(int64(1)))
+	mock.ExpectCommit()
+
+	router := setupTestRouter(h, newTestTokens(t), false)
+	req, _ := http.NewRequest("GET", "/api/feeds?order=asc", nil)
+	rr := httptest.NewRecorder()
+	router.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Errorf("handler returned wrong status code: got %v want %v", rr.Code, http.StatusOK)
+	}
+	if len(rr.Body.Bytes()) == 0 {
+		t.Fatalf("empty response body")
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Errorf("unmet pgxmock expectations: %v", err)
+	}
+}
+
+func TestGetFeedsHandlerOrderRejectsUnknownValue(t *testing.T) {
+	// Huma's enum tag on the input struct rejects anything outside
+	// {asc, desc} with a 400 before the handler runs — the DB is
+	// never touched.
+	repo, _ := newMockRepo(t)
+	service := NewService(repo, cache.NewNoop(), time.Minute, noop.NewTracerProvider().Tracer("test"))
+	h := NewHandler(service)
+
+	router := setupTestRouter(h, newTestTokens(t), false)
+	req, _ := http.NewRequest("GET", "/api/feeds?order=sideways", nil)
+	rr := httptest.NewRecorder()
+	router.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusBadRequest {
+		t.Errorf("expected 400 for unknown order, got %v", rr.Code)
+	}
+}
+
 func TestGetFeedsHandlerSearch(t *testing.T) {
 	repo, mock := newMockRepo(t)
 	service := NewService(repo, cache.NewNoop(), time.Minute, noop.NewTracerProvider().Tracer("test"))

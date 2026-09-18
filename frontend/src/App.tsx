@@ -21,7 +21,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from './components/ui/Dialog';
-import { Plus, X, Search, LogOut, User as UserIcon, MessageSquare } from 'lucide-react';
+import { Plus, X, Search, LogOut, User as UserIcon, MessageSquare, ArrowDownNarrowWide, ArrowUpNarrowWide } from 'lucide-react';
 import { PageMeta } from './components/app/PageMeta';
 import { logger } from './services/logger';
 import { ChatPanel } from './features/chat/components/ChatPanel';
@@ -38,6 +38,8 @@ function App() {
     setShowAddForm,
     editingFeed,
     setEditingFeed,
+    sortOrder,
+    toggleSortOrder,
     resetFormState,
   } = useFeedUiStore();
 
@@ -66,7 +68,7 @@ function App() {
     addFeed,
     updateFeed,
     deleteFeed,
-  } = useFeeds(debouncedSearchTerm);
+  } = useFeeds(debouncedSearchTerm, sortOrder);
 
   const handleAddOrUpdateFeed = async (feedData: NewFeed | Feed) => {
     try {
@@ -117,6 +119,8 @@ function App() {
     ? 'Sign in — Nyx'
     : chatOpen && isAuthenticated
     ? 'Chat — Nyx'
+    : sortOrder === 'asc' && !trimmedSearch
+    ? 'Oldest first — Nyx'
     : trimmedSearch
     ? `"${trimmedSearch}" — Search — Nyx`
     : DEFAULT_TITLE;
@@ -226,16 +230,37 @@ function App() {
             />
           )}
 
-          {isAuthenticated && (
+          <div className="self-end mt-4 flex items-center gap-3">
             <Button
               size="icon"
-              onClick={() => setShowAddForm(!showAddForm)}
-              aria-label={showAddForm ? 'Cancel adding feed' : 'Add feed'}
-              className="self-end mt-4 h-14 w-14 rounded-full shadow-lg"
+              variant="outline"
+              onClick={toggleSortOrder}
+              aria-label={
+                sortOrder === 'desc'
+                  ? 'Sorted newest first; click to show oldest first'
+                  : 'Sorted oldest first; click to show newest first'
+              }
+              title={sortOrder === 'desc' ? 'Newest first' : 'Oldest first'}
+              className="h-14 w-14 rounded-full shadow-lg"
+              data-testid="toggle-sort-order"
             >
-              {showAddForm ? <X className="h-6 w-6" /> : <Plus className="h-6 w-6" />}
+              {sortOrder === 'desc' ? (
+                <ArrowDownNarrowWide className="h-6 w-6" />
+              ) : (
+                <ArrowUpNarrowWide className="h-6 w-6" />
+              )}
             </Button>
-          )}
+            {isAuthenticated && (
+              <Button
+                size="icon"
+                onClick={() => setShowAddForm(!showAddForm)}
+                aria-label={showAddForm ? 'Cancel adding feed' : 'Add feed'}
+                className="h-14 w-14 rounded-full shadow-lg"
+              >
+                {showAddForm ? <X className="h-6 w-6" /> : <Plus className="h-6 w-6" />}
+              </Button>
+            )}
+          </div>
         </div>
       </section>
 

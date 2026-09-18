@@ -386,6 +386,21 @@
               "minimum": 1,
               "type": "integer"
             }
+          },
+          {
+            "description": "Sort direction: 'desc' returns newest first (default), 'asc' returns oldest first.",
+            "explode": false,
+            "in": "query",
+            "name": "order",
+            "schema": {
+              "default": "desc",
+              "description": "Sort direction: 'desc' returns newest first (default), 'asc' returns oldest first.",
+              "enum": [
+                "asc",
+                "desc"
+              ],
+              "type": "string"
+            }
           }
         ],
         "responses": {

@@ -1,5 +1,6 @@
 import { Feed, NewFeed, PaginatedFeeds } from '../types/feed';
 import api from '~/services/api'; // Use the alias here
+import type { SortOrder } from '../store/feedUiStore';
 
 const DEFAULT_PAGE_SIZE = 20;
 
@@ -8,11 +9,13 @@ export const feedService = {
     searchTerm: string = '',
     page: number = 1,
     pageSize: number = DEFAULT_PAGE_SIZE,
+    order: SortOrder = 'desc',
   ): Promise<PaginatedFeeds> {
     const params = new URLSearchParams();
     if (searchTerm) params.set('q', searchTerm);
     params.set('page', String(page));
     params.set('page_size', String(pageSize));
+    params.set('order', order);
     const response = await api.get(`/feeds?${params.toString()}`);
     return response.data;
   },
