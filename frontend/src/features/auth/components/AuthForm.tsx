@@ -2,7 +2,7 @@ import React, { useState } from "react";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
-import api from "../../../services/api";
+import api, { tokenStore } from "../../../services/api";
 import { useAuthStore } from "../../../store/authStore";
 import { useUiStore } from "../../../store/uiStore";
 import { logger } from "../../../services/logger";
@@ -44,7 +44,20 @@ export const AuthForm: React.FC<AuthFormProps> = ({ onSuccess, onCancel }) => {
       const endpoint = isLogin ? "/login" : "/register";
       const payload = { username: data.username, password: data.password };
       const response = await api.post(endpoint, payload);
+      // Wire the in-memory + sessionStorage token store AND the
+      // authStore profile. setAuth takes only `{user}` (the
+      // pick'd PersistedAuthPayload), so the bearer pair is
+      // handled separately. Without this call, the wrapped-`api`
+      // request interceptor has nothing to stamp onto subsequent
+      // requests, AND the IIFE in services/api.ts finds an empty
+      // sessionStorage after F5 — useAuthReconciliation sees no
+      // access token and triggers a hard logout (CLAUDE.md
+      // F5/refresh must keep the session alive).
       setAuth(response.data);
+      const body = response.data;
+      if (body?.access_token && body?.refresh_token) {
+        tokenStore.setTokens(body.access_token, body.refresh_token);
+      }
       addToast(
         isLogin ? "Successfully logged in!" : "Successfully registered!",
         "success",
