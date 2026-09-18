@@ -10,7 +10,7 @@ import { Feed, NewFeed, PaginatedFeeds } from '../types/feed';
 import type { SortOrder } from '../store/feedUiStore';
 
 const FEEDS_QUERY_KEY = 'feeds' as const;
-const PAGE_SIZE = 10;
+const PAGE_SIZE = 5;
 
 // Negative ids are placeholders for rows that have not yet been
 // confirmed by the server (see addFeed's optimistic update). They
