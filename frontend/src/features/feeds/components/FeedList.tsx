@@ -4,6 +4,7 @@ import { Card, CardHeader, CardTitle, CardContent } from '~/components/ui/Card';
 import { Button } from '~/components/ui/Button';
 import { Pencil, Trash2 } from 'lucide-react';
 import { formatRelativeTime } from '~/utils/date';
+import { FeedForm } from './FeedForm';
 
 interface FeedItemProps {
   feed: Feed;
@@ -108,6 +109,9 @@ interface FeedListProps {
   hasMore: boolean;
   isLoadingMore: boolean;
   onLoadMore: () => void;
+  editingFeed: Feed | null;
+  onUpdate: (data: Feed) => void;
+  onCancelEdit: () => void;
   onEdit: (feed: Feed) => void;
   onDelete: (id: number) => void;
 }
@@ -119,6 +123,9 @@ export const FeedList: React.FC<FeedListProps> = ({
   hasMore,
   isLoadingMore,
   onLoadMore,
+  editingFeed,
+  onUpdate,
+  onCancelEdit,
   onEdit,
   onDelete,
 }) => {
@@ -168,14 +175,24 @@ export const FeedList: React.FC<FeedListProps> = ({
       data-testid="feed-list"
       className="flex flex-col gap-4 w-full max-w-[600px] my-8 text-left"
     >
-      {feeds.map((feed) => (
-        <FeedItem
-          key={feed.id}
-          feed={feed}
-          onEdit={onEdit}
-          onDelete={onDelete}
-        />
-      ))}
+      {feeds.map((feed) =>
+        editingFeed?.id === feed.id ? (
+          <FeedForm
+            key={feed.id}
+            title="Edit Feed"
+            feed={editingFeed}
+            onSubmit={onUpdate}
+            onCancel={onCancelEdit}
+          />
+        ) : (
+          <FeedItem
+            key={feed.id}
+            feed={feed}
+            onEdit={onEdit}
+            onDelete={onDelete}
+          />
+        ),
+      )}
       {hasMore && (
         <>
           {isLoadingMore && <FeedListSkeleton />}

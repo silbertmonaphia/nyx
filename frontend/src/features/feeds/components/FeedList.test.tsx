@@ -18,6 +18,9 @@ describe('FeedList', () => {
         hasMore={false}
         isLoadingMore={false}
         onLoadMore={vi.fn()}
+        editingFeed={null}
+        onUpdate={vi.fn()}
+        onCancelEdit={vi.fn()}
         onEdit={vi.fn()}
         onDelete={vi.fn()}
       />,
@@ -36,6 +39,9 @@ describe('FeedList', () => {
         hasMore={false}
         isLoadingMore={false}
         onLoadMore={vi.fn()}
+        editingFeed={null}
+        onUpdate={vi.fn()}
+        onCancelEdit={vi.fn()}
         onEdit={vi.fn()}
         onDelete={vi.fn()}
       />,
@@ -59,6 +65,9 @@ describe('FeedList', () => {
         hasMore={false}
         isLoadingMore={false}
         onLoadMore={vi.fn()}
+        editingFeed={null}
+        onUpdate={vi.fn()}
+        onCancelEdit={vi.fn()}
         onEdit={vi.fn()}
         onDelete={vi.fn()}
       />,
@@ -75,6 +84,9 @@ describe('FeedList', () => {
         hasMore={false}
         isLoadingMore={false}
         onLoadMore={vi.fn()}
+        editingFeed={null}
+        onUpdate={vi.fn()}
+        onCancelEdit={vi.fn()}
         onEdit={vi.fn()}
         onDelete={vi.fn()}
       />,
@@ -91,6 +103,9 @@ describe('FeedList', () => {
         hasMore={false}
         isLoadingMore={false}
         onLoadMore={vi.fn()}
+        editingFeed={null}
+        onUpdate={vi.fn()}
+        onCancelEdit={vi.fn()}
         onEdit={vi.fn()}
         onDelete={vi.fn()}
       />,
@@ -107,6 +122,9 @@ describe('FeedList', () => {
         hasMore={true}
         isLoadingMore={false}
         onLoadMore={vi.fn()}
+        editingFeed={null}
+        onUpdate={vi.fn()}
+        onCancelEdit={vi.fn()}
         onEdit={vi.fn()}
         onDelete={vi.fn()}
       />,
@@ -123,10 +141,36 @@ describe('FeedList', () => {
         hasMore={false}
         isLoadingMore={false}
         onLoadMore={vi.fn()}
+        editingFeed={null}
+        onUpdate={vi.fn()}
+        onCancelEdit={vi.fn()}
         onEdit={vi.fn()}
         onDelete={vi.fn()}
       />,
     );
     expect(screen.queryByTestId('feed-list-sentinel')).not.toBeInTheDocument();
+  });
+
+  it('renders the edit form inline in place of the edited row', () => {
+    render(
+      <FeedList
+        feeds={feeds}
+        loading={false}
+        searchTerm=""
+        hasMore={false}
+        isLoadingMore={false}
+        onLoadMore={vi.fn()}
+        editingFeed={feeds[0]}
+        onUpdate={vi.fn()}
+        onCancelEdit={vi.fn()}
+        onEdit={vi.fn()}
+        onDelete={vi.fn()}
+      />,
+    );
+    // The edited row is replaced by the form; the other row stays as a card.
+    expect(screen.queryByText('Feed 1')).not.toBeInTheDocument();
+    expect(screen.getByText('Feed 2')).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Edit Feed' })).toBeInTheDocument();
+    expect(screen.getByPlaceholderText('Feed title')).toHaveValue('Feed 1');
   });
 });

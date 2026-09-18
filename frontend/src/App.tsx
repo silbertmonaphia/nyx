@@ -187,15 +187,6 @@ function App() {
 
       <section id="center" className="container mx-auto px-4 py-8">
         <div className="w-full max-w-2xl mx-auto flex flex-col items-center">
-          {isAuthenticated && editingFeed && (
-            <FeedForm
-              title="Edit Feed"
-              feed={editingFeed}
-              onSubmit={handleAddOrUpdateFeed}
-              onCancel={resetFormState}
-            />
-          )}
-
           <FeedList
             feeds={feeds}
             loading={isLoading}
@@ -203,6 +194,9 @@ function App() {
             hasMore={hasMore}
             isLoadingMore={isLoadingMore}
             onLoadMore={loadMore}
+            editingFeed={editingFeed}
+            onUpdate={handleAddOrUpdateFeed}
+            onCancelEdit={resetFormState}
             onEdit={(feed) => {
               if (!isAuthenticated) {
                 useUiStore.getState().addToast('Please login to edit feeds', 'info');
@@ -210,7 +204,6 @@ function App() {
                 return;
               }
               setEditingFeed(feed);
-              window.scrollTo({ top: 0, behavior: 'smooth' });
             }}
             onDelete={(id) => {
               if (!isAuthenticated) {
