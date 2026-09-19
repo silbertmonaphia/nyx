@@ -1,4 +1,4 @@
-import React, { useEffect, useRef } from 'react';
+import React, { useEffect, useLayoutEffect, useRef } from 'react';
 import { Feed, NewFeed } from '../types/feed';
 import { Card, CardHeader, CardTitle, CardContent } from '~/components/ui/Card';
 import { Button } from '~/components/ui/Button';
@@ -124,7 +124,7 @@ const FeedCount: React.FC<{ loaded: number; total: number }> = ({ loaded, total 
   return (
     <div
       data-testid="feed-count"
-      className="text-xs text-muted-foreground self-start"
+      className="text-xs text-muted-foreground self-start w-full max-w-[600px] mb-2"
       aria-live="polite"
     >
       {moreOnTheWay
@@ -149,23 +149,58 @@ export const FeedList: React.FC<FeedListProps> = ({
   onDelete,
 }) => {
   const sentinelRef = useRef<HTMLDivElement | null>(null);
+  const scrollRef = useRef<HTMLDivElement | null>(null);
+  const didInitialScroll = useRef(false);
+  const firstFeedIdRef = useRef<number | null>(null);
 
   useEffect(() => {
     if (!hasMore || isLoadingMore) return;
     const node = sentinelRef.current;
-    if (!node) return;
+    const root = scrollRef.current;
+    if (!node || !root) return;
 
+    // Watch the scroll container itself, not the document viewport. The
+    // sentinel is the LAST flex child of a `column-reverse` panel and the
+    // browser's bounding-rect math for it doesn't track the inner scroll
+    // reliably — pinning the observer's root to the panel makes the
+    // intersection test deterministic regardless of where the panel sits
+    // in the viewport or which edge the sentinel approaches.
     const observer = new IntersectionObserver(
       (entries) => {
         if (entries[0]?.isIntersecting) {
           onLoadMore();
         }
       },
-      { rootMargin: '200px' },
+      { root, rootMargin: '200px' },
     );
     observer.observe(node);
     return () => observer.disconnect();
   }, [hasMore, isLoadingMore, onLoadMore]);
+
+  // Chat-style scroll: the newest feed sits at the visual bottom on first
+  // render, and we re-stick to the bottom whenever the head of the list
+  // changes (a new optimistic add landed at index 0). Infinite-scroll
+  // history fetches append to the tail — same length grows, same head id —
+  // so this effect won't yank the user away from history they're reading.
+  useLayoutEffect(() => {
+    const node = scrollRef.current;
+    if (!node || loading) return;
+
+    if (!didInitialScroll.current) {
+      didInitialScroll.current = true;
+      if (feeds.length > 0) {
+        firstFeedIdRef.current = feeds[0].id;
+        node.scrollTop = node.scrollHeight;
+      }
+      return;
+    }
+
+    const currentFirstId = feeds[0]?.id;
+    if (currentFirstId !== undefined && currentFirstId !== firstFeedIdRef.current) {
+      firstFeedIdRef.current = currentFirstId;
+      node.scrollTop = node.scrollHeight;
+    }
+  }, [feeds, loading]);
 
   if (loading) {
     return (
@@ -192,35 +227,38 @@ export const FeedList: React.FC<FeedListProps> = ({
   }
 
   return (
-    <div
-      data-testid="feed-list"
-      className="flex flex-col gap-4 w-full max-w-[600px] mb-8 text-left flex-1 min-h-0 overflow-y-auto"
-    >
+    <>
       <FeedCount loaded={feeds.length} total={totalCount} />
-      {feeds.map((feed) =>
-        editingFeed?.id === feed.id ? (
-          <FeedForm
-            key={feed.id}
-            title="Edit Feed"
-            feed={editingFeed}
-            onSubmit={onUpdate}
-            onCancel={onCancelEdit}
-          />
-        ) : (
-          <FeedItem
-            key={feed.id}
-            feed={feed}
-            onEdit={onEdit}
-            onDelete={onDelete}
-          />
-        ),
-      )}
-      {hasMore && (
-        <>
-          {isLoadingMore && <FeedListSkeleton />}
-          <div ref={sentinelRef} data-testid="feed-list-sentinel" className="h-1" />
-        </>
-      )}
-    </div>
+      <div
+        ref={scrollRef}
+        data-testid="feed-list"
+        className="flex flex-col-reverse gap-4 w-full max-w-[600px] mb-8 text-left flex-1 min-h-0 overflow-y-auto"
+      >
+        {feeds.map((feed) =>
+          editingFeed?.id === feed.id ? (
+            <FeedForm
+              key={feed.id}
+              title="Edit Feed"
+              feed={editingFeed}
+              onSubmit={onUpdate}
+              onCancel={onCancelEdit}
+            />
+          ) : (
+            <FeedItem
+              key={feed.id}
+              feed={feed}
+              onEdit={onEdit}
+              onDelete={onDelete}
+            />
+          ),
+        )}
+        {hasMore && (
+          <>
+            {isLoadingMore && <FeedListSkeleton />}
+            <div ref={sentinelRef} data-testid="feed-list-sentinel" className="h-1" />
+          </>
+        )}
+      </div>
+    </>
   );
 };

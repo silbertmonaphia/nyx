@@ -3,11 +3,28 @@ import { FeedList } from './FeedList';
 import { Feed } from '../types/feed';
 import { vi } from 'vitest';
 
+// `IntersectionObserver` is polyfilled in test/setup.js. The stub keeps a
+// reference to the most-recently constructed instance and exposes a
+// `trigger()` helper so tests can simulate intersection callbacks without
+// needing real layout.
+const IntersectionObserverStub = globalThis.IntersectionObserver as unknown as {
+  last: {
+    trigger: (isIntersecting: boolean, target?: Element | null) => void;
+    root: Element | null;
+    rootMargin: string;
+  } | null;
+  reset: () => void;
+};
+
 describe('FeedList', () => {
   const feeds: Feed[] = [
     { id: 1, title: 'Feed 1', description: 'Desc 1', rating: 8, created_at: '2024-01-01T00:00:00Z', updated_at: '2024-01-01T00:00:00Z' },
     { id: 2, title: 'Feed 2', description: 'Desc 2', rating: 9, created_at: '2024-01-01T00:00:00Z', updated_at: '2024-01-01T00:00:00Z' },
   ];
+
+  beforeEach(() => {
+    IntersectionObserverStub.reset();
+  });
 
   it('renders a list of feeds', () => {
     render(
@@ -270,6 +287,51 @@ describe('FeedList', () => {
     expect(screen.getByTestId('feed-count')).toHaveTextContent('2 feeds loaded');
   });
 
+  it('places the feed count outside the scrollable panel (chat-style layout)', () => {
+    render(
+      <FeedList
+        feeds={feeds}
+        totalCount={feeds.length}
+        loading={false}
+        searchTerm=""
+        hasMore={false}
+        isLoadingMore={false}
+        onLoadMore={vi.fn()}
+        editingFeed={null}
+        onUpdate={vi.fn()}
+        onCancelEdit={vi.fn()}
+        onEdit={vi.fn()}
+        onDelete={vi.fn()}
+      />,
+    );
+    const count = screen.getByTestId('feed-count');
+    const list = screen.getByTestId('feed-list');
+    // The count must not be nested inside the scroll container —
+    // column-reverse would otherwise push it to the visual bottom.
+    expect(count.parentElement).not.toBe(list);
+  });
+
+  it('renders the list with a reversed column flex so the newest sits at the visual bottom', () => {
+    render(
+      <FeedList
+        feeds={feeds}
+        totalCount={feeds.length}
+        loading={false}
+        searchTerm=""
+        hasMore={false}
+        isLoadingMore={false}
+        onLoadMore={vi.fn()}
+        editingFeed={null}
+        onUpdate={vi.fn()}
+        onCancelEdit={vi.fn()}
+        onEdit={vi.fn()}
+        onDelete={vi.fn()}
+      />,
+    );
+    const root = screen.getByTestId('feed-list');
+    expect(root.className).toMatch(/flex-col-reverse/);
+  });
+
   it('renders "1 feed loaded" (singular) when only one feed is loaded', () => {
     render(
       <FeedList
@@ -308,5 +370,108 @@ describe('FeedList', () => {
       />,
     );
     expect(screen.getByTestId('feed-count')).toHaveTextContent('2 of 42 feeds loaded');
+  });
+
+  describe('infinite-scroll observer', () => {
+    it('pins the IntersectionObserver root to the scroll container, not the document viewport', () => {
+      // Regression: the sentinel lives inside an `overflow-auto` +
+      // `column-reverse` panel. Watching the document viewport is
+      // unreliable here because the browser's bounding-rect math for the
+      // LAST flex child of a column-reverse container doesn't track the
+      // inner scroll predictably, so `isIntersecting` never flips.
+      // Pinning `root` to the scroll container makes the intersection
+      // test deterministic.
+      const onLoadMore = vi.fn();
+      render(
+        <FeedList
+          feeds={feeds}
+          totalCount={feeds.length}
+          loading={false}
+          searchTerm=""
+          hasMore={true}
+          isLoadingMore={false}
+          onLoadMore={onLoadMore}
+          editingFeed={null}
+          onUpdate={vi.fn()}
+          onCancelEdit={vi.fn()}
+          onEdit={vi.fn()}
+          onDelete={vi.fn()}
+        />,
+      );
+
+      const observer = IntersectionObserverStub.last;
+      const panel = screen.getByTestId('feed-list');
+      expect(observer).not.toBeNull();
+      expect(observer?.root).toBe(panel);
+      expect(observer?.rootMargin).toBe('200px');
+    });
+
+    it('calls onLoadMore when the sentinel reports intersecting', () => {
+      const onLoadMore = vi.fn();
+      render(
+        <FeedList
+          feeds={feeds}
+          totalCount={42}
+          loading={false}
+          searchTerm=""
+          hasMore={true}
+          isLoadingMore={false}
+          onLoadMore={onLoadMore}
+          editingFeed={null}
+          onUpdate={vi.fn()}
+          onCancelEdit={vi.fn()}
+          onEdit={vi.fn()}
+          onDelete={vi.fn()}
+        />,
+      );
+
+      expect(onLoadMore).not.toHaveBeenCalled();
+      IntersectionObserverStub.last?.trigger(true);
+      expect(onLoadMore).toHaveBeenCalledTimes(1);
+    });
+
+    it('does not call onLoadMore when the sentinel reports not intersecting', () => {
+      const onLoadMore = vi.fn();
+      render(
+        <FeedList
+          feeds={feeds}
+          totalCount={42}
+          loading={false}
+          searchTerm=""
+          hasMore={true}
+          isLoadingMore={false}
+          onLoadMore={onLoadMore}
+          editingFeed={null}
+          onUpdate={vi.fn()}
+          onCancelEdit={vi.fn()}
+          onEdit={vi.fn()}
+          onDelete={vi.fn()}
+        />,
+      );
+
+      IntersectionObserverStub.last?.trigger(false);
+      expect(onLoadMore).not.toHaveBeenCalled();
+    });
+
+    it('does not attach an observer when there are no more pages', () => {
+      render(
+        <FeedList
+          feeds={feeds}
+          totalCount={feeds.length}
+          loading={false}
+          searchTerm=""
+          hasMore={false}
+          isLoadingMore={false}
+          onLoadMore={vi.fn()}
+          editingFeed={null}
+          onUpdate={vi.fn()}
+          onCancelEdit={vi.fn()}
+          onEdit={vi.fn()}
+          onDelete={vi.fn()}
+        />,
+      );
+
+      expect(IntersectionObserverStub.last).toBeNull();
+    });
   });
 });
