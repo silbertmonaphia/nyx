@@ -2,17 +2,36 @@ import '@testing-library/jest-dom';
 
 // JSDOM doesn't ship IntersectionObserver. Components that use it for
 // infinite-scroll need a stub. The real behaviour is exercised in E2E.
+// The stub exposes the most-recent instance and its options so tests
+// can assert against the observer's root (e.g. pinning it to a
+// scroll container instead of the document viewport) and trigger
+// callbacks deterministically.
 if (typeof globalThis.IntersectionObserver === 'undefined') {
   class IntersectionObserverStub {
+    constructor(_cb, options = {}) {
+      this._cb = _cb;
+      this.root = options.root ?? null;
+      this.rootMargin = options.rootMargin ?? '';
+      this.thresholds = options.threshold !== undefined ? [options.threshold].flat() : [0];
+      IntersectionObserverStub.last = this;
+      IntersectionObserverStub.instances.push(this);
+    }
     observe() {}
     unobserve() {}
     disconnect() {}
     takeRecords() {
       return [];
     }
-    root = null;
-    rootMargin = '';
-    thresholds = [];
+    /** Test-only: simulate an intersection event for this observer. */
+    trigger(isIntersecting, target = null) {
+      this._cb([{ isIntersecting, target, intersectionRatio: isIntersecting ? 1 : 0 }]);
+    }
+    static last = null;
+    static instances = [];
+    static reset() {
+      IntersectionObserverStub.last = null;
+      IntersectionObserverStub.instances = [];
+    }
   }
   // @ts-expect-error - test-only global polyfill
   globalThis.IntersectionObserver = IntersectionObserverStub;
