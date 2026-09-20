@@ -17,6 +17,7 @@ import (
 // only FeedInput enforces them on a real request path.
 type Feed struct {
 	ID          int        `json:"id" db:"id"`
+	UserID      int        `json:"user_id" db:"user_id"`
 	Title       string     `json:"title" db:"title" required:"true" minLength:"1" maxLength:"100"`
 	Description string     `json:"description" db:"description" maxLength:"1000"`
 	Rating      float64    `json:"rating" db:"rating" minimum:"0" maximum:"10"`

@@ -8,6 +8,7 @@ sql:
       - "migrations/000006_add_movies_indexes.up.sql"
       - "migrations/000007_add_movies_description_trgm_index.up.sql"
       - "migrations/000011_rename_movies_to_feeds.up.sql"
+      - "migrations/000012_add_user_id_to_feeds.up.sql"
     gen:
       go:
         package: "db"
@@ -19,6 +20,7 @@ sql:
         emit_empty_slices: true
         rename:
           id: "ID"
+          user_id: "UserID"
           created_at: "CreatedAt"
           updated_at: "UpdatedAt"
           deleted_at: "DeletedAt"

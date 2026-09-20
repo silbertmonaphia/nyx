@@ -103,8 +103,15 @@ func setupRefreshIntegrationPool(t *testing.T) (*pgxpool.Pool, Repository) {
 	pool, err := pgxpool.NewWithConfig(context.Background(), poolCfg)
 	require.NoError(t, err)
 
-	// Wipe in FK-safe order: refresh_tokens first, then users.
+	// Wipe in FK-safe order: refresh_tokens, feeds (depends on users),
+	// then users. The feeds.user_id FK added by migration 000012 makes
+	// "DELETE FROM users" fail with 23503 when any feed row exists,
+	// so the dependent tables must go first. The user-package tests
+	// don't touch feeds; the cleanup is purely to satisfy the new FK
+	// inherited from migration 000012.
 	_, err = pool.Exec(context.Background(), "DELETE FROM refresh_tokens")
+	require.NoError(t, err)
+	_, err = pool.Exec(context.Background(), "DELETE FROM feeds")
 	require.NoError(t, err)
 	_, err = pool.Exec(context.Background(), "DELETE FROM users")
 	require.NoError(t, err)

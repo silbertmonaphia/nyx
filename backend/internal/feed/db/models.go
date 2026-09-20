@@ -16,4 +16,5 @@ type Feed struct {
 	CreatedAt   pgtype.Timestamptz
 	UpdatedAt   pgtype.Timestamptz
 	DeletedAt   pgtype.Timestamptz
+	UserID      int64
 }

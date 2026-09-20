@@ -7,9 +7,14 @@
 -- `query` parameter, which short-circuits the LIKE clauses via the
 -- `IS NULL OR ...` pattern. When the caller sets it, the caller is
 -- responsible for wrapping the search term in `%` wildcards.
+--
+-- Every query filters on user_id — feeds are owner-scoped. The handler
+-- always supplies a user_id (the JWT subject); we use plain
+-- `= @user_id` rather than `sqlc.narg` so a NULL filter can't accidentally
+-- leak rows from every user.
 
 -- name: QueryFeedsPage :many
-SELECT id, title, description, rating, created_at, updated_at, deleted_at
+SELECT id, user_id, title, description, rating, created_at, updated_at, deleted_at
 FROM feeds
 WHERE (
         sqlc.narg('query')::text IS NULL
@@ -17,6 +22,7 @@ WHERE (
         OR description ILIKE sqlc.narg('query')
       )
   AND deleted_at IS NULL
+  AND user_id   = @user_id
 ORDER BY created_at DESC, id DESC
 LIMIT  sqlc.arg('page_size')::int
 OFFSET sqlc.arg('offset')::int;
@@ -27,7 +33,7 @@ OFFSET sqlc.arg('offset')::int;
 -- and let the planner pick a different index if one ever lands for
 -- ASC. The id tiebreaker flips to ASC so pagination stays consistent
 -- within a sort direction.
-SELECT id, title, description, rating, created_at, updated_at, deleted_at
+SELECT id, user_id, title, description, rating, created_at, updated_at, deleted_at
 FROM feeds
 WHERE (
         sqlc.narg('query')::text IS NULL
@@ -35,6 +41,7 @@ WHERE (
         OR description ILIKE sqlc.narg('query')
       )
   AND deleted_at IS NULL
+  AND user_id   = @user_id
 ORDER BY created_at ASC, id ASC
 LIMIT  sqlc.arg('page_size')::int
 OFFSET sqlc.arg('offset')::int;
@@ -47,11 +54,12 @@ WHERE (
         OR title       ILIKE sqlc.narg('query')
         OR description ILIKE sqlc.narg('query')
       )
-  AND deleted_at IS NULL;
+  AND deleted_at IS NULL
+  AND user_id   = @user_id;
 
 -- name: InsertFeed :one
-INSERT INTO feeds (title, description, rating)
-VALUES (@title, @description, @rating)
+INSERT INTO feeds (user_id, title, description, rating)
+VALUES (@user_id, @title, @description, @rating)
 RETURNING *;
 
 -- name: UpdateFeed :one
@@ -60,10 +68,10 @@ SET title       = @title,
     description = @description,
     rating      = @rating,
     updated_at  = CURRENT_TIMESTAMP
-WHERE id = @id AND deleted_at IS NULL
+WHERE id = @id AND user_id = @user_id AND deleted_at IS NULL
 RETURNING *;
 
 -- name: SoftDeleteFeed :execrows
 UPDATE feeds
 SET deleted_at = CURRENT_TIMESTAMP
-WHERE id = @id AND deleted_at IS NULL;
+WHERE id = @id AND user_id = @user_id AND deleted_at IS NULL;

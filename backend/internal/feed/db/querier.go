@@ -6,12 +6,10 @@ package db
 
 import (
 	"context"
-
-	"github.com/jackc/pgx/v5/pgtype"
 )
 
 type Querier interface {
-	CountFeeds(ctx context.Context, query pgtype.Text) (int64, error)
+	CountFeeds(ctx context.Context, arg CountFeedsParams) (int64, error)
 	InsertFeed(ctx context.Context, arg InsertFeedParams) (Feed, error)
 	// SQL queries for the feed feature. Each block becomes a method on the
 	// generated internal/feed/db.Querier interface. The first line of each
@@ -22,14 +20,19 @@ type Querier interface {
 	// `query` parameter, which short-circuits the LIKE clauses via the
 	// `IS NULL OR ...` pattern. When the caller sets it, the caller is
 	// responsible for wrapping the search term in `%` wildcards.
-	QueryFeedsPage(ctx context.Context, arg QueryFeedsPageParams) ([]Feed, error)
+	//
+	// Every query filters on user_id — feeds are owner-scoped. The handler
+	// always supplies a user_id (the JWT subject); we use plain
+	// `= @user_id` rather than `sqlc.narg` so a NULL filter can't accidentally
+	// leak rows from every user.
+	QueryFeedsPage(ctx context.Context, arg QueryFeedsPageParams) ([]QueryFeedsPageRow, error)
 	// Ascending counterpart of QueryFeedsPage. Two separate queries keep
 	// the ORDER BY literal (sqlc doesn't interpolate direction tokens),
 	// and let the planner pick a different index if one ever lands for
 	// ASC. The id tiebreaker flips to ASC so pagination stays consistent
 	// within a sort direction.
-	QueryFeedsPageAsc(ctx context.Context, arg QueryFeedsPageAscParams) ([]Feed, error)
-	SoftDeleteFeed(ctx context.Context, id int32) (int64, error)
+	QueryFeedsPageAsc(ctx context.Context, arg QueryFeedsPageAscParams) ([]QueryFeedsPageAscRow, error)
+	SoftDeleteFeed(ctx context.Context, arg SoftDeleteFeedParams) (int64, error)
 	UpdateFeed(ctx context.Context, arg UpdateFeedParams) (Feed, error)
 }
 

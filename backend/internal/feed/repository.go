@@ -33,6 +33,14 @@ type Page struct {
 //nolint:gosec // G115: SERIAL PKs + handler-side caps keep this safe.
 func toInt32(v int) int32 { return int32(v) }
 
+// toInt64 narrows an int to int64. The feeds.user_id column is
+// BIGINT (matches users.id SERIAL — both stay below math.MaxInt64 for
+// any realistic user count). If a hostile client somehow sent a
+// value above that, pgx would fail with a value-out-of-range SQLSTATE.
+//
+//nolint:gosec // G115: user_id comes from the JWT subject, capped by SERIAL.
+func toInt64(v int) int64 { return int64(v) }
+
 // Pool is the subset of *pgxpool.Pool the repository needs. Both
 // pgxpool.Pool and pgxmock.PgxPoolIface satisfy it (the latter is
 // the unit-test path; see handler_test.go). The interface embeds
@@ -49,6 +57,13 @@ type Pool interface {
 // The handler layer maps this to HTTP 404; everything else becomes
 // 500. Migrated from the old `err.Error() == "feed not found"`
 // string compare in handler.go.
+//
+// Now also covers the cross-owner case: a PUT/DELETE on a feed that
+// exists but belongs to a different user returns ErrNotFound too —
+// the SQL WHERE filters by both id and user_id, so a non-owner
+// caller sees the same 0-rows outcome as a missing id. This is the
+// leak-free path the product spec mandates (single sentinel, no
+// ErrForbidden).
 var ErrNotFound = errors.New("feed not found")
 
 // SortOrder is the listing direction for paginated feed queries.
@@ -81,10 +96,10 @@ func init() {
 }
 
 type Repository interface {
-	GetAll(ctx context.Context, query string, page, pageSize int, order SortOrder) (*Page, error)
-	Create(ctx context.Context, m *Feed) error
-	Update(ctx context.Context, id int, m *Feed) error
-	Delete(ctx context.Context, id int) error
+	GetAll(ctx context.Context, userID int, query string, page, pageSize int, order SortOrder) (*Page, error)
+	Create(ctx context.Context, userID int, m *Feed) error
+	Update(ctx context.Context, userID int, id int, m *Feed) error
+	Delete(ctx context.Context, userID int, id int) error
 	Ping(ctx context.Context) error
 }
 
@@ -107,16 +122,16 @@ func NewRepositoryFromQuerier(q *db.Queries) Repository {
 	return &sqlRepository{q: q}
 }
 
-// GetAll returns one paginated page of feeds. SELECT and COUNT run
-// in a single transaction so the page count and the items stay
-// consistent even under concurrent writes. The repo caller is
-// responsible for clamping page/pageSize; defaults are applied
-// defensively here.
+// GetAll returns one paginated page of feeds owned by userID. SELECT
+// and COUNT run in a single transaction so the page count and the
+// items stay consistent even under concurrent writes. The repo
+// caller is responsible for clamping page/pageSize; defaults are
+// applied defensively here.
 //
 // GetAll requires a Pool — calling it on a repository built via
 // NewRepositoryFromQuerier returns an error. Production code always
 // uses NewRepository.
-func (r *sqlRepository) GetAll(ctx context.Context, queryParam string, page, pageSize int, order SortOrder) (*Page, error) {
+func (r *sqlRepository) GetAll(ctx context.Context, userID int, queryParam string, page, pageSize int, order SortOrder) (*Page, error) {
 	if page < 1 {
 		page = 1
 	}
@@ -152,25 +167,36 @@ func (r *sqlRepository) GetAll(ctx context.Context, queryParam string, page, pag
 	// interpolate direction tokens); pick the matching one. Any
 	// unknown SortOrder falls through to DESC via ParseSortOrder at
 	// the handler boundary, so this branch only sees ASC or DESC.
-	var items []db.Feed
+	userIDParam := toInt64(userID)
+	var feeds []Feed
 	switch order {
 	case SortAsc:
-		items, err = qtx.QueryFeedsPageAsc(ctx, db.QueryFeedsPageAscParams{
+		rows, qErr := qtx.QueryFeedsPageAsc(ctx, db.QueryFeedsPageAscParams{
 			Query:    queryArg,
+			UserID:   userIDParam,
 			Offset:   toInt32(offset),
 			PageSize: toInt32(pageSize),
 		})
+		if qErr != nil {
+			return nil, qErr
+		}
+		feeds = toFeedsFromAscRows(rows)
 	default:
-		items, err = qtx.QueryFeedsPage(ctx, db.QueryFeedsPageParams{
+		rows, qErr := qtx.QueryFeedsPage(ctx, db.QueryFeedsPageParams{
 			Query:    queryArg,
+			UserID:   userIDParam,
 			Offset:   toInt32(offset),
 			PageSize: toInt32(pageSize),
 		})
+		if qErr != nil {
+			return nil, qErr
+		}
+		feeds = toFeeds(rows)
 	}
-	if err != nil {
-		return nil, err
-	}
-	total, err := qtx.CountFeeds(ctx, queryArg)
+	total, err := qtx.CountFeeds(ctx, db.CountFeedsParams{
+		Query:  queryArg,
+		UserID: userIDParam,
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -180,15 +206,20 @@ func (r *sqlRepository) GetAll(ctx context.Context, queryParam string, page, pag
 	}
 
 	return &Page{
-		Items:    toFeeds(items),
+		Items:    feeds,
 		Total:    int(total),
 		Page:     page,
 		PageSize: pageSize,
 	}, nil
 }
 
-func (r *sqlRepository) Create(ctx context.Context, m *Feed) error {
+func (r *sqlRepository) Create(ctx context.Context, userID int, m *Feed) error {
+	// Defense-in-depth: the handler always sets UserID from the JWT
+	// subject, but pin it here too so a malformed Feed can never
+	// persist as another user's feed.
+	m.UserID = userID
 	row, err := r.q.InsertFeed(ctx, db.InsertFeedParams{
+		UserID:      toInt64(userID),
 		Title:       m.Title,
 		Description: textFromString(m.Description),
 		Rating:      float8FromValue(m.Rating),
@@ -205,15 +236,19 @@ func (r *sqlRepository) Create(ctx context.Context, m *Feed) error {
 	return nil
 }
 
-func (r *sqlRepository) Update(ctx context.Context, id int, m *Feed) error {
+func (r *sqlRepository) Update(ctx context.Context, userID int, id int, m *Feed) error {
 	row, err := r.q.UpdateFeed(ctx, db.UpdateFeedParams{
 		Title:       m.Title,
 		Description: textFromString(m.Description),
 		Rating:      float8FromValue(m.Rating),
 		ID:          toInt32(id),
+		UserID:      toInt64(userID),
 	})
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
+			// Either the row doesn't exist, is soft-deleted, OR is
+			// owned by another user. All three map to ErrNotFound —
+			// see the type comment. No ErrForbidden sentinel by design.
 			return ErrNotFound
 		}
 		return pgerr.Map(err)
@@ -222,12 +257,17 @@ func (r *sqlRepository) Update(ctx context.Context, id int, m *Feed) error {
 	return nil
 }
 
-func (r *sqlRepository) Delete(ctx context.Context, id int) error {
-	rows, err := r.q.SoftDeleteFeed(ctx, toInt32(id))
+func (r *sqlRepository) Delete(ctx context.Context, userID int, id int) error {
+	rows, err := r.q.SoftDeleteFeed(ctx, db.SoftDeleteFeedParams{
+		ID:     toInt32(id),
+		UserID: toInt64(userID),
+	})
 	if err != nil {
 		return pgerr.Map(err)
 	}
 	if rows == 0 {
+		// Same shape as Update: missing, soft-deleted, OR owned by
+		// another user. Single ErrNotFound sentinel for all three.
 		return ErrNotFound
 	}
 	return nil
@@ -243,6 +283,7 @@ func (r *sqlRepository) Ping(ctx context.Context) error {
 // toFeed projects a sqlc-generated db.Feed into the API-shaped
 // Feed. The model differences are:
 //   - int32 (db) -> int (api)
+//   - int64 (db) -> int (api)
 //   - pgtype.Text (nullable) -> string (empty when not set)
 //   - pgtype.Float8 (nullable) -> float64 (zero when not set;
 //     the API model uses a non-pointer rating, so NULL is lossy)
@@ -250,6 +291,7 @@ func (r *sqlRepository) Ping(ctx context.Context) error {
 func toFeed(d db.Feed) Feed {
 	m := Feed{
 		ID:        int(d.ID),
+		UserID:    int(d.UserID),
 		Title:     d.Title,
 		CreatedAt: d.CreatedAt.Time,
 		UpdatedAt: d.UpdatedAt.Time,
@@ -267,10 +309,68 @@ func toFeed(d db.Feed) Feed {
 	return m
 }
 
-func toFeeds(ds []db.Feed) []Feed {
+// toFeedsRow projects a sqlc-generated *QueryFeedsPageRow /
+// *QueryFeedsPageAscRow into the API-shaped Feed. The page queries
+// return dedicated Row types (not the shared db.Feed) because sqlc
+// can't widen RETURNING * automatically — but the columns are
+// identical, so the projection is the same shape.
+func toFeedsRow(d db.QueryFeedsPageRow) Feed {
+	m := Feed{
+		ID:        int(d.ID),
+		UserID:    int(d.UserID),
+		Title:     d.Title,
+		CreatedAt: d.CreatedAt.Time,
+		UpdatedAt: d.UpdatedAt.Time,
+	}
+	if d.Description.Valid {
+		m.Description = d.Description.String
+	}
+	if d.Rating.Valid {
+		m.Rating = d.Rating.Float64
+	}
+	if d.DeletedAt.Valid {
+		t := d.DeletedAt.Time
+		m.DeletedAt = &t
+	}
+	return m
+}
+
+func toFeeds(ds []db.QueryFeedsPageRow) []Feed {
 	out := make([]Feed, len(ds))
 	for i, d := range ds {
-		out[i] = toFeed(d)
+		out[i] = toFeedsRow(d)
+	}
+	return out
+}
+
+// toFeedsFromAscRows is the ascending-query counterpart to
+// toFeeds. The two page queries return distinct sqlc row types with
+// identical fields; rather than introduce an interface (sqlc
+// generates them as plain structs), we duplicate the projection in
+// a sibling helper. The two should stay in lock-step — a column
+// added to the SELECT list will fail to compile in both row types
+// and force a fix here.
+func toFeedsFromAscRows(ds []db.QueryFeedsPageAscRow) []Feed {
+	out := make([]Feed, len(ds))
+	for i, d := range ds {
+		m := Feed{
+			ID:        int(d.ID),
+			UserID:    int(d.UserID),
+			Title:     d.Title,
+			CreatedAt: d.CreatedAt.Time,
+			UpdatedAt: d.UpdatedAt.Time,
+		}
+		if d.Description.Valid {
+			m.Description = d.Description.String
+		}
+		if d.Rating.Valid {
+			m.Rating = d.Rating.Float64
+		}
+		if d.DeletedAt.Valid {
+			t := d.DeletedAt.Time
+			m.DeletedAt = &t
+		}
+		out[i] = m
 	}
 	return out
 }

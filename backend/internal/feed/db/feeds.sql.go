@@ -20,29 +20,41 @@ WHERE (
         OR description ILIKE $1
       )
   AND deleted_at IS NULL
+  AND user_id   = $2
 `
 
-func (q *Queries) CountFeeds(ctx context.Context, query pgtype.Text) (int64, error) {
-	row := q.db.QueryRow(ctx, countFeeds, query)
+type CountFeedsParams struct {
+	Query  pgtype.Text
+	UserID int64
+}
+
+func (q *Queries) CountFeeds(ctx context.Context, arg CountFeedsParams) (int64, error) {
+	row := q.db.QueryRow(ctx, countFeeds, arg.Query, arg.UserID)
 	var count int64
 	err := row.Scan(&count)
 	return count, err
 }
 
 const insertFeed = `-- name: InsertFeed :one
-INSERT INTO feeds (title, description, rating)
-VALUES ($1, $2, $3)
-RETURNING id, title, description, rating, created_at, updated_at, deleted_at
+INSERT INTO feeds (user_id, title, description, rating)
+VALUES ($1, $2, $3, $4)
+RETURNING id, title, description, rating, created_at, updated_at, deleted_at, user_id
 `
 
 type InsertFeedParams struct {
+	UserID      int64
 	Title       string
 	Description pgtype.Text
 	Rating      pgtype.Float8
 }
 
 func (q *Queries) InsertFeed(ctx context.Context, arg InsertFeedParams) (Feed, error) {
-	row := q.db.QueryRow(ctx, insertFeed, arg.Title, arg.Description, arg.Rating)
+	row := q.db.QueryRow(ctx, insertFeed,
+		arg.UserID,
+		arg.Title,
+		arg.Description,
+		arg.Rating,
+	)
 	var i Feed
 	err := row.Scan(
 		&i.ID,
@@ -52,13 +64,14 @@ func (q *Queries) InsertFeed(ctx context.Context, arg InsertFeedParams) (Feed, e
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.DeletedAt,
+		&i.UserID,
 	)
 	return i, err
 }
 
 const queryFeedsPage = `-- name: QueryFeedsPage :many
 
-SELECT id, title, description, rating, created_at, updated_at, deleted_at
+SELECT id, user_id, title, description, rating, created_at, updated_at, deleted_at
 FROM feeds
 WHERE (
         $1::text IS NULL
@@ -66,15 +79,28 @@ WHERE (
         OR description ILIKE $1
       )
   AND deleted_at IS NULL
+  AND user_id   = $2
 ORDER BY created_at DESC, id DESC
-LIMIT  $3::int
-OFFSET $2::int
+LIMIT  $4::int
+OFFSET $3::int
 `
 
 type QueryFeedsPageParams struct {
 	Query    pgtype.Text
+	UserID   int64
 	Offset   int32
 	PageSize int32
+}
+
+type QueryFeedsPageRow struct {
+	ID          int32
+	UserID      int64
+	Title       string
+	Description pgtype.Text
+	Rating      pgtype.Float8
+	CreatedAt   pgtype.Timestamptz
+	UpdatedAt   pgtype.Timestamptz
+	DeletedAt   pgtype.Timestamptz
 }
 
 // SQL queries for the feed feature. Each block becomes a method on the
@@ -86,17 +112,28 @@ type QueryFeedsPageParams struct {
 // `query` parameter, which short-circuits the LIKE clauses via the
 // `IS NULL OR ...` pattern. When the caller sets it, the caller is
 // responsible for wrapping the search term in `%` wildcards.
-func (q *Queries) QueryFeedsPage(ctx context.Context, arg QueryFeedsPageParams) ([]Feed, error) {
-	rows, err := q.db.Query(ctx, queryFeedsPage, arg.Query, arg.Offset, arg.PageSize)
+//
+// Every query filters on user_id — feeds are owner-scoped. The handler
+// always supplies a user_id (the JWT subject); we use plain
+// `= @user_id` rather than `sqlc.narg` so a NULL filter can't accidentally
+// leak rows from every user.
+func (q *Queries) QueryFeedsPage(ctx context.Context, arg QueryFeedsPageParams) ([]QueryFeedsPageRow, error) {
+	rows, err := q.db.Query(ctx, queryFeedsPage,
+		arg.Query,
+		arg.UserID,
+		arg.Offset,
+		arg.PageSize,
+	)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	items := []Feed{}
+	items := []QueryFeedsPageRow{}
 	for rows.Next() {
-		var i Feed
+		var i QueryFeedsPageRow
 		if err := rows.Scan(
 			&i.ID,
+			&i.UserID,
 			&i.Title,
 			&i.Description,
 			&i.Rating,
@@ -115,7 +152,7 @@ func (q *Queries) QueryFeedsPage(ctx context.Context, arg QueryFeedsPageParams) 
 }
 
 const queryFeedsPageAsc = `-- name: QueryFeedsPageAsc :many
-SELECT id, title, description, rating, created_at, updated_at, deleted_at
+SELECT id, user_id, title, description, rating, created_at, updated_at, deleted_at
 FROM feeds
 WHERE (
         $1::text IS NULL
@@ -123,15 +160,28 @@ WHERE (
         OR description ILIKE $1
       )
   AND deleted_at IS NULL
+  AND user_id   = $2
 ORDER BY created_at ASC, id ASC
-LIMIT  $3::int
-OFFSET $2::int
+LIMIT  $4::int
+OFFSET $3::int
 `
 
 type QueryFeedsPageAscParams struct {
 	Query    pgtype.Text
+	UserID   int64
 	Offset   int32
 	PageSize int32
+}
+
+type QueryFeedsPageAscRow struct {
+	ID          int32
+	UserID      int64
+	Title       string
+	Description pgtype.Text
+	Rating      pgtype.Float8
+	CreatedAt   pgtype.Timestamptz
+	UpdatedAt   pgtype.Timestamptz
+	DeletedAt   pgtype.Timestamptz
 }
 
 // Ascending counterpart of QueryFeedsPage. Two separate queries keep
@@ -139,17 +189,23 @@ type QueryFeedsPageAscParams struct {
 // and let the planner pick a different index if one ever lands for
 // ASC. The id tiebreaker flips to ASC so pagination stays consistent
 // within a sort direction.
-func (q *Queries) QueryFeedsPageAsc(ctx context.Context, arg QueryFeedsPageAscParams) ([]Feed, error) {
-	rows, err := q.db.Query(ctx, queryFeedsPageAsc, arg.Query, arg.Offset, arg.PageSize)
+func (q *Queries) QueryFeedsPageAsc(ctx context.Context, arg QueryFeedsPageAscParams) ([]QueryFeedsPageAscRow, error) {
+	rows, err := q.db.Query(ctx, queryFeedsPageAsc,
+		arg.Query,
+		arg.UserID,
+		arg.Offset,
+		arg.PageSize,
+	)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	items := []Feed{}
+	items := []QueryFeedsPageAscRow{}
 	for rows.Next() {
-		var i Feed
+		var i QueryFeedsPageAscRow
 		if err := rows.Scan(
 			&i.ID,
+			&i.UserID,
 			&i.Title,
 			&i.Description,
 			&i.Rating,
@@ -170,11 +226,16 @@ func (q *Queries) QueryFeedsPageAsc(ctx context.Context, arg QueryFeedsPageAscPa
 const softDeleteFeed = `-- name: SoftDeleteFeed :execrows
 UPDATE feeds
 SET deleted_at = CURRENT_TIMESTAMP
-WHERE id = $1 AND deleted_at IS NULL
+WHERE id = $1 AND user_id = $2 AND deleted_at IS NULL
 `
 
-func (q *Queries) SoftDeleteFeed(ctx context.Context, id int32) (int64, error) {
-	result, err := q.db.Exec(ctx, softDeleteFeed, id)
+type SoftDeleteFeedParams struct {
+	ID     int32
+	UserID int64
+}
+
+func (q *Queries) SoftDeleteFeed(ctx context.Context, arg SoftDeleteFeedParams) (int64, error) {
+	result, err := q.db.Exec(ctx, softDeleteFeed, arg.ID, arg.UserID)
 	if err != nil {
 		return 0, err
 	}
@@ -187,8 +248,8 @@ SET title       = $1,
     description = $2,
     rating      = $3,
     updated_at  = CURRENT_TIMESTAMP
-WHERE id = $4 AND deleted_at IS NULL
-RETURNING id, title, description, rating, created_at, updated_at, deleted_at
+WHERE id = $4 AND user_id = $5 AND deleted_at IS NULL
+RETURNING id, title, description, rating, created_at, updated_at, deleted_at, user_id
 `
 
 type UpdateFeedParams struct {
@@ -196,6 +257,7 @@ type UpdateFeedParams struct {
 	Description pgtype.Text
 	Rating      pgtype.Float8
 	ID          int32
+	UserID      int64
 }
 
 func (q *Queries) UpdateFeed(ctx context.Context, arg UpdateFeedParams) (Feed, error) {
@@ -204,6 +266,7 @@ func (q *Queries) UpdateFeed(ctx context.Context, arg UpdateFeedParams) (Feed, e
 		arg.Description,
 		arg.Rating,
 		arg.ID,
+		arg.UserID,
 	)
 	var i Feed
 	err := row.Scan(
@@ -214,6 +277,7 @@ func (q *Queries) UpdateFeed(ctx context.Context, arg UpdateFeedParams) (Feed, e
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.DeletedAt,
+		&i.UserID,
 	)
 	return i, err
 }

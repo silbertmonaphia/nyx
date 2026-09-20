@@ -89,7 +89,7 @@ Status legend: ☐ open · ☑ fixed · ◌ wontfix (with rationale).
 - **Dependencies** — no actively-exploited CVEs at current versions (`golang-jwt v5.3.1`, `chi v5.3.1`, `pgx v5.10.0`, `golang.org/x/crypto v0.54.0`, `axios 1.13.6`, React 19.2, Vite 8, Tailwind 4.2).
 - **Repo hygiene** — `.env` gitignored, no hardcoded secrets, multi-stage Dockerfiles, non-root USER, prod compose keeps DB/Redis/Jaeger on an internal network.
 - **Log injection** — zerolog JSON-escapes user input. Response splitting via `X-Request-ID` blocked by `net/http` header validation.
-- **Authorization** — no object-level gaps (no user-CRUD or feed-owner endpoints in scope). Feed create/update/delete is auth-required but not admin-restricted (by design).
+- **Authorization** — no object-level gaps. Feed create/update/delete is auth-required and owner-scoped: every query filters `WHERE user_id = @user_id`, cross-owner writes map to 404 (single `feed.ErrNotFound`, no `ErrForbidden` leak), and `GET /api/feeds` is auth-required so it can return only the caller's rows. The `feeds.user_id` column has an FK to `users.id` with no cascade (users soft-delete via `deleted_at`; a future hard-delete path must reassign or delete the user's feeds first).
 
 ## Suggested remediation order
 

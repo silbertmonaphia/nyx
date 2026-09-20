@@ -5,10 +5,11 @@ import (
 	"fmt"
 	"time"
 
+	"nyx/internal/platform/cache"
+	"nyx/internal/reqctx"
+
 	"github.com/rs/zerolog/log"
 	"go.opentelemetry.io/otel/trace"
-
-	"nyx/internal/platform/cache"
 )
 
 type Service interface {
@@ -36,9 +37,12 @@ func NewService(repo Repository, c cache.Cache, ttl time.Duration, tracer trace.
 	return &feedService{repo: repo, cache: c, ttl: ttl, tracer: tracer}
 }
 
-// GetFeeds is a cache-aside read. On miss it falls through to the
-// repository and best-effort writes the result back to the cache; cache
-// errors never fail the request.
+// GetFeeds is a cache-aside read scoped to the authenticated user.
+// The cache key includes userID so user A's list page can never
+// resolve to user B's cached entry, and invalidation only ever
+// touches the caller's slice of the namespace. On miss it falls
+// through to the repository and best-effort writes the result back
+// to the cache; cache errors never fail the request.
 //
 // Known race: a mutation landing between the DB read and the cache.Set
 // here can leave a stale entry in the cache for up to CACHE_TTL. We rely
@@ -48,14 +52,27 @@ func (s *feedService) GetFeeds(ctx context.Context, query string, page, pageSize
 	ctx, span := s.tracer.Start(ctx, "feed.GetFeeds", trace.WithSpanKind(trace.SpanKindInternal))
 	defer span.End()
 
-	key := cacheKey(query, page, pageSize, order)
+	userID := reqctx.UserIDFromContext(ctx)
+
+	// Defensive guard: if the auth middleware didn't stamp the
+	// context (should be impossible on the auth-required GET
+	// /api/feeds path, but unit tests bypass it), return an empty
+	// page instead of querying. Preserves the no-cross-user-leak
+	// invariant — a userID of 0 would otherwise match no rows in
+	// production but might still resolve to a stale cache
+	// populated by a buggy test or a future regression.
+	if userID == 0 {
+		return &Page{Items: []Feed{}, Page: page, PageSize: pageSize, Total: 0}, nil
+	}
+
+	key := cacheKey(userID, query, page, pageSize, order)
 
 	var cached Page
 	if hit, err := s.cache.Get(ctx, key, &cached); err == nil && hit {
 		return &cached, nil
 	}
 
-	result, err := s.repo.GetAll(ctx, query, page, pageSize, order)
+	result, err := s.repo.GetAll(ctx, userID, query, page, pageSize, order)
 	if err != nil {
 		return nil, err
 	}
@@ -66,39 +83,48 @@ func (s *feedService) GetFeeds(ctx context.Context, query string, page, pageSize
 	return result, nil
 }
 
-// CreateFeed persists the feed then invalidates every cached page.
+// CreateFeed persists the feed then invalidates every cached page
+// for the calling user.
 func (s *feedService) CreateFeed(ctx context.Context, m *Feed) error {
 	ctx, span := s.tracer.Start(ctx, "feed.CreateFeed", trace.WithSpanKind(trace.SpanKindInternal))
 	defer span.End()
 
-	if err := s.repo.Create(ctx, m); err != nil {
+	userID := reqctx.UserIDFromContext(ctx)
+
+	if err := s.repo.Create(ctx, userID, m); err != nil {
 		return err
 	}
-	s.invalidate(ctx)
+	s.invalidate(ctx, userID)
 	return nil
 }
 
-// UpdateFeed persists the changes then invalidates every cached page.
+// UpdateFeed persists the changes then invalidates every cached page
+// for the calling user.
 func (s *feedService) UpdateFeed(ctx context.Context, id int, m *Feed) error {
 	ctx, span := s.tracer.Start(ctx, "feed.UpdateFeed", trace.WithSpanKind(trace.SpanKindInternal))
 	defer span.End()
 
-	if err := s.repo.Update(ctx, id, m); err != nil {
+	userID := reqctx.UserIDFromContext(ctx)
+
+	if err := s.repo.Update(ctx, userID, id, m); err != nil {
 		return err
 	}
-	s.invalidate(ctx)
+	s.invalidate(ctx, userID)
 	return nil
 }
 
-// DeleteFeed soft-deletes the row then invalidates every cached page.
+// DeleteFeed soft-deletes the row then invalidates every cached page
+// for the calling user.
 func (s *feedService) DeleteFeed(ctx context.Context, id int) error {
 	ctx, span := s.tracer.Start(ctx, "feed.DeleteFeed", trace.WithSpanKind(trace.SpanKindInternal))
 	defer span.End()
 
-	if err := s.repo.Delete(ctx, id); err != nil {
+	userID := reqctx.UserIDFromContext(ctx)
+
+	if err := s.repo.Delete(ctx, userID, id); err != nil {
 		return err
 	}
-	s.invalidate(ctx)
+	s.invalidate(ctx, userID)
 	return nil
 }
 
@@ -114,15 +140,22 @@ func (s *feedService) CheckCacheHealth(ctx context.Context) error {
 	return s.cache.Ping(ctx)
 }
 
-// invalidate removes every feeds:* cache key. Best-effort: a cache
-// failure here is logged but does not fail the write — the next read
-// will refresh the entry once its TTL expires.
-func (s *feedService) invalidate(ctx context.Context) {
-	if err := s.cache.DeletePrefix(ctx, "feeds:"); err != nil {
-		log.Warn().Err(err).Msg("feed cache invalidation failed")
+// invalidate removes every cached page belonging to userID. The
+// prefix is user-scoped so user A's mutation can never touch user
+// B's cache and vice versa. Best-effort: a cache failure here is
+// logged but does not fail the write — the next read will refresh
+// the entry once its TTL expires.
+func (s *feedService) invalidate(ctx context.Context, userID int) {
+	prefix := fmt.Sprintf("feeds:u=%d:", userID)
+	if err := s.cache.DeletePrefix(ctx, prefix); err != nil {
+		log.Warn().Err(err).Str("prefix", prefix).Msg("feed cache invalidation failed")
 	}
 }
 
-func cacheKey(query string, page, pageSize int, order SortOrder) string {
-	return fmt.Sprintf("feeds:q=%s:p=%d:s=%d:o=%s", query, page, pageSize, order)
+// cacheKey builds the per-user cache key. Including userID in the key
+// is what enforces ownership at the cache layer: a read for user 1
+// can never resolve to a cached page belonging to user 2 even if the
+// rest of the query tuple happens to match.
+func cacheKey(userID int, query string, page, pageSize int, order SortOrder) string {
+	return fmt.Sprintf("feeds:u=%d:q=%s:p=%d:s=%d:o=%s", userID, query, page, pageSize, order)
 }

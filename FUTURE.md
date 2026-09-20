@@ -26,6 +26,7 @@ Single source of truth for "what's done / what's next" across the stack. Tick an
 - [x] CORS Hardening — `cors.go` reads `CORS_ALLOWED_ORIGINS` (default empty — deny-by-default). Set a comma-separated origin list in production. The cross-origin custom-header preflight (Bearer is not a CORS-safelisted header) is the natural CSRF defence, so `Access-Control-Allow-Credentials` is not needed and is intentionally never set.
 - [x] JWT Secret via Viper Config — `auth.SetSecret(cfg.JWTSecret)` is called once in `main.go`; `auth/jwt.go` no longer reads `os.Getenv`.
 - [x] JWT Refresh Tokens — short-lived access tokens (default 15m, configurable via `JWT_ACCESS_TTL`) paired with opaque rotated refresh tokens (default 7d, `JWT_REFRESH_TTL`) and family-level reuse detection. Frontend refreshes on `WWW-Authenticate: Bearer error="invalid_token", error_description="expired"`.
+- [x] Per-owner feed authorization — `feeds.user_id` BIGINT (FK to `users.id`), every sqlc query filters `WHERE user_id = @user_id`, `GET /api/feeds` is auth-required and returns only the caller's feeds, cross-owner `PUT` / `DELETE` map to `feed.ErrNotFound` (single 404, no `ErrForbidden` leak). Cache keys and invalidation prefixes are per-user (`feeds:u={id}:...`) so a write by user A cannot evict user B's cache.
 
 ## 3. Database Lifecycle
 

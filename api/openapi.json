@@ -86,10 +86,15 @@
           "updated_at": {
             "format": "date-time",
             "type": "string"
+          },
+          "user_id": {
+            "format": "int64",
+            "type": "integer"
           }
         },
         "required": [
           "id",
+          "user_id",
           "title",
           "description",
           "rating",
@@ -347,7 +352,7 @@
   "paths": {
     "/api/feeds": {
       "get": {
-        "description": "Returns a paginated list of feeds, optionally filtered by a search term matched against title and description.",
+        "description": "Returns a paginated list of feeds owned by the authenticated caller, optionally filtered by a search term matched against title and description.",
         "operationId": "get-feeds",
         "parameters": [
           {
@@ -425,6 +430,11 @@
             "description": "Error"
           }
         },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
         "summary": "List feeds",
         "tags": [
           "feeds"

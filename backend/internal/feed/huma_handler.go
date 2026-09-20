@@ -10,6 +10,7 @@ import (
 	"nyx/internal/middleware"
 	"nyx/internal/platform/api"
 	"nyx/internal/platform/auth"
+	"nyx/internal/reqctx"
 )
 
 // Handler exposes feed domain operations. It is constructed in main.go
@@ -82,8 +83,10 @@ func RegisterFeedOpsTest(api huma.API, h *Handler, tokens auth.TokenService, wit
 		Method:      http.MethodGet,
 		Path:        "/api/feeds",
 		Summary:     "List feeds",
-		Description: "Returns a paginated list of feeds, optionally filtered by a search term matched against title and description.",
+		Description: "Returns a paginated list of feeds owned by the authenticated caller, optionally filtered by a search term matched against title and description.",
 		Tags:        []string{"feeds"},
+		Security:    []map[string][]string{{"BearerAuth": {}}},
+		Middlewares: protectedMiddlewares(tokens, withAuth),
 	}, h.GetFeeds)
 
 	huma.Register(api, huma.Operation{
@@ -256,6 +259,10 @@ func (h *Handler) GetFeeds(ctx context.Context, in *getFeedsInput) (*getFeedsOut
 		pageSize = 100
 	}
 
+	// userID is read from the auth-stamped context by the service;
+	// the handler doesn't need to thread it explicitly here. The
+	// GET /api/feeds route is auth-required (see protectedMiddlewares
+	// above), so this is always the caller's id.
 	result, err := h.service.GetFeeds(ctx, in.Q, page, pageSize, ParseSortOrder(in.Order))
 	if err != nil {
 		return nil, api.MapError(ctx, err, "Failed to retrieve feeds")
@@ -265,7 +272,9 @@ func (h *Handler) GetFeeds(ctx context.Context, in *getFeedsInput) (*getFeedsOut
 
 //nolint:revive // unexported-return is huma's idiomatic op pattern
 func (h *Handler) CreateFeed(ctx context.Context, in *createFeedInput) (*createFeedOutput, error) {
+	userID := reqctx.UserIDFromContext(ctx)
 	feed := &Feed{
+		UserID:      userID,
 		Title:       in.Body.Title,
 		Description: in.Body.Description,
 		Rating:      in.Body.Rating,
@@ -278,7 +287,9 @@ func (h *Handler) CreateFeed(ctx context.Context, in *createFeedInput) (*createF
 
 //nolint:revive // unexported-return is huma's idiomatic op pattern
 func (h *Handler) UpdateFeed(ctx context.Context, in *updateFeedInput) (*updateFeedOutput, error) {
+	userID := reqctx.UserIDFromContext(ctx)
 	feed := &Feed{
+		UserID:      userID,
 		Title:       in.Body.Title,
 		Description: in.Body.Description,
 		Rating:      in.Body.Rating,
@@ -291,6 +302,8 @@ func (h *Handler) UpdateFeed(ctx context.Context, in *updateFeedInput) (*updateF
 
 //nolint:revive // unexported-return is huma's idiomatic op pattern
 func (h *Handler) DeleteFeed(ctx context.Context, in *deleteFeedInput) (*deleteFeedOutput, error) {
+	// userID is stamped by the auth middleware and read by the
+	// service — no need to thread it explicitly.
 	if err := h.service.DeleteFeed(ctx, in.ID); err != nil {
 		return nil, api.MapError(ctx, err, "Failed to delete feed")
 	}

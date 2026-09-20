@@ -100,7 +100,24 @@ func setupIntegrationTest(t *testing.T) (*pgxpool.Pool, Repository) {
 	require.NoError(t, err)
 
 	// Clean up tables before each test to ensure isolation.
+	// The feeds.user_id FK references users.id, so we delete feeds
+	// first and then re-seed two canonical test users. We seed via
+	// raw SQL rather than going through the user repo because the
+	// schema columns here are intentionally minimal (only the FK
+	// fields the migration cares about).
+	//
+	// The test users sit at id=101 / id=102 (not 1/2) so they don't
+	// collide with the placeholder user that migration 000012
+	// inserted at id=1 to satisfy the owner-scope backfill on a
+	// freshly-bootstrapped DB. Each test below references the same
+	// numeric ids for the "owner" / "other user" pair.
 	_, err = pool.Exec(context.Background(), "DELETE FROM feeds")
+	require.NoError(t, err)
+	_, err = pool.Exec(context.Background(),
+		`INSERT INTO users (id, username, password_hash) VALUES
+			(101, 'owner1', 'x'),
+			(102, 'owner2', 'x')
+		 ON CONFLICT (id) DO NOTHING`)
 	require.NoError(t, err)
 
 	t.Cleanup(func() { pool.Close() })
@@ -124,11 +141,30 @@ func TestRepositoryIntegration(t *testing.T) {
 			Rating:      8.7,
 		}
 
-		err := repo.Create(ctx, feed)
+		err := repo.Create(ctx, 101, feed)
 		require.NoError(t, err)
 		assert.NotZero(t, feed.ID)
 		assert.NotZero(t, feed.CreatedAt)
 		assert.NotZero(t, feed.UpdatedAt)
+		assert.Equal(t, 101, feed.UserID, "Create must stamp the caller's user_id")
+	})
+
+	t.Run("CreateFeed_StampsOwner", func(t *testing.T) {
+		// Pin the per-user stamping. Create with userID=102 → row
+		// stores user_id=102 even though Feed.UserID was zero before
+		// the call (defense-in-depth at the repo).
+		_, repo := setupIntegrationTest(t)
+
+		feed := &Feed{Title: "Owned by 102", Rating: 7.0}
+		require.NoError(t, repo.Create(ctx, 102, feed))
+
+		assert.Equal(t, 102, feed.UserID)
+
+		// And the row is reachable as user 102 only.
+		page, err := repo.GetAll(ctx, 102, "", 1, 20, SortDesc)
+		require.NoError(t, err)
+		require.Len(t, page.Items, 1)
+		assert.Equal(t, 102, page.Items[0].UserID)
 	})
 
 	t.Run("GetAllFeeds", func(t *testing.T) {
@@ -142,15 +178,35 @@ func TestRepositoryIntegration(t *testing.T) {
 		}
 
 		for _, f := range feeds {
-			err := repo.Create(ctx, f)
+			err := repo.Create(ctx, 101, f)
 			require.NoError(t, err)
 		}
 
-		// Get all feeds
-		allFeeds, err := repo.GetAll(ctx, "", 1, 100, SortDesc)
+		// Get all feeds (owner=user 101)
+		allFeeds, err := repo.GetAll(ctx, 101, "", 1, 100, SortDesc)
 		require.NoError(t, err)
 		assert.Len(t, allFeeds.Items, 3)
 		assert.Equal(t, 3, allFeeds.Total)
+	})
+
+	t.Run("GetAll_OtherUserSeesNothing", func(t *testing.T) {
+		// Owner-scoping guard. A feed owned by user 101 must NOT
+		// surface in user 102's listing — neither as items nor in the
+		// count. Without the WHERE filter the test would see 1 item.
+		_, repo := setupIntegrationTest(t)
+
+		ownerFeed := &Feed{Title: "Not yours", Rating: 5.0}
+		require.NoError(t, repo.Create(ctx, 101, ownerFeed))
+
+		u2Page, err := repo.GetAll(ctx, 102, "", 1, 100, SortDesc)
+		require.NoError(t, err)
+		assert.Empty(t, u2Page.Items)
+		assert.Equal(t, 0, u2Page.Total)
+
+		u1Page, err := repo.GetAll(ctx, 101, "", 1, 100, SortDesc)
+		require.NoError(t, err)
+		require.Len(t, u1Page.Items, 1)
+		assert.Equal(t, "Not yours", u1Page.Items[0].Title)
 	})
 
 	t.Run("GetAllFeedsAscReturnsOldestFirst", func(t *testing.T) {
@@ -161,15 +217,15 @@ func TestRepositoryIntegration(t *testing.T) {
 		_, repo := setupIntegrationTest(t)
 
 		first := &Feed{Title: "Oldest", Description: "first", Rating: 5.0}
-		require.NoError(t, repo.Create(ctx, first))
+		require.NoError(t, repo.Create(ctx, 101, first))
 		time.Sleep(10 * time.Millisecond)
 		mid := &Feed{Title: "Middle", Description: "second", Rating: 6.0}
-		require.NoError(t, repo.Create(ctx, mid))
+		require.NoError(t, repo.Create(ctx, 101, mid))
 		time.Sleep(10 * time.Millisecond)
 		last := &Feed{Title: "Newest", Description: "third", Rating: 7.0}
-		require.NoError(t, repo.Create(ctx, last))
+		require.NoError(t, repo.Create(ctx, 101, last))
 
-		asc, err := repo.GetAll(ctx, "", 1, 100, SortAsc)
+		asc, err := repo.GetAll(ctx, 101, "", 1, 100, SortAsc)
 		require.NoError(t, err)
 		require.Len(t, asc.Items, 3)
 		assert.Equal(t, "Oldest", asc.Items[0].Title)
@@ -188,24 +244,24 @@ func TestRepositoryIntegration(t *testing.T) {
 		}
 
 		for _, f := range feeds {
-			err := repo.Create(ctx, f)
+			err := repo.Create(ctx, 101, f)
 			require.NoError(t, err)
 		}
 
 		// Search by title
-		results, err := repo.GetAll(ctx, "matrix", 1, 20, SortDesc)
+		results, err := repo.GetAll(ctx, 101, "matrix", 1, 20, SortDesc)
 		require.NoError(t, err)
 		assert.Len(t, results.Items, 1)
 		assert.Equal(t, "The Matrix", results.Items[0].Title)
 
 		// Search by description
-		results, err = repo.GetAll(ctx, "thriller", 1, 20, SortDesc)
+		results, err = repo.GetAll(ctx, 101, "thriller", 1, 20, SortDesc)
 		require.NoError(t, err)
 		assert.Len(t, results.Items, 1)
 		assert.Equal(t, "Inception", results.Items[0].Title)
 
 		// Search with no matches
-		results, err = repo.GetAll(ctx, "nonexistent", 1, 20, SortDesc)
+		results, err = repo.GetAll(ctx, 101, "nonexistent", 1, 20, SortDesc)
 		require.NoError(t, err)
 		assert.Empty(t, results.Items)
 	})
@@ -219,7 +275,7 @@ func TestRepositoryIntegration(t *testing.T) {
 			Description: "Original description",
 			Rating:      7.0,
 		}
-		err := repo.Create(ctx, feed)
+		err := repo.Create(ctx, 101, feed)
 		require.NoError(t, err)
 		originalID := feed.ID
 
@@ -230,11 +286,11 @@ func TestRepositoryIntegration(t *testing.T) {
 			Rating:      9.5,
 		}
 
-		err = repo.Update(ctx, originalID, updated)
+		err = repo.Update(ctx, 101, originalID, updated)
 		require.NoError(t, err)
 
 		// Verify update
-		allFeeds, err := repo.GetAll(ctx, "", 1, 100, SortDesc)
+		allFeeds, err := repo.GetAll(ctx, 101, "", 1, 100, SortDesc)
 		require.NoError(t, err)
 		assert.Len(t, allFeeds.Items, 1)
 		assert.Equal(t, "Updated Title", allFeeds.Items[0].Title)
@@ -250,9 +306,29 @@ func TestRepositoryIntegration(t *testing.T) {
 			Rating: 7.0,
 		}
 
-		err := repo.Update(ctx, 999, feed)
+		err := repo.Update(ctx, 101, 999, feed)
 		assert.Error(t, err)
 		assert.ErrorIs(t, err, ErrNotFound)
+	})
+
+	t.Run("Update_OtherUserReturnsNotFound", func(t *testing.T) {
+		// Cross-owner PUT must return ErrNotFound — same path as
+		// the missing-row case. No leak, no ErrForbidden.
+		_, repo := setupIntegrationTest(t)
+
+		ownerFeed := &Feed{Title: "Mine", Rating: 7.0}
+		require.NoError(t, repo.Create(ctx, 101, ownerFeed))
+
+		err := repo.Update(ctx, 102, ownerFeed.ID, &Feed{Title: "Hijack", Rating: 9.9})
+		assert.Error(t, err)
+		assert.ErrorIs(t, err, ErrNotFound)
+
+		// The row was not modified.
+		all, err := repo.GetAll(ctx, 101, "", 1, 100, SortDesc)
+		require.NoError(t, err)
+		require.Len(t, all.Items, 1)
+		assert.Equal(t, "Mine", all.Items[0].Title)
+		assert.Equal(t, 7.0, all.Items[0].Rating)
 	})
 
 	t.Run("DeleteFeed", func(t *testing.T) {
@@ -263,15 +339,15 @@ func TestRepositoryIntegration(t *testing.T) {
 			Title:  "To Delete",
 			Rating: 7.0,
 		}
-		err := repo.Create(ctx, feed)
+		err := repo.Create(ctx, 101, feed)
 		require.NoError(t, err)
 
 		// Delete the feed
-		err = repo.Delete(ctx, feed.ID)
+		err = repo.Delete(ctx, 101, feed.ID)
 		require.NoError(t, err)
 
 		// Verify soft delete (feed should not appear in results)
-		allFeeds, err := repo.GetAll(ctx, "", 1, 100, SortDesc)
+		allFeeds, err := repo.GetAll(ctx, 101, "", 1, 100, SortDesc)
 		require.NoError(t, err)
 		assert.Empty(t, allFeeds.Items)
 	})
@@ -279,9 +355,28 @@ func TestRepositoryIntegration(t *testing.T) {
 	t.Run("DeleteFeedNotFound", func(t *testing.T) {
 		_, repo := setupIntegrationTest(t)
 
-		err := repo.Delete(ctx, 999)
+		err := repo.Delete(ctx, 101, 999)
 		assert.Error(t, err)
 		assert.ErrorIs(t, err, ErrNotFound)
+	})
+
+	t.Run("Delete_OtherUserReturnsNotFound", func(t *testing.T) {
+		// Cross-owner DELETE returns ErrNotFound — RowsAffected=0
+		// because the SQL WHERE filters on user_id. Same 404 as the
+		// missing-id case.
+		_, repo := setupIntegrationTest(t)
+
+		ownerFeed := &Feed{Title: "Stays", Rating: 7.0}
+		require.NoError(t, repo.Create(ctx, 101, ownerFeed))
+
+		err := repo.Delete(ctx, 102, ownerFeed.ID)
+		assert.Error(t, err)
+		assert.ErrorIs(t, err, ErrNotFound)
+
+		// The row was not deleted.
+		all, err := repo.GetAll(ctx, 101, "", 1, 100, SortDesc)
+		require.NoError(t, err)
+		assert.Len(t, all.Items, 1)
 	})
 
 	t.Run("Ping", func(t *testing.T) {
@@ -317,14 +412,14 @@ func TestRepositoryWithTransactions(t *testing.T) {
 			Title:  "Transaction Test",
 			Rating: 8.0,
 		}
-		err = txRepo.Create(ctx, feed)
+		err = txRepo.Create(ctx, 101, feed)
 		require.NoError(t, err)
 
 		// Rollback
 		require.NoError(t, tx.Rollback(ctx))
 
 		// Verify feed was not created
-		allFeeds, err := repo.GetAll(ctx, "", 1, 100, SortDesc)
+		allFeeds, err := repo.GetAll(ctx, 101, "", 1, 100, SortDesc)
 		require.NoError(t, err)
 		assert.Empty(t, allFeeds.Items)
 	})
@@ -344,14 +439,14 @@ func TestRepositoryWithTransactions(t *testing.T) {
 			Title:  "Transaction Commit Test",
 			Rating: 8.5,
 		}
-		err = txRepo.Create(ctx, feed)
+		err = txRepo.Create(ctx, 101, feed)
 		require.NoError(t, err)
 
 		// Commit
 		require.NoError(t, tx.Commit(ctx))
 
 		// Verify feed was created
-		allFeeds, err := repo.GetAll(ctx, "", 1, 100, SortDesc)
+		allFeeds, err := repo.GetAll(ctx, 101, "", 1, 100, SortDesc)
 		require.NoError(t, err)
 		assert.Len(t, allFeeds.Items, 1)
 		assert.Equal(t, "Transaction Commit Test", allFeeds.Items[0].Title)
