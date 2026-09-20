@@ -165,3 +165,14 @@
   box-sizing: border-box;
   overflow: hidden;
 }
+
+/* Visually hide the scrollbar while preserving wheel/touch scrolling.
+ * Firefox honors `scrollbar-width: none`; WebKit/Blink need the
+ * pseudo-element rule. Applied to the FeedList scroll container. */
+.no-scrollbar {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
