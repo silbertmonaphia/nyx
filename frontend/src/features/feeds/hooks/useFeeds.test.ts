@@ -4,6 +4,7 @@ import { TestProviders, renderHook } from '~/test/test-utils';
 import { feedService } from '../services/feedService';
 import { useFeeds } from './useFeeds';
 import type { Feed, NewFeed, PaginatedFeeds } from '../types/feed';
+import { useAuthStore } from '~/store/authStore';
 
 // Auto-mock the service so `feedService.getFeeds`/`addFeed`/etc. become
 // `vi.fn()`s we can assert against per test. Mirrors the convention from
@@ -17,10 +18,17 @@ const mockedService = feedService as unknown as {
   deleteFeed: ReturnType<typeof vi.fn>;
 };
 
+// Test user. `useFeeds` reads the current user id from the auth store
+// to scope its query key, so every test must seed the store before
+// rendering the hook — otherwise the query stays disabled and nothing
+// fetches.
+const TEST_USER = { id: 1, username: 'tester', created_at: '', updated_at: '' };
+
 const basePage: PaginatedFeeds = {
   data: [
     {
       id: 1,
+      user_id: 1,
       title: 'Existing',
       description: 'existing',
       rating: 5,
@@ -59,6 +67,14 @@ describe('useFeeds', () => {
     mockedService.addFeed.mockReset();
     mockedService.updateFeed.mockReset();
     mockedService.deleteFeed.mockReset();
+    // Seed the auth store so the hook's `enabled: userId !== undefined`
+    // guard flips true. Reset to logged-out in the next beforeEach so
+    // cross-test leakage is impossible — important for the user-id swap
+    // tests below.
+    useAuthStore.setState({
+      user: TEST_USER,
+      isAuthenticated: true,
+    });
   });
 
   describe('addFeed optimistic prepend', () => {
@@ -98,6 +114,7 @@ describe('useFeeds', () => {
         expect(result.current.feeds[0]?.id).toBeLessThan(0);
       });
       expect(result.current.feeds[0]?.title).toBe('Brand new');
+      expect(result.current.feeds[0]?.user_id).toBe(TEST_USER.id);
       expect(result.current.feeds.find((f) => f.id === 1)).toBeDefined();
       // Total bumped by one before the server has responded.
       expect(result.current.totalCount).toBe(2);
@@ -106,6 +123,7 @@ describe('useFeeds', () => {
       await act(async () => {
         resolveAdd({
           id: 99,
+          user_id: TEST_USER.id,
           title: 'Brand new',
           description: '',
           rating: 7,
@@ -165,6 +183,7 @@ describe('useFeeds', () => {
       await act(async () => {
         resolveAdd({
           id: 99,
+          user_id: TEST_USER.id,
           title: 'Brand new',
           description: '',
           rating: 7,
@@ -247,6 +266,7 @@ describe('useFeeds', () => {
 
       const placeholder: Feed = {
         id: -12345,
+        user_id: TEST_USER.id,
         title: 'placeholder',
         description: '',
         rating: 5,
@@ -275,6 +295,7 @@ describe('useFeeds', () => {
       // verify it disappears without any network activity.
       const placeholder: Feed = {
         id: -42,
+        user_id: TEST_USER.id,
         title: 'optimistic only',
         description: '',
         rating: 5,
@@ -319,6 +340,47 @@ describe('useFeeds', () => {
       await act(async () => {
         resolveRefetch(basePage);
       });
+    });
+  });
+
+  describe('owner-scoped query key', () => {
+    it('does not fetch when no user is authenticated', async () => {
+      // Override the seeded user with a logged-out state.
+      useAuthStore.setState({ user: null, isAuthenticated: false });
+
+      renderUseFeeds();
+
+      // Give any would-be fetch a chance to fire.
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      });
+
+      expect(mockedService.getFeeds).not.toHaveBeenCalled();
+    });
+
+    it('refetches when the authenticated user changes', async () => {
+      mockedService.getFeeds.mockResolvedValue(basePage);
+
+      // First render with user 1.
+      const { result, rerender } = renderUseFeeds();
+      await waitForInitialLoad(result);
+
+      expect(mockedService.getFeeds).toHaveBeenCalledTimes(1);
+
+      // Swap to user 2 — the query key includes the user id, so a
+      // fresh fetch fires against the new owner's cache. The two
+      // users must not share pages.
+      const user2 = { id: 2, username: 'other', created_at: '', updated_at: '' };
+      await act(async () => {
+        useAuthStore.setState({ user: user2, isAuthenticated: true });
+      });
+
+      await waitFor(() => {
+        expect(mockedService.getFeeds).toHaveBeenCalledTimes(2);
+      });
+
+      // Rerender to consume the latest hook value before tearing down.
+      rerender();
     });
   });
 

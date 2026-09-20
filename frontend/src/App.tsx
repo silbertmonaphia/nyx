@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import './App.css';
 import { Feed, NewFeed } from './features/feeds/types/feed';
 import { useFeeds } from './features/feeds/hooks/useFeeds';
@@ -25,6 +25,7 @@ import { Plus, X, Search, LogOut, User as UserIcon, MessageSquare, ArrowDownNarr
 import { PageMeta } from './components/app/PageMeta';
 import { logger } from './services/logger';
 import { ChatPanel } from './features/chat/components/ChatPanel';
+import { resetFeedStateForNewUser } from './features/feeds/services/resetFeedState';
 
 const DEFAULT_TITLE = 'Nyx — Your minimalist feed guide';
 const DEFAULT_DESCRIPTION =
@@ -51,6 +52,18 @@ function App() {
   // Boot-time round-trip: if localStorage has a persisted user,
   // reconcile it against the server. SECURITY.md L7.
   useAuthReconciliation();
+
+  // Drop every cached feed page + UI state when the authenticated
+  // user changes (login / logout / user swap). The query key inside
+  // `useFeeds` already includes `userId`, so this is belt-and-suspenders:
+  // it guarantees no in-flight stale snapshot serves to a freshly
+  // authenticated viewer even if TanStack Query hasn't garbage-collected
+  // the old key yet. Fires on logout (user becomes null) too — the
+  // UI store reset clears any leftover search / edit modals from the
+  // previous user.
+  useEffect(() => {
+    resetFeedStateForNewUser();
+  }, [user?.id]);
 
   // The input stays fully controlled by `searchTerm` (instant typing),
   // but the network query only fires once the user has paused for
@@ -197,12 +210,23 @@ function App() {
             isLoadingMore={isLoadingMore}
             onLoadMore={loadMore}
             editingFeed={editingFeed}
+            currentUserId={user?.id}
             onUpdate={handleAddOrUpdateFeed}
             onCancelEdit={resetFormState}
             onEdit={(feed) => {
               if (!isAuthenticated) {
                 useUiStore.getState().addToast('Please login to edit feeds', 'info');
                 setShowAuthForm(true);
+                return;
+              }
+              // Defense-in-depth: the backend will 404 (not 403) on
+              // a non-owner, but surface a friendlier message before
+              // the request fires. The list is owner-scoped on the
+              // server, so this branch only fires if a stale feed
+              // somehow lingers (e.g. optimistic row before cache
+              // eviction) — better UX than a silent failure.
+              if (feed.user_id !== user?.id) {
+                useUiStore.getState().addToast('You can only edit feeds you created', 'info');
                 return;
               }
               setEditingFeed(feed);

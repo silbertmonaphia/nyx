@@ -13,7 +13,7 @@ export interface paths {
         };
         /**
          * List feeds
-         * @description Returns a paginated list of feeds, optionally filtered by a search term matched against title and description.
+         * @description Returns a paginated list of feeds owned by the authenticated caller, optionally filtered by a search term matched against title and description.
          */
         get: operations["get-feeds"];
         put?: never;
@@ -225,6 +225,8 @@ export interface components {
             title: string;
             /** Format: date-time */
             updated_at: string;
+            /** Format: int64 */
+            user_id: number;
         };
         FeedInput: {
             description?: string;

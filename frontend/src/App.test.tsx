@@ -117,7 +117,7 @@ describe('App', () => {
       logout: vi.fn(),
     });
 
-    const feeds = [{ id: 1, title: 'Feed to Edit', description: 'Desc', rating: 5 }];
+    const feeds = [{ id: 1, user_id: 1, title: 'Feed to Edit', description: 'Desc', rating: 5 }];
     mockUseFeeds.mockReturnValue({ ...baseFeeds, feeds });
 
     render(<App />);
@@ -137,7 +137,7 @@ describe('App', () => {
     });
 
     const deleteFeedMock = vi.fn().mockResolvedValue({});
-    const feeds = [{ id: 1, title: 'Feed to Delete', description: 'Desc', rating: 5 }];
+    const feeds = [{ id: 1, user_id: 1, title: 'Feed to Delete', description: 'Desc', rating: 5 }];
     mockUseFeeds.mockReturnValue({
       ...baseFeeds,
       feeds,
@@ -166,7 +166,7 @@ describe('App', () => {
     });
 
     const deleteFeedMock = vi.fn().mockResolvedValue({});
-    const feeds = [{ id: 1, title: 'Feed to Keep', description: 'Desc', rating: 5 }];
+    const feeds = [{ id: 1, user_id: 1, title: 'Feed to Keep', description: 'Desc', rating: 5 }];
     mockUseFeeds.mockReturnValue({
       ...baseFeeds,
       feeds,
@@ -209,7 +209,7 @@ describe('App', () => {
         resolveDelete = resolve;
       }),
     );
-    const feeds = [{ id: 1, title: 'Feed to Delete', description: 'Desc', rating: 5 }];
+    const feeds = [{ id: 1, user_id: 1, title: 'Feed to Delete', description: 'Desc', rating: 5 }];
     mockUseFeeds.mockReturnValue({
       ...baseFeeds,
       feeds,
@@ -251,7 +251,7 @@ describe('App', () => {
       logout: vi.fn(),
     });
 
-    const feeds = [{ id: 1, title: 'In Flight', description: 'Desc', rating: 5 }];
+    const feeds = [{ id: 1, user_id: 1, title: 'In Flight', description: 'Desc', rating: 5 }];
     mockUseFeeds.mockReturnValue({
       ...baseFeeds,
       feeds,
@@ -367,7 +367,7 @@ describe('App', () => {
         logout: vi.fn(),
       });
       const feeds = [
-        { id: 1, title: 'Feed to Edit', description: 'Desc', rating: 5, created_at: '2024-01-01T00:00:00Z', updated_at: '2024-01-01T00:00:00Z' },
+        { id: 1, user_id: 1, title: 'Feed to Edit', description: 'Desc', rating: 5, created_at: '2024-01-01T00:00:00Z', updated_at: '2024-01-01T00:00:00Z' },
       ];
       mockUseFeeds.mockReturnValue({ ...baseFeeds, feeds });
 

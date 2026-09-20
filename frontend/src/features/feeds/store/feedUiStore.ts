@@ -17,6 +17,11 @@ interface FeedUiState {
   setSortOrder: (order: SortOrder) => void;
   toggleSortOrder: () => void;
   resetFormState: () => void;
+  // Wipe every user-scoped field (search, modals, edit target) but
+  // keep `sortOrder` — it's a personal preference, not data. Called
+  // when the authenticated user changes so user B never sees user A's
+  // leftover UI state.
+  reset: () => void;
 }
 
 export const useFeedUiStore = create<FeedUiState>((set, get) => ({
@@ -31,4 +36,5 @@ export const useFeedUiStore = create<FeedUiState>((set, get) => ({
   toggleSortOrder: () =>
     set({ sortOrder: get().sortOrder === 'desc' ? 'asc' : 'desc' }),
   resetFormState: () => set({ showAddForm: false, editingFeed: null }),
+  reset: () => set({ searchTerm: '', showAddForm: false, editingFeed: null }),
 }));

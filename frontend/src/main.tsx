@@ -1,22 +1,14 @@
 import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
+import { QueryClientProvider } from '@tanstack/react-query'
 import { ReactQueryDevtools } from '@tanstack/react-query-devtools'
 import './index.css'
 import { initTelemetry } from './services/telemetry'
 import { initSentry, captureSentryException } from './services/sentry'
 import { logger } from './services/logger'
 import { ErrorBoundary } from './components/app/ErrorBoundary'
+import { queryClient } from './services/queryClient'
 import App from './App.tsx'
-
-const queryClient = new QueryClient({
-  defaultOptions: {
-    queries: {
-      refetchOnWindowFocus: false,
-      retry: 1,
-    },
-  },
-})
 
 initTelemetry()
 initSentry()

@@ -8,11 +8,22 @@ import { FeedForm } from './FeedForm';
 
 interface FeedItemProps {
   feed: Feed;
+  // The id of the currently authenticated user, if any. Edit /
+  // delete icons are hidden whenever it doesn't match the feed's
+  // owner — the backend will 404 a cross-owner write anyway, so
+  // surfacing the buttons only invites a confusing failure toast.
+  currentUserId: number | undefined;
   onEdit: (feed: Feed) => void;
   onDelete: (id: number) => void;
 }
 
-export const FeedItem: React.FC<FeedItemProps> = ({ feed, onEdit, onDelete }) => {
+export const FeedItem: React.FC<FeedItemProps> = ({
+  feed,
+  currentUserId,
+  onEdit,
+  onDelete,
+}) => {
+  const isOwner = feed.user_id === currentUserId;
   return (
     <Card className="hover:shadow-md transition-shadow">
       <CardHeader className="flex flex-row items-start justify-between space-y-0 pb-2">
@@ -46,26 +57,28 @@ export const FeedItem: React.FC<FeedItemProps> = ({ feed, onEdit, onDelete }) =>
               )}
             </div>
           )}
-          <div className="flex gap-1">
-            <Button
-              variant="ghost"
-              size="icon"
-              onClick={() => onEdit(feed)}
-              title="Edit"
-              className="h-8 w-8 text-muted-foreground hover:text-primary"
-            >
-              <Pencil className="h-4 w-4" />
-            </Button>
-            <Button
-              variant="ghost"
-              size="icon"
-              onClick={() => onDelete(feed.id)}
-              title="Delete"
-              className="h-8 w-8 text-muted-foreground hover:text-destructive"
-            >
-              <Trash2 className="h-4 w-4" />
-            </Button>
-          </div>
+          {isOwner && (
+            <div className="flex gap-1">
+              <Button
+                variant="ghost"
+                size="icon"
+                onClick={() => onEdit(feed)}
+                title="Edit"
+                className="h-8 w-8 text-muted-foreground hover:text-primary"
+              >
+                <Pencil className="h-4 w-4" />
+              </Button>
+              <Button
+                variant="ghost"
+                size="icon"
+                onClick={() => onDelete(feed.id)}
+                title="Delete"
+                className="h-8 w-8 text-muted-foreground hover:text-destructive"
+              >
+                <Trash2 className="h-4 w-4" />
+              </Button>
+            </div>
+          )}
         </div>
       </CardHeader>
       <CardContent>
@@ -111,6 +124,10 @@ interface FeedListProps {
   isLoadingMore: boolean;
   onLoadMore: () => void;
   editingFeed: Feed | null;
+  // Threaded down so each row can decide whether to surface its
+  // edit/delete icons. `undefined` means logged-out — still hide the
+  // buttons (auth check happens in App.tsx too).
+  currentUserId: number | undefined;
   onUpdate: (data: NewFeed | Feed) => void;
   onCancelEdit: () => void;
   onEdit: (feed: Feed) => void;
@@ -143,6 +160,7 @@ export const FeedList: React.FC<FeedListProps> = ({
   isLoadingMore,
   onLoadMore,
   editingFeed,
+  currentUserId,
   onUpdate,
   onCancelEdit,
   onEdit,
@@ -206,7 +224,7 @@ export const FeedList: React.FC<FeedListProps> = ({
     return (
       <div
         data-testid="feed-list-skeleton"
-        className="flex flex-col gap-4 w-full max-w-[600px] mb-8 text-left flex-1 min-h-0 overflow-y-auto"
+        className="no-scrollbar flex flex-col gap-4 w-full max-w-[600px] mb-8 text-left flex-1 min-h-0 overflow-y-auto"
       >
         <FeedListSkeleton />
       </div>
@@ -217,7 +235,7 @@ export const FeedList: React.FC<FeedListProps> = ({
     return (
       <div
         data-testid="feed-list-empty"
-        className="w-full max-w-[600px] flex-1 min-h-0 overflow-y-auto flex flex-col items-center justify-center"
+        className="no-scrollbar w-full max-w-[600px] flex-1 min-h-0 overflow-y-auto flex flex-col items-center justify-center"
       >
         <div className="w-full py-10 text-center text-muted-foreground rounded-lg border border-dashed border-border">
           {searchTerm ? `Feed "${searchTerm}" not found` : 'No feeds found'}
@@ -232,7 +250,7 @@ export const FeedList: React.FC<FeedListProps> = ({
       <div
         ref={scrollRef}
         data-testid="feed-list"
-        className="flex flex-col-reverse gap-4 w-full max-w-[600px] mb-8 text-left flex-1 min-h-0 overflow-y-auto"
+        className="no-scrollbar flex flex-col-reverse gap-4 w-full max-w-[600px] mb-8 text-left flex-1 min-h-0 overflow-y-auto"
       >
         {feeds.map((feed) =>
           editingFeed?.id === feed.id ? (
@@ -247,6 +265,7 @@ export const FeedList: React.FC<FeedListProps> = ({
             <FeedItem
               key={feed.id}
               feed={feed}
+              currentUserId={currentUserId}
               onEdit={onEdit}
               onDelete={onDelete}
             />

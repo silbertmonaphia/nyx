@@ -8,8 +8,11 @@ import { useMemo } from 'react';
 import { feedService } from '../services/feedService';
 import { Feed, NewFeed, PaginatedFeeds } from '../types/feed';
 import type { SortOrder } from '../store/feedUiStore';
+import { useAuthStore } from '~/store/authStore';
 
-const FEEDS_QUERY_KEY = 'feeds' as const;
+// Exported so non-React modules (the user-change reset helper) can
+// drop every cached feed page without re-deriving the key shape.
+export const FEEDS_QUERY_KEY = 'feeds' as const;
 const PAGE_SIZE = 5;
 
 // Negative ids are placeholders for rows that have not yet been
@@ -31,10 +34,12 @@ interface FeedsContext {
 
 export const useFeeds = (searchTerm: string, sortOrder: SortOrder = 'desc') => {
   const queryClient = useQueryClient();
-  // sortOrder is part of the key so flipping the toggle triggers
-  // a refetch against the opposite-direction cache and never serves
-  // a stale page from the other sort.
-  const queryKey = [FEEDS_QUERY_KEY, searchTerm, sortOrder] as const;
+  // `userId` is part of the key so each user gets an isolated cache
+  // — user A's pages never serve to user B even if the auth store
+  // updates without a full reload. Read from the auth store here
+  // (not as an arg) so a login swap automatically re-keys the query.
+  const userId = useAuthStore((s) => s.user?.id);
+  const queryKey = [FEEDS_QUERY_KEY, userId, searchTerm, sortOrder] as const;
 
   const {
     data,
@@ -45,6 +50,9 @@ export const useFeeds = (searchTerm: string, sortOrder: SortOrder = 'desc') => {
     isError,
   } = useInfiniteQuery<PaginatedFeeds, Error, InfiniteData<PaginatedFeeds>, typeof queryKey, number>({
     queryKey,
+    // No logged-in user → no fetch. The list is owner-scoped on the
+    // backend, so an anonymous request would 401.
+    enabled: userId !== undefined,
     queryFn: ({ pageParam }) => feedService.getFeeds(searchTerm, pageParam, PAGE_SIZE, sortOrder),
     initialPageParam: 1,
     getNextPageParam: (last) => (last ? (last.has_more ? last.page + 1 : undefined) : undefined),
@@ -77,6 +85,11 @@ export const useFeeds = (searchTerm: string, sortOrder: SortOrder = 'desc') => {
           if (!old || old.pages.length === 0) return old;
           const optimistic: Feed = {
             ...newFeed,
+            // The optimistic row must carry the current user's id —
+            // matches the server shape so the optimistic-edit /
+            // optimistic-delete buttons are correctly gated against
+            // `feed.user_id === currentUserId`.
+            user_id: userId ?? -1,
             rating: 0, // form no longer collects rating; placeholder until server replaces this row
             id: -Date.now(), // negative id marks it as unconfirmed
             created_at: new Date().toISOString(),
