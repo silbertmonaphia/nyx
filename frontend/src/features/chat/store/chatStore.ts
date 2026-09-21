@@ -13,6 +13,12 @@ export interface ChatMessage {
     completion_tokens: number;
     total_tokens: number;
   };
+  // Failover notes streamed from the backend when the primary LLM
+  // errored mid-stream and the secondary is taking over. Each note
+  // is a short static string (e.g. "[continued on OpenAI]"). Lives
+  // on the assistant row so a follow-up render can show it without
+  // keeping the event out-of-band.
+  notes?: string[];
 }
 
 interface ChatState {
@@ -136,6 +142,22 @@ export const useChatStore = create<ChatState>((set, get) => ({
             next[assistantIndex] = {
               ...target,
               usage: event.usage,
+            };
+            return { messages: next };
+          });
+        } else if (event.kind === "note") {
+          // Mid-stream failover note from the router: append to the
+          // partial assistant reply's notes array. Do NOT truncate
+          // messages — unlike the error branch, the partial assistant
+          // content survives and the secondary's deltas will continue
+          // appending into the same row.
+          set((state) => {
+            const next = state.messages.slice();
+            const target = next[assistantIndex];
+            if (!target || target.role !== "assistant") return state;
+            next[assistantIndex] = {
+              ...target,
+              notes: [...(target.notes ?? []), event.text],
             };
             return { messages: next };
           });

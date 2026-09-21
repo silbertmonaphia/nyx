@@ -129,6 +129,16 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ open, onOpenChange }) => {
                 )}
               >
                 {m.content || (isStreaming && m.role === "assistant" ? "…" : "")}
+                {m.role === "assistant" &&
+                  m.notes?.map((n, ni) => (
+                    <div
+                      key={`note-${ni}`}
+                      className="mt-1 text-[10px] italic text-muted-foreground"
+                      data-testid="chat-note"
+                    >
+                      {n}
+                    </div>
+                  ))}
                 {m.role === "assistant" && m.usage && (
                   <div className="mt-1 text-[10px] text-muted-foreground">
                     tokens: {m.usage.total_tokens} (

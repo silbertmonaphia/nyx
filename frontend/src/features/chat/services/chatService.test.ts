@@ -94,6 +94,63 @@ describe('chatService.streamMessage', () => {
     expect(headers.Accept).toBe('text/event-stream');
   });
 
+  it('parses event:note frames and yields ChatNote events between deltas', async () => {
+    const sse =
+      'event: delta\ndata: {"delta":"Hel"}\n\n' +
+      'event: note\ndata: {"text":"[continued on OpenAI]","provider":"openai"}\n\n' +
+      'event: delta\ndata: {"delta":"lo"}\n\n' +
+      'event: done\ndata: {"usage":{"prompt_tokens":3,"completion_tokens":2,"total_tokens":5}}\n\n' +
+      'data: [DONE]\n\n';
+    fetchMock.mockResolvedValueOnce(sseResponse([sse]));
+
+    const events: unknown[] = [];
+    for await (const e of chatService.streamMessage(
+      [{ role: 'user', content: 'hi' }],
+      new AbortController().signal,
+    )) {
+      events.push(e);
+    }
+
+    expect(events).toEqual([
+      { kind: 'delta', delta: 'Hel' },
+      { kind: 'note', text: '[continued on OpenAI]', provider: 'openai' },
+      { kind: 'delta', delta: 'lo' },
+      {
+        kind: 'done',
+        usage: { prompt_tokens: 3, completion_tokens: 2, total_tokens: 5 },
+      },
+      { kind: 'terminator' },
+    ]);
+  });
+
+  it('drops a malformed event:note frame without stopping the loop', async () => {
+    const sse =
+      'event: delta\ndata: {"delta":"Hel"}\n\n' +
+      'event: note\ndata: not-json\n\n' +
+      'event: done\ndata: {"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}}\n\n' +
+      'data: [DONE]\n\n';
+    fetchMock.mockResolvedValueOnce(sseResponse([sse]));
+
+    const events: unknown[] = [];
+    for await (const e of chatService.streamMessage(
+      [{ role: 'user', content: 'hi' }],
+      new AbortController().signal,
+    )) {
+      events.push(e);
+    }
+
+    // The bad note frame is silently dropped; the surrounding delta
+    // + done flow through unchanged.
+    expect(events).toEqual([
+      { kind: 'delta', delta: 'Hel' },
+      {
+        kind: 'done',
+        usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
+      },
+      { kind: 'terminator' },
+    ]);
+  });
+
   it('surfaces a mid-stream event:error as ChatStreamError and stops the loop', async () => {
     const sse =
       'event: delta\ndata: {"delta":"Hel"}\n\n' +

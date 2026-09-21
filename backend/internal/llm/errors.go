@@ -31,6 +31,7 @@ var (
 	ErrRateLimited         = errors.New("llm rate limited")
 	ErrInvalidInput        = errors.New("invalid chat input")
 	ErrContextCanceled     = errors.New("llm context canceled")
+	ErrAllProvidersFailed  = errors.New("llm all providers failed")
 )
 
 // Register each sentinel with api.MapError so handlers can funnel
@@ -42,4 +43,5 @@ func init() {
 	api.RegisterSentinel(ErrRateLimited, http.StatusTooManyRequests, "LLM rate limited")
 	api.RegisterSentinel(ErrInvalidInput, http.StatusBadRequest, "Invalid chat input")
 	api.RegisterSentinel(ErrContextCanceled, 499, "Client closed request")
+	api.RegisterSentinel(ErrAllProvidersFailed, http.StatusBadGateway, "Upstream LLM unavailable")
 }

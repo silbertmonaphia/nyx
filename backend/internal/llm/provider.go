@@ -45,11 +45,19 @@ type Message struct {
 // Provider. Model, MaxTokens, and Temperature are operator-controlled
 // knobs read from config; the service does not accept per-request
 // overrides (model choice is operational, not client-driven).
+//
+// OnNote is an optional mid-stream notification hook honoured by
+// provider routers (e.g. llm.Router) when they fail over from one
+// upstream to another. Providers other than the Router ignore it —
+// pass nil when no notification is wanted. Routers fire OnNote
+// exactly once per request, immediately before the secondary
+// provider's first delta; a non-nil return value aborts the stream.
 type ChatRequest struct {
 	Model       string
 	Messages    []Message
 	MaxTokens   int
 	Temperature *float32
+	OnNote      func(text, provider string) error
 }
 
 // ChatUsage is the trailing usage summary OpenAI emits on the final

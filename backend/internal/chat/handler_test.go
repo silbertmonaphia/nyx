@@ -27,19 +27,31 @@ import (
 // chatStubProvider is the llm.Provider used by handler tests. It can
 // block on a never-closed channel (for the ctx-cancel test) and can
 // return a sentinel error mid-stream (for the error-frame test).
+// fireNote is an optional one-shot callback the test seeds so the
+// stub fires its req.OnNote as if llm.Router were calling it.
 type chatStubProvider struct {
 	deltas     []string
 	finalUsage *llm.ChatUsage
 	returnErr  error
 	release    <-chan struct{} // optional hang point
+	fireNote   *struct {
+		text, provider string
+	}
 }
 
-func (p *chatStubProvider) Chat(ctx context.Context, _ llm.ChatRequest, cb func(string, *llm.ChatUsage) error) (*llm.ChatUsage, error) {
+func (p *chatStubProvider) Chat(ctx context.Context, req llm.ChatRequest, cb func(string, *llm.ChatUsage) error) (*llm.ChatUsage, error) {
 	if p.release != nil {
 		select {
 		case <-p.release:
 		case <-ctx.Done():
 			return nil, llm.ErrContextCanceled
+		}
+	}
+	// Optional one-shot note fire — exercises the router's
+	// `event: note` SSE frame plumbing end-to-end.
+	if p.fireNote != nil && req.OnNote != nil {
+		if err := req.OnNote(p.fireNote.text, p.fireNote.provider); err != nil {
+			return p.finalUsage, err
 		}
 	}
 	for _, d := range p.deltas {
@@ -391,6 +403,69 @@ func TestHandler_ContextCancellation_StopsStream(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("server did not return after client cancel")
 	}
+}
+
+// TestHandler_EmitsNoteFrame_OnRouterFailover asserts the SSE wire
+// contract for the failover note: when the provider (Router) fires
+// OnNote("text-x", "vllm"), the handler writes one
+// `event: note\ndata: {"text":"text-x","provider":"vllm"}\n\n`
+// frame to the response. The existing readSSEFrames helper handles
+// `event: note` natively.
+func TestHandler_EmitsNoteFrame_OnRouterFailover(t *testing.T) {
+	stub := &chatStubProvider{
+		deltas: []string{"continuation-from-secondary"},
+		fireNote: &struct {
+			text, provider string
+		}{text: "text-x", provider: "vllm"},
+	}
+	svc := newTestServiceForHandler(stub)
+
+	router, tokens := buildRouter(t, svc, nil)
+	server := httptest.NewServer(router)
+	defer server.Close()
+
+	req, err := http.NewRequest(http.MethodPost, server.URL+"/api/chat",
+		bytes.NewReader(chatRequest(Message{Role: RoleUser, Content: "hi"})))
+	require.NoError(t, err)
+	req.Header.Set("Authorization", "Bearer "+bearerToken(t, tokens))
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := server.Client().Do(req)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+
+	assert.Equal(t, http.StatusOK, resp.StatusCode)
+
+	frames := readSSEFrames(t, resp.Body)
+	var noteFrame *sseFrame
+	for i := range frames {
+		if frames[i].event == "note" {
+			noteFrame = &frames[i]
+			break
+		}
+	}
+	require.NotNil(t, noteFrame, "expected an event:note frame, got %+v", frames)
+
+	var note struct {
+		Text     string `json:"text"`
+		Provider string `json:"provider"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(noteFrame.data), &note))
+	assert.Equal(t, "text-x", note.Text)
+	assert.Equal(t, "vllm", note.Provider)
+
+	// Delta from the secondary still lands AFTER the note frame.
+	var gotDeltas []string
+	for _, f := range frames {
+		if f.event == "delta" {
+			var d struct {
+				Delta string `json:"delta"`
+			}
+			require.NoError(t, json.Unmarshal([]byte(f.data), &d))
+			gotDeltas = append(gotDeltas, d.Delta)
+		}
+	}
+	assert.Equal(t, []string{"continuation-from-secondary"}, gotDeltas)
 }
 
 // TestFlushingWriter_FlushDefersToResponseController pins the

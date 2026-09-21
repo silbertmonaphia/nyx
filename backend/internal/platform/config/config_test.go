@@ -299,8 +299,8 @@ func TestLoad_AcceptsValidLLMConfig(t *testing.T) {
 	if !cfg.LLMEnabled {
 		t.Error("LLMEnabled = false, want true")
 	}
-	if cfg.LLMProvider != "openai" {
-		t.Errorf("LLMProvider default = %q, want %q", cfg.LLMProvider, llmProviderOpenAI)
+	if cfg.LLMProvider != LLMProviderOpenAI {
+		t.Errorf("LLMProvider default = %q, want %q", cfg.LLMProvider, LLMProviderOpenAI)
 	}
 	if cfg.LLMAllowPrivateURL {
 		t.Error("LLMAllowPrivateURL default = true, want false")
@@ -459,5 +459,104 @@ func TestLoad_RejectsInvalidLLMTimeout(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "LLM_TIMEOUT") {
 		t.Errorf("Load() error = %v, want it to mention LLM_TIMEOUT", err)
+	}
+}
+
+// TestLoad_AcceptsPrimaryOnly pins case 12: primary-only (no
+// fallback configured) loads cleanly. The Router is skipped, so
+// the env vars it consumes are simply unused.
+func TestLoad_AcceptsPrimaryOnly(t *testing.T) {
+	t.Setenv("DB_URL", "postgres://x")
+	t.Setenv("JWT_SECRET", auth.TestSecret)
+	t.Setenv("LLM_ENABLED", "true")
+	t.Setenv("LLM_PROVIDER", "openai")
+	t.Setenv("LLM_BASE_URL", "https://api.openai.com/v1")
+	t.Setenv("LLM_API_KEY", "sk-prod-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+	t.Setenv("LLM_MODEL", "gpt-4o-mini")
+	// LLM_FALLBACK_BASE_URL intentionally unset.
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v, want nil for primary-only", err)
+	}
+	if cfg.LLMFallbackBaseURL != "" {
+		t.Errorf("LLMFallbackBaseURL = %q, want empty", cfg.LLMFallbackBaseURL)
+	}
+}
+
+// TestLoad_RejectsVLLMFallbackMissingAPIKey pins case 13: primary
+// vLLM with an OpenAI fallback URL but no fallback API key — the
+// OpenAI client requires a non-empty bearer, so boot must fail
+// closed with a clear LLM_FALLBACK_API_KEY error.
+func TestLoad_RejectsVLLMFallbackMissingAPIKey(t *testing.T) {
+	t.Setenv("DB_URL", "postgres://x")
+	t.Setenv("JWT_SECRET", auth.TestSecret)
+	t.Setenv("LLM_ENABLED", "true")
+	t.Setenv("LLM_PROVIDER", "vllm")
+	t.Setenv("LLM_BASE_URL", "http://vllm:8000/v1")
+	t.Setenv("LLM_API_KEY", "")
+	t.Setenv("LLM_MODEL", "test")
+	t.Setenv("LLM_ALLOW_PRIVATE_URL", "true")
+	t.Setenv("LLM_FALLBACK_BASE_URL", "https://api.openai.com/v1")
+	t.Setenv("LLM_FALLBACK_API_KEY", "")
+	t.Setenv("LLM_ALLOW_PRIVATE_URL", "true")
+
+	_, err := Load()
+	if err == nil {
+		t.Fatal("Load() error = nil, want LLM_FALLBACK_API_KEY rejection")
+	}
+	if !strings.Contains(err.Error(), "LLM_FALLBACK_API_KEY") {
+		t.Errorf("Load() error = %v, want it to mention LLM_FALLBACK_API_KEY", err)
+	}
+}
+
+// TestLoad_AcceptsOpenAIFallbackToVLLMWithEmptyKey pins case 14:
+// primary is OpenAI, fallback is a vLLM endpoint with no fallback
+// key — vLLM accepts an empty Authorization header, so boot must
+// succeed. The fallback type is implicit (the opposite of the
+// primary).
+func TestLoad_AcceptsOpenAIFallbackToVLLMWithEmptyKey(t *testing.T) {
+	t.Setenv("DB_URL", "postgres://x")
+	t.Setenv("JWT_SECRET", auth.TestSecret)
+	t.Setenv("LLM_ENABLED", "true")
+	t.Setenv("LLM_PROVIDER", "openai")
+	t.Setenv("LLM_BASE_URL", "https://api.openai.com/v1")
+	t.Setenv("LLM_API_KEY", "sk-prod-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+	t.Setenv("LLM_MODEL", "gpt-4o-mini")
+	t.Setenv("LLM_FALLBACK_BASE_URL", "http://vllm:8000/v1")
+	t.Setenv("LLM_FALLBACK_API_KEY", "")
+	t.Setenv("LLM_ALLOW_PRIVATE_URL", "true")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v, want nil for OpenAI→vLLM failover", err)
+	}
+	if cfg.LLMFallbackBaseURL != "http://vllm:8000/v1" {
+		t.Errorf("LLMFallbackBaseURL = %q, want %q", cfg.LLMFallbackBaseURL, "http://vllm:8000/v1")
+	}
+}
+
+// TestLoad_RejectsFallbackPrivateHost pins case 15: SSRF guard
+// must apply to the fallback URL too — the dev escape hatch
+// LLM_ALLOW_PRIVATE_URL=false refuses the fallback URL the same
+// way it refuses the primary.
+func TestLoad_RejectsFallbackPrivateHost(t *testing.T) {
+	t.Setenv("DB_URL", "postgres://x")
+	t.Setenv("JWT_SECRET", auth.TestSecret)
+	t.Setenv("LLM_ENABLED", "true")
+	t.Setenv("LLM_PROVIDER", "openai")
+	t.Setenv("LLM_BASE_URL", "https://api.openai.com/v1")
+	t.Setenv("LLM_API_KEY", "sk-prod-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+	t.Setenv("LLM_MODEL", "gpt-4o-mini")
+	t.Setenv("LLM_FALLBACK_BASE_URL", "http://127.0.0.1:8000/v1")
+	t.Setenv("LLM_FALLBACK_API_KEY", "")
+	// LLM_ALLOW_PRIVATE_URL intentionally false.
+
+	_, err := Load()
+	if err == nil {
+		t.Fatal("Load() error = nil, want fallback private-host rejection")
+	}
+	if !strings.Contains(err.Error(), "LLM_FALLBACK_BASE_URL") && !strings.Contains(err.Error(), "LLM_ALLOW_PRIVATE_URL") {
+		t.Errorf("Load() error = %v, want it to mention fallback URL or escape hatch", err)
 	}
 }

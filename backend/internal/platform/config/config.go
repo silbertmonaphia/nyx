@@ -15,9 +15,11 @@ import (
 // validateLLMConfig switch, the cmd/api/main.go dispatch, and
 // the config_test.go golden-value assertions all reference the
 // same literals (goconst would otherwise flag the duplicates).
+// Exported so cmd/api/main.go can reference them without
+// re-declaring the same strings.
 const (
-	llmProviderOpenAI = "openai"
-	llmProviderVLLM   = "vllm"
+	LLMProviderOpenAI = "openai"
+	LLMProviderVLLM   = "vllm"
 )
 
 type Config struct {
@@ -122,6 +124,19 @@ type Config struct {
 	LLMMaxMessageChars    int    `mapstructure:"LLM_MAX_MESSAGE_CHARS"`
 	LLMMaxStreamDuration  string `mapstructure:"LLM_MAX_STREAM_DURATION"`
 	LLMAllowPrivateURL    bool   `mapstructure:"LLM_ALLOW_PRIVATE_URL"`
+
+	// LLM failover. LLM_FALLBACK_* is the secondary slot consumed by
+	// llm.Router when LLM_FALLBACK_BASE_URL is non-empty. The
+	// fallback's provider type is implicit (the opposite of
+	// LLM_PROVIDER — today only openai + vllm exist). LLM_FALLBACK_MODEL
+	// is optional; the wiring site falls back to LLM_MODEL when empty.
+	// LLM_PROBE_TIMEOUT caps the per-request GET /v1/models probe the
+	// Router fires before each chat call (default 2s; should stay
+	// well under LLM_TIMEOUT to leave room for the actual chat).
+	LLMFallbackBaseURL string `mapstructure:"LLM_FALLBACK_BASE_URL"`
+	LLMFallbackAPIKey  string `mapstructure:"LLM_FALLBACK_API_KEY"`
+	LLMFallbackModel   string `mapstructure:"LLM_FALLBACK_MODEL"`
+	LLMProbeTimeout    string `mapstructure:"LLM_PROBE_TIMEOUT"`
 }
 
 func Load() (*Config, error) {
@@ -256,6 +271,12 @@ func setDefaults() {
 	viper.SetDefault("LLM_MAX_MESSAGE_CHARS", 32768)
 	viper.SetDefault("LLM_MAX_STREAM_DURATION", "10m")
 	viper.SetDefault("LLM_ALLOW_PRIVATE_URL", false)
+	// LLM_FALLBACK_* default to empty → no fallback configured →
+	// Router is skipped entirely (single-provider passthrough).
+	// LLM_PROBE_TIMEOUT caps the per-request /v1/models probe the
+	// Router fires; 2s leaves room for the chat itself under a
+	// typical 60s LLM_TIMEOUT.
+	viper.SetDefault("LLM_PROBE_TIMEOUT", "2s")
 	// LLM_SYSTEM_PROMPT is left empty by default — the chat
 	// service falls back to a hard-coded "feed catalog
 	// assistant" prompt when the operator hasn't customised it.
@@ -278,6 +299,8 @@ func bindEnvVars() {
 		"LLM_TIMEOUT", "LLM_MAX_TOKENS", "LLM_SYSTEM_PROMPT",
 		"LLM_MAX_HISTORY_MESSAGES", "LLM_MAX_MESSAGE_CHARS",
 		"LLM_MAX_STREAM_DURATION", "LLM_ALLOW_PRIVATE_URL",
+		"LLM_FALLBACK_BASE_URL", "LLM_FALLBACK_API_KEY", "LLM_FALLBACK_MODEL",
+		"LLM_PROBE_TIMEOUT",
 	} {
 		_ = viper.BindEnv(key)
 	}
@@ -328,6 +351,9 @@ func validateDurations(cfg *Config) error {
 		if _, err := time.ParseDuration(cfg.LLMMaxStreamDuration); err != nil {
 			return fmt.Errorf("invalid LLM_MAX_STREAM_DURATION: %w", err)
 		}
+		if _, err := time.ParseDuration(cfg.LLMProbeTimeout); err != nil {
+			return fmt.Errorf("invalid LLM_PROBE_TIMEOUT: %w", err)
+		}
 	}
 	return nil
 }
@@ -353,19 +379,24 @@ func validateDurations(cfg *Config) error {
 //     http.Transport.DialContext; this is the startup guard.
 //   - System prompt length is capped at 8 KiB to bound the input
 //     to every chat completion.
+//   - Fallback (LLM_FALLBACK_BASE_URL non-empty) must satisfy the
+//     same scheme/host/SSRF rules. Fallback provider type is the
+//     opposite of LLM_PROVIDER; OpenAI fallback requires a
+//     non-placeholder key, vLLM fallback allows empty key.
+//     LLM_FALLBACK_MODEL is optional (defaults to LLM_MODEL).
 //
 // Called only when LLMEnabled is true so the default-off path
 // stays free of these requirements.
 func validateLLMConfig(cfg *Config) error {
 	switch cfg.LLMProvider {
-	case llmProviderOpenAI, llmProviderVLLM:
+	case LLMProviderOpenAI, LLMProviderVLLM:
 	case "":
 		// Empty means viper default didn't apply — treat as the
 		// canonical "openai" so a misconfigured deployment fails
 		// loudly here rather than silently routing to OpenAI.
-		return fmt.Errorf("LLM_PROVIDER must be one of {%s, %s}, got empty", llmProviderOpenAI, llmProviderVLLM)
+		return fmt.Errorf("LLM_PROVIDER must be one of {%s, %s}, got empty", LLMProviderOpenAI, LLMProviderVLLM)
 	default:
-		return fmt.Errorf("LLM_PROVIDER must be one of {%s, %s}, got %q", llmProviderOpenAI, llmProviderVLLM, cfg.LLMProvider)
+		return fmt.Errorf("LLM_PROVIDER must be one of {%s, %s}, got %q", LLMProviderOpenAI, LLMProviderVLLM, cfg.LLMProvider)
 	}
 	if cfg.LLMBaseURL == "" {
 		return fmt.Errorf("LLM_BASE_URL is required when LLM_ENABLED=true")
@@ -378,19 +409,54 @@ func validateLLMConfig(cfg *Config) error {
 	}
 	// OpenAI rejects an empty bearer; vLLM doesn't. Only the OpenAI
 	// path enforces a non-empty key.
-	if cfg.LLMProvider == "openai" {
+	if cfg.LLMProvider == LLMProviderOpenAI {
 		if cfg.LLMAPIKey == "" {
 			return fmt.Errorf("LLM_API_KEY is required when LLM_ENABLED=true and LLM_PROVIDER=openai")
 		}
-		lower := strings.ToLower(cfg.LLMAPIKey)
-		for _, placeholder := range []string{"changeme", "your-key", "sk-xxx", "xxx", "test-key"} {
-			if strings.Contains(lower, placeholder) {
-				return fmt.Errorf("LLM_API_KEY looks like a placeholder (%q); refusing to start — set a real key", placeholder)
-			}
+		if err := checkNotPlaceholderKey(cfg.LLMAPIKey, "LLM_API_KEY"); err != nil {
+			return err
 		}
 	}
+
+	// Fallback slot — only validated when LLM_FALLBACK_BASE_URL is
+	// non-empty. The fallback's provider type is the OPPOSITE of
+	// the primary's; with only two impls today (openai, vllm) that's
+	// unambiguous. If a third provider is added, this rule needs
+	// either a sibling LLM_FALLBACK_PROVIDER env or a richer router.
+	if cfg.LLMFallbackBaseURL != "" {
+		if err := validateLLMBaseURL(cfg.LLMFallbackBaseURL, cfg.LLMAllowPrivateURL); err != nil {
+			return err
+		}
+		fallbackIsOpenAI := cfg.LLMProvider == LLMProviderVLLM
+		if fallbackIsOpenAI {
+			if cfg.LLMFallbackAPIKey == "" {
+				return fmt.Errorf("LLM_FALLBACK_API_KEY is required when LLM_PROVIDER=vllm (fallback is OpenAI)")
+			}
+			if err := checkNotPlaceholderKey(cfg.LLMFallbackAPIKey, "LLM_FALLBACK_API_KEY"); err != nil {
+				return err
+			}
+		}
+		// vLLM fallback: LLM_FALLBACK_API_KEY optional — empty is
+		// the standard vLLM-without---api-key deployment.
+	}
+
 	if len(cfg.LLMSystemPrompt) > 8192 {
 		return fmt.Errorf("LLM_SYSTEM_PROMPT must be at most 8192 bytes, got %d", len(cfg.LLMSystemPrompt))
+	}
+	return nil
+}
+
+// checkNotPlaceholderKey rejects the common "I committed my .env
+// with a literal placeholder" foot-gun. Case-insensitive
+// contains-match against a short blocklist — the check is
+// intentionally cheap and catches careless operators, not
+// determined attackers.
+func checkNotPlaceholderKey(key, fieldName string) error {
+	lower := strings.ToLower(key)
+	for _, placeholder := range []string{"changeme", "your-key", "sk-xxx", "xxx", "test-key"} {
+		if strings.Contains(lower, placeholder) {
+			return fmt.Errorf("%s looks like a placeholder (%q); refusing to start — set a real key", fieldName, placeholder)
+		}
 	}
 	return nil
 }

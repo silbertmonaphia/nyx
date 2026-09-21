@@ -70,6 +70,13 @@ func NewService(p llm.Provider, cfg *config.Config, tracer trace.Tracer) *Servic
 // forwarded with a populated finalUsage and an empty delta — the
 // signal to handlers that the stream is ending.
 //
+// onNote is plumbed through to llm.Router when the configured
+// provider is a router; other providers ignore it. Nil is a valid
+// value — handlers that don't surface notes pass nil and the router
+// just doesn't notify on failover. Routers fire onNote exactly
+// once per request, immediately before the secondary provider's
+// first delta.
+//
 // Validation runs before the provider call:
 //   - messages must be non-empty
 //   - every message role must be "user" or "assistant" (system from
@@ -85,7 +92,7 @@ func NewService(p llm.Provider, cfg *config.Config, tracer trace.Tracer) *Servic
 // caller's Messages is never mutated — the same request body could
 // be replayed on retry without the second call seeing the system
 // message twice.
-func (s *Service) Chat(ctx context.Context, req ChatRequest, onDelta func(delta string, finalUsage *llm.ChatUsage) error) (*llm.ChatUsage, error) {
+func (s *Service) Chat(ctx context.Context, req ChatRequest, onDelta func(delta string, finalUsage *llm.ChatUsage) error, onNote func(text, provider string) error) (*llm.ChatUsage, error) {
 	ctx, span := s.tracer.Start(ctx, "chat.service",
 		trace.WithAttributes(attribute.Int("chat.messages", len(req.Messages))),
 	)
@@ -121,6 +128,7 @@ func (s *Service) Chat(ctx context.Context, req ChatRequest, onDelta func(delta 
 		Model:     "", // model is configured at the provider level (openai.NewClient reads cfg.LLMModel)
 		Messages:  msgs,
 		MaxTokens: s.maxTokens,
+		OnNote:    onNote,
 	}, onDelta)
 	if err != nil {
 		span.RecordError(err)

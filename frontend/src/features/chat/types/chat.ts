@@ -29,8 +29,9 @@ export type ChatDone = {
   usage: { prompt_tokens: number; completion_tokens: number; total_tokens: number };
 };
 export type ChatError = { kind: "error"; error: string; request_id: string };
+export type ChatNote = { kind: "note"; text: string; provider: string };
 export type ChatTerminator = { kind: "terminator" };
-export type ChatEvent = ChatDelta | ChatDone | ChatError | ChatTerminator;
+export type ChatEvent = ChatDelta | ChatDone | ChatError | ChatNote | ChatTerminator;
 
 /**
  * Thrown by `chatService.streamMessage` when the stream errors out —

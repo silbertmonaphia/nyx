@@ -125,4 +125,33 @@ describe('ChatPanel', () => {
 
     expect(screen.getByTestId('chat-error')).toHaveTextContent('boom');
   });
+
+  it('renders chat-note testids on an assistant row that carries notes', async () => {
+    // Seed the store directly — simulates a mid-stream failover
+    // where the router emitted `event: note` and the assistant row
+    // accumulated the note text. The panel should render it as an
+    // italic muted line without disturbing the main content.
+    useChatStore.setState({
+      messages: [
+        { role: 'user', content: 'hi' },
+        {
+          role: 'assistant',
+          content: 'Hello',
+          notes: ['[continued on OpenAI]'],
+        },
+      ],
+      isStreaming: false,
+      error: null,
+    });
+
+    render(<ChatPanel open={true} onOpenChange={vi.fn()} />);
+
+    const note = screen.getByTestId('chat-note');
+    expect(note).toHaveTextContent('[continued on OpenAI]');
+    // The note sits next to the assistant content (same bubble), and
+    // the italic utility class is what drives the muted look.
+    const assistantBubble = screen.getByTestId('chat-message-assistant');
+    expect(assistantBubble).toContainElement(note);
+    expect(note.className).toMatch(/italic/);
+  });
 });

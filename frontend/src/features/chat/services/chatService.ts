@@ -212,6 +212,22 @@ export const chatService = {
             }
             yield { kind: "terminator" };
             return;
+          } else if (currentEvent === "note") {
+            try {
+              const parsed = JSON.parse(dataStr) as {
+                text?: unknown;
+                provider?: unknown;
+              };
+              if (
+                typeof parsed.text === "string" &&
+                typeof parsed.provider === "string"
+              ) {
+                yield { kind: "note", text: parsed.text, provider: parsed.provider };
+              }
+            } catch {
+              // Malformed note frame — drop it; mirrors the error-frame
+              // precedent so a bad frame can't tear down the stream.
+            }
           } else if (currentEvent === "error") {
             try {
               const parsed = JSON.parse(dataStr) as {

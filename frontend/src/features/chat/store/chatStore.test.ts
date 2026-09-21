@@ -157,6 +157,52 @@ describe('useChatStore', () => {
       });
     });
 
+    it('appends a mid-stream note event to the assistant row without truncating', async () => {
+      mockedService.streamMessage.mockImplementationOnce(
+        (messages: unknown, signal: AbortSignal) =>
+          makeStream(
+            [
+              { kind: 'delta', delta: 'part' },
+              { kind: 'note', text: '[continued on OpenAI]', provider: 'openai' },
+              {
+                kind: 'done',
+                usage: {
+                  prompt_tokens: 4,
+                  completion_tokens: 2,
+                  total_tokens: 6,
+                },
+              },
+            ],
+            signal,
+          ),
+      );
+
+      await act(async () => {
+        useChatStore.getState().send('hi');
+      });
+
+      // Release the held stream so the store's finally block runs
+      // and isStreaming flips back to false. The note was appended
+      // mid-flight, before this release.
+      await act(async () => {
+        releaseStream();
+      });
+
+      const messages = useChatStore.getState().messages;
+      const assistant = messages.find((m) => m.role === 'assistant');
+      expect(assistant?.notes).toEqual(['[continued on OpenAI]']);
+      // The delta landed before the note — content is preserved.
+      expect(assistant?.content).toBe('part');
+      // Usage still got recorded when done fired after the note.
+      expect(assistant?.usage).toEqual({
+        prompt_tokens: 4,
+        completion_tokens: 2,
+        total_tokens: 6,
+      });
+      // No truncation: the messages array still holds user + assistant.
+      expect(messages.map((m) => m.role)).toEqual(['user', 'assistant']);
+    });
+
     it('captures a mid-stream error event into store.error', async () => {
       mockedService.streamMessage.mockImplementationOnce(
         (messages: unknown, signal: AbortSignal) =>

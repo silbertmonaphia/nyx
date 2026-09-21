@@ -136,25 +136,44 @@ func (h *Handler) stream(w http.ResponseWriter, r *http.Request) {
 		finalUsage *llm.ChatUsage
 		writeErr   error
 	)
-	_, writeErr = h.service.Chat(r.Context(), req, func(delta string, finalUsageChunk *llm.ChatUsage) error {
-		// Heartbeat check: if the client has disconnected, bail
-		// before doing any I/O. The provider's recv loop will also
-		// notice on its next read, but this short-circuits one
-		// chunk of work.
-		if err := r.Context().Err(); err != nil {
-			return err
-		}
-		// Final usage chunk — nothing to write inline; the handler
-		// emits the terminal "done" event after Chat returns.
-		if finalUsageChunk != nil {
-			finalUsage = finalUsageChunk
-			return nil
-		}
-		if err := writeSSEEvent(fw, "delta", map[string]string{"delta": delta}); err != nil {
-			return err
-		}
-		return fw.Flush()
-	})
+	_, writeErr = h.service.Chat(r.Context(), req,
+		func(delta string, finalUsageChunk *llm.ChatUsage) error {
+			// Heartbeat check: if the client has disconnected, bail
+			// before doing any I/O. The provider's recv loop will also
+			// notice on its next read, but this short-circuits one
+			// chunk of work.
+			if err := r.Context().Err(); err != nil {
+				return err
+			}
+			// Final usage chunk — nothing to write inline; the handler
+			// emits the terminal "done" event after Chat returns.
+			if finalUsageChunk != nil {
+				finalUsage = finalUsageChunk
+				return nil
+			}
+			if err := writeSSEEvent(fw, "delta", map[string]string{"delta": delta}); err != nil {
+				return err
+			}
+			return fw.Flush()
+		},
+		// onNote is fired by llm.Router when it fails over from one
+		// upstream to another; the handler renders the note as an SSE
+		// `event: note` frame so the SPA can show a "continued on …"
+		// hint before the secondary's first delta lands. Other
+		// providers ignore the callback; passing nil would also work
+		// but the router wants to know we noticed.
+		func(text, provider string) error {
+			if err := r.Context().Err(); err != nil {
+				return err
+			}
+			if err := writeSSEEvent(fw, "note", map[string]string{
+				"text":     text,
+				"provider": provider,
+			}); err != nil {
+				return err
+			}
+			return fw.Flush()
+		})
 
 	// Step 6: terminal frame.
 	if writeErr != nil {

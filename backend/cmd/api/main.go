@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"os"
 	"os/signal"
@@ -267,33 +268,97 @@ func setupTracing(cfg *config.Config) *observability.Tracing {
 // mounts directly on chi, bypassing huma — see backend/HUMA.md
 // "Streaming endpoints" for the rationale).
 //
-// LLM_PROVIDER picks the client implementation: "openai" (default;
-// targets OpenAI proper or any OpenAI-compatible server via the
-// sashabaranov SDK) or "vllm" (raw HTTP + hand-rolled SSE decoder
-// for self-hosted vLLM, with per-dial DNS hardening). The chat
-// domain consumes the resulting client through the llm.Provider
-// interface and never imports either implementation directly.
+// LLM_PROVIDER picks the primary client implementation: "openai"
+// (default; targets OpenAI proper or any OpenAI-compatible server
+// via the sashabaranov SDK) or "vllm" (raw HTTP + hand-rolled SSE
+// decoder for self-hosted vLLM, with per-dial DNS hardening). The
+// fallback (LLM_FALLBACK_BASE_URL) is the opposite provider type;
+// both slots are validated at config.Load() and either may be nil
+// (single-provider passthrough — zero per-request probe cost).
 //
-// provider / model / base_url are logged at Info on startup so the
-// operator can confirm their config took; the API key is NEVER
-// logged. Returns a shutdown function the caller MUST defer so the
-// chat-rate-limiter's GC goroutine stops on graceful shutdown.
+// The chat domain consumes the resulting client through the
+// llm.Provider interface and never imports either implementation
+// directly. provider / model / base_url are logged at Info on
+// startup so the operator can confirm their config took; the API
+// key is NEVER logged. Returns a shutdown function the caller
+// MUST defer so the chat-rate-limiter's GC goroutine stops on
+// graceful shutdown.
 func mountChatRoute(router chi.Router, cfg *config.Config, tracerProvider trace.TracerProvider, tokens auth.TokenService) (shutdown func()) {
 	if !cfg.LLMEnabled {
 		log.Info().Msg("LLM chat disabled (LLM_ENABLED=false)")
 		return func() {}
 	}
+
+	// Build the primary client from the active config.
+	primaryClient, err := buildLLMClient(cfg, tracerProvider)
+	if err != nil {
+		log.Fatal().Err(err).Str("provider", cfg.LLMProvider).Msg("primary LLM client init failed")
+	}
+	primary := &llm.ProviderSlot{
+		Name:     cfg.LLMProvider,
+		Provider: primaryClient,
+		BaseURL:  cfg.LLMBaseURL,
+		ProbeKey: probeKeyFor(cfg, cfg.LLMProvider),
+	}
+
+	// Build the fallback client from a *copy* of cfg with the three
+	// fallback-specific fields overridden. Clone-not-mutate keeps
+	// the caller's Config unchanged for any downstream consumer.
+	var secondary *llm.ProviderSlot
+	if cfg.LLMFallbackBaseURL != "" {
+		fallbackProvider := config.LLMProviderOpenAI
+		if cfg.LLMProvider == config.LLMProviderOpenAI {
+			fallbackProvider = config.LLMProviderVLLM
+		}
+		cfg2 := *cfg
+		cfg2.LLMProvider = fallbackProvider
+		cfg2.LLMBaseURL = cfg.LLMFallbackBaseURL
+		cfg2.LLMAPIKey = cfg.LLMFallbackAPIKey
+		if cfg.LLMFallbackModel != "" {
+			cfg2.LLMModel = cfg.LLMFallbackModel
+		}
+		fallbackClient, ferr := buildLLMClient(&cfg2, tracerProvider)
+		if ferr != nil {
+			log.Fatal().Err(ferr).Str("provider", fallbackProvider).Msg("fallback LLM client init failed")
+		}
+		secondary = &llm.ProviderSlot{
+			Name:     fallbackProvider,
+			Provider: fallbackClient,
+			BaseURL:  cfg.LLMFallbackBaseURL,
+			ProbeKey: probeKeyFor(&cfg2, fallbackProvider),
+		}
+	}
+
+	// Pick the Provider the chat service consumes. Dual-provider
+	// → Router with per-request probe; single-provider →
+	// passthrough, no probe cost.
 	var llmClient llm.Provider
-	var llmErr error
-	switch cfg.LLMProvider {
-	case "vllm":
-		llmClient, llmErr = vllm.NewClient(cfg, tracerProvider.Tracer("nyx.llm.vllm"))
-	default: // "openai" — validated upstream
-		llmClient, llmErr = openai.NewClient(cfg, tracerProvider.Tracer("nyx.llm.openai"))
+	switch {
+	case secondary != nil:
+		probeTimeout, perr := time.ParseDuration(cfg.LLMProbeTimeout)
+		if perr != nil {
+			log.Fatal().Err(perr).Msg("invalid LLM_PROBE_TIMEOUT")
+		}
+		llmClient = llm.NewRouter(
+			*primary,
+			secondary,
+			tracerProvider.Tracer("nyx.llm.router"),
+			probeTimeout,
+		)
+		log.Info().
+			Str("primary", primary.Name).
+			Str("secondary", secondary.Name).
+			Str("probe_timeout", cfg.LLMProbeTimeout).
+			Msg("LLM router: failover enabled")
+	default:
+		llmClient = primary.Provider
+		log.Info().
+			Str("provider", primary.Name).
+			Str("model", cfg.LLMModel).
+			Str("base_url", cfg.LLMBaseURL).
+			Msg("LLM chat enabled")
 	}
-	if llmErr != nil {
-		log.Fatal().Err(llmErr).Msg("LLM client init failed")
-	}
+
 	chatService := chat.NewService(llmClient, cfg, tracerProvider.Tracer("nyx.chat"))
 	chatHandler := chat.NewHandler(chatService)
 	// Per-user limiter: 5 streams/min, burst 3. In-memory only;
@@ -301,12 +366,31 @@ func mountChatRoute(router chi.Router, cfg *config.Config, tracerProvider trace.
 	chatLimiter := chat.NewUserRateLimiter(5.0/60.0, 3)
 	stopGC := chatLimiter.RunGC(time.Minute, time.Hour)
 	chat.RegisterChatRoute(router, chatHandler, tokens, chatLimiter)
-	log.Info().
-		Str("provider", cfg.LLMProvider).
-		Str("model", cfg.LLMModel).
-		Str("base_url", cfg.LLMBaseURL).
-		Msg("LLM chat enabled")
 	return stopGC
+}
+
+// buildLLMClient dispatches on cfg.LLMProvider to the right client
+// constructor. The choice is validated by config.Load; an unknown
+// value here would already have failed boot, so we log + return an
+// error rather than falling back silently.
+func buildLLMClient(cfg *config.Config, tracerProvider trace.TracerProvider) (llm.Provider, error) {
+	switch cfg.LLMProvider {
+	case config.LLMProviderVLLM:
+		return vllm.NewClient(cfg, tracerProvider.Tracer("nyx.llm.vllm"))
+	case config.LLMProviderOpenAI, "":
+		return openai.NewClient(cfg, tracerProvider.Tracer("nyx.llm.openai"))
+	default:
+		return nil, fmt.Errorf("unknown LLM_PROVIDER %q", cfg.LLMProvider)
+	}
+}
+
+// probeKeyFor returns the bearer key the per-request GET /v1/models
+// probe should send as Authorization. vLLM allows an empty key
+// (started without --api-key); OpenAI requires a non-empty one.
+// cfg.LLMProvider drives the policy; the config validator already
+// enforced it, so this is the straight read.
+func probeKeyFor(cfg *config.Config, provider string) string {
+	return cfg.LLMAPIKey
 }
 
 // maxBodyBytes returns a middleware that wraps r.Body in an
