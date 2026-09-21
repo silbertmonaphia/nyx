@@ -17,6 +17,7 @@ import (
 	_ "github.com/golang-migrate/migrate/v4/source/file"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+	pgxvec "github.com/pgvector/pgvector-go/pgx"
 	"github.com/rs/zerolog/log"
 )
 
@@ -55,6 +56,17 @@ func New(ctx context.Context, cfg *config.Config, tracer pgx.QueryTracer) (*pgxp
 			poolCfg.MaxConnLifetime = maxLifetime
 			poolCfg.MaxConnIdleTime = maxIdleTime
 			poolCfg.ConnConfig.Tracer = tracer
+			// Register pgvector's vector / halfvec / sparsevec codecs
+			// on every new connection in the pool. Without this,
+			// pgx has no way to encode/decode the vector column
+			// type and every read/write of feed_embeddings.embedding
+			// fails with "unsupported type". AfterConnect fires once
+			// per new connection — pgxpool recycles existing
+			// connections across requests, so this is not per-query
+			// overhead.
+			poolCfg.AfterConnect = func(ctx context.Context, conn *pgx.Conn) error {
+				return pgxvec.RegisterTypes(ctx, conn)
+			}
 
 			pool, err := pgxpool.NewWithConfig(ctx, poolCfg)
 			if err != nil {

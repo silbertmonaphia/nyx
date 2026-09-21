@@ -55,3 +55,31 @@ sql:
           created_at: "CreatedAt"
           updated_at: "UpdatedAt"
           deleted_at: "DeletedAt"
+  - engine: "postgresql"
+    queries: "queries/rag.sql"
+    schema:
+      - "migrations/000001_create_movies_table.up.sql"
+      - "migrations/000003_add_audit_fields_to_movies_table.up.sql"
+      - "migrations/000011_rename_movies_to_feeds.up.sql"
+      - "migrations/000012_add_user_id_to_feeds.up.sql"
+      - "migrations/000013_drop_rating_from_feeds.up.sql"
+      - "migrations/000014_add_feed_embeddings.up.sql"
+    gen:
+      go:
+        package: "db"
+        out: "internal/rag/db"
+        sql_package: "pgx/v5"
+        emit_interface: true
+        emit_json_tags: false
+        emit_prepared_queries: false
+        emit_empty_slices: true
+        rename:
+          id: "ID"
+          user_id: "UserID"
+          feed_id: "FeedID"
+          content_hash: "ContentHash"
+          chunk_text: "ChunkText"
+          embedded_at: "EmbeddedAt"
+          created_at: "CreatedAt"
+          updated_at: "UpdatedAt"
+          deleted_at: "DeletedAt"
