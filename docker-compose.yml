@@ -1,6 +1,13 @@
 services:
   db:
-    image: postgres:17-alpine
+    # pgvector community image: drop-in for postgres:17-alpine but
+    # with the pgvector extension pre-built. Required for the RAG
+    # feature (the feed_embeddings.embedding column uses vector(N)).
+    # If you're upgrading from a pre-pgvector volume and the new
+    # container refuses to start, run `docker compose down -v` once
+    # to recreate the named volume — on-disk WAL format versions
+    # can differ across minor releases.
+    image: pgvector/pgvector:pg17-alpine
     # Local-dev resource caps. Generous enough that the dev stack
     # stays healthy on a 16 GB laptop; tight enough to prevent a
     # runaway query from starving the host. Override per-run with
