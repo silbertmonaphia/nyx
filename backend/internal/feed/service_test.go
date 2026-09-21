@@ -71,7 +71,7 @@ func TestGetFeeds_CacheMissThenHit(t *testing.T) {
 	ctx := ctxWithUser(t, 1)
 
 	repo.getAllResp = &Page{
-		Items:    []Feed{{ID: 1, Title: "The Matrix", Rating: 8.7}},
+		Items:    []Feed{{ID: 1, Title: "The Matrix"}},
 		Total:    1,
 		Page:     1,
 		PageSize: 20,

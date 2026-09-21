@@ -222,7 +222,6 @@ func (r *sqlRepository) Create(ctx context.Context, userID int, m *Feed) error {
 		UserID:      toInt64(userID),
 		Title:       m.Title,
 		Description: textFromString(m.Description),
-		Rating:      float8FromValue(m.Rating),
 	})
 	if err != nil {
 		// pgerr.Map is a no-op for errors it doesn't recognize; today
@@ -240,7 +239,6 @@ func (r *sqlRepository) Update(ctx context.Context, userID int, id int, m *Feed)
 	row, err := r.q.UpdateFeed(ctx, db.UpdateFeedParams{
 		Title:       m.Title,
 		Description: textFromString(m.Description),
-		Rating:      float8FromValue(m.Rating),
 		ID:          toInt32(id),
 		UserID:      toInt64(userID),
 	})
@@ -285,8 +283,6 @@ func (r *sqlRepository) Ping(ctx context.Context) error {
 //   - int32 (db) -> int (api)
 //   - int64 (db) -> int (api)
 //   - pgtype.Text (nullable) -> string (empty when not set)
-//   - pgtype.Float8 (nullable) -> float64 (zero when not set;
-//     the API model uses a non-pointer rating, so NULL is lossy)
 //   - pgtype.Timestamptz -> time.Time / *time.Time
 func toFeed(d db.Feed) Feed {
 	m := Feed{
@@ -298,9 +294,6 @@ func toFeed(d db.Feed) Feed {
 	}
 	if d.Description.Valid {
 		m.Description = d.Description.String
-	}
-	if d.Rating.Valid {
-		m.Rating = d.Rating.Float64
 	}
 	if d.DeletedAt.Valid {
 		t := d.DeletedAt.Time
@@ -324,9 +317,6 @@ func toFeedsRow(d db.QueryFeedsPageRow) Feed {
 	}
 	if d.Description.Valid {
 		m.Description = d.Description.String
-	}
-	if d.Rating.Valid {
-		m.Rating = d.Rating.Float64
 	}
 	if d.DeletedAt.Valid {
 		t := d.DeletedAt.Time
@@ -363,9 +353,6 @@ func toFeedsFromAscRows(ds []db.QueryFeedsPageAscRow) []Feed {
 		if d.Description.Valid {
 			m.Description = d.Description.String
 		}
-		if d.Rating.Valid {
-			m.Rating = d.Rating.Float64
-		}
 		if d.DeletedAt.Valid {
 			t := d.DeletedAt.Time
 			m.DeletedAt = &t
@@ -385,13 +372,4 @@ func textFromString(s string) pgtype.Text {
 		return pgtype.Text{}
 	}
 	return pgtype.Text{String: s, Valid: true}
-}
-
-// float8FromValue treats every rating as a SET value. The API model
-// uses a non-pointer float64, so it cannot express "no rating" vs
-// "rating is 0" — we always persist the value. If a future model
-// uses *float64, switch to float8FromPointer and route the NULL
-// case explicitly.
-func float8FromValue(r float64) pgtype.Float8 {
-	return pgtype.Float8{Float64: r, Valid: true}
 }

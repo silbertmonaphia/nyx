@@ -18,8 +18,8 @@ const IntersectionObserverStub = globalThis.IntersectionObserver as unknown as {
 
 describe('FeedList', () => {
   const feeds: Feed[] = [
-    { id: 1, user_id: 1, title: 'Feed 1', description: 'Desc 1', rating: 8, created_at: '2024-01-01T00:00:00Z', updated_at: '2024-01-01T00:00:00Z' },
-    { id: 2, user_id: 1, title: 'Feed 2', description: 'Desc 2', rating: 9, created_at: '2024-01-01T00:00:00Z', updated_at: '2024-01-01T00:00:00Z' },
+    { id: 1, user_id: 1, title: 'Feed 1', description: 'Desc 1', created_at: '2024-01-01T00:00:00Z', updated_at: '2024-01-01T00:00:00Z' },
+    { id: 2, user_id: 1, title: 'Feed 2', description: 'Desc 2', created_at: '2024-01-01T00:00:00Z', updated_at: '2024-01-01T00:00:00Z' },
   ];
   // Helper: every existing render call needs a `currentUserId`. Default
   // to "you own these rows" so the existing assertions stay meaningful;

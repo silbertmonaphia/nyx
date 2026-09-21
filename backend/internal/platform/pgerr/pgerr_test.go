@@ -60,7 +60,7 @@ func TestTranslate_NotNullViolation(t *testing.T) {
 }
 
 func TestTranslate_CheckViolation(t *testing.T) {
-	err := &pgconn.PgError{Code: CodeCheckViolation, ConstraintName: "rating_range"}
+	err := &pgconn.PgError{Code: CodeCheckViolation, ConstraintName: "description_length"}
 	tr := Translate(err)
 	if !tr.Ok || tr.Code != CodeCheckViolation {
 		t.Errorf("Translate = %+v, want Ok=true Code=%q", tr, CodeCheckViolation)

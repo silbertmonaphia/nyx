@@ -22,7 +22,7 @@ func HumaConfig() huma.Config {
 			Info: &huma.Info{
 				Title:       "Nyx API",
 				Version:     "1.0.0",
-				Description: "Minimalist media rating application API.",
+				Description: "Minimalist feed application API.",
 			},
 			Components: &huma.Components{
 				SecuritySchemes: map[string]*huma.SecurityScheme{

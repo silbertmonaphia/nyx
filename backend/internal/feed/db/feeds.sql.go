@@ -36,31 +36,24 @@ func (q *Queries) CountFeeds(ctx context.Context, arg CountFeedsParams) (int64, 
 }
 
 const insertFeed = `-- name: InsertFeed :one
-INSERT INTO feeds (user_id, title, description, rating)
-VALUES ($1, $2, $3, $4)
-RETURNING id, title, description, rating, created_at, updated_at, deleted_at, user_id
+INSERT INTO feeds (user_id, title, description)
+VALUES ($1, $2, $3)
+RETURNING id, title, description, created_at, updated_at, deleted_at, user_id
 `
 
 type InsertFeedParams struct {
 	UserID      int64
 	Title       string
 	Description pgtype.Text
-	Rating      pgtype.Float8
 }
 
 func (q *Queries) InsertFeed(ctx context.Context, arg InsertFeedParams) (Feed, error) {
-	row := q.db.QueryRow(ctx, insertFeed,
-		arg.UserID,
-		arg.Title,
-		arg.Description,
-		arg.Rating,
-	)
+	row := q.db.QueryRow(ctx, insertFeed, arg.UserID, arg.Title, arg.Description)
 	var i Feed
 	err := row.Scan(
 		&i.ID,
 		&i.Title,
 		&i.Description,
-		&i.Rating,
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.DeletedAt,
@@ -71,7 +64,7 @@ func (q *Queries) InsertFeed(ctx context.Context, arg InsertFeedParams) (Feed, e
 
 const queryFeedsPage = `-- name: QueryFeedsPage :many
 
-SELECT id, user_id, title, description, rating, created_at, updated_at, deleted_at
+SELECT id, user_id, title, description, created_at, updated_at, deleted_at
 FROM feeds
 WHERE (
         $1::text IS NULL
@@ -97,7 +90,6 @@ type QueryFeedsPageRow struct {
 	UserID      int64
 	Title       string
 	Description pgtype.Text
-	Rating      pgtype.Float8
 	CreatedAt   pgtype.Timestamptz
 	UpdatedAt   pgtype.Timestamptz
 	DeletedAt   pgtype.Timestamptz
@@ -136,7 +128,6 @@ func (q *Queries) QueryFeedsPage(ctx context.Context, arg QueryFeedsPageParams) 
 			&i.UserID,
 			&i.Title,
 			&i.Description,
-			&i.Rating,
 			&i.CreatedAt,
 			&i.UpdatedAt,
 			&i.DeletedAt,
@@ -152,7 +143,7 @@ func (q *Queries) QueryFeedsPage(ctx context.Context, arg QueryFeedsPageParams) 
 }
 
 const queryFeedsPageAsc = `-- name: QueryFeedsPageAsc :many
-SELECT id, user_id, title, description, rating, created_at, updated_at, deleted_at
+SELECT id, user_id, title, description, created_at, updated_at, deleted_at
 FROM feeds
 WHERE (
         $1::text IS NULL
@@ -178,7 +169,6 @@ type QueryFeedsPageAscRow struct {
 	UserID      int64
 	Title       string
 	Description pgtype.Text
-	Rating      pgtype.Float8
 	CreatedAt   pgtype.Timestamptz
 	UpdatedAt   pgtype.Timestamptz
 	DeletedAt   pgtype.Timestamptz
@@ -208,7 +198,6 @@ func (q *Queries) QueryFeedsPageAsc(ctx context.Context, arg QueryFeedsPageAscPa
 			&i.UserID,
 			&i.Title,
 			&i.Description,
-			&i.Rating,
 			&i.CreatedAt,
 			&i.UpdatedAt,
 			&i.DeletedAt,
@@ -246,16 +235,14 @@ const updateFeed = `-- name: UpdateFeed :one
 UPDATE feeds
 SET title       = $1,
     description = $2,
-    rating      = $3,
     updated_at  = CURRENT_TIMESTAMP
-WHERE id = $4 AND user_id = $5 AND deleted_at IS NULL
-RETURNING id, title, description, rating, created_at, updated_at, deleted_at, user_id
+WHERE id = $3 AND user_id = $4 AND deleted_at IS NULL
+RETURNING id, title, description, created_at, updated_at, deleted_at, user_id
 `
 
 type UpdateFeedParams struct {
 	Title       string
 	Description pgtype.Text
-	Rating      pgtype.Float8
 	ID          int32
 	UserID      int64
 }
@@ -264,7 +251,6 @@ func (q *Queries) UpdateFeed(ctx context.Context, arg UpdateFeedParams) (Feed, e
 	row := q.db.QueryRow(ctx, updateFeed,
 		arg.Title,
 		arg.Description,
-		arg.Rating,
 		arg.ID,
 		arg.UserID,
 	)
@@ -273,7 +259,6 @@ func (q *Queries) UpdateFeed(ctx context.Context, arg UpdateFeedParams) (Feed, e
 		&i.ID,
 		&i.Title,
 		&i.Description,
-		&i.Rating,
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.DeletedAt,

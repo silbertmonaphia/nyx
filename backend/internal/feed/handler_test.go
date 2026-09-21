@@ -209,15 +209,15 @@ func TestGetFeedsHandler(t *testing.T) {
 	h := NewHandler(service)
 
 	now := time.Now()
-	rows := pgxmock.NewRows([]string{"id", "user_id", "title", "description", "rating", "created_at", "updated_at", "deleted_at"}).
-		AddRow(int32(1), int64(1), "Inception", "A thief who steals corporate secrets through the use of dream-sharing technology.", 8.8, now, now, nil).
-		AddRow(int32(2), int64(1), "The Matrix", "A computer hacker learns from mysterious rebels about the true nature of his reality.", 8.7, now, now, nil)
+	rows := pgxmock.NewRows([]string{"id", "user_id", "title", "description", "created_at", "updated_at", "deleted_at"}).
+		AddRow(int32(1), int64(1), "Inception", "A thief who steals corporate secrets through the use of dream-sharing technology.", now, now, nil).
+		AddRow(int32(2), int64(1), "The Matrix", "A computer hacker learns from mysterious rebels about the true nature of his reality.", now, now, nil)
 
 	// GetAll opens a tx, runs QueryFeedsPage + CountFeeds, commits.
 	// Args: query, user_id, offset, page_size — user_id is the
 	// authenticated caller (1 in this test).
 	mock.ExpectBegin()
-	mock.ExpectQuery(`SELECT id, user_id, title, description, rating, created_at, updated_at, deleted_at FROM feeds`).
+	mock.ExpectQuery(`SELECT id, user_id, title, description, created_at, updated_at, deleted_at FROM feeds`).
 		WithArgs(pgxmock.AnyArg(), int64(1), int32(0), int32(20)).
 		WillReturnRows(rows)
 	mock.ExpectQuery(`SELECT COUNT\(\*\) FROM feeds`).
@@ -259,10 +259,10 @@ func TestGetFeedsHandlerPaginationParams(t *testing.T) {
 	service := NewService(repo, cache.NewNoop(), time.Minute, noop.NewTracerProvider().Tracer("test"))
 	h := NewHandler(service)
 
-	rows := pgxmock.NewRows([]string{"id", "user_id", "title", "description", "rating", "created_at", "updated_at", "deleted_at"})
+	rows := pgxmock.NewRows([]string{"id", "user_id", "title", "description", "created_at", "updated_at", "deleted_at"})
 
 	mock.ExpectBegin()
-	mock.ExpectQuery(`SELECT id, user_id, title, description, rating, created_at, updated_at, deleted_at FROM feeds`).
+	mock.ExpectQuery(`SELECT id, user_id, title, description, created_at, updated_at, deleted_at FROM feeds`).
 		WithArgs(pgxmock.AnyArg(), int64(1), int32(10), int32(5)). // page=3, page_size=5 => offset=10
 		WillReturnRows(rows)
 	mock.ExpectQuery(`SELECT COUNT\(\*\) FROM feeds`).
@@ -301,10 +301,10 @@ func TestGetFeedsHandlerPageSizeClamped(t *testing.T) {
 	service := NewService(repo, cache.NewNoop(), time.Minute, noop.NewTracerProvider().Tracer("test"))
 	h := NewHandler(service)
 
-	rows := pgxmock.NewRows([]string{"id", "user_id", "title", "description", "rating", "created_at", "updated_at", "deleted_at"})
+	rows := pgxmock.NewRows([]string{"id", "user_id", "title", "description", "created_at", "updated_at", "deleted_at"})
 
 	mock.ExpectBegin()
-	mock.ExpectQuery(`SELECT id, user_id, title, description, rating, created_at, updated_at, deleted_at FROM feeds`).
+	mock.ExpectQuery(`SELECT id, user_id, title, description, created_at, updated_at, deleted_at FROM feeds`).
 		WithArgs(pgxmock.AnyArg(), int64(1), int32(0), int32(100)). // page_size=500 clamps to 100
 		WillReturnRows(rows)
 	mock.ExpectQuery(`SELECT COUNT\(\*\) FROM feeds`).
@@ -345,11 +345,11 @@ func TestGetFeedsHandlerOrderAscUsesAscQuery(t *testing.T) {
 	h := NewHandler(service)
 
 	now := time.Now()
-	rows := pgxmock.NewRows([]string{"id", "user_id", "title", "description", "rating", "created_at", "updated_at", "deleted_at"}).
-		AddRow(int32(1), int64(1), "Oldest", "first", 5.0, now, now, nil)
+	rows := pgxmock.NewRows([]string{"id", "user_id", "title", "description", "created_at", "updated_at", "deleted_at"}).
+		AddRow(int32(1), int64(1), "Oldest", "first", now, now, nil)
 
 	mock.ExpectBegin()
-	mock.ExpectQuery(`SELECT id, user_id, title, description, rating, created_at, updated_at, deleted_at FROM feeds`).
+	mock.ExpectQuery(`SELECT id, user_id, title, description, created_at, updated_at, deleted_at FROM feeds`).
 		WithArgs(pgxmock.AnyArg(), int64(1), int32(0), int32(20)).
 		WillReturnRows(rows)
 	mock.ExpectQuery(`SELECT COUNT\(\*\) FROM feeds`).
@@ -399,8 +399,8 @@ func TestGetFeedsHandlerSearch(t *testing.T) {
 	h := NewHandler(service)
 
 	now := time.Now()
-	rows := pgxmock.NewRows([]string{"id", "user_id", "title", "description", "rating", "created_at", "updated_at", "deleted_at"}).
-		AddRow(int32(3), int64(1), "The Matrix Reloaded", "Continuation of the Matrix saga.", 7.2, now, now, nil)
+	rows := pgxmock.NewRows([]string{"id", "user_id", "title", "description", "created_at", "updated_at", "deleted_at"}).
+		AddRow(int32(3), int64(1), "The Matrix Reloaded", "Continuation of the Matrix saga.", now, now, nil)
 
 	// Search uses the SAME query as the no-search case (sqlc.narg),
 	// but the query arg is now a non-NULL pgtype.Text with the
@@ -409,7 +409,7 @@ func TestGetFeedsHandlerSearch(t *testing.T) {
 	// pgx's encoder — AnyArg keeps the test focused on the SQL
 	// contract and the offset/page_size order.
 	mock.ExpectBegin()
-	mock.ExpectQuery(`SELECT id, user_id, title, description, rating, created_at, updated_at, deleted_at FROM feeds`).
+	mock.ExpectQuery(`SELECT id, user_id, title, description, created_at, updated_at, deleted_at FROM feeds`).
 		WithArgs(pgxmock.AnyArg(), int64(1), int32(0), int32(20)).
 		WillReturnRows(rows)
 	mock.ExpectQuery(`SELECT COUNT\(\*\) FROM feeds`).
@@ -451,19 +451,18 @@ func TestCreateFeedHandler(t *testing.T) {
 	newFeed := FeedInput{
 		Title:       "Interstellar",
 		Description: "Space exploration",
-		Rating:      8.6,
 	}
 	body, _ := json.Marshal(newFeed)
 
 	now := time.Now()
-	// sqlc-generated INSERT now takes (user_id, title, description,
-	// rating). pgx encodes the nullable fields as pgtype.Text /
-	// pgtype.Float8; we pin the title and user_id (the new arg) and
-	// use AnyArg for the rest.
+	// sqlc-generated INSERT now takes (user_id, title, description).
+	// pgx encodes the nullable description as pgtype.Text; we pin
+	// the title and user_id (the owner-stamping arg) and use AnyArg
+	// for the rest.
 	mock.ExpectQuery(`INSERT INTO feeds`).
-		WithArgs(int64(1), newFeed.Title, pgxmock.AnyArg(), pgxmock.AnyArg()).
-		WillReturnRows(pgxmock.NewRows([]string{"id", "title", "description", "rating", "created_at", "updated_at", "deleted_at", "user_id"}).
-			AddRow(int32(1), newFeed.Title, newFeed.Description, newFeed.Rating, now, now, nil, int64(1)))
+		WithArgs(int64(1), newFeed.Title, pgxmock.AnyArg()).
+		WillReturnRows(pgxmock.NewRows([]string{"id", "title", "description", "created_at", "updated_at", "deleted_at", "user_id"}).
+			AddRow(int32(1), newFeed.Title, newFeed.Description, now, now, nil, int64(1)))
 
 	tokens := newTestTokens(t)
 	router := setupTestRouter(h, tokens, true)
@@ -495,10 +494,9 @@ func TestCreateFeedHandlerValidation(t *testing.T) {
 	h := NewHandler(nil) // service not needed; validation rejects before the repo is called
 	router := setupTestRouter(h, newTestTokens(t), false)
 
-	// Case 1: Empty Title (Required)
+	// Empty Title (Required) — huma rejects before the handler runs.
 	body, _ := json.Marshal(map[string]interface{}{
-		"title":  "",
-		"rating": 5.0,
+		"title": "",
 	})
 	req, _ := http.NewRequest("POST", "/api/feeds", bytes.NewBuffer(body))
 	rr := httptest.NewRecorder()
@@ -506,28 +504,16 @@ func TestCreateFeedHandlerValidation(t *testing.T) {
 	if rr.Code != http.StatusBadRequest {
 		t.Errorf("Expected status 400 for empty title, got %v", rr.Code)
 	}
-
-	// Case 2: Rating out of range
-	body, _ = json.Marshal(map[string]interface{}{
-		"title":  "Test",
-		"rating": 11.0,
-	})
-	req, _ = http.NewRequest("POST", "/api/feeds", bytes.NewBuffer(body))
-	rr = httptest.NewRecorder()
-	router.ServeHTTP(rr, req)
-	if rr.Code != http.StatusBadRequest {
-		t.Errorf("Expected status 400 for invalid rating, got %v", rr.Code)
-	}
 }
 
 // TestCreateFeedHandlerUserPayload pins the regression where huma
 // validated the POST body against the response/persistence Feed
 // struct. Because Feed has non-pointer ID/CreatedAt/UpdatedAt, a body
-// carrying only the user-supplied {title, description, rating} was
-// rejected with "expected required property id/created_at/updated_at
-// to be present". The fix is FeedInput — a request DTO that excludes
-// the server-generated fields (matches the user-domain
-// RegisterRequest pattern).
+// carrying only the user-supplied {title, description} was rejected
+// with "expected required property id/created_at/updated_at to be
+// present". The fix is FeedInput — a request DTO that excludes the
+// server-generated fields (matches the user-domain RegisterRequest
+// pattern).
 func TestCreateFeedHandlerUserPayload(t *testing.T) {
 	repo, mock := newMockRepo(t)
 	service := NewService(repo, cache.NewNoop(), time.Minute, noop.NewTracerProvider().Tracer("test"))
@@ -535,14 +521,13 @@ func TestCreateFeedHandlerUserPayload(t *testing.T) {
 
 	now := time.Now()
 	mock.ExpectQuery(`INSERT INTO feeds`).
-		WithArgs(int64(1), "Inception", pgxmock.AnyArg(), pgxmock.AnyArg()).
-		WillReturnRows(pgxmock.NewRows([]string{"id", "title", "description", "rating", "created_at", "updated_at", "deleted_at", "user_id"}).
-			AddRow(int32(7), "Inception", "Dream heist", 8.8, now, now, nil, int64(1)))
+		WithArgs(int64(1), "Inception", pgxmock.AnyArg()).
+		WillReturnRows(pgxmock.NewRows([]string{"id", "title", "description", "created_at", "updated_at", "deleted_at", "user_id"}).
+			AddRow(int32(7), "Inception", "Dream heist", now, now, nil, int64(1)))
 
 	body, _ := json.Marshal(map[string]interface{}{
 		"title":       "Inception",
 		"description": "Dream heist",
-		"rating":      8.8,
 	})
 	tokens := newTestTokens(t)
 	router := setupTestRouter(h, tokens, true)
@@ -558,7 +543,7 @@ func TestCreateFeedHandlerUserPayload(t *testing.T) {
 	if err := json.Unmarshal(rr.Body.Bytes(), &f); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
-	if f.ID != 7 || f.Title != "Inception" || f.Description != "Dream heist" || f.Rating != 8.8 {
+	if f.ID != 7 || f.Title != "Inception" || f.Description != "Dream heist" {
 		t.Errorf("unexpected response: %+v", f)
 	}
 	if f.UserID != 1 {
@@ -569,10 +554,10 @@ func TestCreateFeedHandlerUserPayload(t *testing.T) {
 	}
 }
 
-// TestCreateFeedHandlerMinimalPayload confirms description and rating
-// are optional on the request — only Title is required. The handler
-// should accept {title} alone and leave description="" / rating=0 on
-// the response (DB defaults; not validated client-side).
+// TestCreateFeedHandlerMinimalPayload confirms description is optional
+// on the request — only Title is required. The handler should accept
+// {title} alone and leave description="" on the response (DB default;
+// not validated client-side).
 func TestCreateFeedHandlerMinimalPayload(t *testing.T) {
 	repo, mock := newMockRepo(t)
 	service := NewService(repo, cache.NewNoop(), time.Minute, noop.NewTracerProvider().Tracer("test"))
@@ -580,9 +565,9 @@ func TestCreateFeedHandlerMinimalPayload(t *testing.T) {
 
 	now := time.Now()
 	mock.ExpectQuery(`INSERT INTO feeds`).
-		WithArgs(int64(1), "Bare Minimum", pgxmock.AnyArg(), pgxmock.AnyArg()).
-		WillReturnRows(pgxmock.NewRows([]string{"id", "title", "description", "rating", "created_at", "updated_at", "deleted_at", "user_id"}).
-			AddRow(int32(8), "Bare Minimum", "", 0, now, now, nil, int64(1)))
+		WithArgs(int64(1), "Bare Minimum", pgxmock.AnyArg()).
+		WillReturnRows(pgxmock.NewRows([]string{"id", "title", "description", "created_at", "updated_at", "deleted_at", "user_id"}).
+			AddRow(int32(8), "Bare Minimum", "", now, now, nil, int64(1)))
 
 	body, _ := json.Marshal(map[string]interface{}{"title": "Bare Minimum"})
 	tokens := newTestTokens(t)
@@ -608,18 +593,17 @@ func TestUpdateFeedHandler(t *testing.T) {
 	updatedFeed := FeedInput{
 		Title:       "Inception Updated",
 		Description: "A deeper dream.",
-		Rating:      9.0,
 	}
 	body, _ := json.Marshal(updatedFeed)
 
 	now := time.Now()
-	// sqlc-generated UPDATE: args are title, description, rating,
-	// id, user_id. We pin the int32 id and the int64 user_id (the
-	// new arg); the rest is AnyArg.
+	// sqlc-generated UPDATE: args are title, description, id,
+	// user_id. We pin the int32 id and the int64 user_id (the
+	// owner-stamping arg); the rest is AnyArg.
 	mock.ExpectQuery(`UPDATE feeds SET title`).
-		WithArgs(updatedFeed.Title, pgxmock.AnyArg(), pgxmock.AnyArg(), int32(1), int64(1)).
-		WillReturnRows(pgxmock.NewRows([]string{"id", "title", "description", "rating", "created_at", "updated_at", "deleted_at", "user_id"}).
-			AddRow(int32(1), updatedFeed.Title, updatedFeed.Description, updatedFeed.Rating, now, now, nil, int64(1)))
+		WithArgs(updatedFeed.Title, pgxmock.AnyArg(), int32(1), int64(1)).
+		WillReturnRows(pgxmock.NewRows([]string{"id", "title", "description", "created_at", "updated_at", "deleted_at", "user_id"}).
+			AddRow(int32(1), updatedFeed.Title, updatedFeed.Description, now, now, nil, int64(1)))
 
 	tokens := newTestTokens(t)
 	router := setupTestRouter(h, tokens, true)
@@ -680,11 +664,11 @@ func TestUpdateFeedHandlerNotFound(t *testing.T) {
 	service := NewService(repo, cache.NewNoop(), time.Minute, noop.NewTracerProvider().Tracer("test"))
 	h := NewHandler(service)
 
-	updatedFeed := FeedInput{Title: "Anything", Rating: 5.0}
+	updatedFeed := FeedInput{Title: "Anything"}
 	body, _ := json.Marshal(updatedFeed)
 
 	mock.ExpectQuery(`UPDATE feeds SET title`).
-		WithArgs(updatedFeed.Title, pgxmock.AnyArg(), pgxmock.AnyArg(), int32(999), int64(1)).
+		WithArgs(updatedFeed.Title, pgxmock.AnyArg(), int32(999), int64(1)).
 		WillReturnError(pgx.ErrNoRows)
 
 	tokens := newTestTokens(t)
@@ -745,12 +729,12 @@ func TestCreateFeedHandler_InternalErrorHidesInternalDetails(t *testing.T) {
 	service := NewService(repo, cache.NewNoop(), time.Minute, noop.NewTracerProvider().Tracer("test"))
 	h := NewHandler(service)
 
-	body, _ := json.Marshal(FeedInput{Title: "X", Rating: 5})
+	body, _ := json.Marshal(FeedInput{Title: "X"})
 	// pgx-style error text — contains SQL fragment & driver internals
 	// we explicitly must not leak to the client.
 	pgxLeak := fmt.Errorf("ERROR: relation %q does not exist (SQLSTATE 42P01)", "feeds")
 	mock.ExpectQuery(`INSERT INTO feeds`).
-		WithArgs(int64(1), "X", pgxmock.AnyArg(), pgxmock.AnyArg()).
+		WithArgs(int64(1), "X", pgxmock.AnyArg()).
 		WillReturnError(pgxLeak)
 
 	tokens := newTestTokens(t)
@@ -790,9 +774,9 @@ func TestUpdateFeedHandler_InternalErrorHidesInternalDetails(t *testing.T) {
 	service := NewService(repo, cache.NewNoop(), time.Minute, noop.NewTracerProvider().Tracer("test"))
 	h := NewHandler(service)
 
-	body, _ := json.Marshal(FeedInput{Title: "X", Rating: 5})
+	body, _ := json.Marshal(FeedInput{Title: "X"})
 	mock.ExpectQuery(`UPDATE feeds SET title`).
-		WithArgs("X", pgxmock.AnyArg(), pgxmock.AnyArg(), int32(1), int64(1)).
+		WithArgs("X", pgxmock.AnyArg(), int32(1), int64(1)).
 		WillReturnError(errors.New("pq: SSL connection has been closed unexpectedly"))
 
 	tokens := newTestTokens(t)
@@ -886,14 +870,14 @@ func TestUpdateFeedHandler_OtherUserReturnsNotFound(t *testing.T) {
 	service := NewService(repo, cache.NewNoop(), time.Minute, noop.NewTracerProvider().Tracer("test"))
 	h := NewHandler(service)
 
-	updatedFeed := FeedInput{Title: "Hijack", Rating: 9.9}
+	updatedFeed := FeedInput{Title: "Hijack"}
 	body, _ := json.Marshal(updatedFeed)
 
-	// Args: title, description, rating, id (1), user_id (2 — the
-	// attacker, not the owner). pgx.ErrNoRows because no row matches
-	// the id+user_id combo.
+	// Args: title, description, id (1), user_id (2 — the attacker,
+	// not the owner). pgx.ErrNoRows because no row matches the
+	// id+user_id combo.
 	mock.ExpectQuery(`UPDATE feeds SET title`).
-		WithArgs(updatedFeed.Title, pgxmock.AnyArg(), pgxmock.AnyArg(), int32(1), int64(2)).
+		WithArgs(updatedFeed.Title, pgxmock.AnyArg(), int32(1), int64(2)).
 		WillReturnError(pgx.ErrNoRows)
 
 	tokens := newTestTokens(t)
@@ -952,15 +936,14 @@ func TestCreateFeedHandler_StampsUserID(t *testing.T) {
 	now := time.Now()
 	// Verify the INSERT args contain user_id=1 (from the JWT
 	// subject, not from the request body). AnyArg matches anything
-	// for the description/rating fields. We use the pgtype
-	// wrappers explicitly for nullable fields because pgxmock +
-	// pgtype scan can silently zero out downstream columns when the
-	// raw driver value looks like a SQL NULL (e.g. float64(0)
-	// decoded into pgtype.Float8).
+	// for the description field. We use the pgtype wrapper explicitly
+	// for nullable description because pgxmock + pgtype scan can
+	// silently zero out downstream columns when the raw driver value
+	// looks like a SQL NULL.
 	mock.ExpectQuery(`INSERT INTO feeds`).
-		WithArgs(int64(1), "Owned", pgxmock.AnyArg(), pgxmock.AnyArg()).
-		WillReturnRows(pgxmock.NewRows([]string{"id", "title", "description", "rating", "created_at", "updated_at", "deleted_at", "user_id"}).
-			AddRow(int32(42), "Owned", pgtype.Text{String: "", Valid: false}, pgtype.Float8{Float64: 0, Valid: true}, pgtype.Timestamptz{Time: now, Valid: true}, pgtype.Timestamptz{Time: now, Valid: true}, pgtype.Timestamptz{}, int64(1)))
+		WithArgs(int64(1), "Owned", pgxmock.AnyArg()).
+		WillReturnRows(pgxmock.NewRows([]string{"id", "title", "description", "created_at", "updated_at", "deleted_at", "user_id"}).
+			AddRow(int32(42), "Owned", pgtype.Text{String: "", Valid: false}, pgtype.Timestamptz{Time: now, Valid: true}, pgtype.Timestamptz{Time: now, Valid: true}, pgtype.Timestamptz{}, int64(1)))
 
 	body, _ := json.Marshal(FeedInput{Title: "Owned"})
 	tokens := newTestTokens(t)
@@ -995,10 +978,10 @@ func TestGetFeedsHandler_FilteredByOwner(t *testing.T) {
 	service := NewService(repo, cache.NewNoop(), time.Minute, noop.NewTracerProvider().Tracer("test"))
 	h := NewHandler(service)
 
-	rows := pgxmock.NewRows([]string{"id", "user_id", "title", "description", "rating", "created_at", "updated_at", "deleted_at"})
+	rows := pgxmock.NewRows([]string{"id", "user_id", "title", "description", "created_at", "updated_at", "deleted_at"})
 
 	mock.ExpectBegin()
-	mock.ExpectQuery(`SELECT id, user_id, title, description, rating, created_at, updated_at, deleted_at FROM feeds`).
+	mock.ExpectQuery(`SELECT id, user_id, title, description, created_at, updated_at, deleted_at FROM feeds`).
 		WithArgs(pgxmock.AnyArg(), int64(1), int32(0), int32(20)).
 		WillReturnRows(rows)
 	mock.ExpectQuery(`SELECT COUNT\(\*\) FROM feeds`).

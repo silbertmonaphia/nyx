@@ -138,7 +138,6 @@ func TestRepositoryIntegration(t *testing.T) {
 		feed := &Feed{
 			Title:       "The Matrix",
 			Description: "A computer hacker learns about the true nature of reality",
-			Rating:      8.7,
 		}
 
 		err := repo.Create(ctx, 101, feed)
@@ -155,7 +154,7 @@ func TestRepositoryIntegration(t *testing.T) {
 		// the call (defense-in-depth at the repo).
 		_, repo := setupIntegrationTest(t)
 
-		feed := &Feed{Title: "Owned by 102", Rating: 7.0}
+		feed := &Feed{Title: "Owned by 102"}
 		require.NoError(t, repo.Create(ctx, 102, feed))
 
 		assert.Equal(t, 102, feed.UserID)
@@ -172,9 +171,9 @@ func TestRepositoryIntegration(t *testing.T) {
 
 		// Create test feeds
 		feeds := []*Feed{
-			{Title: "Feed 1", Description: "Description 1", Rating: 7.5},
-			{Title: "Feed 2", Description: "Description 2", Rating: 8.0},
-			{Title: "Feed 3", Description: "Description 3", Rating: 9.0},
+			{Title: "Feed 1", Description: "Description 1"},
+			{Title: "Feed 2", Description: "Description 2"},
+			{Title: "Feed 3", Description: "Description 3"},
 		}
 
 		for _, f := range feeds {
@@ -195,7 +194,7 @@ func TestRepositoryIntegration(t *testing.T) {
 		// count. Without the WHERE filter the test would see 1 item.
 		_, repo := setupIntegrationTest(t)
 
-		ownerFeed := &Feed{Title: "Not yours", Rating: 5.0}
+		ownerFeed := &Feed{Title: "Not yours"}
 		require.NoError(t, repo.Create(ctx, 101, ownerFeed))
 
 		u2Page, err := repo.GetAll(ctx, 102, "", 1, 100, SortDesc)
@@ -216,13 +215,13 @@ func TestRepositoryIntegration(t *testing.T) {
 		// DESC, but the explicit sleep makes the test self-documenting.
 		_, repo := setupIntegrationTest(t)
 
-		first := &Feed{Title: "Oldest", Description: "first", Rating: 5.0}
+		first := &Feed{Title: "Oldest", Description: "first"}
 		require.NoError(t, repo.Create(ctx, 101, first))
 		time.Sleep(10 * time.Millisecond)
-		mid := &Feed{Title: "Middle", Description: "second", Rating: 6.0}
+		mid := &Feed{Title: "Middle", Description: "second"}
 		require.NoError(t, repo.Create(ctx, 101, mid))
 		time.Sleep(10 * time.Millisecond)
-		last := &Feed{Title: "Newest", Description: "third", Rating: 7.0}
+		last := &Feed{Title: "Newest", Description: "third"}
 		require.NoError(t, repo.Create(ctx, 101, last))
 
 		asc, err := repo.GetAll(ctx, 101, "", 1, 100, SortAsc)
@@ -238,9 +237,9 @@ func TestRepositoryIntegration(t *testing.T) {
 
 		// Create test feeds
 		feeds := []*Feed{
-			{Title: "The Matrix", Description: "Sci-fi action", Rating: 8.7},
-			{Title: "Inception", Description: "Mind-bending thriller", Rating: 8.8},
-			{Title: "Interstellar", Description: "Space exploration", Rating: 8.6},
+			{Title: "The Matrix", Description: "Sci-fi action"},
+			{Title: "Inception", Description: "Mind-bending thriller"},
+			{Title: "Interstellar", Description: "Space exploration"},
 		}
 
 		for _, f := range feeds {
@@ -273,7 +272,6 @@ func TestRepositoryIntegration(t *testing.T) {
 		feed := &Feed{
 			Title:       "Original Title",
 			Description: "Original description",
-			Rating:      7.0,
 		}
 		err := repo.Create(ctx, 101, feed)
 		require.NoError(t, err)
@@ -283,7 +281,6 @@ func TestRepositoryIntegration(t *testing.T) {
 		updated := &Feed{
 			Title:       "Updated Title",
 			Description: "Updated description",
-			Rating:      9.5,
 		}
 
 		err = repo.Update(ctx, 101, originalID, updated)
@@ -295,15 +292,13 @@ func TestRepositoryIntegration(t *testing.T) {
 		assert.Len(t, allFeeds.Items, 1)
 		assert.Equal(t, "Updated Title", allFeeds.Items[0].Title)
 		assert.Equal(t, "Updated description", allFeeds.Items[0].Description)
-		assert.Equal(t, 9.5, allFeeds.Items[0].Rating)
 	})
 
 	t.Run("UpdateFeedNotFound", func(t *testing.T) {
 		_, repo := setupIntegrationTest(t)
 
 		feed := &Feed{
-			Title:  "Test",
-			Rating: 7.0,
+			Title: "Test",
 		}
 
 		err := repo.Update(ctx, 101, 999, feed)
@@ -316,10 +311,10 @@ func TestRepositoryIntegration(t *testing.T) {
 		// the missing-row case. No leak, no ErrForbidden.
 		_, repo := setupIntegrationTest(t)
 
-		ownerFeed := &Feed{Title: "Mine", Rating: 7.0}
+		ownerFeed := &Feed{Title: "Mine"}
 		require.NoError(t, repo.Create(ctx, 101, ownerFeed))
 
-		err := repo.Update(ctx, 102, ownerFeed.ID, &Feed{Title: "Hijack", Rating: 9.9})
+		err := repo.Update(ctx, 102, ownerFeed.ID, &Feed{Title: "Hijack"})
 		assert.Error(t, err)
 		assert.ErrorIs(t, err, ErrNotFound)
 
@@ -328,7 +323,6 @@ func TestRepositoryIntegration(t *testing.T) {
 		require.NoError(t, err)
 		require.Len(t, all.Items, 1)
 		assert.Equal(t, "Mine", all.Items[0].Title)
-		assert.Equal(t, 7.0, all.Items[0].Rating)
 	})
 
 	t.Run("DeleteFeed", func(t *testing.T) {
@@ -336,8 +330,7 @@ func TestRepositoryIntegration(t *testing.T) {
 
 		// Create a feed
 		feed := &Feed{
-			Title:  "To Delete",
-			Rating: 7.0,
+			Title: "To Delete",
 		}
 		err := repo.Create(ctx, 101, feed)
 		require.NoError(t, err)
@@ -366,7 +359,7 @@ func TestRepositoryIntegration(t *testing.T) {
 		// missing-id case.
 		_, repo := setupIntegrationTest(t)
 
-		ownerFeed := &Feed{Title: "Stays", Rating: 7.0}
+		ownerFeed := &Feed{Title: "Stays"}
 		require.NoError(t, repo.Create(ctx, 101, ownerFeed))
 
 		err := repo.Delete(ctx, 102, ownerFeed.ID)
@@ -409,8 +402,7 @@ func TestRepositoryWithTransactions(t *testing.T) {
 
 		// Create a feed in transaction
 		feed := &Feed{
-			Title:  "Transaction Test",
-			Rating: 8.0,
+			Title: "Transaction Test",
 		}
 		err = txRepo.Create(ctx, 101, feed)
 		require.NoError(t, err)
@@ -436,8 +428,7 @@ func TestRepositoryWithTransactions(t *testing.T) {
 
 		// Create a feed in transaction
 		feed := &Feed{
-			Title:  "Transaction Commit Test",
-			Rating: 8.5,
+			Title: "Transaction Commit Test",
 		}
 		err = txRepo.Create(ctx, 101, feed)
 		require.NoError(t, err)

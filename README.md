@@ -1,6 +1,6 @@
 # Nyx
 
-A minimalist media rating application — Go 1.26.1 API, React 19 SPA, PostgreSQL, optional Redis cache.
+A minimalist feed application — Go 1.26.1 API, React 19 SPA, PostgreSQL, optional Redis cache.
 
 ## Highlights
 

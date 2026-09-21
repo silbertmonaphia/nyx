@@ -38,7 +38,7 @@ export interface paths {
         get?: never;
         /**
          * Update a feed
-         * @description Updates the title, description, or rating of an existing feed. Requires a valid JWT.
+         * @description Updates the title or description of an existing feed. Requires a valid JWT.
          */
         put: operations["update-feed"];
         post?: never;
@@ -220,8 +220,6 @@ export interface components {
             description: string;
             /** Format: int64 */
             id: number;
-            /** Format: double */
-            rating: number;
             title: string;
             /** Format: date-time */
             updated_at: string;
@@ -230,8 +228,6 @@ export interface components {
         };
         FeedInput: {
             description?: string;
-            /** Format: double */
-            rating?: number;
             title: string;
         };
         FeedsPage: {

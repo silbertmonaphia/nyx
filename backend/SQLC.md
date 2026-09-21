@@ -46,7 +46,7 @@ inject a stub.
 
    ```sql
    -- name: GetFeedByID :one
-   SELECT id, title, description, rating, created_at, updated_at, deleted_at
+   SELECT id, title, description, created_at, updated_at, deleted_at
    FROM feeds
    WHERE id = @id AND deleted_at IS NULL;
    ```

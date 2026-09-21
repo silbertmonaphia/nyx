@@ -105,7 +105,7 @@ func RegisterFeedOpsTest(api huma.API, h *Handler, tokens auth.TokenService, wit
 		Method:      http.MethodPut,
 		Path:        "/api/feeds/{id}",
 		Summary:     "Update a feed",
-		Description: "Updates the title, description, or rating of an existing feed. Requires a valid JWT.",
+		Description: "Updates the title or description of an existing feed. Requires a valid JWT.",
 		Tags:        []string{"feeds"},
 		Security:    []map[string][]string{{"BearerAuth": {}}},
 		Middlewares: protectedMiddlewares(tokens, withAuth),
@@ -277,7 +277,6 @@ func (h *Handler) CreateFeed(ctx context.Context, in *createFeedInput) (*createF
 		UserID:      userID,
 		Title:       in.Body.Title,
 		Description: in.Body.Description,
-		Rating:      in.Body.Rating,
 	}
 	if err := h.service.CreateFeed(ctx, feed); err != nil {
 		return nil, api.MapError(ctx, err, "Failed to create feed")
@@ -292,7 +291,6 @@ func (h *Handler) UpdateFeed(ctx context.Context, in *updateFeedInput) (*updateF
 		UserID:      userID,
 		Title:       in.Body.Title,
 		Description: in.Body.Description,
-		Rating:      in.Body.Rating,
 	}
 	if err := h.service.UpdateFeed(ctx, in.ID, feed); err != nil {
 		return nil, api.MapError(ctx, err, "Failed to update feed")

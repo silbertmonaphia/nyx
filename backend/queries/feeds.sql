@@ -14,7 +14,7 @@
 -- leak rows from every user.
 
 -- name: QueryFeedsPage :many
-SELECT id, user_id, title, description, rating, created_at, updated_at, deleted_at
+SELECT id, user_id, title, description, created_at, updated_at, deleted_at
 FROM feeds
 WHERE (
         sqlc.narg('query')::text IS NULL
@@ -33,7 +33,7 @@ OFFSET sqlc.arg('offset')::int;
 -- and let the planner pick a different index if one ever lands for
 -- ASC. The id tiebreaker flips to ASC so pagination stays consistent
 -- within a sort direction.
-SELECT id, user_id, title, description, rating, created_at, updated_at, deleted_at
+SELECT id, user_id, title, description, created_at, updated_at, deleted_at
 FROM feeds
 WHERE (
         sqlc.narg('query')::text IS NULL
@@ -58,15 +58,14 @@ WHERE (
   AND user_id   = @user_id;
 
 -- name: InsertFeed :one
-INSERT INTO feeds (user_id, title, description, rating)
-VALUES (@user_id, @title, @description, @rating)
+INSERT INTO feeds (user_id, title, description)
+VALUES (@user_id, @title, @description)
 RETURNING *;
 
 -- name: UpdateFeed :one
 UPDATE feeds
 SET title       = @title,
     description = @description,
-    rating      = @rating,
     updated_at  = CURRENT_TIMESTAMP
 WHERE id = @id AND user_id = @user_id AND deleted_at IS NULL
 RETURNING *;

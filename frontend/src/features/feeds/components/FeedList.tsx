@@ -29,9 +29,6 @@ export const FeedItem: React.FC<FeedItemProps> = ({
       <CardHeader className="flex flex-row items-start justify-between space-y-0 pb-2">
         <div className="space-y-1">
           <CardTitle className="text-xl">{feed.title}</CardTitle>
-          <div className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-semibold bg-primary/10 text-primary">
-            ★ {feed.rating}
-          </div>
         </div>
         <div className="flex flex-col items-end gap-2">
           {(feed.created_at || feed.updated_at) && (

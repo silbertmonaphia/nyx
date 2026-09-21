@@ -88,23 +88,6 @@
     resize: vertical;
   }
 
-  .rating-input {
-    display: flex;
-    flex-direction: column;
-    gap: 8px;
-    margin: 8px 0;
-
-    label {
-      font-size: 14px;
-      color: var(--accent);
-      font-weight: bold;
-    }
-
-    input[type="range"] {
-      width: 100%;
-    }
-  }
-
   .submit-button {
     background: var(--accent);
     color: white;
@@ -187,15 +170,6 @@
   p {
     font-size: 15px;
     margin-bottom: 12px;
-  }
-
-  .rating {
-    font-weight: bold;
-    color: var(--accent);
-    background: var(--accent-bg);
-    padding: 4px 10px;
-    border-radius: 20px;
-    font-size: 14px;
   }
 }
 

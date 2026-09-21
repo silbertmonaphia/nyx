@@ -12,7 +12,6 @@ type Feed struct {
 	ID          int32
 	Title       string
 	Description pgtype.Text
-	Rating      pgtype.Float8
 	CreatedAt   pgtype.Timestamptz
 	UpdatedAt   pgtype.Timestamptz
 	DeletedAt   pgtype.Timestamptz

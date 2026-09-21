@@ -30,9 +30,6 @@ export const feedService = {
     // additionalProperties:false (huma strict-mode), so an extra
     // id/created_at/updated_at/deleted_at in the PUT body would 400
     // as "unexpected property" — pick only the user-editable subset.
-    // Rating is omitted from the form, so we don't send it; the
-    // backend treats FeedInput.Rating as optional and leaves the
-    // existing value untouched.
     const response = await api.put(`/feeds/${id}`, {
       title: feed.title,
       description: feed.description,

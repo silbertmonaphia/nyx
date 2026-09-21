@@ -9,6 +9,7 @@ sql:
       - "migrations/000007_add_movies_description_trgm_index.up.sql"
       - "migrations/000011_rename_movies_to_feeds.up.sql"
       - "migrations/000012_add_user_id_to_feeds.up.sql"
+      - "migrations/000013_drop_rating_from_feeds.up.sql"
     gen:
       go:
         package: "db"

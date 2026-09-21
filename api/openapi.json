@@ -72,12 +72,6 @@
             "format": "int64",
             "type": "integer"
           },
-          "rating": {
-            "format": "double",
-            "maximum": 10,
-            "minimum": 0,
-            "type": "number"
-          },
           "title": {
             "maxLength": 100,
             "minLength": 1,
@@ -97,7 +91,6 @@
           "user_id",
           "title",
           "description",
-          "rating",
           "created_at",
           "updated_at"
         ],
@@ -109,12 +102,6 @@
           "description": {
             "maxLength": 1000,
             "type": "string"
-          },
-          "rating": {
-            "format": "double",
-            "maximum": 10,
-            "minimum": 0,
-            "type": "number"
           },
           "title": {
             "maxLength": 100,
@@ -344,7 +331,7 @@
     }
   },
   "info": {
-    "description": "Minimalist media rating application API.",
+    "description": "Minimalist feed application API.",
     "title": "Nyx API",
     "version": "1.0.0"
   },
@@ -528,7 +515,7 @@
         ]
       },
       "put": {
-        "description": "Updates the title, description, or rating of an existing feed. Requires a valid JWT.",
+        "description": "Updates the title or description of an existing feed. Requires a valid JWT.",
         "operationId": "update-feed",
         "parameters": [
           {

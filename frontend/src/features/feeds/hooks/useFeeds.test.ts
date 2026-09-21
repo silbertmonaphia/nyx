@@ -31,7 +31,6 @@ const basePage: PaginatedFeeds = {
       user_id: 1,
       title: 'Existing',
       description: 'existing',
-      rating: 5,
       created_at: '2024-01-01T00:00:00Z',
       updated_at: '2024-01-01T00:00:00Z',
     },
@@ -126,7 +125,6 @@ describe('useFeeds', () => {
           user_id: TEST_USER.id,
           title: 'Brand new',
           description: '',
-          rating: 7,
           created_at: '2024-02-01T00:00:00Z',
           updated_at: '2024-02-01T00:00:00Z',
         });
@@ -186,7 +184,6 @@ describe('useFeeds', () => {
           user_id: TEST_USER.id,
           title: 'Brand new',
           description: '',
-          rating: 7,
           created_at: '2024-02-01T00:00:00Z',
           updated_at: '2024-02-01T00:00:00Z',
         });
@@ -269,7 +266,6 @@ describe('useFeeds', () => {
         user_id: TEST_USER.id,
         title: 'placeholder',
         description: '',
-        rating: 5,
         created_at: '2024-01-01T00:00:00Z',
         updated_at: '2024-01-01T00:00:00Z',
       };
@@ -298,7 +294,6 @@ describe('useFeeds', () => {
         user_id: TEST_USER.id,
         title: 'optimistic only',
         description: '',
-        rating: 5,
         created_at: '2024-01-01T00:00:00Z',
         updated_at: '2024-01-01T00:00:00Z',
       };

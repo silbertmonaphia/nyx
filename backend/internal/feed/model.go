@@ -20,7 +20,6 @@ type Feed struct {
 	UserID      int        `json:"user_id" db:"user_id"`
 	Title       string     `json:"title" db:"title" required:"true" minLength:"1" maxLength:"100"`
 	Description string     `json:"description" db:"description" maxLength:"1000"`
-	Rating      float64    `json:"rating" db:"rating" minimum:"0" maximum:"10"`
 	CreatedAt   time.Time  `json:"created_at" db:"created_at"`
 	UpdatedAt   time.Time  `json:"updated_at" db:"updated_at"`
 	DeletedAt   *time.Time `json:"deleted_at,omitempty" db:"deleted_at"`
@@ -34,18 +33,17 @@ type Feed struct {
 // before calling the service; the repo then overwrites the Feed with
 // the full DB row (including ID and timestamps).
 type FeedInput struct {
-	Title       string  `json:"title" required:"true" minLength:"1" maxLength:"100"`
-	Description string  `json:"description" required:"false" maxLength:"1000"`
-	Rating      float64 `json:"rating" required:"false" minimum:"0" maximum:"10"`
+	Title       string `json:"title" required:"true" minLength:"1" maxLength:"100"`
+	Description string `json:"description" required:"false" maxLength:"1000"`
 }
 
 // FeedsPage is the paginated response envelope returned by GET /feeds.
 type FeedsPage struct {
-	Data     []Feed  `json:"data"`
-	Page     int     `json:"page" example:"1"`
-	PageSize int     `json:"page_size" example:"20"`
-	Total    int     `json:"total" example:"42"`
-	HasMore  bool    `json:"has_more" example:"true"`
+	Data     []Feed `json:"data"`
+	Page     int    `json:"page" example:"1"`
+	PageSize int    `json:"page_size" example:"20"`
+	Total    int    `json:"total" example:"42"`
+	HasMore  bool   `json:"has_more" example:"true"`
 }
 
 // NewFeedsPage converts a repository Page into the response envelope.
