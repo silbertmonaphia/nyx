@@ -16,7 +16,6 @@ import (
 // rag package sent the right model + inputs, and lets each test
 // seed a canned response or error.
 type stubProvider struct {
-	chatCalls  int
 	embedCalls int
 	lastReq    llm.EmbedRequest
 	vecs       [][]float32

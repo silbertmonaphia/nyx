@@ -89,10 +89,9 @@ func (s *stubIndexer) Delete(_ context.Context, id int) error {
 // newServiceWithStubIndexer builds the service with the supplied
 // indexer so the embed-on-create / -update / -delete tests can
 // swap the noop for an indexer that records calls.
-func newServiceWithStubIndexer(idx EmbeddingIndexer) (Service, *stubRepo) {
+func newServiceWithStubIndexer(idx EmbeddingIndexer) Service {
 	repo := &stubRepo{}
-	svc := NewService(repo, cache.NewNoop(), idx, time.Minute, noop.NewTracerProvider().Tracer("test"))
-	return svc, repo
+	return NewService(repo, cache.NewNoop(), idx, time.Minute, noop.NewTracerProvider().Tracer("test"))
 }
 
 // ctxWithUser stamps a user id onto ctx the same way the auth
@@ -333,7 +332,7 @@ func TestGetFeeds_DefensiveEmptyPageWhenNoUser(t *testing.T) {
 // indexer does NOT fail the write.
 func TestCreateFeed_IndexesAfterCreate(t *testing.T) {
 	idx := &stubIndexer{}
-	svc, _ := newServiceWithStubIndexer(idx)
+	svc := newServiceWithStubIndexer(idx)
 	ctx := ctxWithUser(t, 1)
 
 	err := svc.CreateFeed(ctx, &Feed{ID: 42, Title: "x"})
@@ -346,7 +345,7 @@ func TestCreateFeed_IndexesAfterCreate(t *testing.T) {
 // UpdateFeed.
 func TestUpdateFeed_IndexesAfterUpdate(t *testing.T) {
 	idx := &stubIndexer{}
-	svc, _ := newServiceWithStubIndexer(idx)
+	svc := newServiceWithStubIndexer(idx)
 	ctx := ctxWithUser(t, 1)
 
 	err := svc.UpdateFeed(ctx, 7, &Feed{ID: 7, Title: "y"})
@@ -359,7 +358,7 @@ func TestUpdateFeed_IndexesAfterUpdate(t *testing.T) {
 // DeleteFeed — a successful delete triggers indexer.Delete.
 func TestDeleteFeed_DeletesEmbedding(t *testing.T) {
 	idx := &stubIndexer{}
-	svc, _ := newServiceWithStubIndexer(idx)
+	svc := newServiceWithStubIndexer(idx)
 	ctx := ctxWithUser(t, 1)
 
 	err := svc.DeleteFeed(ctx, 99)
@@ -374,7 +373,7 @@ func TestDeleteFeed_DeletesEmbedding(t *testing.T) {
 // provider would block every feed write.
 func TestIndex_FailureDoesNotFailCreate(t *testing.T) {
 	idx := &stubIndexer{indexErr: errors.New("embedding provider down")}
-	svc, _ := newServiceWithStubIndexer(idx)
+	svc := newServiceWithStubIndexer(idx)
 	ctx := ctxWithUser(t, 1)
 
 	err := svc.CreateFeed(ctx, &Feed{ID: 1, Title: "x"})
@@ -386,7 +385,7 @@ func TestIndex_FailureDoesNotFailCreate(t *testing.T) {
 // contract for DeleteFeed.
 func TestDelete_IndexFailureDoesNotFailDelete(t *testing.T) {
 	idx := &stubIndexer{deleteErr: errors.New("embedding db down")}
-	svc, _ := newServiceWithStubIndexer(idx)
+	svc := newServiceWithStubIndexer(idx)
 	ctx := ctxWithUser(t, 1)
 
 	err := svc.DeleteFeed(ctx, 5)

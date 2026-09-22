@@ -232,7 +232,8 @@ func (s *Service) runBackfill(ctx context.Context, userID int) {
 	for iter := 0; iter < maxBackfillIterations; iter++ {
 		rows, err := q.ListFeedsWithoutEmbeddings(ctx, ragdb.ListFeedsWithoutEmbeddingsParams{
 			UserID: int64(userID),
-			Limit:  int32(s.maxBackfill),
+			//nolint:gosec // G115: maxBackfill is bounded by RAG_MAX_BACKFILL_PER_REQUEST (default 20).
+			Limit: int32(s.maxBackfill),
 		})
 		if err != nil {
 			span.RecordError(err)
@@ -263,9 +264,10 @@ func (s *Service) runBackfill(ctx context.Context, userID int) {
 		}
 		for i, f := range feeds {
 			if err := q.UpsertFeedEmbedding(ctx, ragdb.UpsertFeedEmbeddingParams{
-				FeedID:      int32(f.ID),
-				UserID:      int64(userID),
-				Embedding:   pgvector.NewVector(vecs[i]),
+				//nolint:gosec // G115: feed_id is a SERIAL PK; handler-side caps keep this well below math.MaxInt32.
+				FeedID: int32(f.ID),
+				UserID: int64(userID),
+				Embedding: pgvector.NewVector(vecs[i]),
 				ChunkText:   ChunkText(f),
 				ContentHash: hashes[i],
 			}); err != nil {

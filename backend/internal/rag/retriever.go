@@ -79,7 +79,8 @@ func (r *Retriever) Retrieve(ctx context.Context, userID int, queryVec []float32
 	rows, err := r.q.RetrieveFeedPassages(ctx, ragdb.RetrieveFeedPassagesParams{
 		Embedding: pgvector.NewVector(queryVec),
 		UserID:    int64(userID),
-		Limit:     int32(k),
+		//nolint:gosec // G115: k is bounded by RAG_TOP_K (default 5).
+		Limit: int32(k),
 	})
 	if err != nil {
 		span.RecordError(err)

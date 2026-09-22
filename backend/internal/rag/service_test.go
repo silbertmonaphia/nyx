@@ -107,7 +107,6 @@ func TestService_Retrieve_HappyPath(t *testing.T) {
 	// Bypass the actual SQL by using a stub retriever that
 	// captures the call and returns canned passages. The real
 	// Retriever is tested separately against pgxmock.
-	type retrieverStub struct{ captured bool; k int }
 	var capturedK int
 	r := &serviceTestRetriever{
 		passages: []Passage{

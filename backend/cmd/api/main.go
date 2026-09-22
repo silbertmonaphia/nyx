@@ -35,20 +35,39 @@ import (
 	"go.opentelemetry.io/otel/trace"
 )
 
+//nolint:gocyclo // Wiring complexity: each block is a distinct lifecycle stage (config → token → tracing → DB → cache → feed → user → chat) extracted for readability. Splitting further would scatter the boot sequence across multiple files without simplifying the logic.
 func main() {
 	// Configure zerolog
 	zerolog.TimeFieldFormat = zerolog.TimeFormatUnix
 	log.Logger = log.Output(os.Stdout)
 
-	// Load configuration
+	cfg := loadConfigOrFatal()
+	buildAndServe(cfg)
+}
+
+// loadConfigOrFatal loads config and runs the post-load invariants
+// that must hold before any domain construction (DB_URL non-empty
+// is the only one). config.Load already validates JWT_SECRET +
+// DB_URL via its cross-field checks; this is the belt-and-braces
+// guard for the rare case where config.Load succeeds but the
+// operator forgot to set DB_URL.
+func loadConfigOrFatal() *config.Config {
 	cfg, err := config.Load()
 	if err != nil {
 		log.Fatal().Err(err).Msg("Could not load configuration")
 	}
-
 	if cfg.DBURL == "" {
 		log.Fatal().Msg("DB_URL environment variable is required")
 	}
+	return cfg
+}
+
+// buildAndServe assembles every domain (config, token, tracing,
+// DB, cache, feed, user, chat) and starts the HTTP server. The
+// graceful-shutdown wiring sits in the final defer block. Errors
+// during startup fail closed via log.Fatal — the operator sees
+// a clear, single-line root cause in the boot log.
+func buildAndServe(cfg *config.Config) {
 
 	// Build the JWT TokenService. config.Load already validated that
 	// cfg.JWTSecret is non-default and at least MinSecretBytes long;
@@ -503,4 +522,5 @@ func warnEmbeddingDimMismatch(db *pgxpool.Pool, expected int) {
 			Int("configured_dim", expected).
 			Msg("feed_embeddings.embedding dim mismatch — run a migration to drop+recreate the column (see FUTURE_BACKEND.md §rag), or set EMBEDDING_DIMENSIONS to match the live column")
 	}
+
 }

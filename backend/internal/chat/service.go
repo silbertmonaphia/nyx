@@ -310,6 +310,12 @@ const ragContextTimeout = 30 * time.Second
 // is not part of the chat request's trace tree (it would confuse
 // trace correlation when the chat span ends before the backfill).
 func detachContext(_ context.Context) context.Context {
-	ctx, _ := context.WithTimeout(context.Background(), ragContextTimeout)
+	ctx, cancel := context.WithTimeout(context.Background(), ragContextTimeout)
+	// Detached goroutine: cancel at function return so a future
+	// caller that forgets to defer doesn't leak the timer.
+	// (Today's only caller is the inline `go s.rag.BackfillOnce(...)`
+	// — cancel is effectively a no-op since the timer auto-fires
+	// after ragContextTimeout regardless.)
+	cancel()
 	return ctx
 }

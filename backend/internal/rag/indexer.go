@@ -59,6 +59,8 @@ func (i *Indexer) Index(ctx context.Context, userID int, f *feed.Feed) error {
 	// we pay for the embedding API call. pgx's QueryRow().Scan
 	// returns pgx.ErrNoRows when no row exists, which is the
 	// common case on first Create — that's NOT an error.
+	//
+	//nolint:gosec // G115: feed_id is a SERIAL PK; handler-side caps keep this well below math.MaxInt32.
 	existingHash, err := i.q.GetFeedEmbeddingHash(ctx, int32(f.ID))
 	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
 		span.RecordError(err)
@@ -77,6 +79,7 @@ func (i *Indexer) Index(ctx context.Context, userID int, f *feed.Feed) error {
 	}
 
 	if err := i.q.UpsertFeedEmbedding(ctx, ragdb.UpsertFeedEmbeddingParams{
+		//nolint:gosec // G115: feed_id is a SERIAL PK; handler-side caps keep this well below math.MaxInt32.
 		FeedID:      int32(f.ID),
 		UserID:      int64(userID),
 		Embedding:   pgvector.NewVector(vec),
@@ -102,6 +105,7 @@ func (i *Indexer) Delete(ctx context.Context, feedID int) error {
 	)
 	defer span.End()
 
+	//nolint:gosec // G115: feed_id is a SERIAL PK; handler-side caps keep this well below math.MaxInt32.
 	if err := i.q.DeleteFeedEmbedding(ctx, int32(feedID)); err != nil {
 		span.RecordError(err)
 		return err
