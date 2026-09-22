@@ -67,6 +67,14 @@ func (p *chatStubProvider) Chat(ctx context.Context, req llm.ChatRequest, cb fun
 	return p.finalUsage, p.returnErr
 }
 
+// Embed is unimplemented in chat-handler tests — chat handler never
+// calls it. rag owns embeddings; chat delegates to rag.Service.
+// Panicking here catches a future regression where the handler
+// reaches past rag to call llm.Provider.Embed directly.
+func (p *chatStubProvider) Embed(_ context.Context, _ llm.EmbedRequest) ([][]float32, error) {
+	panic("chatStubProvider.Embed should not be called from chat handler tests")
+}
+
 // buildRouter mounts the chat route on a fresh chi router with
 // RequestID + StoreRequest (the two middleware the handler reads
 // from via reqctx). Returns the assembled handler + a TokenService

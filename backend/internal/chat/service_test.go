@@ -14,6 +14,8 @@ import (
 
 	"nyx/internal/llm"
 	"nyx/internal/platform/config"
+	"nyx/internal/rag"
+	"nyx/internal/reqctx"
 )
 
 // stubProvider is the hand-rolled llm.Provider used by service tests.
@@ -47,6 +49,15 @@ func (s *stubProvider) Chat(_ context.Context, req llm.ChatRequest, cb func(stri
 	return s.finalUsage, s.returnErr
 }
 
+// Embed is unimplemented in chat-service tests — chat never calls
+// it directly. The rag package owns embeddings, and chat only
+// delegates through rag.Service.Retrieve. A panic here catches a
+// future regression where chat accidentally reaches past rag to
+// call llm.Provider.Embed itself.
+func (s *stubProvider) Embed(_ context.Context, _ llm.EmbedRequest) ([][]float32, error) {
+	panic("stubProvider.Embed should not be called from chat service tests")
+}
+
 // newTestService builds a Service wired to the supplied stub. The
 // config values are intentionally small (5 history, 50 chars) so
 // the per-request-limit tests don't need huge inputs.
@@ -57,7 +68,7 @@ func newTestService(p llm.Provider, systemPrompt string) *Service {
 		LLMMaxTokens:          100,
 		LLMSystemPrompt:       systemPrompt,
 	}
-	return NewService(p, cfg, noop.NewTracerProvider().Tracer("test"))
+	return NewService(p, cfg, nil, noop.NewTracerProvider().Tracer("test"))
 }
 
 func TestService_RejectsEmptyMessages(t *testing.T) {
@@ -235,7 +246,7 @@ func TestService_StreamDeadlineCancelsIdleProvider(t *testing.T) {
 		LLMSystemPrompt:       "",
 		LLMMaxStreamDuration:  "50ms",
 	}
-	s := NewService(p, cfg, noop.NewTracerProvider().Tracer("test"))
+	s := NewService(p, cfg, nil, noop.NewTracerProvider().Tracer("test"))
 
 	start := time.Now()
 	_, err := s.Chat(context.Background(), ChatRequest{
@@ -259,6 +270,10 @@ type blockingProvider struct{}
 func (p *blockingProvider) Chat(ctx context.Context, _ llm.ChatRequest, _ func(string, *llm.ChatUsage) error) (*llm.ChatUsage, error) {
 	<-ctx.Done()
 	return nil, llm.ErrContextCanceled
+}
+
+func (p *blockingProvider) Embed(_ context.Context, _ llm.EmbedRequest) ([][]float32, error) {
+	panic("blockingProvider.Embed should not be called")
 }
 
 // TestService_ForwardsOnNoteToRouter pins the router plumbing:
@@ -291,4 +306,249 @@ func TestService_ForwardsOnNoteToRouter(t *testing.T) {
 		reflect.ValueOf(p.lastReq.OnNote).Pointer(),
 	)
 	assert.False(t, called, "stub never invokes OnNote; only the router would")
+}
+
+// stubRAG is the hand-rolled rag.Service stand-in. It records the
+// last query + userID and lets each test seed a canned passages /
+// contextBlock / error. The chat service depends on
+// *rag.Service, so the stub satisfies the same surface (a
+// Retrieve method returning (passages, contextBlock, err)) via a
+// tiny adapter. Inject via a NewService test helper that swaps in
+// the adapter.
+//
+// We can't pass a real *rag.Service here because that would
+// require a working pgxpool — chat tests must stay SQL-free.
+// Instead, we test the chat service's RAG branch via a separate
+// constructor that accepts a ragRetriever (the small interface
+// rag.Service satisfies).
+
+// chatRAGStub captures RAG calls for chat-service assertions.
+// Embedding is bypassed by having the chat service call
+// rag.Service.Retrieve directly; we make a thin *rag.Service whose
+// Retriever field points at our stub.
+//
+// The simplest way to wire this is to construct a real *rag.Service
+// with a stub Retriever (which rag.Service already accepts —
+// rag.NewService takes RetrieverIface, and we already have a
+// rag.RetrieverIface that any test struct can implement).
+
+// chatRAGEmbedder is a stub llm.Provider for rag tests. Returns
+// canned vectors; chat-side tests use it together with a stub
+// retriever to exercise the full rag.Service → chat.Service RAG
+// path without an actual embedding API.
+type chatRAGEmbedder struct {
+	vecs [][]float32
+	err  error
+}
+
+func (c *chatRAGEmbedder) Chat(_ context.Context, _ llm.ChatRequest, _ func(string, *llm.ChatUsage) error) (*llm.ChatUsage, error) {
+	panic("chatRAGEmbedder.Chat should not be called from chat tests")
+}
+func (c *chatRAGEmbedder) Embed(_ context.Context, _ llm.EmbedRequest) ([][]float32, error) {
+	if c.err != nil {
+		return nil, c.err
+	}
+	return c.vecs, nil
+}
+
+// chatRAGRetriever implements rag.RetrieverIface for chat tests.
+type chatRAGRetriever struct {
+	passages  []rag.Passage
+	err       error
+	calls     int
+	lastUserID int
+}
+
+func (c *chatRAGRetriever) Retrieve(_ context.Context, userID int, _ []float32, _ int) ([]rag.Passage, error) {
+	c.calls++
+	c.lastUserID = userID
+	return c.passages, c.err
+}
+
+// newTestServiceWithRAG mirrors newTestService but lets the test
+// pass a stub Retriever. Uses a real *rag.Service so the chat
+// service's rag != nil branch is exercised.
+func newTestServiceWithRAG(p llm.Provider, ragSvc *rag.Service) *Service {
+	cfg := &config.Config{
+		LLMMaxHistoryMessages: 5,
+		LLMMaxMessageChars:    50,
+		LLMMaxTokens:          100,
+	}
+	return NewService(p, cfg, ragSvc, noop.NewTracerProvider().Tracer("test"))
+}
+
+// buildRAGService wraps a stub retriever + stub embedder in a real
+// *rag.Service so the chat service's Retrieve plumbing is
+// exercised end-to-end. The embedder returns a fixed vector;
+// the retriever returns canned passages.
+func buildRAGService(ret rag.RetrieverIface, embed llm.Provider) *rag.Service {
+	e := rag.NewEmbedder(embed, "test-model", noop.NewTracerProvider().Tracer("test"))
+	return rag.NewService(e, ret, nil, nil, 5, 4000, 20, noop.NewTracerProvider().Tracer("test"))
+}
+
+// TestChat_RAGOff_NoRetrieval pins that req.RAG=false (or omitted)
+// skips the RAG branch entirely — the stub retriever never sees a
+// call, the model sees the original (un-augmented) messages.
+func TestChat_RAGOff_NoRetrieval(t *testing.T) {
+	prov := &stubProvider{}
+	r := &chatRAGRetriever{}
+	s := newTestServiceWithRAG(prov, buildRAGService(r, &chatRAGEmbedder{vecs: [][]float32{{0.5, 0.5}}}))
+
+	_, err := s.Chat(context.Background(), ChatRequest{
+		Messages: []Message{{Role: RoleUser, Content: "hi"}},
+	}, func(string, *llm.ChatUsage) error { return nil }, nil)
+	require.NoError(t, err)
+	assert.Equal(t, 0, r.calls, "RAG=false must not invoke the retriever")
+
+	// The lastReq.Messages includes the system prompt + the user's
+	// message; no extra "context" message injected.
+	require.Len(t, prov.lastReq.Messages, 2)
+	assert.Equal(t, "system", prov.lastReq.Messages[0].Role)
+	assert.Equal(t, "user", prov.lastReq.Messages[1].Role)
+}
+
+// TestChat_RAGOn_RetrievesAndAppends pins the happy path: rag:true
+// triggers a retrieve with the last user message, and the
+// rendered context block is injected as a NEW user message
+// immediately after the last user message.
+func TestChat_RAGOn_RetrievesAndAppends(t *testing.T) {
+	prov := &stubProvider{}
+	r := &chatRAGRetriever{
+		passages: []rag.Passage{
+			{FeedID: 1, Title: "The Matrix", Description: "sci-fi film", Score: 0.9},
+		},
+	}
+	s := newTestServiceWithRAG(prov, buildRAGService(r, &chatRAGEmbedder{vecs: [][]float32{{0.5, 0.5}}}))
+
+	// Stamp userID on the context so the chat service's retrieval
+	// path runs. Without it the defensive zero-check skips retrieval.
+	ctx := reqctx.WithUserID(context.Background(), 42)
+
+	_, err := s.Chat(ctx, ChatRequest{
+		Messages: []Message{{Role: RoleUser, Content: "what is the matrix?"}},
+		RAG:      true,
+	}, func(string, *llm.ChatUsage) error { return nil }, nil)
+	require.NoError(t, err)
+
+	// Retrieve saw the call.
+	assert.Equal(t, 1, r.calls)
+	assert.Equal(t, 42, r.lastUserID)
+
+	// Model saw: system, user (original), user (context injection).
+	require.Len(t, prov.lastReq.Messages, 3)
+	assert.Equal(t, "system", prov.lastReq.Messages[0].Role)
+	assert.Equal(t, "user", prov.lastReq.Messages[1].Role)
+	assert.Equal(t, "what is the matrix?", prov.lastReq.Messages[1].Content)
+
+	injected := prov.lastReq.Messages[2]
+	assert.Equal(t, "user", injected.Role)
+	assert.Contains(t, injected.Content, "[Feed 1] Title: The Matrix")
+	assert.Contains(t, injected.Content, "what is the matrix?", "injection restates the question")
+	assert.Contains(t, injected.Content, "Use the following context", "injection has the standard prompt prefix")
+}
+
+// TestChat_RAGOn_EmptyResult_NoInjection pins the contract that
+// zero passages → no extra message is appended. The model sees
+// only the original messages (plus the system prompt).
+func TestChat_RAGOn_EmptyResult_NoInjection(t *testing.T) {
+	prov := &stubProvider{}
+	r := &chatRAGRetriever{} // empty passages, empty contextBlock
+	s := newTestServiceWithRAG(prov, buildRAGService(r, &chatRAGEmbedder{vecs: [][]float32{{0.5, 0.5}}}))
+	ctx := reqctx.WithUserID(context.Background(), 42)
+
+	_, err := s.Chat(ctx, ChatRequest{
+		Messages: []Message{{Role: RoleUser, Content: "x"}},
+		RAG:      true,
+	}, func(string, *llm.ChatUsage) error { return nil }, nil)
+	require.NoError(t, err)
+	require.Len(t, prov.lastReq.Messages, 2, "empty retrieval must not inject a message")
+	assert.Equal(t, "system", prov.lastReq.Messages[0].Role)
+	assert.Equal(t, "x", prov.lastReq.Messages[1].Content)
+}
+
+// TestChat_RAGOn_RetrieveError_FailsOpen pins the contract that
+// a retrieval error must NOT fail the chat. The model still
+// receives the original (un-augmented) messages and the chat
+// succeeds.
+func TestChat_RAGOn_RetrieveError_FailsOpen(t *testing.T) {
+	prov := &stubProvider{}
+	r := &chatRAGRetriever{err: errors.New("retrieval exploded")}
+	s := newTestServiceWithRAG(prov, buildRAGService(r, &chatRAGEmbedder{vecs: [][]float32{{0.5, 0.5}}}))
+	ctx := reqctx.WithUserID(context.Background(), 42)
+
+	_, err := s.Chat(ctx, ChatRequest{
+		Messages: []Message{{Role: RoleUser, Content: "x"}},
+		RAG:      true,
+	}, func(string, *llm.ChatUsage) error { return nil }, nil)
+	require.NoError(t, err, "retrieval error must not fail the chat")
+	require.Len(t, prov.lastReq.Messages, 2, "retrieval error must not inject context")
+}
+
+// TestChat_RAGOn_NoUserID_SkipsRetrieval pins the defensive
+// guard: without a userID on the context, retrieval is skipped
+// (no cross-user leak, no panic). The model still gets the
+// original messages.
+func TestChat_RAGOn_NoUserID_SkipsRetrieval(t *testing.T) {
+	prov := &stubProvider{}
+	r := &chatRAGRetriever{}
+	s := newTestServiceWithRAG(prov, buildRAGService(r, &chatRAGEmbedder{vecs: [][]float32{{0.5, 0.5}}}))
+	// No reqctx.WithUserID — context.UserID defaults to 0.
+
+	_, err := s.Chat(context.Background(), ChatRequest{
+		Messages: []Message{{Role: RoleUser, Content: "x"}},
+		RAG:      true,
+	}, func(string, *llm.ChatUsage) error { return nil }, nil)
+	require.NoError(t, err)
+	assert.Equal(t, 0, r.calls, "missing userID must skip retrieval")
+	require.Len(t, prov.lastReq.Messages, 2)
+}
+
+// TestChat_RAGOn_NilRAGService pins the contract that a nil
+// rag.Service silently ignores the rag:true flag. This is the
+// LLM-disabled deployment path.
+func TestChat_RAGOn_NilRAGService(t *testing.T) {
+	prov := &stubProvider{}
+	s := newTestServiceWithRAG(prov, nil)
+	ctx := reqctx.WithUserID(context.Background(), 42)
+
+	_, err := s.Chat(ctx, ChatRequest{
+		Messages: []Message{{Role: RoleUser, Content: "x"}},
+		RAG:      true,
+	}, func(string, *llm.ChatUsage) error { return nil }, nil)
+	require.NoError(t, err)
+	require.Len(t, prov.lastReq.Messages, 2, "nil ragSvc must not inject anything")
+}
+
+// TestChat_RAGOn_HistoryPreserved pins that the context injection
+// is inserted AFTER the last user message, not at the tail. A
+// future regression that appends at the end would surface here
+// because the model would see the context BEFORE the question.
+func TestChat_RAGOn_HistoryPreserved(t *testing.T) {
+	prov := &stubProvider{}
+	r := &chatRAGRetriever{
+		passages: []rag.Passage{{FeedID: 1, Title: "X"}},
+	}
+	s := newTestServiceWithRAG(prov, buildRAGService(r, &chatRAGEmbedder{vecs: [][]float32{{0.5, 0.5}}}))
+	ctx := reqctx.WithUserID(context.Background(), 42)
+
+	_, err := s.Chat(ctx, ChatRequest{
+		Messages: []Message{
+			{Role: RoleUser, Content: "first"},
+			{Role: RoleAssistant, Content: "ok"},
+			{Role: RoleUser, Content: "second"},
+		},
+		RAG: true,
+	}, func(string, *llm.ChatUsage) error { return nil }, nil)
+	require.NoError(t, err)
+	require.Len(t, prov.lastReq.Messages, 5, "system + 3 originals + 1 injection")
+	assert.Equal(t, "system", prov.lastReq.Messages[0].Role)
+	assert.Equal(t, "first", prov.lastReq.Messages[1].Content)
+	assert.Equal(t, "assistant", prov.lastReq.Messages[2].Role)
+	assert.Equal(t, "ok", prov.lastReq.Messages[2].Content)
+	assert.Equal(t, "second", prov.lastReq.Messages[3].Content)
+	// Injection comes immediately AFTER the last user message,
+	// before any assistant response would have been streamed.
+	assert.Contains(t, prov.lastReq.Messages[4].Content, "[Feed 1] Title: X")
+	assert.Contains(t, prov.lastReq.Messages[4].Content, "second",
+		"injection restates the LAST user question")
 }

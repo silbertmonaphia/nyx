@@ -21,10 +21,12 @@ import (
 	"nyx/internal/platform/config"
 	"nyx/internal/platform/database"
 	"nyx/internal/platform/observability"
+	"nyx/internal/rag"
 	"nyx/internal/user"
 
 	"github.com/danielgtaylor/huma/v2/adapters/humachi"
 	"github.com/go-chi/chi/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
@@ -119,9 +121,12 @@ func main() {
 		log.Fatal().Err(err).Msg("Invalid CACHE_TTL")
 	}
 
-	// Initialize Feed domain
+	// Initialize Feed domain. The indexer starts as noop; cmd/api/main.go
+	// swaps it for the real rag.Indexer below once the chat/embed
+	// wiring is built (LLM is a prerequisite for embeddings).
+	var feedIndexer feed.EmbeddingIndexer = feed.NoopEmbeddingIndexer{}
 	feedRepo := feed.NewRepository(db)
-	feedService := feed.NewService(feedRepo, cacheClient, cacheTTL, tracing.Provider.Tracer("nyx.feed"))
+	feedService := feed.NewService(feedRepo, cacheClient, feedIndexer, cacheTTL, tracing.Provider.Tracer("nyx.feed"))
 	feedHandler := feed.NewHandler(feedService)
 
 	// Initialize User domain. accessTTL / refreshTTL come from viper
@@ -189,14 +194,16 @@ func main() {
 	feed.RegisterFeedOps(humaAPI, feedHandler, tokens)
 	user.RegisterUserOps(humaAPI, userHandler, tokens)
 
-	// Chat domain. Opt-in via LLM_ENABLED; when off, no route is
-	// mounted and no provider client is constructed. The dispatch
-	// lives in mountChatRoute so the main wiring stays under the
-	// project's cyclomatic-complexity budget. The returned
-	// shutdown stops the rate-limiter GC goroutine on graceful
-	// shutdown.
-	stopChatGC := mountChatRoute(router, cfg, tracing.Provider, tokens)
+	// Build the LLM provider (single-provider or router with
+// failover) + the RAG facade (nil when LLM is disabled). The
+// ragSvc drives the chat service's RAG injection; the indexer
+// swaps the feed service's noop indexer so subsequent writes
+// embed.
+	stopChatGC, _, ragIndexer := mountChatRoute(router, cfg, db, feedRepo, tracing.Provider, tokens)
 	defer stopChatGC()
+	if ragIndexer != nil {
+		feedService.SetIndexer(ragIndexer)
+	}
 
 	port := ":" + cfg.Port
 	server := &http.Server{
@@ -283,10 +290,17 @@ func setupTracing(cfg *config.Config) *observability.Tracing {
 // key is NEVER logged. Returns a shutdown function the caller
 // MUST defer so the chat-rate-limiter's GC goroutine stops on
 // graceful shutdown.
-func mountChatRoute(router chi.Router, cfg *config.Config, tracerProvider trace.TracerProvider, tokens auth.TokenService) (shutdown func()) {
+//
+// feedRepo is the feed-domain persistence handle — the RAG facade
+// uses it for the lazy backfill's "feeds without embeddings"
+// query. The second + third return values are the constructed
+// RAG facade and its indexer (both nil when LLM is disabled) so
+// main() can swap the feed service's noop indexer for the real
+// rag.Indexer.
+func mountChatRoute(router chi.Router, cfg *config.Config, db *pgxpool.Pool, feedRepo feed.Repository, tracerProvider trace.TracerProvider, tokens auth.TokenService) (shutdown func(), ragSvc *rag.Service, ragIndexer feed.EmbeddingIndexer) {
 	if !cfg.LLMEnabled {
 		log.Info().Msg("LLM chat disabled (LLM_ENABLED=false)")
-		return func() {}
+		return func() {}, nil, nil
 	}
 
 	// Build the primary client from the active config.
@@ -359,14 +373,48 @@ func mountChatRoute(router chi.Router, cfg *config.Config, tracerProvider trace.
 			Msg("LLM chat enabled")
 	}
 
-	chatService := chat.NewService(llmClient, cfg, tracerProvider.Tracer("nyx.chat"))
+	// RAG facade. Built only when LLM is enabled (embeddings need
+	// an LLM). Resolves the embedding model with cfg.LLMModel as
+	// the fallback so a single-model deployment doesn't need a
+	// separate LLM_EMBEDDING_MODEL setting. The same llmClient
+	// powers both chat and embeddings — the failover Router wraps
+	// /v1/embeddings too.
+	if cfg.LLMEnabled {
+		embeddingModel := cfg.LLMEmbeddingModel
+		if embeddingModel == "" {
+			embeddingModel = cfg.LLMModel
+		}
+		ragEmbedder := rag.NewEmbedder(llmClient, embeddingModel, tracerProvider.Tracer("nyx.rag"))
+		ragIndexer = rag.NewIndexer(db, ragEmbedder, tracerProvider.Tracer("nyx.rag"))
+		ragRetriever := rag.NewRetriever(db, tracerProvider.Tracer("nyx.rag"))
+		ragSvc = rag.NewService(
+			ragEmbedder, ragRetriever, db, feedRepo,
+			cfg.RAGTopK, cfg.RAGMaxContextChars, cfg.RAGMaxBackfillPerRequest,
+			tracerProvider.Tracer("nyx.rag"),
+		)
+		// Schema-drift warning: warn loudly if the live
+		// feed_embeddings.embedding column dim disagrees with
+		// EMBEDDING_DIMENSIONS. Doesn't fail-closed (the operator
+		// may be intentionally migrating), but logs the
+		// remediation runbook so a wrong-config deployment is
+		// obvious in the boot log.
+		warnEmbeddingDimMismatch(db, cfg.EmbeddingDimensions)
+		log.Info().
+			Str("embedding_model", embeddingModel).
+			Int("dimensions", cfg.EmbeddingDimensions).
+			Int("top_k", cfg.RAGTopK).
+			Int("max_context_chars", cfg.RAGMaxContextChars).
+			Msg("RAG over feeds enabled")
+	}
+
+	chatService := chat.NewService(llmClient, cfg, ragSvc, tracerProvider.Tracer("nyx.chat"))
 	chatHandler := chat.NewHandler(chatService)
 	// Per-user limiter: 5 streams/min, burst 3. In-memory only;
 	// see chat/ratelimit.go for the cost trade-off.
 	chatLimiter := chat.NewUserRateLimiter(5.0/60.0, 3)
 	stopGC := chatLimiter.RunGC(time.Minute, time.Hour)
 	chat.RegisterChatRoute(router, chatHandler, tokens, chatLimiter)
-	return stopGC
+	return stopGC, ragSvc, ragIndexer
 }
 
 // buildLLMClient dispatches on cfg.LLMProvider to the right client
@@ -419,4 +467,40 @@ func connectRedisWithRetry(url string, attempts int) (cache.Cache, error) {
 		time.Sleep(1 * time.Second)
 	}
 	return nil, lastErr
+}
+
+// warnEmbeddingDimMismatch queries pg_attribute for the
+// feed_embeddings.embedding column's stored dim and warns loudly
+// when it disagrees with cfg.EmbeddingDimensions. pgvector stores
+// the dim in atttypmod (so vector(1536) → 1536 directly).
+//
+// Doesn't fail-closed: an operator may be intentionally migrating
+// (truncating the table, swapping models, about to run a new
+// migration). The warning is loud enough to make a wrong-config
+// deployment obvious in the boot log. A migration to drop+
+// recreate the column would emit the same warning on the
+// intermediate boot, which is the correct behaviour.
+func warnEmbeddingDimMismatch(db *pgxpool.Pool, expected int) {
+	if db == nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	var dim int
+	err := db.QueryRow(ctx,
+		`SELECT atttypmod FROM pg_attribute
+		 WHERE attrelid = 'feed_embeddings'::regclass
+		   AND attname   = 'embedding'`).Scan(&dim)
+	if err != nil {
+		// Table doesn't exist yet (testcontainers racing migrations)
+		// or pgvector isn't installed. Either way, defer to the
+		// migration step which surfaces its own clear errors.
+		return
+	}
+	if dim != expected {
+		log.Warn().
+			Int("schema_dim", dim).
+			Int("configured_dim", expected).
+			Msg("feed_embeddings.embedding dim mismatch — run a migration to drop+recreate the column (see FUTURE_BACKEND.md §rag), or set EMBEDDING_DIMENSIONS to match the live column")
+	}
 }

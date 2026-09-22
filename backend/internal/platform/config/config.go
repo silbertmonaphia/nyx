@@ -137,6 +137,25 @@ type Config struct {
 	LLMFallbackAPIKey  string `mapstructure:"LLM_FALLBACK_API_KEY"`
 	LLMFallbackModel   string `mapstructure:"LLM_FALLBACK_MODEL"`
 	LLMProbeTimeout    string `mapstructure:"LLM_PROBE_TIMEOUT"`
+
+	// Embeddings + RAG over feeds. LLM_EMBEDDING_MODEL is the model
+	// the rag package sends to /v1/embeddings; default empty means
+	// fall back to LLM_MODEL (single-model deployments reuse the
+	// chat model for embeddings). EMBEDDING_DIMENSIONS is the
+	// vector dim the schema is built for; a model with a different
+	// dim requires a schema migration AND setting this to match.
+	// A startup-time schema-drift check in cmd/api/main.go warns
+	// loudly when the live column dim disagrees.
+	//
+	// RAG is gated on LLM_ENABLED=true — no separate RAG_ENABLED.
+	// The chat endpoint exposes the rag:true flag regardless; when
+	// LLM is disabled the server simply runs without a provider
+	// client and the chat service ignores the flag (defensive no-op).
+	LLMEmbeddingModel        string `mapstructure:"LLM_EMBEDDING_MODEL"`
+	EmbeddingDimensions      int    `mapstructure:"EMBEDDING_DIMENSIONS"`
+	RAGTopK                  int    `mapstructure:"RAG_TOP_K"`
+	RAGMaxContextChars       int    `mapstructure:"RAG_MAX_CONTEXT_CHARS"`
+	RAGMaxBackfillPerRequest int    `mapstructure:"RAG_MAX_BACKFILL_PER_REQUEST"`
 }
 
 func Load() (*Config, error) {
@@ -280,6 +299,19 @@ func setDefaults() {
 	// LLM_SYSTEM_PROMPT is left empty by default — the chat
 	// service falls back to a hard-coded "feed catalog
 	// assistant" prompt when the operator hasn't customised it.
+
+	// Embeddings + RAG defaults. LLM_EMBEDDING_MODEL defaults empty
+	// so cmd/api/main.go can fall back to LLM_MODEL at wiring time.
+	// EMBEDDING_DIMENSIONS defaults to 1536 (text-embedding-3-small)
+	// and MUST match the feed_embeddings.embedding column dim — the
+	// schema migration hardcodes 1536. Operators switching to a
+	// different-dim model must write a new migration AND set
+	// EMBEDDING_DIMENSIONS to match.
+	viper.SetDefault("LLM_EMBEDDING_MODEL", "")
+	viper.SetDefault("EMBEDDING_DIMENSIONS", 1536)
+	viper.SetDefault("RAG_TOP_K", 5)
+	viper.SetDefault("RAG_MAX_CONTEXT_CHARS", 4000)
+	viper.SetDefault("RAG_MAX_BACKFILL_PER_REQUEST", 20)
 }
 
 // bindEnvVars explicitly wires every env-sourced viper key. See Load
@@ -301,6 +333,8 @@ func bindEnvVars() {
 		"LLM_MAX_STREAM_DURATION", "LLM_ALLOW_PRIVATE_URL",
 		"LLM_FALLBACK_BASE_URL", "LLM_FALLBACK_API_KEY", "LLM_FALLBACK_MODEL",
 		"LLM_PROBE_TIMEOUT",
+		"LLM_EMBEDDING_MODEL", "EMBEDDING_DIMENSIONS",
+		"RAG_TOP_K", "RAG_MAX_CONTEXT_CHARS", "RAG_MAX_BACKFILL_PER_REQUEST",
 	} {
 		_ = viper.BindEnv(key)
 	}
@@ -442,6 +476,16 @@ func validateLLMConfig(cfg *Config) error {
 
 	if len(cfg.LLMSystemPrompt) > 8192 {
 		return fmt.Errorf("LLM_SYSTEM_PROMPT must be at most 8192 bytes, got %d", len(cfg.LLMSystemPrompt))
+	}
+
+	// LLM_EMBEDDING_MODEL is optional (defaults to LLM_MODEL via
+	// cmd/api/main.go), but when set it must not be a placeholder.
+	// Reuses the chat key blocklist — the foot-gun is the same:
+	// operator committed a literal "your-key" into .env.
+	if cfg.LLMEmbeddingModel != "" {
+		if err := checkNotPlaceholderKey(cfg.LLMEmbeddingModel, "LLM_EMBEDDING_MODEL"); err != nil {
+			return err
+		}
 	}
 	return nil
 }

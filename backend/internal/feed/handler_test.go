@@ -114,7 +114,7 @@ func newTestTokens(t *testing.T) auth.TokenService {
 
 func TestHealthHandler(t *testing.T) {
 	repo, mock := newMockRepo(t)
-	service := NewService(repo, cache.NewNoop(), time.Minute, noop.NewTracerProvider().Tracer("test"))
+	service := NewService(repo, cache.NewNoop(), NoopEmbeddingIndexer{}, time.Minute, noop.NewTracerProvider().Tracer("test"))
 	h := NewHandler(service)
 
 	mock.ExpectPing()
@@ -142,7 +142,7 @@ func TestHealthHandler(t *testing.T) {
 
 func TestHealthHandlerError(t *testing.T) {
 	repo, mock := newMockRepo(t)
-	service := NewService(repo, cache.NewNoop(), time.Minute, noop.NewTracerProvider().Tracer("test"))
+	service := NewService(repo, cache.NewNoop(), NoopEmbeddingIndexer{}, time.Minute, noop.NewTracerProvider().Tracer("test"))
 	h := NewHandler(service)
 
 	mock.ExpectPing().WillReturnError(fmt.Errorf("db connection failed"))
@@ -182,7 +182,7 @@ func TestHealthHandlerError(t *testing.T) {
 // turn a transient infra blip into a container restart cascade.
 func TestLivezHandlerReturnsOK(t *testing.T) {
 	repo, _ := newMockRepo(t)
-	service := NewService(repo, cache.NewNoop(), time.Minute, noop.NewTracerProvider().Tracer("test"))
+	service := NewService(repo, cache.NewNoop(), NoopEmbeddingIndexer{}, time.Minute, noop.NewTracerProvider().Tracer("test"))
 	h := NewHandler(service)
 
 	router := setupTestRouter(h, newTestTokens(t), false)
@@ -205,7 +205,7 @@ func TestLivezHandlerReturnsOK(t *testing.T) {
 
 func TestGetFeedsHandler(t *testing.T) {
 	repo, mock := newMockRepo(t)
-	service := NewService(repo, cache.NewNoop(), time.Minute, noop.NewTracerProvider().Tracer("test"))
+	service := NewService(repo, cache.NewNoop(), NoopEmbeddingIndexer{}, time.Minute, noop.NewTracerProvider().Tracer("test"))
 	h := NewHandler(service)
 
 	now := time.Now()
@@ -256,7 +256,7 @@ func TestGetFeedsHandler(t *testing.T) {
 
 func TestGetFeedsHandlerPaginationParams(t *testing.T) {
 	repo, mock := newMockRepo(t)
-	service := NewService(repo, cache.NewNoop(), time.Minute, noop.NewTracerProvider().Tracer("test"))
+	service := NewService(repo, cache.NewNoop(), NoopEmbeddingIndexer{}, time.Minute, noop.NewTracerProvider().Tracer("test"))
 	h := NewHandler(service)
 
 	rows := pgxmock.NewRows([]string{"id", "user_id", "title", "description", "created_at", "updated_at", "deleted_at"})
@@ -298,7 +298,7 @@ func TestGetFeedsHandlerPaginationParams(t *testing.T) {
 
 func TestGetFeedsHandlerPageSizeClamped(t *testing.T) {
 	repo, mock := newMockRepo(t)
-	service := NewService(repo, cache.NewNoop(), time.Minute, noop.NewTracerProvider().Tracer("test"))
+	service := NewService(repo, cache.NewNoop(), NoopEmbeddingIndexer{}, time.Minute, noop.NewTracerProvider().Tracer("test"))
 	h := NewHandler(service)
 
 	rows := pgxmock.NewRows([]string{"id", "user_id", "title", "description", "created_at", "updated_at", "deleted_at"})
@@ -341,7 +341,7 @@ func TestGetFeedsHandlerOrderAscUsesAscQuery(t *testing.T) {
 	// fell through to the DESC query (regression) the
 	// ExpectationsWereMet check would fail.
 	repo, mock := newMockRepo(t)
-	service := NewService(repo, cache.NewNoop(), time.Minute, noop.NewTracerProvider().Tracer("test"))
+	service := NewService(repo, cache.NewNoop(), NoopEmbeddingIndexer{}, time.Minute, noop.NewTracerProvider().Tracer("test"))
 	h := NewHandler(service)
 
 	now := time.Now()
@@ -380,7 +380,7 @@ func TestGetFeedsHandlerOrderRejectsUnknownValue(t *testing.T) {
 	// {asc, desc} with a 400 before the handler runs — the DB is
 	// never touched.
 	repo, _ := newMockRepo(t)
-	service := NewService(repo, cache.NewNoop(), time.Minute, noop.NewTracerProvider().Tracer("test"))
+	service := NewService(repo, cache.NewNoop(), NoopEmbeddingIndexer{}, time.Minute, noop.NewTracerProvider().Tracer("test"))
 	h := NewHandler(service)
 
 	router := setupTestRouter(h, newTestTokens(t), false)
@@ -395,7 +395,7 @@ func TestGetFeedsHandlerOrderRejectsUnknownValue(t *testing.T) {
 
 func TestGetFeedsHandlerSearch(t *testing.T) {
 	repo, mock := newMockRepo(t)
-	service := NewService(repo, cache.NewNoop(), time.Minute, noop.NewTracerProvider().Tracer("test"))
+	service := NewService(repo, cache.NewNoop(), NoopEmbeddingIndexer{}, time.Minute, noop.NewTracerProvider().Tracer("test"))
 	h := NewHandler(service)
 
 	now := time.Now()
@@ -445,7 +445,7 @@ func TestGetFeedsHandlerSearch(t *testing.T) {
 
 func TestCreateFeedHandler(t *testing.T) {
 	repo, mock := newMockRepo(t)
-	service := NewService(repo, cache.NewNoop(), time.Minute, noop.NewTracerProvider().Tracer("test"))
+	service := NewService(repo, cache.NewNoop(), NoopEmbeddingIndexer{}, time.Minute, noop.NewTracerProvider().Tracer("test"))
 	h := NewHandler(service)
 
 	newFeed := FeedInput{
@@ -516,7 +516,7 @@ func TestCreateFeedHandlerValidation(t *testing.T) {
 // pattern).
 func TestCreateFeedHandlerUserPayload(t *testing.T) {
 	repo, mock := newMockRepo(t)
-	service := NewService(repo, cache.NewNoop(), time.Minute, noop.NewTracerProvider().Tracer("test"))
+	service := NewService(repo, cache.NewNoop(), NoopEmbeddingIndexer{}, time.Minute, noop.NewTracerProvider().Tracer("test"))
 	h := NewHandler(service)
 
 	now := time.Now()
@@ -560,7 +560,7 @@ func TestCreateFeedHandlerUserPayload(t *testing.T) {
 // not validated client-side).
 func TestCreateFeedHandlerMinimalPayload(t *testing.T) {
 	repo, mock := newMockRepo(t)
-	service := NewService(repo, cache.NewNoop(), time.Minute, noop.NewTracerProvider().Tracer("test"))
+	service := NewService(repo, cache.NewNoop(), NoopEmbeddingIndexer{}, time.Minute, noop.NewTracerProvider().Tracer("test"))
 	h := NewHandler(service)
 
 	now := time.Now()
@@ -587,7 +587,7 @@ func TestCreateFeedHandlerMinimalPayload(t *testing.T) {
 
 func TestUpdateFeedHandler(t *testing.T) {
 	repo, mock := newMockRepo(t)
-	service := NewService(repo, cache.NewNoop(), time.Minute, noop.NewTracerProvider().Tracer("test"))
+	service := NewService(repo, cache.NewNoop(), NoopEmbeddingIndexer{}, time.Minute, noop.NewTracerProvider().Tracer("test"))
 	h := NewHandler(service)
 
 	updatedFeed := FeedInput{
@@ -633,7 +633,7 @@ func TestUpdateFeedHandler(t *testing.T) {
 
 func TestDeleteFeedHandler(t *testing.T) {
 	repo, mock := newMockRepo(t)
-	service := NewService(repo, cache.NewNoop(), time.Minute, noop.NewTracerProvider().Tracer("test"))
+	service := NewService(repo, cache.NewNoop(), NoopEmbeddingIndexer{}, time.Minute, noop.NewTracerProvider().Tracer("test"))
 	h := NewHandler(service)
 
 	mock.ExpectExec(`UPDATE feeds SET deleted_at`).
@@ -661,7 +661,7 @@ func TestDeleteFeedHandler(t *testing.T) {
 // handler maps that to HTTP 404.
 func TestUpdateFeedHandlerNotFound(t *testing.T) {
 	repo, mock := newMockRepo(t)
-	service := NewService(repo, cache.NewNoop(), time.Minute, noop.NewTracerProvider().Tracer("test"))
+	service := NewService(repo, cache.NewNoop(), NoopEmbeddingIndexer{}, time.Minute, noop.NewTracerProvider().Tracer("test"))
 	h := NewHandler(service)
 
 	updatedFeed := FeedInput{Title: "Anything"}
@@ -690,7 +690,7 @@ func TestUpdateFeedHandlerNotFound(t *testing.T) {
 // path in the repo. The handler maps ErrNotFound to HTTP 404.
 func TestDeleteFeedHandlerNotFound(t *testing.T) {
 	repo, mock := newMockRepo(t)
-	service := NewService(repo, cache.NewNoop(), time.Minute, noop.NewTracerProvider().Tracer("test"))
+	service := NewService(repo, cache.NewNoop(), NoopEmbeddingIndexer{}, time.Minute, noop.NewTracerProvider().Tracer("test"))
 	h := NewHandler(service)
 
 	mock.ExpectExec(`UPDATE feeds SET deleted_at`).
@@ -726,7 +726,7 @@ func TestErrNotFoundIsError(t *testing.T) {
 // underlying pgx error.
 func TestCreateFeedHandler_InternalErrorHidesInternalDetails(t *testing.T) {
 	repo, mock := newMockRepo(t)
-	service := NewService(repo, cache.NewNoop(), time.Minute, noop.NewTracerProvider().Tracer("test"))
+	service := NewService(repo, cache.NewNoop(), NoopEmbeddingIndexer{}, time.Minute, noop.NewTracerProvider().Tracer("test"))
 	h := NewHandler(service)
 
 	body, _ := json.Marshal(FeedInput{Title: "X"})
@@ -771,7 +771,7 @@ func TestCreateFeedHandler_InternalErrorHidesInternalDetails(t *testing.T) {
 // through MapError.
 func TestUpdateFeedHandler_InternalErrorHidesInternalDetails(t *testing.T) {
 	repo, mock := newMockRepo(t)
-	service := NewService(repo, cache.NewNoop(), time.Minute, noop.NewTracerProvider().Tracer("test"))
+	service := NewService(repo, cache.NewNoop(), NoopEmbeddingIndexer{}, time.Minute, noop.NewTracerProvider().Tracer("test"))
 	h := NewHandler(service)
 
 	body, _ := json.Marshal(FeedInput{Title: "X"})
@@ -806,7 +806,7 @@ func TestUpdateFeedHandler_InternalErrorHidesInternalDetails(t *testing.T) {
 // non-sentinel delete branch, funneled through MapError.
 func TestDeleteFeedHandler_InternalErrorHidesInternalDetails(t *testing.T) {
 	repo, mock := newMockRepo(t)
-	service := NewService(repo, cache.NewNoop(), time.Minute, noop.NewTracerProvider().Tracer("test"))
+	service := NewService(repo, cache.NewNoop(), NoopEmbeddingIndexer{}, time.Minute, noop.NewTracerProvider().Tracer("test"))
 	h := NewHandler(service)
 
 	mock.ExpectExec(`UPDATE feeds SET deleted_at`).
@@ -841,7 +841,7 @@ func TestDeleteFeedHandler_InternalErrorHidesInternalDetails(t *testing.T) {
 // Authorization header must 401. The repo is never touched.
 func TestGetFeedsHandler_RequiresAuth(t *testing.T) {
 	repo, mock := newMockRepo(t)
-	service := NewService(repo, cache.NewNoop(), time.Minute, noop.NewTracerProvider().Tracer("test"))
+	service := NewService(repo, cache.NewNoop(), NoopEmbeddingIndexer{}, time.Minute, noop.NewTracerProvider().Tracer("test"))
 	h := NewHandler(service)
 
 	tokens := newTestTokens(t)
@@ -867,7 +867,7 @@ func TestGetFeedsHandler_RequiresAuth(t *testing.T) {
 // leak.
 func TestUpdateFeedHandler_OtherUserReturnsNotFound(t *testing.T) {
 	repo, mock := newMockRepo(t)
-	service := NewService(repo, cache.NewNoop(), time.Minute, noop.NewTracerProvider().Tracer("test"))
+	service := NewService(repo, cache.NewNoop(), NoopEmbeddingIndexer{}, time.Minute, noop.NewTracerProvider().Tracer("test"))
 	h := NewHandler(service)
 
 	updatedFeed := FeedInput{Title: "Hijack"}
@@ -901,7 +901,7 @@ func TestUpdateFeedHandler_OtherUserReturnsNotFound(t *testing.T) {
 // user_id+id combo — that maps to ErrNotFound → 404.
 func TestDeleteFeedHandler_OtherUserReturnsNotFound(t *testing.T) {
 	repo, mock := newMockRepo(t)
-	service := NewService(repo, cache.NewNoop(), time.Minute, noop.NewTracerProvider().Tracer("test"))
+	service := NewService(repo, cache.NewNoop(), NoopEmbeddingIndexer{}, time.Minute, noop.NewTracerProvider().Tracer("test"))
 	h := NewHandler(service)
 
 	mock.ExpectExec(`UPDATE feeds SET deleted_at`).
@@ -930,7 +930,7 @@ func TestDeleteFeedHandler_OtherUserReturnsNotFound(t *testing.T) {
 // the row with the correct owner.
 func TestCreateFeedHandler_StampsUserID(t *testing.T) {
 	repo, mock := newMockRepo(t)
-	service := NewService(repo, cache.NewNoop(), time.Minute, noop.NewTracerProvider().Tracer("test"))
+	service := NewService(repo, cache.NewNoop(), NoopEmbeddingIndexer{}, time.Minute, noop.NewTracerProvider().Tracer("test"))
 	h := NewHandler(service)
 
 	now := time.Now()
@@ -975,7 +975,7 @@ func TestCreateFeedHandler_StampsUserID(t *testing.T) {
 // the test.
 func TestGetFeedsHandler_FilteredByOwner(t *testing.T) {
 	repo, mock := newMockRepo(t)
-	service := NewService(repo, cache.NewNoop(), time.Minute, noop.NewTracerProvider().Tracer("test"))
+	service := NewService(repo, cache.NewNoop(), NoopEmbeddingIndexer{}, time.Minute, noop.NewTracerProvider().Tracer("test"))
 	h := NewHandler(service)
 
 	rows := pgxmock.NewRows([]string{"id", "user_id", "title", "description", "created_at", "updated_at", "deleted_at"})

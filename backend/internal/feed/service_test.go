@@ -2,6 +2,7 @@ package feed
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -9,6 +10,8 @@ import (
 	"nyx/internal/reqctx"
 
 	"github.com/alicebob/miniredis/v2"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	"go.opentelemetry.io/otel/trace/noop"
 )
 
@@ -53,8 +56,43 @@ func newServiceWithCache(t *testing.T) (Service, *stubRepo, *miniredis.Miniredis
 	}
 	t.Cleanup(func() { _ = c.Close() })
 	repo := &stubRepo{}
-	svc := NewService(repo, c, time.Minute, noop.NewTracerProvider().Tracer("test"))
+	svc := NewService(repo, c, NoopEmbeddingIndexer{}, time.Minute, noop.NewTracerProvider().Tracer("test"))
 	return svc, repo, mr
+}
+
+// stubIndexer captures Index / Delete calls so the feed service's
+// embedding-indexer integration can be asserted end-to-end. The
+// stub lets each test seed a canned error to verify the
+// "indexer failures never fail the write" contract.
+type stubIndexer struct {
+	indexCalls   int
+	indexFeedIDs []int
+	indexErr     error
+
+	deleteCalls   int
+	deleteFeedIDs []int
+	deleteErr     error
+}
+
+func (s *stubIndexer) Index(_ context.Context, _ int, m *Feed) error {
+	s.indexCalls++
+	s.indexFeedIDs = append(s.indexFeedIDs, m.ID)
+	return s.indexErr
+}
+
+func (s *stubIndexer) Delete(_ context.Context, id int) error {
+	s.deleteCalls++
+	s.deleteFeedIDs = append(s.deleteFeedIDs, id)
+	return s.deleteErr
+}
+
+// newServiceWithStubIndexer builds the service with the supplied
+// indexer so the embed-on-create / -update / -delete tests can
+// swap the noop for an indexer that records calls.
+func newServiceWithStubIndexer(idx EmbeddingIndexer) (Service, *stubRepo) {
+	repo := &stubRepo{}
+	svc := NewService(repo, cache.NewNoop(), idx, time.Minute, noop.NewTracerProvider().Tracer("test"))
+	return svc, repo
 }
 
 // ctxWithUser stamps a user id onto ctx the same way the auth
@@ -288,4 +326,70 @@ func TestGetFeeds_DefensiveEmptyPageWhenNoUser(t *testing.T) {
 	if repo.getAllCalls != 0 {
 		t.Errorf("repo must NOT be called without a user id, got %d calls", repo.getAllCalls)
 	}
+}
+
+// TestCreateFeed_IndexesAfterCreate pins that a successful feed
+// Create triggers the indexer. Best-effort contract: a failing
+// indexer does NOT fail the write.
+func TestCreateFeed_IndexesAfterCreate(t *testing.T) {
+	idx := &stubIndexer{}
+	svc, _ := newServiceWithStubIndexer(idx)
+	ctx := ctxWithUser(t, 1)
+
+	err := svc.CreateFeed(ctx, &Feed{ID: 42, Title: "x"})
+	require.NoError(t, err)
+	assert.Equal(t, 1, idx.indexCalls)
+	assert.Equal(t, []int{42}, idx.indexFeedIDs)
+}
+
+// TestUpdateFeed_IndexesAfterUpdate pins the same contract on
+// UpdateFeed.
+func TestUpdateFeed_IndexesAfterUpdate(t *testing.T) {
+	idx := &stubIndexer{}
+	svc, _ := newServiceWithStubIndexer(idx)
+	ctx := ctxWithUser(t, 1)
+
+	err := svc.UpdateFeed(ctx, 7, &Feed{ID: 7, Title: "y"})
+	require.NoError(t, err)
+	assert.Equal(t, 1, idx.indexCalls)
+	assert.Equal(t, []int{7}, idx.indexFeedIDs)
+}
+
+// TestDeleteFeed_DeletesEmbedding pins the same contract on
+// DeleteFeed — a successful delete triggers indexer.Delete.
+func TestDeleteFeed_DeletesEmbedding(t *testing.T) {
+	idx := &stubIndexer{}
+	svc, _ := newServiceWithStubIndexer(idx)
+	ctx := ctxWithUser(t, 1)
+
+	err := svc.DeleteFeed(ctx, 99)
+	require.NoError(t, err)
+	assert.Equal(t, 1, idx.deleteCalls)
+	assert.Equal(t, []int{99}, idx.deleteFeedIDs)
+}
+
+// TestIndex_FailureDoesNotFailCreate pins the best-effort
+// contract: a failing indexer logs and continues, the CreateFeed
+// call still returns nil. Without this, a flaky embedding
+// provider would block every feed write.
+func TestIndex_FailureDoesNotFailCreate(t *testing.T) {
+	idx := &stubIndexer{indexErr: errors.New("embedding provider down")}
+	svc, _ := newServiceWithStubIndexer(idx)
+	ctx := ctxWithUser(t, 1)
+
+	err := svc.CreateFeed(ctx, &Feed{ID: 1, Title: "x"})
+	require.NoError(t, err, "indexer error must not fail the write")
+	assert.Equal(t, 1, idx.indexCalls)
+}
+
+// TestDelete_IndexFailureDoesNotFailDelete pins the same
+// contract for DeleteFeed.
+func TestDelete_IndexFailureDoesNotFailDelete(t *testing.T) {
+	idx := &stubIndexer{deleteErr: errors.New("embedding db down")}
+	svc, _ := newServiceWithStubIndexer(idx)
+	ctx := ctxWithUser(t, 1)
+
+	err := svc.DeleteFeed(ctx, 5)
+	require.NoError(t, err, "delete-indexer error must not fail the delete")
+	assert.Equal(t, 1, idx.deleteCalls)
 }

@@ -19,22 +19,73 @@ type Service interface {
 	DeleteFeed(ctx context.Context, id int) error
 	CheckHealth(ctx context.Context) error
 	CheckCacheHealth(ctx context.Context) error
+	SetIndexer(idx EmbeddingIndexer)
 }
 
+// EmbeddingIndexer is the narrow contract the feed service needs
+// from the rag package. rag.Indexer satisfies it structurally
+// (Go's implicit interface satisfaction), so feed stays unaware
+// of the rag package while the rag package stays unaware of the
+// feed service's cache + invalidation logic. The dependency is
+// one-way: rag → feed.Feed, never feed → rag.
+//
+// All methods are best-effort: the feed service calls them after
+// a successful write, logs a warn on error, and never propagates
+// the error as a write failure (a flaky embedding provider must
+// not block the user's CRUD).
+type EmbeddingIndexer interface {
+	Index(ctx context.Context, userID int, m *Feed) error
+	Delete(ctx context.Context, feedID int) error
+}
+
+// NoopEmbeddingIndexer is the no-op implementation for deployments
+// without an LLM (which can't embed). Constructed by main.go
+// when cfg.LLMEnabled is false so feed.NewService never sees a
+// nil interface — a nil interface would NPE on every feed write
+// instead of degrading gracefully.
+type NoopEmbeddingIndexer struct{}
+
+// Index is a no-op.
+func (NoopEmbeddingIndexer) Index(context.Context, int, *Feed) error { return nil }
+
+// Delete is a no-op.
+func (NoopEmbeddingIndexer) Delete(context.Context, int) error { return nil }
+
 type feedService struct {
-	repo   Repository
-	cache  cache.Cache
-	ttl    time.Duration
-	tracer trace.Tracer
+	repo    Repository
+	cache   cache.Cache
+	indexer EmbeddingIndexer
+	ttl     time.Duration
+	tracer  trace.Tracer
 }
 
 // NewService wires the feed domain. The cache parameter may be a no-op
 // (cache.NewNoop()) when caching is disabled — the service treats both
+// implementations uniformly. indexer may be a NoopEmbeddingIndexer
+// when embeddings are not enabled — the service treats both
 // implementations uniformly. tracer emits one OTel span per public
 // method; pass the noop tracer (otel.Tracer("…") with the global
 // noop provider) when tracing is disabled — Start becomes free.
-func NewService(repo Repository, c cache.Cache, ttl time.Duration, tracer trace.Tracer) Service {
-	return &feedService{repo: repo, cache: c, ttl: ttl, tracer: tracer}
+func NewService(repo Repository, c cache.Cache, indexer EmbeddingIndexer, ttl time.Duration, tracer trace.Tracer) Service {
+	if indexer == nil {
+		indexer = NoopEmbeddingIndexer{}
+	}
+	return &feedService{repo: repo, cache: c, indexer: indexer, ttl: ttl, tracer: tracer}
+}
+
+// SetIndexer swaps the embedding indexer at runtime. The wiring
+// site uses this when the LLM/RAG facade is constructed after
+// the feed service (cmd/api/main.go) — the feed service starts
+// with a NoopEmbeddingIndexer so its constructor doesn't have to
+// know about LLM at all; once LLM is enabled the wiring site
+// swaps in the real rag.Indexer. Not goroutine-safe by itself —
+// callers must call it once during startup before serving
+// traffic.
+func (s *feedService) SetIndexer(idx EmbeddingIndexer) {
+	if idx == nil {
+		idx = NoopEmbeddingIndexer{}
+	}
+	s.indexer = idx
 }
 
 // GetFeeds is a cache-aside read scoped to the authenticated user.
@@ -84,7 +135,9 @@ func (s *feedService) GetFeeds(ctx context.Context, query string, page, pageSize
 }
 
 // CreateFeed persists the feed then invalidates every cached page
-// for the calling user.
+// for the calling user. Embedding is best-effort: a failed Index
+// logs a warn and never fails the write — the next read will
+// re-embed when the user toggles RAG and the lazy backfill fires.
 func (s *feedService) CreateFeed(ctx context.Context, m *Feed) error {
 	ctx, span := s.tracer.Start(ctx, "feed.CreateFeed", trace.WithSpanKind(trace.SpanKindInternal))
 	defer span.End()
@@ -94,12 +147,17 @@ func (s *feedService) CreateFeed(ctx context.Context, m *Feed) error {
 	if err := s.repo.Create(ctx, userID, m); err != nil {
 		return err
 	}
+	if err := s.indexer.Index(ctx, userID, m); err != nil {
+		log.Warn().Err(err).Int("feed_id", m.ID).Msg("feed embedding index failed")
+	}
 	s.invalidate(ctx, userID)
 	return nil
 }
 
 // UpdateFeed persists the changes then invalidates every cached page
-// for the calling user.
+// for the calling user. Same best-effort Index contract as
+// CreateFeed — the Indexer compares the new content_hash against
+// the stored hash and skips the Embed API call on a no-op update.
 func (s *feedService) UpdateFeed(ctx context.Context, id int, m *Feed) error {
 	ctx, span := s.tracer.Start(ctx, "feed.UpdateFeed", trace.WithSpanKind(trace.SpanKindInternal))
 	defer span.End()
@@ -109,12 +167,17 @@ func (s *feedService) UpdateFeed(ctx context.Context, id int, m *Feed) error {
 	if err := s.repo.Update(ctx, userID, id, m); err != nil {
 		return err
 	}
+	if err := s.indexer.Index(ctx, userID, m); err != nil {
+		log.Warn().Err(err).Int("feed_id", id).Msg("feed embedding index failed")
+	}
 	s.invalidate(ctx, userID)
 	return nil
 }
 
 // DeleteFeed soft-deletes the row then invalidates every cached page
-// for the calling user.
+// for the calling user. Embedding deletion is best-effort — a
+// dead embedding row is harmless because the retriever's JOIN
+// filters deleted_at IS NULL anyway.
 func (s *feedService) DeleteFeed(ctx context.Context, id int) error {
 	ctx, span := s.tracer.Start(ctx, "feed.DeleteFeed", trace.WithSpanKind(trace.SpanKindInternal))
 	defer span.End()
@@ -123,6 +186,9 @@ func (s *feedService) DeleteFeed(ctx context.Context, id int) error {
 
 	if err := s.repo.Delete(ctx, userID, id); err != nil {
 		return err
+	}
+	if err := s.indexer.Delete(ctx, id); err != nil {
+		log.Warn().Err(err).Int("feed_id", id).Msg("feed embedding delete failed")
 	}
 	s.invalidate(ctx, userID)
 	return nil

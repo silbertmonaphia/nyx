@@ -49,6 +49,13 @@ const MaxBodyBytes = 64 << 10
 type ChatRequest struct {
 	Messages []Message `json:"messages"`
 	Model    *string   `json:"model,omitempty"`
+	// RAG, when true, asks the server to ground the answer in the
+	// authenticated user's feeds via top-K semantic retrieval.
+	// Omitted on the wire when false (json:",omitempty") so today's
+	// non-RAG requests look identical to before this field landed.
+	// DisallowUnknownFields on the handler decoder rejects typos
+	// like "ragged" with 400.
+	RAG bool `json:"rag,omitempty"`
 }
 
 // Message is one turn. Role is restricted to RoleUser / RoleAssistant
