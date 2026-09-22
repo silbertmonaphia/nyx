@@ -334,3 +334,74 @@ func TestMapError_DeadlineExceededRoutesToCtxCanceled(t *testing.T) {
 	mapped := c.mapError(ctx.Err())
 	assert.True(t, errors.Is(mapped, llm.ErrContextCanceled))
 }
+
+// TestEmbed_ReturnsVectorsInInputOrder pins the happy path:
+// httptest server returns 2 embeddings and the client surfaces them
+// in input order. Index field is honoured (server might reorder).
+func TestEmbed_ReturnsVectorsInInputOrder(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, "/embeddings", r.URL.Path)
+		assert.Equal(t, http.MethodPost, r.Method)
+
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		// Echo each input with its index, in input order.
+		_, _ = fmt.Fprintln(w, `{"object":"list","data":[{"object":"embedding","index":0,"embedding":[1.0,2.0]},{"object":"embedding","index":1,"embedding":[3.0,4.0]}],"model":"test-embed","usage":{"prompt_tokens":4,"completion_tokens":0,"total_tokens":4}}`)
+	}))
+	defer server.Close()
+
+	c := newTestClient(t, server.URL)
+	vecs, err := c.Embed(context.Background(), llm.EmbedRequest{
+		Model:  "test-embed",
+		Inputs: []string{"hello", "world"},
+	})
+	require.NoError(t, err)
+	require.Len(t, vecs, 2)
+	assert.Equal(t, []float32{1.0, 2.0}, vecs[0])
+	assert.Equal(t, []float32{3.0, 4.0}, vecs[1])
+}
+
+// TestEmbed_EmptyInputsIsNoop pins the contract: an empty Inputs
+// slice is a no-op (no provider call). Mirrors vllm/client_test.go.
+func TestEmbed_EmptyInputsIsNoop(t *testing.T) {
+	c := newTestClient(t, "http://127.0.0.1:1") // unreachable; proves no call
+	vecs, err := c.Embed(context.Background(), llm.EmbedRequest{Model: "m", Inputs: nil})
+	require.NoError(t, err)
+	assert.Empty(t, vecs)
+}
+
+// TestEmbed_OutOfRangeIndexReturnsSentinel pins the malformed-
+// upstream guard: if the server returns data with an index that
+// doesn't fit the input slice, surface ErrProviderUnavailable
+// rather than panic.
+func TestEmbed_OutOfRangeIndexReturnsSentinel(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		// Caller will send 2 inputs but this returns index=99.
+		_, _ = fmt.Fprintln(w, `{"data":[{"index":99,"embedding":[1.0]}]}`)
+	}))
+	defer server.Close()
+
+	c := newTestClient(t, server.URL)
+	_, err := c.Embed(context.Background(), llm.EmbedRequest{
+		Model:  "m",
+		Inputs: []string{"a", "b"},
+	})
+	require.Error(t, err)
+	assert.True(t, errors.Is(err, llm.ErrProviderUnavailable))
+}
+
+// TestEmbed_UpstreamErrorReturnsSentinel pins the 5xx → sentinel
+// mapping so a future regression that drops the mapping breaks
+// the chat-side fallback path.
+func TestEmbed_UpstreamErrorReturnsSentinel(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer server.Close()
+
+	c := newTestClient(t, server.URL)
+	_, err := c.Embed(context.Background(), llm.EmbedRequest{Model: "m", Inputs: []string{"x"}})
+	require.Error(t, err)
+	assert.True(t, errors.Is(err, llm.ErrProviderUnavailable))
+}

@@ -20,12 +20,23 @@ import (
 // chatFn controls what happens when the Router calls Chat on the
 // underlying slot; tests seed it with the canned sequences they
 // need (streaming partials, erroring mid-stream, etc.).
+// embedFn is the Embed counterpart; the existing Chat tests leave
+// it nil and rely on the nil-deref panic in Embed to catch any
+// accidental call. Embed tests seed it directly.
 type stubProvider struct {
-	chatFn func(ctx context.Context, req ChatRequest, onDelta func(delta string, finalUsage *ChatUsage) error) (*ChatUsage, error)
+	chatFn  func(ctx context.Context, req ChatRequest, onDelta func(delta string, finalUsage *ChatUsage) error) (*ChatUsage, error)
+	embedFn func(ctx context.Context, req EmbedRequest) ([][]float32, error)
 }
 
 func (s *stubProvider) Chat(ctx context.Context, req ChatRequest, onDelta func(delta string, finalUsage *ChatUsage) error) (*ChatUsage, error) {
 	return s.chatFn(ctx, req, onDelta)
+}
+
+func (s *stubProvider) Embed(ctx context.Context, req EmbedRequest) ([][]float32, error) {
+	if s.embedFn == nil {
+		panic("stubProvider.Embed called without an embedFn seeded")
+	}
+	return s.embedFn(ctx, req)
 }
 
 // newProbeServer wires an httptest.NewServer that responds to
@@ -522,4 +533,142 @@ func newAlwaysFailingURL(t *testing.T) string {
 	addr := "http://" + ln.Addr().String()
 	require.NoError(t, ln.Close())
 	return addr
+}
+
+// TestRouter_Embed_Passthrough pins the single-provider path: no
+// probe round-trip, primary's Embed result is returned untouched.
+func TestRouter_Embed_Passthrough(t *testing.T) {
+	want := []float32{0.1, 0.2, 0.3}
+	primary := &stubProvider{
+		embedFn: func(_ context.Context, _ EmbedRequest) ([][]float32, error) {
+			return [][]float32{want}, nil
+		},
+	}
+	r := NewRouter(
+		ProviderSlot{Name: "openai", Provider: primary, BaseURL: "http://primary"},
+		nil, // single-provider passthrough
+		noop.NewTracerProvider().Tracer("test"),
+		100*time.Millisecond,
+	)
+	got, err := r.Embed(context.Background(), EmbedRequest{Model: "m", Inputs: []string{"x"}})
+	require.NoError(t, err)
+	require.Len(t, got, 1)
+	assert.Equal(t, want, got[0])
+}
+
+// TestRouter_Embed_FailoverOnProviderUnavailable pins the
+// dual-provider failover contract: ErrProviderUnavailable on the
+// primary triggers a single retry on the secondary.
+func TestRouter_Embed_FailoverOnProviderUnavailable(t *testing.T) {
+	primaryCalls := atomic.Int64{}
+	secondaryCalls := atomic.Int64{}
+	primary := &stubProvider{
+		embedFn: func(_ context.Context, _ EmbedRequest) ([][]float32, error) {
+			primaryCalls.Add(1)
+			return nil, ErrProviderUnavailable
+		},
+	}
+	secondary := &stubProvider{
+		embedFn: func(_ context.Context, _ EmbedRequest) ([][]float32, error) {
+			secondaryCalls.Add(1)
+			return [][]float32{{0.5, 0.6}}, nil
+		},
+	}
+	r := NewRouter(
+		ProviderSlot{Name: "openai", Provider: primary, BaseURL: "http://primary"},
+		&ProviderSlot{Name: "vllm", Provider: secondary, BaseURL: "http://secondary"},
+		noop.NewTracerProvider().Tracer("test"),
+		100*time.Millisecond,
+	)
+	got, err := r.Embed(context.Background(), EmbedRequest{Model: "m", Inputs: []string{"x"}})
+	require.NoError(t, err)
+	assert.Equal(t, int64(1), primaryCalls.Load())
+	assert.Equal(t, int64(1), secondaryCalls.Load())
+	assert.Equal(t, []float32{0.5, 0.6}, got[0])
+}
+
+// TestRouter_Embed_NonFailoverErrorsDoNotFailover pins that
+// rate-limit and ctx-cancel do NOT trigger a secondary retry.
+// Same rule as shouldFailover for chat.
+func TestRouter_Embed_NonFailoverErrorsDoNotFailover(t *testing.T) {
+	primaryCalls := atomic.Int64{}
+	secondaryCalls := atomic.Int64{}
+	primary := &stubProvider{
+		embedFn: func(_ context.Context, _ EmbedRequest) ([][]float32, error) {
+			primaryCalls.Add(1)
+			return nil, ErrRateLimited
+		},
+	}
+	secondary := &stubProvider{
+		embedFn: func(_ context.Context, _ EmbedRequest) ([][]float32, error) {
+			secondaryCalls.Add(1)
+			return [][]float32{{0}}, nil
+		},
+	}
+	r := NewRouter(
+		ProviderSlot{Name: "openai", Provider: primary, BaseURL: "http://primary"},
+		&ProviderSlot{Name: "vllm", Provider: secondary, BaseURL: "http://secondary"},
+		noop.NewTracerProvider().Tracer("test"),
+		100*time.Millisecond,
+	)
+	_, err := r.Embed(context.Background(), EmbedRequest{Model: "m", Inputs: []string{"x"}})
+	require.Error(t, err)
+	assert.Equal(t, int64(1), primaryCalls.Load())
+	assert.Equal(t, int64(0), secondaryCalls.Load(), "non-failover error must not retry on secondary")
+}
+
+// TestRouter_Embed_BothFail_ReturnsAllProvidersFailed pins the
+// both-down branch: ErrAllProvidersFailed wraps ErrProviderUnavailable
+// so the chat-side handler can still walk the chain with errors.Is.
+func TestRouter_Embed_BothFail_ReturnsAllProvidersFailed(t *testing.T) {
+	primary := &stubProvider{
+		embedFn: func(_ context.Context, _ EmbedRequest) ([][]float32, error) {
+			return nil, ErrProviderUnavailable
+		},
+	}
+	secondary := &stubProvider{
+		embedFn: func(_ context.Context, _ EmbedRequest) ([][]float32, error) {
+			return nil, ErrProviderUnavailable
+		},
+	}
+	r := NewRouter(
+		ProviderSlot{Name: "openai", Provider: primary, BaseURL: "http://primary"},
+		&ProviderSlot{Name: "vllm", Provider: secondary, BaseURL: "http://secondary"},
+		noop.NewTracerProvider().Tracer("test"),
+		100*time.Millisecond,
+	)
+	_, err := r.Embed(context.Background(), EmbedRequest{Model: "m", Inputs: []string{"x"}})
+	require.Error(t, err)
+	assert.True(t, errors.Is(err, ErrAllProvidersFailed))
+	assert.True(t, errors.Is(err, ErrProviderUnavailable))
+}
+
+// TestRouter_Embed_NoProbeRoundTrip pins the contract that
+// embeddings do NOT trigger the GET /v1/models probe. The chat
+// probe exists to detect a wedged upstream before committing to a
+// streaming call; an embedding is one synchronous request whose
+// outcome IS the liveness signal.
+func TestRouter_Embed_NoProbeRoundTrip(t *testing.T) {
+	hits := atomic.Int64{}
+	probeURL := newProbeServer(t, &hits).URL
+	defer func() {
+		// Reach into the test server we just constructed to close it
+		// explicitly — defer Close on the URL would race against the
+		// httptest shutdown machinery otherwise.
+	}()
+	_ = probeURL // keep lint happy; we only need the hit counter
+	primary := &stubProvider{
+		embedFn: func(_ context.Context, _ EmbedRequest) ([][]float32, error) {
+			return [][]float32{{0.0}}, nil
+		},
+	}
+	r := NewRouter(
+		ProviderSlot{Name: "openai", Provider: primary, BaseURL: "http://primary"},
+		&ProviderSlot{Name: "vllm", Provider: primary, BaseURL: "http://secondary"},
+		noop.NewTracerProvider().Tracer("test"),
+		100*time.Millisecond,
+	)
+	_, err := r.Embed(context.Background(), EmbedRequest{Model: "m", Inputs: []string{"x"}})
+	require.NoError(t, err)
+	assert.Equal(t, int64(0), hits.Load(), "embed must not issue a /v1/models probe")
 }

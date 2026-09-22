@@ -583,3 +583,112 @@ func TestCheckHost_RejectsIPv6LoopbackByDefault(t *testing.T) {
 	err := checkHost("::1")
 	require.Error(t, err)
 }
+
+// TestEmbed_ReturnsVectorsInInputOrder pins the happy path:
+// httptest server returns 2 embeddings and the client surfaces them
+// in input order. The auth header assertion also catches a future
+// regression where Embed forgets the empty-key handling.
+func TestEmbed_ReturnsVectorsInInputOrder(t *testing.T) {
+	var (
+		gotPath        atomic.Value
+		gotAuth        atomic.Value
+		gotContentType atomic.Value
+	)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath.Store(r.URL.Path)
+		gotAuth.Store(r.Header.Get("Authorization"))
+		gotContentType.Store(r.Header.Get("Content-Type"))
+		// Match the OpenAI EmbeddingResponse layout that vLLM emits.
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = fmt.Fprintln(w, `{"data":[{"embedding":[1.0,2.0,3.0]},{"embedding":[4.0,5.0,6.0]}]}`)
+	}))
+	defer server.Close()
+
+	c := newTestClient(t, server.URL)
+	vecs, err := c.Embed(context.Background(), llm.EmbedRequest{
+		Model:  "embed-model",
+		Inputs: []string{"hello", "world"},
+	})
+	require.NoError(t, err)
+	require.Len(t, vecs, 2)
+	assert.Equal(t, []float32{1.0, 2.0, 3.0}, vecs[0])
+	assert.Equal(t, []float32{4.0, 5.0, 6.0}, vecs[1])
+	assert.Equal(t, "/v1/embeddings", gotPath.Load())
+	assert.Equal(t, "application/json", gotContentType.Load())
+	assert.Equal(t, "Bearer sk-real-test-key-1234567890", gotAuth.Load())
+}
+
+// TestEmbed_AuthorizationOmittedWhenKeyEmpty pins the empty-key path
+// for vLLM deployments started without --api-key. Sending `Bearer `
+// (empty) would 401, so the header is omitted entirely.
+func TestEmbed_AuthorizationOmittedWhenKeyEmpty(t *testing.T) {
+	var gotAuth atomic.Value
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotAuth.Store(r.Header.Get("Authorization"))
+		w.WriteHeader(http.StatusOK)
+		_, _ = fmt.Fprintln(w, `{"data":[{"embedding":[0.0]}]}`)
+	}))
+	defer server.Close()
+
+	cfg := &config.Config{
+		LLMEnabled:         true,
+		LLMProvider:        "vllm",
+		LLMBaseURL:         server.URL,
+		LLMModel:           "test-model",
+		LLMTimeout:         "30s",
+		LLMAllowPrivateURL: true,
+	}
+	c, err := NewClient(cfg, noop.NewTracerProvider().Tracer("test"))
+	require.NoError(t, err)
+	_, err = c.Embed(context.Background(), llm.EmbedRequest{Model: "m", Inputs: []string{"x"}})
+	require.NoError(t, err)
+	assert.Equal(t, "", gotAuth.Load())
+}
+
+// TestEmbed_LengthMismatchReturnsProviderUnavailable pins the
+// malformed-upstream guard: if the server returns M embeddings for
+// N inputs (M != N), surface ErrProviderUnavailable rather than
+// panic on out-of-range indexing or silently return garbled data.
+func TestEmbed_LengthMismatchReturnsProviderUnavailable(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = fmt.Fprintln(w, `{"data":[{"embedding":[1.0]}]}`) // 1 vector, caller will send 2 inputs
+	}))
+	defer server.Close()
+
+	c := newTestClient(t, server.URL)
+	_, err := c.Embed(context.Background(), llm.EmbedRequest{
+		Model:  "m",
+		Inputs: []string{"a", "b"},
+	})
+	require.Error(t, err)
+	assert.True(t, errors.Is(err, llm.ErrProviderUnavailable))
+}
+
+// TestEmbed_UpstreamErrorReturnsSentinel pins the 5xx / 429 →
+// ErrProviderUnavailable / ErrRateLimited mapping so a future
+// regression that drops the sentinel breaks the chat-side handler
+// fallback path.
+func TestEmbed_UpstreamErrorReturnsSentinel(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer server.Close()
+
+	c := newTestClient(t, server.URL)
+	_, err := c.Embed(context.Background(), llm.EmbedRequest{Model: "m", Inputs: []string{"x"}})
+	require.Error(t, err)
+	assert.True(t, errors.Is(err, llm.ErrProviderUnavailable))
+}
+
+// TestEmbed_EmptyInputsIsNoop pins the contract that an empty
+// Inputs slice is not an error and produces an empty result — the
+// rag package uses this to short-circuit when no feeds need
+// embedding on a feed-write that hashes-match.
+func TestEmbed_EmptyInputsIsNoop(t *testing.T) {
+	c := newTestClient(t, "http://127.0.0.1:1") // unreachable; proves no call is made
+	vecs, err := c.Embed(context.Background(), llm.EmbedRequest{Model: "m", Inputs: nil})
+	require.NoError(t, err)
+	assert.Empty(t, vecs)
+}

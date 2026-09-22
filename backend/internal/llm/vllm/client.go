@@ -327,6 +327,115 @@ func (e *upstreamStatusError) Error() string {
 	return fmt.Sprintf("vllm: upstream status %d", e.status)
 }
 
+// Embed batches len(req.Inputs) strings into a single POST
+// {base}/v1/embeddings call and returns one []float32 per input,
+// in input order. vLLM exposes an OpenAI-compatible /v1/embeddings
+// endpoint, so the wire contract is identical to OpenAI's; the
+// only reason this code lives in vllm/ rather than openai/ is the
+// SSRF-hardened http.Client below.
+//
+// CRITICAL: this method REUSES c.http (built by newHTTPClient).
+// That client runs the per-dial IP-class allowlist on every
+// connection, so the /v1/embeddings path inherits the same
+// protection as /chat/completions. Adding a new http.Client here
+// would silently open an SSRF window — code review must catch
+// that.
+//
+// The model is taken from req.Model, not from c.model — chat and
+// embedding models can differ. cmd/api/main.go is responsible for
+// resolving the embedding model (cfg.LLMEmbeddingModel, with
+// cfg.LLMModel as the fallback) at wiring time and passing it on
+// every Embed call.
+func (c *Client) Embed(ctx context.Context, req llm.EmbedRequest) ([][]float32, error) {
+	ctx, span := c.tracer.Start(ctx, "llm.vllm.embed",
+		trace.WithAttributes(
+			attribute.String("llm.provider", "vllm"),
+			attribute.String("llm.model", req.Model),
+			attribute.Int("llm.inputs", len(req.Inputs)),
+		),
+	)
+	defer span.End()
+
+	if len(req.Inputs) == 0 {
+		return nil, nil
+	}
+
+	body := struct {
+		Model string   `json:"model"`
+		Input []string `json:"input"`
+	}{
+		Model: req.Model,
+		Input: req.Inputs,
+	}
+	payload, err := json.Marshal(body)
+	if err != nil {
+		span.RecordError(err)
+		return nil, fmt.Errorf("vllm: marshal embed request: %w", llm.ErrInvalidInput)
+	}
+
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/v1/embeddings", bytes.NewReader(payload))
+	if err != nil {
+		span.RecordError(err)
+		return nil, c.mapError(err)
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+	httpReq.Header.Set("Accept", "application/json")
+	// Same empty-key handling as Chat — vLLM started without --api-key
+	// accepts the call without an Authorization header. Sending
+	// `Bearer ` (empty) would return 401.
+	if c.apiKey != "" {
+		httpReq.Header.Set("Authorization", "Bearer "+c.apiKey)
+	}
+
+	resp, err := c.http.Do(httpReq)
+	if err != nil {
+		span.RecordError(err)
+		return nil, c.mapError(err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		_, _ = io.Copy(io.Discard, resp.Body)
+		statusErr := &upstreamStatusError{status: resp.StatusCode}
+		span.RecordError(statusErr)
+		return nil, c.mapError(statusErr)
+	}
+
+	// vLLM follows the OpenAI EmbeddingResponse layout. We only need
+	// data[].embedding; everything else (object, model, usage,
+	// http_header) is ignored. Go's permissive decoder drops unknown
+	// fields without error so a future vLLM response-field addition
+	// doesn't break us.
+	var embedResp struct {
+		Data []struct {
+			Embedding []float32 `json:"embedding"`
+		} `json:"data"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&embedResp); err != nil {
+		span.RecordError(err)
+		return nil, fmt.Errorf("vllm: decode embed response: %w", llm.ErrProviderUnavailable)
+	}
+
+	if len(embedResp.Data) != len(req.Inputs) {
+		// Malformed upstream: we asked for N, got M. Surface a sentinel
+		// so the rag layer logs and continues without context — a
+		// retrieval failure must never fail the chat.
+		span.RecordError(fmt.Errorf("vllm embed: got %d embeddings, want %d", len(embedResp.Data), len(req.Inputs)))
+		return nil, llm.ErrProviderUnavailable
+	}
+
+	// OpenAI preserves order via data[i].index; vLLM typically just
+	// returns the embeddings in input order without an index field.
+	// We accept the simpler vLLM shape (positional, indexed 0..N-1)
+	// because we already asserted len(data) == len(req.Inputs).
+	out := make([][]float32, len(req.Inputs))
+	for i, d := range embedResp.Data {
+		out[i] = d.Embedding
+	}
+	span.SetStatus(codes.Ok, "")
+	return out, nil
+}
+
 // sseFrame is the subset of the OpenAI /vLLM chunk schema we read.
 // Tool-call deltas, finish_reason, logprobs, etc. are intentionally
 // ignored — Go's permissive JSON decoder drops unknown fields

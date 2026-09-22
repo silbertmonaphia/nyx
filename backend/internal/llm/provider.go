@@ -98,4 +98,21 @@ type ChatUsage struct {
 // errors.Is.
 type Provider interface {
 	Chat(ctx context.Context, req ChatRequest, onDelta func(delta string, finalUsage *ChatUsage) error) (*ChatUsage, error)
+	Embed(ctx context.Context, req EmbedRequest) ([][]float32, error)
+}
+
+// EmbedRequest is the per-call shape for embedding one or more
+// strings. The rag package batches inputs into a single request to
+// amortise the HTTP round-trip — every supported upstream (OpenAI,
+// vLLM) accepts an array shape natively.
+//
+// Model is optional; the rag package resolves it from
+// cfg.LLMEmbeddingModel at construction (falling back to
+// cfg.LLMModel) and passes the resolved string on every call. An
+// empty Model on the request is a programming error — clients that
+// want "use whatever the provider is configured for" should pass
+// the resolved string, not rely on a default.
+type EmbedRequest struct {
+	Model  string
+	Inputs []string
 }

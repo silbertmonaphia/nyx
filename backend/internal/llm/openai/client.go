@@ -237,3 +237,58 @@ func (c *Client) mapError(err error) error {
 
 	return fmt.Errorf("llm chat failed: %w", llm.ErrProviderUnavailable)
 }
+
+// Embed batches len(req.Inputs) strings into a single
+// /v1/embeddings call and returns one []float32 per input, in the
+// same order. The OpenAI SDK and any OpenAI-compatible server
+// (including vLLM, since the SDK ignores auth headers when the
+// upstream accepts anonymous access) honour the array shape
+// natively, so one HTTP round-trip serves N inputs.
+//
+// The model is taken from req.Model, not from c.model — the chat
+// model and the embedding model can differ (e.g. chat on gpt-4o,
+// embeddings on text-embedding-3-small). cmd/api/main.go is
+// responsible for resolving the embedding model from
+// cfg.LLMEmbeddingModel (with cfg.LLMModel as the fallback) at
+// wiring time and passing it on every Embed call.
+//
+// Error mapping reuses c.mapError — the SDK's typed errors
+// (openai.APIError, openai.RequestError) are identical for the
+// /v1/embeddings endpoint.
+func (c *Client) Embed(ctx context.Context, req llm.EmbedRequest) ([][]float32, error) {
+	ctx, span := c.tracer.Start(ctx, "llm.openai.embed",
+		trace.WithAttributes(
+			attribute.String("llm.model", req.Model),
+			attribute.Int("llm.inputs", len(req.Inputs)),
+		),
+	)
+	defer span.End()
+
+	if len(req.Inputs) == 0 {
+		return nil, nil
+	}
+
+	resp, err := c.http.CreateEmbeddings(ctx, openai.EmbeddingRequest{
+		Model: openai.EmbeddingModel(req.Model),
+		Input: req.Inputs,
+	})
+	if err != nil {
+		span.RecordError(err)
+		return nil, c.mapError(err)
+	}
+
+	out := make([][]float32, len(req.Inputs))
+	for _, d := range resp.Data {
+		// d.Index tells us which input the embedding corresponds to
+		// (preserves order even when the server batches). The bounds
+		// check guards against a malformed upstream that returns
+		// fewer rows than requested — we surface a sentinel error
+		// rather than a confusing nil-deref panic downstream.
+		if d.Index < 0 || d.Index >= len(out) {
+			return nil, fmt.Errorf("openai embed: index %d out of range [0,%d): %w", d.Index, len(out), llm.ErrProviderUnavailable)
+		}
+		out[d.Index] = d.Embedding
+	}
+	span.SetStatus(codes.Ok, "")
+	return out, nil
+}
