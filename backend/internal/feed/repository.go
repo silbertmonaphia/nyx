@@ -97,6 +97,7 @@ func init() {
 
 type Repository interface {
 	GetAll(ctx context.Context, userID int, query string, page, pageSize int, order SortOrder) (*Page, error)
+	GetFeedByID(ctx context.Context, userID int, id int) (*Feed, error)
 	Create(ctx context.Context, userID int, m *Feed) error
 	Update(ctx context.Context, userID int, id int, m *Feed) error
 	Delete(ctx context.Context, userID int, id int) error
@@ -276,6 +277,49 @@ func (r *sqlRepository) Ping(ctx context.Context) error {
 		return nil
 	}
 	return r.pool.Ping(ctx)
+}
+
+// GetFeedByID returns a single feed owned by userID. Missing rows
+// AND cross-owner reads both surface as ErrNotFound — the SQL
+// WHERE filters on id + user_id + deleted_at IS NULL, so a
+// non-owner caller sees the same 0-rows outcome as a missing id.
+// Same leak-free contract as Update and Delete.
+func (r *sqlRepository) GetFeedByID(ctx context.Context, userID int, id int) (*Feed, error) {
+	row, err := r.q.GetFeedByIDForUser(ctx, db.GetFeedByIDForUserParams{
+		ID:     toInt32(id),
+		UserID: toInt64(userID),
+	})
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, ErrNotFound
+		}
+		return nil, pgerr.Map(err)
+	}
+	f := toFeedFromGetByIDRow(row)
+	return &f, nil
+}
+
+// toFeedFromGetByIDRow projects a GetFeedByIDForUserRow into the
+// API-shaped Feed. The row type is distinct from db.Feed because
+// sqlc generates a dedicated row per query (sqlc can't widen
+// identical columns across queries), but the columns are identical
+// — mirror toFeed in case logic.
+func toFeedFromGetByIDRow(d db.GetFeedByIDForUserRow) Feed {
+	m := Feed{
+		ID:        int(d.ID),
+		UserID:    int(d.UserID),
+		Title:     d.Title,
+		CreatedAt: d.CreatedAt.Time,
+		UpdatedAt: d.UpdatedAt.Time,
+	}
+	if d.Description.Valid {
+		m.Description = d.Description.String
+	}
+	if d.DeletedAt.Valid {
+		t := d.DeletedAt.Time
+		m.DeletedAt = &t
+	}
+	return m
 }
 
 // toFeed projects a sqlc-generated db.Feed into the API-shaped

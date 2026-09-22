@@ -1003,3 +1003,117 @@ func TestGetFeedsHandler_FilteredByOwner(t *testing.T) {
 		t.Errorf("unmet pgxmock expectations: %v", err)
 	}
 }
+
+// TestGetFeedHandler covers the happy path for GET /api/feeds/{id}:
+// own feed returns 200 + the row. pgxmock arg matching pins the
+// owner-stamping arg so a future regression that hardcoded 0 would
+// fail the test.
+func TestGetFeedHandler(t *testing.T) {
+	repo, mock := newMockRepo(t)
+	service := NewService(repo, cache.NewNoop(), NoopEmbeddingIndexer{}, time.Minute, noop.NewTracerProvider().Tracer("test"))
+	h := NewHandler(service)
+
+	now := time.Now()
+	mock.ExpectQuery(`SELECT id, user_id, title, description, created_at, updated_at, deleted_at FROM feeds`).
+		WithArgs(int32(7), int64(1)).
+		WillReturnRows(pgxmock.NewRows([]string{"id", "user_id", "title", "description", "created_at", "updated_at", "deleted_at"}).
+			AddRow(int32(7), int64(1), "Inception", "Dream heist", now, now, nil))
+
+	tokens := newTestTokens(t)
+	router := setupTestRouter(h, tokens, true)
+	req, _ := http.NewRequest("GET", "/api/feeds/7", nil)
+	req.Header.Set("Authorization", "Bearer "+testAccessToken(t, tokens))
+	rr := httptest.NewRecorder()
+	router.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", rr.Code, rr.Body.String())
+	}
+	var f Feed
+	if err := json.Unmarshal(rr.Body.Bytes(), &f); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if f.ID != 7 || f.Title != "Inception" || f.UserID != 1 {
+		t.Errorf("unexpected response: %+v", f)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Errorf("unmet pgxmock expectations: %v", err)
+	}
+}
+
+// TestGetFeedHandlerNotFound pins the missing-id path: pgx.ErrNoRows
+// from the sqlc query → ErrNotFound → 404.
+func TestGetFeedHandlerNotFound(t *testing.T) {
+	repo, mock := newMockRepo(t)
+	service := NewService(repo, cache.NewNoop(), NoopEmbeddingIndexer{}, time.Minute, noop.NewTracerProvider().Tracer("test"))
+	h := NewHandler(service)
+
+	mock.ExpectQuery(`SELECT id, user_id, title, description, created_at, updated_at, deleted_at FROM feeds`).
+		WithArgs(int32(999), int64(1)).
+		WillReturnError(pgx.ErrNoRows)
+
+	tokens := newTestTokens(t)
+	router := setupTestRouter(h, tokens, true)
+	req, _ := http.NewRequest("GET", "/api/feeds/999", nil)
+	req.Header.Set("Authorization", "Bearer "+testAccessToken(t, tokens))
+	rr := httptest.NewRecorder()
+	router.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusNotFound {
+		t.Errorf("expected 404 for missing feed, got %v", rr.Code)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Errorf("unmet pgxmock expectations: %v", err)
+	}
+}
+
+// TestGetFeedHandler_OtherUserReturnsNotFound is the leak-free
+// cross-owner path for the new GET /api/feeds/{id} route: user 2
+// asks for user 1's feed, the SQL WHERE filters on user_id so the
+// query returns 0 rows, the repo translates that to ErrNotFound,
+// and the handler emits 404 — NEVER 403. Single sentinel, no
+// existence leak.
+func TestGetFeedHandler_OtherUserReturnsNotFound(t *testing.T) {
+	repo, mock := newMockRepo(t)
+	service := NewService(repo, cache.NewNoop(), NoopEmbeddingIndexer{}, time.Minute, noop.NewTracerProvider().Tracer("test"))
+	h := NewHandler(service)
+
+	mock.ExpectQuery(`SELECT id, user_id, title, description, created_at, updated_at, deleted_at FROM feeds`).
+		WithArgs(int32(7), int64(2)).
+		WillReturnError(pgx.ErrNoRows)
+
+	tokens := newTestTokens(t)
+	router := setupTestRouter(h, tokens, true)
+	req, _ := http.NewRequest("GET", "/api/feeds/7", nil)
+	req.Header.Set("Authorization", "Bearer "+testAccessTokenFor(t, tokens, 2, "intruder"))
+	rr := httptest.NewRecorder()
+	router.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusNotFound {
+		t.Errorf("expected 404 for cross-owner GET, got %v", rr.Code)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Errorf("unmet pgxmock expectations: %v", err)
+	}
+}
+
+// TestGetFeedHandler_RequiresAuth pins the auth gate on the new
+// route. No Authorization header → 401, the repo is never touched.
+func TestGetFeedHandler_RequiresAuth(t *testing.T) {
+	repo, mock := newMockRepo(t)
+	service := NewService(repo, cache.NewNoop(), NoopEmbeddingIndexer{}, time.Minute, noop.NewTracerProvider().Tracer("test"))
+	h := NewHandler(service)
+
+	tokens := newTestTokens(t)
+	router := setupTestRouter(h, tokens, true)
+	req, _ := http.NewRequest("GET", "/api/feeds/1", nil)
+	rr := httptest.NewRecorder()
+	router.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusUnauthorized {
+		t.Errorf("expected 401 without Authorization header, got %v", rr.Code)
+	}
+	if mock.ExpectationsWereMet() != nil {
+		t.Errorf("repo must not be queried on 401")
+	}
+}

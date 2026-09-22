@@ -121,6 +121,17 @@ func RegisterFeedOpsTest(api huma.API, h *Handler, tokens auth.TokenService, wit
 		Security:    []map[string][]string{{"BearerAuth": {}}},
 		Middlewares: protectedMiddlewares(tokens, withAuth),
 	}, h.DeleteFeed)
+
+	huma.Register(api, huma.Operation{
+		OperationID: "get-feed",
+		Method:      http.MethodGet,
+		Path:        "/api/feeds/{id}",
+		Summary:     "Get a feed",
+		Description: "Returns a single feed owned by the authenticated caller. Returns 404 if the feed does not exist OR is owned by another user — single sentinel, no existence leak.",
+		Tags:        []string{"feeds"},
+		Security:    []map[string][]string{{"BearerAuth": {}}},
+		Middlewares: protectedMiddlewares(tokens, withAuth),
+	}, h.GetFeed)
 }
 
 // protectedMiddlewares returns the per-operation middleware list for
@@ -208,6 +219,12 @@ type deleteFeedInput struct {
 // zero value.
 
 type deleteFeedOutput struct{}
+
+type getFeedInput struct {
+	ID int `path:"id" required:"true" minimum:"1" doc:"Feed id."`
+}
+
+type getFeedOutput struct{ Body Feed }
 
 // ---- Handler functions ----
 
@@ -306,4 +323,13 @@ func (h *Handler) DeleteFeed(ctx context.Context, in *deleteFeedInput) (*deleteF
 		return nil, api.MapError(ctx, err, "Failed to delete feed")
 	}
 	return &deleteFeedOutput{}, nil
+}
+
+//nolint:revive // unexported-return is huma's idiomatic op pattern
+func (h *Handler) GetFeed(ctx context.Context, in *getFeedInput) (*getFeedOutput, error) {
+	f, err := h.service.GetFeedByID(ctx, in.ID)
+	if err != nil {
+		return nil, api.MapError(ctx, err, "Failed to retrieve feed")
+	}
+	return &getFeedOutput{Body: *f}, nil
 }

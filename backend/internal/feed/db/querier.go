@@ -10,6 +10,12 @@ import (
 
 type Querier interface {
 	CountFeeds(ctx context.Context, arg CountFeedsParams) (int64, error)
+	// Single-row read for GET /api/feeds/{id}. The same WHERE filters on
+	// id + user_id + deleted_at IS NULL that GetAll uses, so a missing id
+	// AND a cross-owner id both resolve to pgx.ErrNoRows at the sqlc
+	// layer — the repo translates that to feed.ErrNotFound (single
+	// sentinel, no existence leak).
+	GetFeedByIDForUser(ctx context.Context, arg GetFeedByIDForUserParams) (GetFeedByIDForUserRow, error)
 	InsertFeed(ctx context.Context, arg InsertFeedParams) (Feed, error)
 	// SQL queries for the feed feature. Each block becomes a method on the
 	// generated internal/feed/db.Querier interface. The first line of each

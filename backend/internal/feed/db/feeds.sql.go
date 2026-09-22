@@ -35,6 +35,47 @@ func (q *Queries) CountFeeds(ctx context.Context, arg CountFeedsParams) (int64, 
 	return count, err
 }
 
+const getFeedByIDForUser = `-- name: GetFeedByIDForUser :one
+SELECT id, user_id, title, description, created_at, updated_at, deleted_at
+FROM feeds
+WHERE id = $1 AND user_id = $2 AND deleted_at IS NULL
+`
+
+type GetFeedByIDForUserParams struct {
+	ID     int32
+	UserID int64
+}
+
+type GetFeedByIDForUserRow struct {
+	ID          int32
+	UserID      int64
+	Title       string
+	Description pgtype.Text
+	CreatedAt   pgtype.Timestamptz
+	UpdatedAt   pgtype.Timestamptz
+	DeletedAt   pgtype.Timestamptz
+}
+
+// Single-row read for GET /api/feeds/{id}. The same WHERE filters on
+// id + user_id + deleted_at IS NULL that GetAll uses, so a missing id
+// AND a cross-owner id both resolve to pgx.ErrNoRows at the sqlc
+// layer — the repo translates that to feed.ErrNotFound (single
+// sentinel, no existence leak).
+func (q *Queries) GetFeedByIDForUser(ctx context.Context, arg GetFeedByIDForUserParams) (GetFeedByIDForUserRow, error) {
+	row := q.db.QueryRow(ctx, getFeedByIDForUser, arg.ID, arg.UserID)
+	var i GetFeedByIDForUserRow
+	err := row.Scan(
+		&i.ID,
+		&i.UserID,
+		&i.Title,
+		&i.Description,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.DeletedAt,
+	)
+	return i, err
+}
+
 const insertFeed = `-- name: InsertFeed :one
 INSERT INTO feeds (user_id, title, description)
 VALUES ($1, $2, $3)

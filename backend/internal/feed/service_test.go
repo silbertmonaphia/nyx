@@ -33,6 +33,15 @@ func (s *stubRepo) GetAll(_ context.Context, userID int, _ string, _, _ int, _ S
 	s.lastUserID = userID
 	return s.getAllResp, s.getAllErr
 }
+func (s *stubRepo) GetFeedByID(_ context.Context, userID int, id int) (*Feed, error) {
+	s.lastUserID = userID
+	for _, it := range s.getAllResp.Items {
+		if it.ID == id {
+			return &it, nil
+		}
+	}
+	return nil, ErrNotFound
+}
 func (s *stubRepo) Create(_ context.Context, userID int, m *Feed) error {
 	s.lastUserID = userID
 	return nil

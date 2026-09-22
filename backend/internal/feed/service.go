@@ -14,6 +14,7 @@ import (
 
 type Service interface {
 	GetFeeds(ctx context.Context, query string, page, pageSize int, order SortOrder) (*Page, error)
+	GetFeedByID(ctx context.Context, id int) (*Feed, error)
 	CreateFeed(ctx context.Context, m *Feed) error
 	UpdateFeed(ctx context.Context, id int, m *Feed) error
 	DeleteFeed(ctx context.Context, id int) error
@@ -192,6 +193,26 @@ func (s *feedService) DeleteFeed(ctx context.Context, id int) error {
 	}
 	s.invalidate(ctx, userID)
 	return nil
+}
+
+// GetFeedByID is a single-row, no-cache read scoped to the
+// authenticated user. Single PK lookups are cheaper than cache
+// round-trips so we go straight to the repo. Same defensive
+// userID==0 guard as GetFeeds — the route is auth-required, but
+// the guard preserves the no-cross-user-leak invariant if the
+// middleware is ever bypassed (e.g. by a future test seam).
+//
+// Cross-owner reads surface as ErrNotFound, not ErrForbidden —
+// single sentinel, no existence leak. See Repository.GetFeedByID.
+func (s *feedService) GetFeedByID(ctx context.Context, id int) (*Feed, error) {
+	ctx, span := s.tracer.Start(ctx, "feed.GetFeedByID", trace.WithSpanKind(trace.SpanKindInternal))
+	defer span.End()
+
+	userID := reqctx.UserIDFromContext(ctx)
+	if userID == 0 {
+		return nil, ErrNotFound
+	}
+	return s.repo.GetFeedByID(ctx, userID, id)
 }
 
 func (s *feedService) CheckHealth(ctx context.Context) error {

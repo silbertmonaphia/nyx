@@ -514,6 +514,55 @@
           "feeds"
         ]
       },
+      "get": {
+        "description": "Returns a single feed owned by the authenticated caller. Returns 404 if the feed does not exist OR is owned by another user — single sentinel, no existence leak.",
+        "operationId": "get-feed",
+        "parameters": [
+          {
+            "description": "Feed id.",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "description": "Feed id.",
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Feed"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Get a feed",
+        "tags": [
+          "feeds"
+        ]
+      },
       "put": {
         "description": "Updates the title or description of an existing feed. Requires a valid JWT.",
         "operationId": "update-feed",

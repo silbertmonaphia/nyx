@@ -74,3 +74,13 @@ RETURNING *;
 UPDATE feeds
 SET deleted_at = CURRENT_TIMESTAMP
 WHERE id = @id AND user_id = @user_id AND deleted_at IS NULL;
+
+-- name: GetFeedByIDForUser :one
+-- Single-row read for GET /api/feeds/{id}. The same WHERE filters on
+-- id + user_id + deleted_at IS NULL that GetAll uses, so a missing id
+-- AND a cross-owner id both resolve to pgx.ErrNoRows at the sqlc
+-- layer — the repo translates that to feed.ErrNotFound (single
+-- sentinel, no existence leak).
+SELECT id, user_id, title, description, created_at, updated_at, deleted_at
+FROM feeds
+WHERE id = @id AND user_id = @user_id AND deleted_at IS NULL;
