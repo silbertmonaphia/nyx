@@ -61,8 +61,9 @@ export const chatService = {
   async *streamMessage(
     messages: Message[],
     signal: AbortSignal,
+    opts: { rag?: boolean } = {},
   ): AsyncGenerator<ChatEvent> {
-    const body: ChatRequest = { messages };
+    const body: ChatRequest = { messages, rag: opts.rag };
     // `model` is intentionally omitted — the backend ignores it for
     // v1 and the brief explicitly forbids a model picker in the UI.
     let response = await fetch(CHAT_URL, {

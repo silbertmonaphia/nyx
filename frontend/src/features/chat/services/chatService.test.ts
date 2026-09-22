@@ -373,4 +373,46 @@ describe('chatService.streamMessage', () => {
       { kind: 'terminator' },
     ]);
   });
+
+  it('sends rag:true in the request body when opts.rag is true', async () => {
+    const sse =
+      'event: done\ndata: {"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}}\n\n' +
+      'data: [DONE]\n\n';
+    fetchMock.mockResolvedValueOnce(sseResponse([sse]));
+
+    for await (const e of chatService.streamMessage(
+      [{ role: 'user', content: 'hi' }],
+      new AbortController().signal,
+      { rag: true },
+    )) {
+      // drain
+      void e;
+    }
+
+    const body = JSON.parse(fetchMock.mock.calls[0][1].body as string);
+    expect(body).toEqual({ messages: [{ role: 'user', content: 'hi' }], rag: true });
+  });
+
+  it('sends rag: false in the body when opts.rag is false (server treats false as no-op)', async () => {
+    const sse =
+      'event: done\ndata: {"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}}\n\n' +
+      'data: [DONE]\n\n';
+    fetchMock.mockResolvedValueOnce(sseResponse([sse]));
+
+    for await (const e of chatService.streamMessage(
+      [{ role: 'user', content: 'hi' }],
+      new AbortController().signal,
+      { rag: false },
+    )) {
+      void e;
+    }
+
+    const body = JSON.parse(fetchMock.mock.calls[0][1].body as string);
+    // The wire always includes the rag field when the caller
+    // explicitly opts in or out; the server ignores false. We
+    // don't try to strip false on the client because Go's
+    // json:",omitempty" handles a missing field cleanly and a
+    // present false is harmless.
+    expect(body.rag).toBe(false);
+  });
 });

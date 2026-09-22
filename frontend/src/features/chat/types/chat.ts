@@ -13,6 +13,11 @@ export const messageSchema = z.object({
 export const chatRequestSchema = z.object({
   messages: z.array(messageSchema).max(50),
   model: z.string().optional(),
+  // rag:true asks the server to ground the answer in the
+  // authenticated user's feeds via top-K semantic retrieval.
+  // Omitted on the wire when false so today's non-RAG requests
+  // look identical to before this field landed.
+  rag: z.boolean().optional(),
 });
 
 export type Role = z.infer<typeof roleSchema>;

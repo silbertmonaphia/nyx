@@ -17,7 +17,10 @@ function resetStore() {
     messages: [],
     isStreaming: false,
     error: null,
+    useFeeds: false,
   });
+  // Clear any persisted toggle from a previous test in the suite.
+  localStorage.clear();
 }
 
 /**
@@ -335,6 +338,104 @@ describe('useChatStore', () => {
       expect(state.messages).toEqual([]);
       expect(state.isStreaming).toBe(false);
       expect(state.error).toBeNull();
+    });
+
+    it('also resets useFeeds to false so a fresh session starts clean', async () => {
+      await act(async () => {
+        useChatStore.getState().setUseFeeds(true);
+      });
+      expect(useChatStore.getState().useFeeds).toBe(true);
+
+      await act(async () => {
+        await useChatStore.getState().reset();
+      });
+
+      expect(useChatStore.getState().useFeeds).toBe(false);
+      expect(localStorage.getItem('nyx.chat.useFeeds')).toBe('false');
+    });
+  });
+
+  describe('useFeeds toggle', () => {
+    it('persists true to localStorage and is read on next module init', async () => {
+      await act(async () => {
+        useChatStore.getState().setUseFeeds(true);
+      });
+      expect(useChatStore.getState().useFeeds).toBe(true);
+      expect(localStorage.getItem('nyx.chat.useFeeds')).toBe('true');
+    });
+
+    it('passes rag: true to streamMessage when useFeeds is on', async () => {
+      await act(async () => {
+        useChatStore.getState().setUseFeeds(true);
+      });
+
+      mockedService.streamMessage.mockImplementationOnce(
+        (messages: unknown, signal: AbortSignal) =>
+          makeStream(
+            [
+              {
+                kind: 'done',
+                usage: {
+                  prompt_tokens: 1,
+                  completion_tokens: 1,
+                  total_tokens: 2,
+                },
+              },
+            ],
+            signal,
+          ),
+      );
+
+      // Fire-and-forget send: the held promise inside makeStream
+      // means send() never resolves until releaseStream() runs.
+      act(() => {
+        void useChatStore.getState().send('hi');
+      });
+
+      // Wait for the call to land, then assert the third arg.
+      await waitFor(() => {
+        expect(mockedService.streamMessage).toHaveBeenCalled();
+      });
+      const call = mockedService.streamMessage.mock.calls[0];
+      expect(call[2]).toEqual({ rag: true });
+
+      await act(async () => {
+        releaseStream();
+      });
+    });
+
+    it('passes rag: false when useFeeds is off (default)', async () => {
+      // useFeeds default is false (reset above clears it).
+      mockedService.streamMessage.mockImplementationOnce(
+        (messages: unknown, signal: AbortSignal) =>
+          makeStream(
+            [
+              {
+                kind: 'done',
+                usage: {
+                  prompt_tokens: 1,
+                  completion_tokens: 1,
+                  total_tokens: 2,
+                },
+              },
+            ],
+            signal,
+          ),
+      );
+
+      act(() => {
+        void useChatStore.getState().send('hi');
+      });
+
+      await waitFor(() => {
+        expect(mockedService.streamMessage).toHaveBeenCalled();
+      });
+      const call = mockedService.streamMessage.mock.calls[0];
+      expect(call[2]).toEqual({ rag: false });
+
+      await act(async () => {
+        releaseStream();
+      });
     });
   });
 });

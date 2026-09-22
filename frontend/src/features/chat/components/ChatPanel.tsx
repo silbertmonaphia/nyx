@@ -35,6 +35,8 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ open, onOpenChange }) => {
   const send = useChat((s) => s.send);
   const cancel = useChat((s) => s.cancel);
   const reset = useChat((s) => s.reset);
+  const useFeeds = useChat((s) => s.useFeeds);
+  const setUseFeeds = useChat((s) => s.setUseFeeds);
 
   const [draft, setDraft] = useState("");
   const listRef = useRef<HTMLDivElement | null>(null);
@@ -165,6 +167,29 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ open, onOpenChange }) => {
           className="flex flex-col gap-2"
           data-testid="chat-form"
         >
+          <div className="flex items-center gap-2">
+            <input
+              type="checkbox"
+              id="chat-use-feeds"
+              checked={useFeeds}
+              onChange={(e) => setUseFeeds(e.target.checked)}
+              disabled={isStreaming}
+              data-testid="chat-use-feeds"
+              className="h-4 w-4 rounded border-input accent-primary"
+              aria-label="Use my feeds"
+            />
+            <label
+              htmlFor="chat-use-feeds"
+              className="text-xs text-muted-foreground cursor-pointer"
+            >
+              Use my feeds
+            </label>
+            {useFeeds && (
+              <span className="text-[10px] text-muted-foreground/70 ml-auto">
+                Answers grounded in your feeds
+              </span>
+            )}
+          </div>
           <Textarea
             value={draft}
             onChange={(e) => setDraft(e.target.value)}

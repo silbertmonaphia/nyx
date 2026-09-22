@@ -26,6 +26,15 @@ interface ChatState {
   isStreaming: boolean;
   error: string | null;
   /**
+   * Whether the next `send()` should ask the server to ground the
+   * answer in the authenticated user's feeds via top-K semantic
+   * retrieval. Persisted to localStorage so a deliberate opt-in
+   * survives a page reload. The toggle is consumed by `send` —
+   * toggling mid-stream has no effect on the in-flight request.
+   */
+  useFeeds: boolean;
+  setUseFeeds: (next: boolean) => void;
+  /**
    * Send a user message and stream the assistant response. Appends
    * the user message immediately, opens the stream, and patches a
    * single assistant message in place as deltas arrive. Always
@@ -39,6 +48,11 @@ interface ChatState {
   cancel: () => void;
 }
 
+// localStorage key for the useFeeds toggle. Persisted so a
+// deliberate opt-in survives a page reload — a user who flipped
+// the switch expects it to stay flipped.
+const USE_FEEDS_KEY = "nyx.chat.useFeeds";
+
 // Module-level singleton so the abort controller survives across
 // render boundaries. The store holds only the live reference; the
 // controller itself is internal to this module.
@@ -48,6 +62,19 @@ let controller: AbortController | null = null;
 // has already wiped the messages array, so slicing it again would
 // resurrect a row that the UI just declared gone.
 let resetting = false;
+
+// Read the persisted toggle at module init. localStorage access in
+// the browser is synchronous and silent on failure (Safari private
+// mode, SSR with no window, etc.) — a missing value collapses to
+// the default (off).
+function readPersistedUseFeeds(): boolean {
+  if (typeof localStorage === "undefined") return false;
+  try {
+    return localStorage.getItem(USE_FEEDS_KEY) === "true";
+  } catch {
+    return false;
+  }
+}
 
 /**
  * Ephemeral chat history. Deliberately NOT persisted to localStorage:
@@ -61,6 +88,20 @@ export const useChatStore = create<ChatState>((set, get) => ({
   messages: [],
   isStreaming: false,
   error: null,
+  useFeeds: readPersistedUseFeeds(),
+
+  setUseFeeds: (next) => {
+    if (typeof localStorage !== "undefined") {
+      try {
+        localStorage.setItem(USE_FEEDS_KEY, next ? "true" : "false");
+      } catch {
+        // Safari private mode, quota exceeded, etc. — the in-memory
+        // value still flips, so the current session works; the
+        // choice just won't survive a reload.
+      }
+    }
+    set({ useFeeds: next });
+  },
 
   send: async (text) => {
     const trimmed = text.trim();
@@ -94,6 +135,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
       const stream = chatService.streamMessage(
         [...baseMessages].map((m) => ({ role: m.role, content: m.content })),
         localController.signal,
+        { rag: get().useFeeds },
       );
       while (true) {
         // Race the next event against the abort signal so a Cancel
@@ -218,7 +260,18 @@ export const useChatStore = create<ChatState>((set, get) => ({
       controller.abort();
       controller = null;
     }
-    set({ messages: [], isStreaming: false, error: null });
+    // A fresh dialog session starts with RAG off; the persisted
+    // user preference survives but is not auto-applied until the
+    // user re-toggles it. Avoids surprising the next visitor who
+    // shares the browser.
+    set({ messages: [], isStreaming: false, error: null, useFeeds: false });
+    if (typeof localStorage !== "undefined") {
+      try {
+        localStorage.setItem(USE_FEEDS_KEY, "false");
+      } catch {
+        // Same private-mode tolerance as setUseFeeds.
+      }
+    }
   },
 
   cancel: () => {

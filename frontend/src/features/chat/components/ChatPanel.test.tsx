@@ -155,3 +155,33 @@ describe('ChatPanel', () => {
     expect(note.className).toMatch(/italic/);
   });
 });
+
+describe('ChatPanel useFeeds toggle', () => {
+  it('renders the checkbox and lets the user flip it', async () => {
+    render(<ChatPanel open={true} onOpenChange={() => {}} />);
+    const toggle = screen.getByTestId('chat-use-feeds') as HTMLInputElement;
+    expect(toggle.checked).toBe(false);
+
+    await userEvent.click(toggle);
+    expect(toggle.checked).toBe(true);
+  });
+
+  it('disables the toggle while a stream is in flight', async () => {
+    // Seed a fake streaming state by writing into the store
+    // directly — the user-facing send path is exercised in
+    // chatStore.test.ts.
+    useChatStore.setState({ isStreaming: true });
+    render(<ChatPanel open={true} onOpenChange={() => {}} />);
+    const toggle = screen.getByTestId('chat-use-feeds') as HTMLInputElement;
+    expect(toggle.disabled).toBe(true);
+
+    useChatStore.setState({ isStreaming: false });
+  });
+
+  it('shows a "grounded in your feeds" hint when the toggle is on', async () => {
+    useChatStore.setState({ useFeeds: true });
+    render(<ChatPanel open={true} onOpenChange={() => {}} />);
+    expect(screen.getByText(/grounded in your feeds/i)).toBeInTheDocument();
+    useChatStore.setState({ useFeeds: false });
+  });
+});
