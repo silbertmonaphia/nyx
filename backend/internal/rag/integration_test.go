@@ -39,7 +39,7 @@ import (
 // test rather than the primary safety net.
 
 // stubEmbedder returns a fixed vector for every call. Its
-// dimensions match the schema's vector(1536). The integration
+// dimensions match the schema's vector(1024). The integration
 // test doesn't care about real embeddings — it cares that the
 // retriever returns the right user's feeds, not another user's.
 // Same input → same output → cosine distance is constant →
@@ -47,12 +47,12 @@ import (
 type stubEmbedder struct{}
 
 func (stubEmbedder) Embed(_ context.Context, _ llm.EmbedRequest) ([][]float32, error) {
-	// 1536-dim all-zeros vector. The retriever's ORDER BY <=> will
+	// 1024-dim all-zeros vector. The retriever's ORDER BY <=> will
 	// rank rows by how close their stored vectors are to zero;
 	// since every row in the test is the same zero-vector, ties
 	// resolve by row order. We sort explicitly in the test
 	// assertions so the tie-breaking doesn't matter.
-	return [][]float32{make([]float32, 1536)}, nil
+	return [][]float32{make([]float32, 1024)}, nil
 }
 
 func (stubEmbedder) Chat(_ context.Context, _ llm.ChatRequest, _ func(string, *llm.ChatUsage) error) (*llm.ChatUsage, error) {

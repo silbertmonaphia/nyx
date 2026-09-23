@@ -7,7 +7,7 @@
 # the repo root; requires `go`, `npm`, and the `docker compose`
 # plugin on PATH. Backend invocations assume `make up` has been run.
 
-.PHONY: dev dev-backend dev-frontend up down logs status stop help
+.PHONY: dev dev-backend dev-frontend up down up-vllm down-vllm logs status stop help
 
 COMPOSE := docker compose
 
@@ -28,6 +28,14 @@ help:
 #: Start the infra containers (db / redis / jaeger). Idempotent.
 up:
 	$(COMPOSE) up -d db redis jaeger
+
+#: Start the vLLM chat + embed containers (full local LLM stack). Requires `make up` already running.
+up-vllm:
+	$(COMPOSE) --profile vllm --profile embed up -d
+
+#: Stop the vLLM chat + embed containers (preserves volumes).
+down-vllm:
+	$(COMPOSE) --profile vllm --profile embed down
 
 #: Stop the infra containers (preserves volumes).
 down:

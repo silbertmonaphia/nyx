@@ -107,13 +107,13 @@ func buildAndServe(cfg *config.Config) {
 	}()
 
 	// Run migrations BEFORE the pool opens. golang-migrate opens its
-// own short-lived connection, so the pool's AfterConnect (which
-// registers the pgvector codec via pgxvec.RegisterTypes) doesn't
-// have to be tolerant of "type not found" — by the time the pool
-// spins up its first connection, migration 000014 has already run
-// CREATE EXTENSION vector. Running migrations first also means a
-// fresh dev volume gets its schema on boot without requiring a
-// separate `make up && go run cmd/api` dance.
+	// own short-lived connection, so the pool's AfterConnect (which
+	// registers the pgvector codec via pgxvec.RegisterTypes) doesn't
+	// have to be tolerant of "type not found" — by the time the pool
+	// spins up its first connection, migration 000014 has already run
+	// CREATE EXTENSION vector. Running migrations first also means a
+	// fresh dev volume gets its schema on boot without requiring a
+	// separate `make up && go run cmd/api` dance.
 	//
 	// golang-migrate's API is synchronous and does not accept a
 	// context — RunMigrations therefore takes no ctx. Failures are
@@ -412,37 +412,15 @@ func mountChatRoute(router chi.Router, cfg *config.Config, db *pgxpool.Pool, fee
 	}
 
 	// RAG facade. Built only when LLM is enabled (embeddings need
-	// an LLM). Resolves the embedding model with cfg.LLMModel as
-	// the fallback so a single-model deployment doesn't need a
-	// separate LLM_EMBEDDING_MODEL setting. The same llmClient
-	// powers both chat and embeddings — the failover Router wraps
-	// /v1/embeddings too.
+	// an LLM). When LLM_EMBEDDING_BASE_URL is set we build a
+	// dedicated llm.Provider for /v1/embeddings (a separate model
+	// — usually an embedding-tuned model — at a separate endpoint).
+	// Otherwise the embedder reuses the chat provider (Router or
+	// single) and falls back to LLM_MODEL for the embed model name
+	// when LLM_EMBEDDING_MODEL is empty. See mountRAGFacade for the
+	// extraction.
 	if cfg.LLMEnabled {
-		embeddingModel := cfg.LLMEmbeddingModel
-		if embeddingModel == "" {
-			embeddingModel = cfg.LLMModel
-		}
-		ragEmbedder := rag.NewEmbedder(llmClient, embeddingModel, tracerProvider.Tracer("nyx.rag"))
-		ragIndexer = rag.NewIndexer(db, ragEmbedder, tracerProvider.Tracer("nyx.rag"))
-		ragRetriever := rag.NewRetriever(db, tracerProvider.Tracer("nyx.rag"))
-		ragSvc = rag.NewService(
-			ragEmbedder, ragRetriever, db, feedRepo,
-			cfg.RAGTopK, cfg.RAGMaxContextChars, cfg.RAGMaxBackfillPerRequest,
-			tracerProvider.Tracer("nyx.rag"),
-		)
-		// Schema-drift warning: warn loudly if the live
-		// feed_embeddings.embedding column dim disagrees with
-		// EMBEDDING_DIMENSIONS. Doesn't fail-closed (the operator
-		// may be intentionally migrating), but logs the
-		// remediation runbook so a wrong-config deployment is
-		// obvious in the boot log.
-		warnEmbeddingDimMismatch(db, cfg.EmbeddingDimensions)
-		log.Info().
-			Str("embedding_model", embeddingModel).
-			Int("dimensions", cfg.EmbeddingDimensions).
-			Int("top_k", cfg.RAGTopK).
-			Int("max_context_chars", cfg.RAGMaxContextChars).
-			Msg("RAG over feeds enabled")
+		ragSvc, ragIndexer = mountRAGFacade(cfg, db, feedRepo, primary, llmClient, tracerProvider)
 	}
 
 	chatService := chat.NewService(llmClient, cfg, ragSvc, tracerProvider.Tracer("nyx.chat"))
@@ -453,6 +431,89 @@ func mountChatRoute(router chi.Router, cfg *config.Config, db *pgxpool.Pool, fee
 	stopGC := chatLimiter.RunGC(time.Minute, time.Hour)
 	chat.RegisterChatRoute(router, chatHandler, tokens, chatLimiter)
 	return stopGC, ragSvc, ragIndexer
+}
+
+// mountRAGFacade builds the RAG stack (embedder / indexer /
+// retriever / service) and wires the right llm.Provider to the
+// embedder.
+//
+// When LLM_EMBEDDING_BASE_URL is set, the embedder gets a
+// dedicated client (built from a clone of cfg with the embed
+// fields swapped in, mirroring the fallback-slot pattern above).
+// The dedicated client is single-provider — the embed endpoint
+// has no LLM_FALLBACK_* counterpart, and a failed embed is
+// best-effort by contract (feed/service.go:151 logs Warn and
+// continues on failure).
+//
+// When LLM_EMBEDDING_BASE_URL is empty, the embedder reuses the
+// chat provider (Router or single) and falls back to LLM_MODEL
+// for the embed model name when LLM_EMBEDDING_MODEL is empty —
+// today's behaviour for single-model deployments.
+//
+// Returns the RAG service (nil when not built) and the indexer
+// (nil when not built) so the caller can swap the feed service's
+// noop indexer for the real rag.Indexer.
+func mountRAGFacade(cfg *config.Config, db *pgxpool.Pool, feedRepo feed.Repository, primary *llm.ProviderSlot, chatClient llm.Provider, tracerProvider trace.TracerProvider) (*rag.Service, feed.EmbeddingIndexer) {
+	var ragLLMClient llm.Provider = chatClient
+	var embeddingModel string
+	if cfg.LLMEmbeddingBaseURL != "" {
+		embedProvider := cfg.LLMEmbeddingProvider
+		if embedProvider == "" {
+			embedProvider = cfg.LLMProvider
+		}
+		embedAPIKey := cfg.LLMEmbeddingAPIKey
+		if embedAPIKey == "" {
+			embedAPIKey = cfg.LLMAPIKey
+		}
+		cfgEmbed := *cfg
+		cfgEmbed.LLMProvider = embedProvider
+		cfgEmbed.LLMBaseURL = cfg.LLMEmbeddingBaseURL
+		cfgEmbed.LLMAPIKey = embedAPIKey
+		cfgEmbed.LLMModel = cfg.LLMEmbeddingModel
+		cfgEmbed.LLMAllowPrivateURL = cfg.LLMEmbeddingAllowPrivateURL || cfg.LLMAllowPrivateURL
+		embedClient, eerr := buildLLMClient(&cfgEmbed, tracerProvider)
+		if eerr != nil {
+			log.Fatal().Err(eerr).Str("provider", embedProvider).Msg("embedding LLM client init failed")
+		}
+		ragLLMClient = embedClient
+		embeddingModel = cfg.LLMEmbeddingModel
+		log.Info().
+			Str("embed_provider", embedProvider).
+			Str("embed_base_url", cfg.LLMEmbeddingBaseURL).
+			Str("embed_model", cfg.LLMEmbeddingModel).
+			Msg("RAG using separate embed provider")
+	} else {
+		embeddingModel = cfg.LLMEmbeddingModel
+		if embeddingModel == "" {
+			embeddingModel = cfg.LLMModel
+		}
+		log.Info().
+			Str("embed_provider", primary.Name).
+			Str("embed_model", embeddingModel).
+			Msg("RAG reusing chat LLM provider for embeddings")
+	}
+	ragEmbedder := rag.NewEmbedder(ragLLMClient, embeddingModel, tracerProvider.Tracer("nyx.rag"))
+	ragIndexer := rag.NewIndexer(db, ragEmbedder, tracerProvider.Tracer("nyx.rag"))
+	ragRetriever := rag.NewRetriever(db, tracerProvider.Tracer("nyx.rag"))
+	ragSvc := rag.NewService(
+		ragEmbedder, ragRetriever, db, feedRepo,
+		cfg.RAGTopK, cfg.RAGMaxContextChars, cfg.RAGMaxBackfillPerRequest,
+		tracerProvider.Tracer("nyx.rag"),
+	)
+	// Schema-drift warning: warn loudly if the live
+	// feed_embeddings.embedding column dim disagrees with
+	// EMBEDDING_DIMENSIONS. Doesn't fail-closed (the operator may
+	// be intentionally migrating), but logs the remediation
+	// runbook so a wrong-config deployment is obvious in the boot
+	// log.
+	warnEmbeddingDimMismatch(db, cfg.EmbeddingDimensions)
+	log.Info().
+		Str("embedding_model", embeddingModel).
+		Int("dimensions", cfg.EmbeddingDimensions).
+		Int("top_k", cfg.RAGTopK).
+		Int("max_context_chars", cfg.RAGMaxContextChars).
+		Msg("RAG over feeds enabled")
+	return ragSvc, ragIndexer
 }
 
 // buildLLMClient dispatches on cfg.LLMProvider to the right client

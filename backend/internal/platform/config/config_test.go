@@ -560,3 +560,208 @@ func TestLoad_RejectsFallbackPrivateHost(t *testing.T) {
 		t.Errorf("Load() error = %v, want it to mention fallback URL or escape hatch", err)
 	}
 }
+
+// TestLoad_AcceptsEmbedBaseURLEmpty pins the default-off path for
+// the separate embedding endpoint slot: LLM_EMBEDDING_BASE_URL
+// unset means the embedder reuses the chat provider (single-model
+// deployments pay nothing). All other LLM_EMBEDDING_* fields are
+// ignored in this mode.
+func TestLoad_AcceptsEmbedBaseURLEmpty(t *testing.T) {
+	t.Setenv("DB_URL", "postgres://x")
+	t.Setenv("JWT_SECRET", auth.TestSecret)
+	t.Setenv("LLM_ENABLED", "true")
+	t.Setenv("LLM_PROVIDER", "vllm")
+	t.Setenv("LLM_BASE_URL", "http://vllm:8000/v1")
+	t.Setenv("LLM_API_KEY", "")
+	t.Setenv("LLM_MODEL", "Qwen/Qwen3-4B-Instruct-2507")
+	t.Setenv("LLM_ALLOW_PRIVATE_URL", "true")
+	// LLM_EMBEDDING_* intentionally unset.
+	t.Setenv("LLM_EMBEDDING_BASE_URL", "")
+	t.Setenv("LLM_EMBEDDING_PROVIDER", "")
+	t.Setenv("LLM_EMBEDDING_MODEL", "")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v, want nil for default embed-off path", err)
+	}
+	if cfg.LLMEmbeddingBaseURL != "" {
+		t.Errorf("LLMEmbeddingBaseURL = %q, want empty", cfg.LLMEmbeddingBaseURL)
+	}
+}
+
+// TestLoad_AcceptsValidEmbedConfig pins the happy path for the
+// separate embedding endpoint: LLM_EMBEDDING_BASE_URL set, model
+// explicit, provider / api key fall back to the chat fields. The
+// embed endpoint reuses the chat provider (vllm) and the chat
+// api-key policy (vLLM allows empty).
+func TestLoad_AcceptsValidEmbedConfig(t *testing.T) {
+	t.Setenv("DB_URL", "postgres://x")
+	t.Setenv("JWT_SECRET", auth.TestSecret)
+	t.Setenv("LLM_ENABLED", "true")
+	t.Setenv("LLM_PROVIDER", "vllm")
+	t.Setenv("LLM_BASE_URL", "http://vllm:8000/v1")
+	t.Setenv("LLM_API_KEY", "")
+	t.Setenv("LLM_MODEL", "Qwen/Qwen3-4B-Instruct-2507")
+	t.Setenv("LLM_ALLOW_PRIVATE_URL", "true")
+	t.Setenv("LLM_EMBEDDING_BASE_URL", "http://vllm-embed:8000/v1")
+	t.Setenv("LLM_EMBEDDING_MODEL", "Qwen/Qwen3-Embedding-0.6B")
+	// LLM_EMBEDDING_PROVIDER / LLM_EMBEDDING_API_KEY intentionally
+	// unset — must fall back to chat's vllm + empty key.
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v, want nil for valid embed config", err)
+	}
+	if cfg.LLMEmbeddingBaseURL != "http://vllm-embed:8000/v1" {
+		t.Errorf("LLMEmbeddingBaseURL = %q, want %q", cfg.LLMEmbeddingBaseURL, "http://vllm-embed:8000/v1")
+	}
+	if cfg.LLMEmbeddingModel != "Qwen/Qwen3-Embedding-0.6B" {
+		t.Errorf("LLMEmbeddingModel = %q, want %q", cfg.LLMEmbeddingModel, "Qwen/Qwen3-Embedding-0.6B")
+	}
+}
+
+// TestLoad_RejectsEmbedConfigWithoutModel pins the resolution-rule
+// change: when LLM_EMBEDDING_BASE_URL is set, the embed model must
+// be explicit. Falling back to LLM_MODEL would 404 on the embed
+// endpoint because the embed server serves a different model id.
+func TestLoad_RejectsEmbedConfigWithoutModel(t *testing.T) {
+	t.Setenv("DB_URL", "postgres://x")
+	t.Setenv("JWT_SECRET", auth.TestSecret)
+	t.Setenv("LLM_ENABLED", "true")
+	t.Setenv("LLM_PROVIDER", "vllm")
+	t.Setenv("LLM_BASE_URL", "http://vllm:8000/v1")
+	t.Setenv("LLM_API_KEY", "")
+	t.Setenv("LLM_MODEL", "Qwen/Qwen3-4B-Instruct-2507")
+	t.Setenv("LLM_ALLOW_PRIVATE_URL", "true")
+	t.Setenv("LLM_EMBEDDING_BASE_URL", "http://vllm-embed:8000/v1")
+	t.Setenv("LLM_EMBEDDING_MODEL", "")
+
+	_, err := Load()
+	if err == nil {
+		t.Fatal("Load() error = nil, want LLM_EMBEDDING_MODEL-required rejection")
+	}
+	if !strings.Contains(err.Error(), "LLM_EMBEDDING_MODEL") {
+		t.Errorf("Load() error = %v, want it to mention LLM_EMBEDDING_MODEL", err)
+	}
+}
+
+// TestLoad_RejectsEmbedConfigInvalidProvider pins the embed-side
+// provider allowlist — same rules as LLM_PROVIDER but a separate
+// field so embed and chat can target different backends.
+func TestLoad_RejectsEmbedConfigInvalidProvider(t *testing.T) {
+	t.Setenv("DB_URL", "postgres://x")
+	t.Setenv("JWT_SECRET", auth.TestSecret)
+	t.Setenv("LLM_ENABLED", "true")
+	t.Setenv("LLM_PROVIDER", "vllm")
+	t.Setenv("LLM_BASE_URL", "http://vllm:8000/v1")
+	t.Setenv("LLM_API_KEY", "")
+	t.Setenv("LLM_MODEL", "Qwen/Qwen3-4B-Instruct-2507")
+	t.Setenv("LLM_ALLOW_PRIVATE_URL", "true")
+	t.Setenv("LLM_EMBEDDING_BASE_URL", "http://vllm-embed:8000/v1")
+	t.Setenv("LLM_EMBEDDING_MODEL", "Qwen/Qwen3-Embedding-0.6B")
+	t.Setenv("LLM_EMBEDDING_PROVIDER", "anthropic")
+
+	_, err := Load()
+	if err == nil {
+		t.Fatal("Load() error = nil, want LLM_EMBEDDING_PROVIDER rejection")
+	}
+	if !strings.Contains(err.Error(), "LLM_EMBEDDING_PROVIDER") {
+		t.Errorf("Load() error = %v, want it to mention LLM_EMBEDDING_PROVIDER", err)
+	}
+}
+
+// TestLoad_RejectsEmbedConfigOpenAIWithoutAPIKey pins the OpenAI
+// embed path: when the embed provider is OpenAI, the resolved
+// api key (LLM_EMBEDDING_API_KEY or fall-back LLM_API_KEY) must
+// be non-empty.
+func TestLoad_RejectsEmbedConfigOpenAIWithoutAPIKey(t *testing.T) {
+	t.Setenv("DB_URL", "postgres://x")
+	t.Setenv("JWT_SECRET", auth.TestSecret)
+	t.Setenv("LLM_ENABLED", "true")
+	t.Setenv("LLM_PROVIDER", "vllm")
+	t.Setenv("LLM_BASE_URL", "http://vllm:8000/v1")
+	t.Setenv("LLM_API_KEY", "")
+	t.Setenv("LLM_MODEL", "Qwen/Qwen3-4B-Instruct-2507")
+	t.Setenv("LLM_ALLOW_PRIVATE_URL", "true")
+	t.Setenv("LLM_EMBEDDING_BASE_URL", "https://api.openai.com/v1")
+	t.Setenv("LLM_EMBEDDING_MODEL", "text-embedding-3-small")
+	t.Setenv("LLM_EMBEDDING_PROVIDER", "openai")
+	// LLM_EMBEDDING_API_KEY intentionally unset; LLM_API_KEY is empty.
+
+	_, err := Load()
+	if err == nil {
+		t.Fatal("Load() error = nil, want embed-OpenAI-without-API-key rejection")
+	}
+	if !strings.Contains(err.Error(), "LLM_EMBEDDING_API_KEY") {
+		t.Errorf("Load() error = %v, want it to mention LLM_EMBEDDING_API_KEY", err)
+	}
+}
+
+// TestLoad_RejectsEmbedConfigPrivateHost pins the SSRF guard for
+// the embed URL. The escape hatch is LLM_EMBEDDING_ALLOW_PRIVATE_URL
+// OR LLM_ALLOW_PRIVATE_URL — either flips the guard off. Here
+// BOTH are false to confirm the embed URL is checked independently
+// of the chat URL (a private embed endpoint requires explicit opt-in).
+func TestLoad_RejectsEmbedConfigPrivateHost(t *testing.T) {
+	t.Setenv("DB_URL", "postgres://x")
+	t.Setenv("JWT_SECRET", auth.TestSecret)
+	t.Setenv("LLM_ENABLED", "true")
+	t.Setenv("LLM_PROVIDER", "vllm")
+	t.Setenv("LLM_BASE_URL", "http://vllm:8000/v1")
+	t.Setenv("LLM_API_KEY", "")
+	t.Setenv("LLM_MODEL", "Qwen/Qwen3-4B-Instruct-2507")
+	t.Setenv("LLM_ALLOW_PRIVATE_URL", "true")
+	t.Setenv("LLM_EMBEDDING_BASE_URL", "http://127.0.0.1:8001/v1")
+	t.Setenv("LLM_EMBEDDING_MODEL", "Qwen/Qwen3-Embedding-0.6B")
+	// LLM_EMBEDDING_ALLOW_PRIVATE_URL intentionally false. The chat
+	// flag alone does NOT cover the embed URL (it must propagate
+	// via the OR at validation time). To get a clean rejection
+	// here, both flags need to be off — but LLM_BASE_URL also
+	// needs to pass the chat-side SSRF guard, so the chat URL
+	// must use LLM_ALLOW_PRIVATE_URL=true. The embed URL gets
+	// validated separately: LLM_EMBEDDING_ALLOW_PRIVATE_URL=false
+	// (this field), LLM_ALLOW_PRIVATE_URL=true → resolved = true
+	// → still passes. So instead we assert the field is read and
+	// resolved correctly by setting both flags to false and
+	// pointing the chat URL at a public domain.
+
+	// Reset to the test that actually exercises rejection: both
+	// allow-private flags false, chat URL public, embed URL private.
+	t.Setenv("LLM_ALLOW_PRIVATE_URL", "false")
+	t.Setenv("LLM_BASE_URL", "https://api.openai.com/v1")
+	t.Setenv("LLM_API_KEY", "sk-prod-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+	t.Setenv("LLM_EMBEDDING_BASE_URL", "http://127.0.0.1:8001/v1")
+
+	_, err := Load()
+	if err == nil {
+		t.Fatal("Load() error = nil, want embed private-host rejection")
+	}
+	if !strings.Contains(err.Error(), "ALLOW_PRIVATE_URL") {
+		t.Errorf("Load() error = %v, want it to mention the escape hatch", err)
+	}
+}
+
+// TestLoad_EmbedConfigAllowPrivateHonoured pins the OR semantics:
+// when LLM_EMBEDDING_ALLOW_PRIVATE_URL=true (and the chat flag is
+// false), the embed URL's private host is allowed.
+func TestLoad_EmbedConfigAllowPrivateHonoured(t *testing.T) {
+	t.Setenv("DB_URL", "postgres://x")
+	t.Setenv("JWT_SECRET", auth.TestSecret)
+	t.Setenv("LLM_ENABLED", "true")
+	t.Setenv("LLM_PROVIDER", "openai")
+	t.Setenv("LLM_BASE_URL", "https://api.openai.com/v1")
+	t.Setenv("LLM_API_KEY", "sk-prod-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+	t.Setenv("LLM_MODEL", "gpt-4o-mini")
+	t.Setenv("LLM_ALLOW_PRIVATE_URL", "false")
+	t.Setenv("LLM_EMBEDDING_BASE_URL", "http://127.0.0.1:8001/v1")
+	t.Setenv("LLM_EMBEDDING_MODEL", "Qwen/Qwen3-Embedding-0.6B")
+	t.Setenv("LLM_EMBEDDING_ALLOW_PRIVATE_URL", "true")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v, want nil for embed-allow-private override", err)
+	}
+	if !cfg.LLMEmbeddingAllowPrivateURL {
+		t.Error("LLMEmbeddingAllowPrivateURL = false, want true")
+	}
+}

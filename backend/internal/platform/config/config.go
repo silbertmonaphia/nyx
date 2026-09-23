@@ -147,15 +147,32 @@ type Config struct {
 	// A startup-time schema-drift check in cmd/api/main.go warns
 	// loudly when the live column dim disagrees.
 	//
+	// LLM_EMBEDDING_{PROVIDER,BASE_URL,API_KEY,ALLOW_PRIVATE_URL}
+	// are the *separate* embedding endpoint slot. When
+	// LLM_EMBEDDING_BASE_URL is empty the embedder reuses the chat
+	// provider (today's behaviour — single-model deployments pay
+	// nothing). When set, cmd/api/main.go builds a dedicated
+	// llm.Provider for /v1/embeddings and resolves the embed model
+	// name with NO fallback to LLM_MODEL (the embed endpoint serves
+	// a different model id than the chat one; the fallback would
+	// produce 404s against the embed server). The chat fields are
+	// still consulted: provider / base URL / api key / allow_private
+	// each fall back to their LLM_* counterparts when the embed
+	// counterpart is empty.
+	//
 	// RAG is gated on LLM_ENABLED=true — no separate RAG_ENABLED.
 	// The chat endpoint exposes the rag:true flag regardless; when
 	// LLM is disabled the server simply runs without a provider
 	// client and the chat service ignores the flag (defensive no-op).
-	LLMEmbeddingModel        string `mapstructure:"LLM_EMBEDDING_MODEL"`
-	EmbeddingDimensions      int    `mapstructure:"EMBEDDING_DIMENSIONS"`
-	RAGTopK                  int    `mapstructure:"RAG_TOP_K"`
-	RAGMaxContextChars       int    `mapstructure:"RAG_MAX_CONTEXT_CHARS"`
-	RAGMaxBackfillPerRequest int    `mapstructure:"RAG_MAX_BACKFILL_PER_REQUEST"`
+	LLMEmbeddingModel           string `mapstructure:"LLM_EMBEDDING_MODEL"`
+	LLMEmbeddingProvider        string `mapstructure:"LLM_EMBEDDING_PROVIDER"`
+	LLMEmbeddingBaseURL         string `mapstructure:"LLM_EMBEDDING_BASE_URL"`
+	LLMEmbeddingAPIKey          string `mapstructure:"LLM_EMBEDDING_API_KEY"`
+	LLMEmbeddingAllowPrivateURL bool   `mapstructure:"LLM_EMBEDDING_ALLOW_PRIVATE_URL"`
+	EmbeddingDimensions         int    `mapstructure:"EMBEDDING_DIMENSIONS"`
+	RAGTopK                     int    `mapstructure:"RAG_TOP_K"`
+	RAGMaxContextChars          int    `mapstructure:"RAG_MAX_CONTEXT_CHARS"`
+	RAGMaxBackfillPerRequest    int    `mapstructure:"RAG_MAX_BACKFILL_PER_REQUEST"`
 
 	// MCP server (Model Context Protocol) for the feed domain.
 	// MCP_ENABLED is the master switch. When false (default) no
@@ -324,14 +341,22 @@ func setDefaults() {
 	// assistant" prompt when the operator hasn't customised it.
 
 	// Embeddings + RAG defaults. LLM_EMBEDDING_MODEL defaults empty
-	// so cmd/api/main.go can fall back to LLM_MODEL at wiring time.
-	// EMBEDDING_DIMENSIONS defaults to 1536 (text-embedding-3-small)
+	// so cmd/api/main.go can fall back to LLM_MODEL at wiring time
+	// ONLY when LLM_EMBEDDING_BASE_URL is also empty (shared
+	// provider). When LLM_EMBEDDING_BASE_URL is set, the embed
+	// model must be explicit — there's no fallback to LLM_MODEL
+	// because the embed endpoint serves a different model id.
+	// EMBEDDING_DIMENSIONS defaults to 1024 (Qwen/Qwen3-Embedding-0.6B)
 	// and MUST match the feed_embeddings.embedding column dim — the
-	// schema migration hardcodes 1536. Operators switching to a
-	// different-dim model must write a new migration AND set
+	// schema migration 000015 hardcodes 1024. Operators switching
+	// to a different-dim model must write a new migration AND set
 	// EMBEDDING_DIMENSIONS to match.
 	viper.SetDefault("LLM_EMBEDDING_MODEL", "")
-	viper.SetDefault("EMBEDDING_DIMENSIONS", 1536)
+	viper.SetDefault("LLM_EMBEDDING_PROVIDER", "")
+	viper.SetDefault("LLM_EMBEDDING_BASE_URL", "")
+	viper.SetDefault("LLM_EMBEDDING_API_KEY", "")
+	viper.SetDefault("LLM_EMBEDDING_ALLOW_PRIVATE_URL", false)
+	viper.SetDefault("EMBEDDING_DIMENSIONS", 1024)
 	viper.SetDefault("RAG_TOP_K", 5)
 	viper.SetDefault("RAG_MAX_CONTEXT_CHARS", 4000)
 	viper.SetDefault("RAG_MAX_BACKFILL_PER_REQUEST", 20)
@@ -368,7 +393,9 @@ func bindEnvVars() {
 		"LLM_MAX_STREAM_DURATION", "LLM_ALLOW_PRIVATE_URL",
 		"LLM_FALLBACK_BASE_URL", "LLM_FALLBACK_API_KEY", "LLM_FALLBACK_MODEL",
 		"LLM_PROBE_TIMEOUT",
-		"LLM_EMBEDDING_MODEL", "EMBEDDING_DIMENSIONS",
+		"LLM_EMBEDDING_MODEL", "LLM_EMBEDDING_PROVIDER", "LLM_EMBEDDING_BASE_URL",
+		"LLM_EMBEDDING_API_KEY", "LLM_EMBEDDING_ALLOW_PRIVATE_URL",
+		"EMBEDDING_DIMENSIONS",
 		"RAG_TOP_K", "RAG_MAX_CONTEXT_CHARS", "RAG_MAX_BACKFILL_PER_REQUEST",
 		"MCP_ENABLED", "MCP_PATH", "MCP_MAX_BODY_BYTES",
 	} {
@@ -488,26 +515,8 @@ func validateLLMConfig(cfg *Config) error {
 		}
 	}
 
-	// Fallback slot — only validated when LLM_FALLBACK_BASE_URL is
-	// non-empty. The fallback's provider type is the OPPOSITE of
-	// the primary's; with only two impls today (openai, vllm) that's
-	// unambiguous. If a third provider is added, this rule needs
-	// either a sibling LLM_FALLBACK_PROVIDER env or a richer router.
-	if cfg.LLMFallbackBaseURL != "" {
-		if err := validateLLMBaseURL(cfg.LLMFallbackBaseURL, cfg.LLMAllowPrivateURL); err != nil {
-			return err
-		}
-		fallbackIsOpenAI := cfg.LLMProvider == LLMProviderVLLM
-		if fallbackIsOpenAI {
-			if cfg.LLMFallbackAPIKey == "" {
-				return fmt.Errorf("LLM_FALLBACK_API_KEY is required when LLM_PROVIDER=vllm (fallback is OpenAI)")
-			}
-			if err := checkNotPlaceholderKey(cfg.LLMFallbackAPIKey, "LLM_FALLBACK_API_KEY"); err != nil {
-				return err
-			}
-		}
-		// vLLM fallback: LLM_FALLBACK_API_KEY optional — empty is
-		// the standard vLLM-without---api-key deployment.
+	if err := validateFallbackConfig(cfg); err != nil {
+		return err
 	}
 
 	if len(cfg.LLMSystemPrompt) > 8192 {
@@ -522,6 +531,95 @@ func validateLLMConfig(cfg *Config) error {
 		if err := checkNotPlaceholderKey(cfg.LLMEmbeddingModel, "LLM_EMBEDDING_MODEL"); err != nil {
 			return err
 		}
+	}
+
+	return validateEmbedConfig(cfg)
+}
+
+// validateFallbackConfig enforces the rules for the chat fallback
+// slot (LLM_FALLBACK_*). Extracted from validateLLMConfig so the
+// chat-path validator stays under the cyclomatic-complexity budget
+// and the fallback rules are documented as a single block.
+//
+// Called only when LLM_FALLBACK_BASE_URL is non-empty. The
+// fallback's provider type is the OPPOSITE of the primary's; with
+// only two impls today (openai, vllm) that's unambiguous. If a
+// third provider is added, this rule needs either a sibling
+// LLM_FALLBACK_PROVIDER env or a richer router. OpenAI fallback
+// requires a non-placeholder key; vLLM fallback allows empty key.
+func validateFallbackConfig(cfg *Config) error {
+	if cfg.LLMFallbackBaseURL == "" {
+		return nil
+	}
+	if err := validateLLMBaseURL(cfg.LLMFallbackBaseURL, cfg.LLMAllowPrivateURL); err != nil {
+		return err
+	}
+	fallbackIsOpenAI := cfg.LLMProvider == LLMProviderVLLM
+	if fallbackIsOpenAI {
+		if cfg.LLMFallbackAPIKey == "" {
+			return fmt.Errorf("LLM_FALLBACK_API_KEY is required when LLM_PROVIDER=vllm (fallback is OpenAI)")
+		}
+		if err := checkNotPlaceholderKey(cfg.LLMFallbackAPIKey, "LLM_FALLBACK_API_KEY"); err != nil {
+			return err
+		}
+	}
+	// vLLM fallback: LLM_FALLBACK_API_KEY optional — empty is the
+	// standard vLLM-without---api-key deployment.
+	return nil
+}
+
+// validateEmbedConfig enforces the rules for the separate embedding
+// endpoint slot (LLM_EMBEDDING_*). Extracted from validateLLMConfig
+// so the chat-path validator stays under the cyclomatic-complexity
+// budget and the embed rules are documented as a single block.
+//
+// When LLM_EMBEDDING_BASE_URL is empty the embedder reuses the chat
+// provider — today's behaviour — and none of the other
+// LLM_EMBEDDING_* fields matter. When set, we validate the resolved
+// (provider, base URL, api key, model) quadruple with the same rules
+// as the chat fields:
+//   - provider ∈ {openai, vllm}, or empty → fall back to chat
+//   - base URL non-empty (must be set when LLM_EMBEDDING_BASE_URL is
+//     set, since the operator opted into the separate slot)
+//   - SSRF guard via validateLLMBaseURL
+//   - OpenAI provider requires non-placeholder api key
+//   - model must be explicit — no fallback to LLM_MODEL (different
+//     endpoint, different model id; the chat model id is almost
+//     certainly unknown to the embed server)
+func validateEmbedConfig(cfg *Config) error {
+	if cfg.LLMEmbeddingBaseURL == "" {
+		return nil
+	}
+	resolvedProvider := cfg.LLMEmbeddingProvider
+	if resolvedProvider == "" {
+		resolvedProvider = cfg.LLMProvider
+	}
+	resolvedAPIKey := cfg.LLMEmbeddingAPIKey
+	if resolvedAPIKey == "" {
+		resolvedAPIKey = cfg.LLMAPIKey
+	}
+	resolvedAllowPrivate := cfg.LLMEmbeddingAllowPrivateURL || cfg.LLMAllowPrivateURL
+
+	switch resolvedProvider {
+	case LLMProviderOpenAI, LLMProviderVLLM:
+	case "":
+		return fmt.Errorf("LLM_EMBEDDING_PROVIDER must be one of {%s, %s}, got empty", LLMProviderOpenAI, LLMProviderVLLM)
+	default:
+		return fmt.Errorf("LLM_EMBEDDING_PROVIDER must be one of {%s, %s}, got %q", LLMProviderOpenAI, LLMProviderVLLM, resolvedProvider)
+	}
+	if err := validateLLMBaseURL(cfg.LLMEmbeddingBaseURL, resolvedAllowPrivate); err != nil {
+		return err
+	}
+	if resolvedProvider == LLMProviderOpenAI {
+		if resolvedAPIKey == "" {
+			return fmt.Errorf("LLM_EMBEDDING_API_KEY is required when LLM_EMBEDDING_PROVIDER=openai")
+		}
+		if err := checkNotPlaceholderKey(resolvedAPIKey, "LLM_EMBEDDING_API_KEY"); err != nil {
+			return err
+		}
+	}
+	if cfg.LLMEmbeddingModel == "" {
+		return fmt.Errorf("LLM_EMBEDDING_MODEL is required when LLM_EMBEDDING_BASE_URL is set — the embed endpoint serves a different model id than the chat one and does not fall back to LLM_MODEL")
 	}
 	return nil
 }

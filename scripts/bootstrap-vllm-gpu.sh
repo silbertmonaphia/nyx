@@ -70,7 +70,12 @@ for kv in \
   LLM_PROVIDER=vllm \
   LLM_BASE_URL=http://vllm:8000/v1 \
   LLM_MODEL=Qwen/Qwen3-4B-Instruct-2507 \
-  LLM_ALLOW_PRIVATE_URL=true; do
+  LLM_ALLOW_PRIVATE_URL=true \
+  LLM_EMBEDDING_PROVIDER=vllm \
+  LLM_EMBEDDING_BASE_URL=http://vllm-embed:8000/v1 \
+  LLM_EMBEDDING_MODEL=Qwen/Qwen3-Embedding-0.6B \
+  LLM_EMBEDDING_ALLOW_PRIVATE_URL=true \
+  EMBEDDING_DIMENSIONS=1024; do
   k=${kv%%=*}
   sed -i -E "s|^[[:space:]]*#?[[:space:]]*(export[[:space:]]+)?${k}[[:space:]]*=.*|${kv}|" .env
   grep -qE "^[[:space:]]*${k}=" .env || printf '%s\n' "$kv" >> .env
@@ -81,13 +86,13 @@ done
 #    leave the compose-managed network in an inconsistent state, and
 #    `up` then fails with "network X not found"). Tolerate the down
 #    failing — it returns non-zero when nothing is running.
-docker compose --profile vllm down --remove-orphans 2>/dev/null || true
-docker compose --profile vllm up --build -d
+docker compose --profile vllm --profile embed down --remove-orphans 2>/dev/null || true
+docker compose --profile vllm --profile embed up --build -d
 # `docker compose ps` without a service arg also shows the `backend`
 # container with `Skipped: optional dependency "vllm"` (compose.yml:137
 # sets `required: false`), which is just backend waiting for vllm and
 # unrelated to vllm's own health. Filter to vllm only.
-docker compose ps vllm
+docker compose ps vllm vllm-embed
 
 # 7. Wait for vLLM to become healthy (compose healthcheck on /v1/models).
 #    Compose healthcheck total budget = start_period (600s) + retries (60) ×
@@ -101,25 +106,36 @@ docker compose ps vllm
 #    doesn't have to run a second command. Exit code reflects the outcome
 #    so CI wrappers can detect failure.
 dump_vllm_log() {
-  echo "----- last 80 lines of vllm log -----"
-  docker compose logs --no-color --tail=80 vllm 2>&1 || echo "(could not read vllm log)"
-  echo "----- end vllm log -----"
+  local svc=$1
+  echo "----- last 80 lines of $svc log -----"
+  docker compose logs --no-color --tail=80 "$svc" 2>&1 || echo "(could not read $svc log)"
+  echo "----- end $svc log -----"
 }
-echo
-echo "Waiting for vLLM to become healthy (up to 25 min — model load + cudagraph capture)..."
-for _ in {1..300}; do
-  # Compose v2 names containers `{project}-{service}-{replica}` (e.g.,
-  # `nyx-vllm-1`), so `docker inspect vllm` finds nothing. Resolve the
-  # service to its container ID first.
-  cid=$(docker compose ps -q vllm 2>/dev/null | head -1 || true)
-  status=unknown
-  [[ -n $cid ]] && status=$(docker inspect --format='{{.State.Health.Status}}' "$cid" 2>/dev/null || echo unknown)
-  case "$status" in
-    healthy)   echo "✓ vLLM is healthy."; exit 0 ;;
-    unhealthy) echo "! vLLM is unhealthy."; dump_vllm_log; exit 1 ;;
-  esac
-  sleep 5
-done
-echo "! vLLM did not become healthy within 25 min."
-dump_vllm_log
-exit 1
+wait_healthy() {
+  local svc=$1
+  local budget_min=$2
+  local attempts=$((budget_min * 12))   # 5s interval → 12 attempts/min
+  echo
+  echo "Waiting for $svc to become healthy (up to ${budget_min} min)..."
+  for _ in $(seq 1 $attempts); do
+    cid=$(docker compose ps -q "$svc" 2>/dev/null | head -1 || true)
+    status=unknown
+    [[ -n $cid ]] && status=$(docker inspect --format='{{.State.Health.Status}}' "$cid" 2>/dev/null || echo unknown)
+    case "$status" in
+      healthy)   echo "✓ $svc is healthy."; return 0 ;;
+      unhealthy) echo "! $svc is unhealthy."; dump_vllm_log "$svc"; return 1 ;;
+    esac
+    sleep 5
+  done
+  echo "! $svc did not become healthy within ${budget_min} min."
+  dump_vllm_log "$svc"
+  return 1
+}
+# Chat container: long cold start (model load + cudagraph capture).
+wait_healthy vllm 25 || exit 1
+# Embed container: smaller model, much faster cold start. The embed
+# service can race the chat service's cudagraph capture without
+# affecting it (separate container, separate memory slice), so we
+# don't gate the embed wait on the chat one.
+wait_healthy vllm-embed 10 || exit 1
+exit 0

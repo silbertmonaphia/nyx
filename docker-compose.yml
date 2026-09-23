@@ -144,6 +144,14 @@ services:
       vllm:
         condition: service_healthy
         required: false
+      # Optional embed endpoint (--profile embed). When the profile
+      # is off, the service is absent and `required: false` keeps the
+      # backend from refusing to boot. When on, the healthcheck gates
+      # backend start so the first embed attempt doesn't race the
+      # model load.
+      vllm-embed:
+        condition: service_healthy
+        required: false
     # SECURITY.md M12: backend Dockerfile already sets USER nyx
     # (non-root), so no compose-level user: override is needed.
     # Read-only rootfs; tmpfs gives /tmp the writable scratch Go
@@ -283,6 +291,16 @@ services:
       # at the cost of ~10-30% per-token latency on small batches.
       # Comment out to re-enable cudagraphs once you measure the hit.
       - "--enforce-eager"
+      # Cap GPU memory so the vllm-embed service (which shares the
+      # same device when --profile embed is on) gets a predictable
+      # slice. Without this cap the chat container claims the whole
+      # card and vllm-embed's reservation is meaningless. 0.70
+      # leaves ~30% for the embed model (Qwen/Qwen3-Embedding-0.6B
+      # uses ~2.5 GB at FP16); operators running Qwen3-8B should
+      # drop this further (e.g. 0.55) or drop --enforce-eager on the
+      # chat container.
+      - "--gpu-memory-utilization"
+      - "0.70"
     environment:
       - HUGGING_FACE_HUB_TOKEN=${HUGGING_FACE_HUB_TOKEN:-}
       # HF_ENDPOINT routes HuggingFace API calls (config + weight fetches)
@@ -341,6 +359,91 @@ services:
       # of throughput can add `--enforce-eager` to the command list.
       retries: 60
       start_period: 600s
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    tmpfs:
+      - /tmp
+
+  # Embedding endpoint for the RAG pipeline (opt-in profile). The
+  # chat vllm service above serves a chat-tuned model (Qwen3-4B /
+  # Qwen3-8B-FP8) which does NOT expose /v1/embeddings — every
+  # embed call returns 404. The Nyx embedder
+  # (internal/llm/vllm/client.go:376) would then silently fail
+  # (ErrProviderUnavailable → feed/service.go:151 logs Warn and
+  # continues), leaving feed_embeddings empty.
+  #
+  # This service serves an embedding-tuned model on host port 8001
+  # and is wired into the backend via the LLM_EMBEDDING_* config
+  # family (LLM_EMBEDDING_BASE_URL=http://vllm-embed:8000/v1 etc.).
+  # Default model Qwen/Qwen3-Embedding-0.6B is multilingual
+  # (100+ languages, 1024-dim), matches the chat model's family
+  # for tokenization consistency, and emits vectors whose dim
+  # matches migration 000015 (vector(1024)).
+  #
+  # Bring up alongside the chat container:
+  #   docker compose --profile vllm --profile embed up -d
+  # The chat vllm service's --gpu-memory-utilization 0.70 cap
+  # (above) leaves ~30% of the device for this service. Qwen3-0.6B
+  # at FP16 needs ~2.5 GB; on a 16 GB card this leaves comfortable
+  # headroom for both.
+  #
+  # Both services share the vllm_cache volume so a model weight
+  # downloaded once is reused on the other container's first start.
+  vllm-embed:
+    image: vllm/vllm-openai:v0.29.0
+    mem_limit: 4g
+    cpus: "2.00"
+    profiles: ["embed"]
+    restart: always
+    command:
+      - "--model"
+      - "${VLLM_EMBED_MODEL:-Qwen/Qwen3-Embedding-0.6B}"
+      - "--served-model-name"
+      - "${VLLM_EMBED_MODEL:-Qwen/Qwen3-Embedding-0.6B}"
+      - "--host"
+      - "0.0.0.0"
+      - "--port"
+      - "8000"
+      # Sub-30s cold start; embed calls are batch-friendly and the
+      # ~10-30% latency hit is irrelevant at retrieval scale.
+      - "--enforce-eager"
+      # Small slice — Qwen3-0.6B at FP16 is ~1.2 GB weights. Cap at
+      # 0.15 so an out-of-memory here doesn't take down the chat
+      # service on the same device. Operators running BGE-large
+      # (~3 GB) should bump this to ~0.25.
+      - "--gpu-memory-utilization"
+      - "0.15"
+      # Embed model context — feed chunk_text is Title + "\n\n" +
+      # Description, well under 512 tokens.
+      - "--max-model-len"
+      - "512"
+    environment:
+      - HUGGING_FACE_HUB_TOKEN=${HUGGING_FACE_HUB_TOKEN:-}
+      - HF_ENDPOINT=${HF_ENDPOINT:-https://hf-mirror.com}
+      - HF_HUB_DISABLE_IPV6=${HF_HUB_DISABLE_IPV6:-1}
+      - VLLM_WSL2_ENABLE_PIN_MEMORY=${VLLM_WSL2_ENABLE_PIN_MEMORY:-1}
+    ports:
+      # Loopback only — same posture as the chat container.
+      - "127.0.0.1:8001:8000"
+    volumes:
+      - vllm_cache:/root/.cache/huggingface
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    healthcheck:
+      # /v1/models returns the loaded model list — cheapest "server
+      # up AND model loaded" probe. Embed model is ~1.2 GB; cold
+      # start well under 5 min on warm cache (cold download ~30 s
+      # on a decent link).
+      test: ["CMD-SHELL", "curl -fsS http://localhost:8000/v1/models > /dev/null || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 300s
     cap_drop: [ALL]
     security_opt: ["no-new-privileges:true"]
     tmpfs:
