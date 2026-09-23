@@ -218,10 +218,19 @@ func TestHandler_ToolsCall_ListFeeds_HappyPath(t *testing.T) {
 	require.Equal(t, http.StatusOK, rr.Code)
 	out := decodeSSEOrJSONBody(t, rr)
 	result, _ := out["result"].(map[string]any)
-	require.NotNil(t, result)
-	// result.isError must be falsy on the happy path.
+	require.NotNil(t, result, "result must be present on the happy path")
 	isErr, _ := result["isError"].(bool)
 	assert.False(t, isErr, "happy-path tool call must NOT set isError")
+	// StructuredContent carries the typed payload — agents prefer
+	// it over the JSON-text Content fallback. Assert the shape so
+	// a future regression that loses StructuredContent is caught.
+	sc, ok := result["structuredContent"].(map[string]any)
+	require.True(t, ok, "structuredContent must be present; got %T (%v)", result["structuredContent"], result["structuredContent"])
+	assert.Contains(t, sc, "data")
+	assert.Contains(t, sc, "page")
+	assert.Contains(t, sc, "page_size")
+	assert.Contains(t, sc, "total")
+	assert.Contains(t, sc, "has_more")
 }
 
 func TestHandler_ToolsCall_GetFeed_NotFoundReturnsToolError(t *testing.T) {

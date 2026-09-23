@@ -77,6 +77,16 @@ func NewHandler(svc *Service, path string, maxBodyBytes int64) *Handler {
 		"1.0.0",
 		server.WithToolCapabilities(false),
 		server.WithRecovery(),
+		// server.WithInputSchemaValidation enforces our declared
+		// mcp.NewTool schemas (Required, Min, MaxLength, Enum) on
+		// incoming arguments. Without it the schema is purely
+		// advisory — clients see the constraints but a hostile
+		// agent can send any JSON. Defence-in-depth: reject
+		// invalid args at the framework boundary before the typed
+		// handler runs. Per [SEP-1303] the failure surfaces as a
+		// tool-level IsError result with a message the LLM can
+		// self-correct on, not as a JSON-RPC 401-style error.
+		server.WithInputSchemaValidation(),
 	)
 	svc.RegisterTools(mcpServer)
 
