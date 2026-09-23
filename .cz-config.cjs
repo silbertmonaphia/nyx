@@ -22,6 +22,7 @@ module.exports = {
     'frontend',
     'auth',
     'infra',
+    'mcp',
     'security',
     'ci',
     'docs',

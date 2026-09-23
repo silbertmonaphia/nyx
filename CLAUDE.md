@@ -45,6 +45,7 @@ Local dev orchestrator (`Makefile` at repo root):
 - `backend/cmd/api/main.go` — wiring (config → DB → cache → domains → router → http.Server).
 - `backend/internal/middleware/` — chi middlewares: RequestID, RealIP, Recoverer, Prometheus, Logging, CORS, RateLimit, plus `huma_adapter.go` for huma-compatible ctx values.
 - `backend/internal/feed/` and `backend/internal/user/` — clean-arch domains (`model.go`, `repository.go`, `service.go`, `huma_handler.go`). Tests live alongside (`service_test.go`, `repository_test.go`, `repository_integration_test.go`, `handler_test.go`).
+- `backend/internal/mcp/` — Model Context Protocol server (Streamable HTTP, JWT-bearer, tools only). Default off via `MCP_ENABLED=false`. Exposes feed list/get/create/update/delete to external AI agents. See `FUTURE_BACKEND.md` §11.
 - `backend/internal/platform/` — `config/` (viper), `database/` (pgxpool + golang-migrate), `cache/` (Redis + noop), `auth/` (JWT), `api/` (huma helpers, error mapper).
 - `backend/internal/reqctx/` — typed values stashed on `context.Context` (auth claims, request ID, etc.).
 - `backend/internal/{feed,user}/db/` — sqlc output, **do not edit by hand**. Regenerate with `make sqlc`. See `backend/SQLC.md`.

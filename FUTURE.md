@@ -84,6 +84,7 @@ Single source of truth for "what's done / what's next" across the stack. Tick an
 - [ ] Chat history persistence — currently stateless (client sends full history each request). When conversations outgrow `LLM_MAX_HISTORY_MESSAGES` or cross-device history / analytics / GDPR-delete become product needs, add `chat_sessions` + `chat_messages` tables with soft-delete + retention cron.
 - [ ] Chat persona allowlist — let authenticated users pick from an operator-curated model allowlist (cost-controlled).
 - [ ] Streaming tool calls / JSON mode — extend the provider interface once we have a feature that needs structured output beyond free text.
+- [x] MCP server for feeds — Streamable HTTP (`/mcp`, JWT-bearer, tools only) exposing list/get/create/update/delete to external AI agents. Default off via `MCP_ENABLED=false`. See `FUTURE_BACKEND.md` §11.
 
 ---
 
