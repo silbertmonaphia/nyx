@@ -25,10 +25,13 @@ type stubFeedRepo struct{}
 func (stubFeedRepo) GetAll(_ context.Context, _ int, _ string, _, _ int, _ feed.SortOrder) (*feed.Page, error) {
 	return nil, nil
 }
-func (stubFeedRepo) Create(_ context.Context, _ int, _ *feed.Feed) error   { return nil }
+func (stubFeedRepo) GetFeedByID(_ context.Context, _ int, _ int) (*feed.Feed, error) {
+	return nil, feed.ErrNotFound
+}
+func (stubFeedRepo) Create(_ context.Context, _ int, _ *feed.Feed) error    { return nil }
 func (stubFeedRepo) Update(_ context.Context, _, _ int, _ *feed.Feed) error { return nil }
 func (stubFeedRepo) Delete(_ context.Context, _, _ int) error               { return nil }
-func (stubFeedRepo) Ping(_ context.Context) error                            { return nil }
+func (stubFeedRepo) Ping(_ context.Context) error                           { return nil }
 
 // TestRenderContextBlock_BasicShape pins the prompt shape: each
 // passage renders with "[Feed N] Title: ...\nDescription: ...",

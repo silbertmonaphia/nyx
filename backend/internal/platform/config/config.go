@@ -156,6 +156,23 @@ type Config struct {
 	RAGTopK                  int    `mapstructure:"RAG_TOP_K"`
 	RAGMaxContextChars       int    `mapstructure:"RAG_MAX_CONTEXT_CHARS"`
 	RAGMaxBackfillPerRequest int    `mapstructure:"RAG_MAX_BACKFILL_PER_REQUEST"`
+
+	// MCP server (Model Context Protocol) for the feed domain.
+	// MCP_ENABLED is the master switch. When false (default) no
+	// route is mounted and no mcp-go server is constructed — a
+	// deployment that doesn't expose feeds to external agents pays
+	// nothing. MCP_PATH is the URL prefix the Streamable HTTP server
+	// is mounted under (default /mcp). MCP_MAX_BODY_BYTES is the
+	// inner per-handler body cap; the outer router-level 1 MiB cap
+	// (cmd/api/main.go maxBodyBytesLimit) still fires first.
+	//
+	// The default-off toggle mirrors LLM_ENABLED — same shape, same
+	// fail-closed semantics, same call-site gating. JWT bearer auth
+	// is required and is provided by the same middleware used by the
+	// REST API; per-owner scoping is enforced inside feed.Service.
+	MCPEnabled      bool   `mapstructure:"MCP_ENABLED"`
+	MCPPath         string `mapstructure:"MCP_PATH"`
+	MCPMaxBodyBytes int64  `mapstructure:"MCP_MAX_BODY_BYTES"`
 }
 
 func Load() (*Config, error) {
@@ -216,6 +233,12 @@ func Load() (*Config, error) {
 
 	if cfg.LLMEnabled {
 		if err := validateLLMConfig(&cfg); err != nil {
+			return nil, err
+		}
+	}
+
+	if cfg.MCPEnabled {
+		if err := validateMCPConfig(&cfg); err != nil {
 			return nil, err
 		}
 	}
@@ -312,6 +335,18 @@ func setDefaults() {
 	viper.SetDefault("RAG_TOP_K", 5)
 	viper.SetDefault("RAG_MAX_CONTEXT_CHARS", 4000)
 	viper.SetDefault("RAG_MAX_BACKFILL_PER_REQUEST", 20)
+
+	// MCP defaults. MCP_ENABLED=false (default) means no /mcp
+	// route is mounted and no mcp-go server is constructed.
+	// MCP_PATH default /mcp matches the standard convention; the
+	// MCP spec recommends a non-versioned path and most MCP clients
+	// (Claude Code, Claude Desktop) discover the server at /mcp.
+	// MCP_MAX_BODY_BYTES 64 KiB matches the chat per-handler cap;
+	// tool args are tiny so the cap catches a buggy agent without
+	// rejecting legitimate inputs.
+	viper.SetDefault("MCP_ENABLED", false)
+	viper.SetDefault("MCP_PATH", "/mcp")
+	viper.SetDefault("MCP_MAX_BODY_BYTES", 65536)
 }
 
 // bindEnvVars explicitly wires every env-sourced viper key. See Load
@@ -335,6 +370,7 @@ func bindEnvVars() {
 		"LLM_PROBE_TIMEOUT",
 		"LLM_EMBEDDING_MODEL", "EMBEDDING_DIMENSIONS",
 		"RAG_TOP_K", "RAG_MAX_CONTEXT_CHARS", "RAG_MAX_BACKFILL_PER_REQUEST",
+		"MCP_ENABLED", "MCP_PATH", "MCP_MAX_BODY_BYTES",
 	} {
 		_ = viper.BindEnv(key)
 	}
@@ -501,6 +537,35 @@ func checkNotPlaceholderKey(key, fieldName string) error {
 		if strings.Contains(lower, placeholder) {
 			return fmt.Errorf("%s looks like a placeholder (%q); refusing to start — set a real key", fieldName, placeholder)
 		}
+	}
+	return nil
+}
+
+// validateMCPConfig enforces the cross-field requirements for
+// turning MCP_ENABLED on. The rules:
+//   - MCPPath must start with "/" and must not contain "?" or "#"
+//     (fragment / query in a route path is a misconfiguration).
+//   - MCPMaxBodyBytes must be in [1024, 1048576] — the upper bound
+//     matches the outer router cap (1 MiB) so an inner cap larger
+//     than the outer is impossible.
+//
+// Called only when MCPEnabled is true so the default-off path
+// stays free of these requirements. Auth uses the project's
+// existing JWT bearer middleware (no companion secrets required).
+func validateMCPConfig(cfg *Config) error {
+	if cfg.MCPPath == "" || cfg.MCPPath[0] != '/' {
+		return fmt.Errorf("MCP_PATH must start with '/', got %q", cfg.MCPPath)
+	}
+	for _, bad := range []string{"?", "#"} {
+		if strings.Contains(cfg.MCPPath, bad) {
+			return fmt.Errorf("MCP_PATH must not contain %q", bad)
+		}
+	}
+	if cfg.MCPMaxBodyBytes < 1024 {
+		return fmt.Errorf("MCP_MAX_BODY_BYTES must be at least 1024, got %d", cfg.MCPMaxBodyBytes)
+	}
+	if cfg.MCPMaxBodyBytes > 1048576 {
+		return fmt.Errorf("MCP_MAX_BODY_BYTES must be at most 1048576 (1 MiB), got %d", cfg.MCPMaxBodyBytes)
 	}
 	return nil
 }

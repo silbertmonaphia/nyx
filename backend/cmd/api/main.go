@@ -490,12 +490,12 @@ func mountMCPRoute(router chi.Router, cfg *config.Config, feedSvc feed.Service, 
 	mcpSvc := mcp.NewService(feedSvc, tracerProvider.Tracer("nyx.mcp"))
 	mcpHandler := mcp.NewHandler(mcpSvc, cfg.MCPPath, cfg.MCPMaxBodyBytes)
 
-	// Per-user limiter: 60 calls/min, burst 20. In-memory only;
-	// see internal/mcp/ratelimit.go for the cost trade-off. The
-	// chat limiter is 5 streams/min because each stream holds open
-	// for minutes; MCP tool calls are cheap short-lived RPCs so the
-	// cap is ten times higher.
-	mcpLimiter := mcp.NewUserRateLimiter(60.0/60.0, 20)
+	// Per-user limiter: 1 token/sec sustained (60 calls/min) with
+	// burst 20. In-memory only; see internal/mcp/ratelimit.go for
+	// the cost trade-off. The chat limiter is 5 streams/min because
+	// each stream holds open for minutes; MCP tool calls are cheap
+	// short-lived RPCs so the cap is ten times higher.
+	mcpLimiter := mcp.NewUserRateLimiter(1.0, 20)
 	stopGC := mcpLimiter.RunGC(time.Minute, time.Hour)
 	mcp.RegisterMCPRoute(router, mcpHandler, tokens, mcpLimiter)
 
