@@ -1,13 +1,17 @@
 services:
   db:
-    # pgvector community image: drop-in for postgres:17-alpine but
-    # with the pgvector extension pre-built. Required for the RAG
-    # feature (the feed_embeddings.embedding column uses vector(N)).
+    # pgvector community image: drop-in for postgres:17 with the
+    # pgvector extension pre-built. Required for the RAG feature
+    # (the feed_embeddings.embedding column uses vector(N)).
+    # Available tags: pg17, pg17-trixie, pg17-bookworm. There is
+    # NO pg17-alpine tag — the pgvector project only ships the
+    # Debian-slim variants. The default postgres:17 image this
+    # replaces was also Debian-slim, so the swap is in-family.
     # If you're upgrading from a pre-pgvector volume and the new
     # container refuses to start, run `docker compose down -v` once
     # to recreate the named volume — on-disk WAL format versions
     # can differ across minor releases.
-    image: pgvector/pgvector:pg17-alpine
+    image: pgvector/pgvector:pg17
     # Local-dev resource caps. Generous enough that the dev stack
     # stays healthy on a 16 GB laptop; tight enough to prevent a
     # runaway query from starving the host. Override per-run with
