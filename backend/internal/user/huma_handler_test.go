@@ -169,7 +169,7 @@ func TestRegisterHandler_Created(t *testing.T) {
 	}
 	rr := postJSON(t, newTestRouterWithRepo(repo), "/api/register", RegisterRequest{
 		Username: testUsername,
-				Password: "hunter2",
+		Password: "hunter2",
 	})
 
 	if rr.Code != http.StatusCreated {
@@ -222,7 +222,7 @@ func TestRegisterHandler_BodyCarriesTokens(t *testing.T) {
 	}
 	rr := postJSON(t, newTestRouterWithRepo(repo), "/api/register", RegisterRequest{
 		Username: testUsername,
-				Password: "hunter2",
+		Password: "hunter2",
 	})
 
 	var res AuthResponse
@@ -249,7 +249,7 @@ func TestRegisterHandler_UsernameTakenReturns409(t *testing.T) {
 	}
 	rr := postJSON(t, newTestRouterWithRepo(repo), "/api/register", RegisterRequest{
 		Username: testUsername,
-				Password: "hunter2",
+		Password: "hunter2",
 	})
 
 	env := decodeEnvelope(t, rr, http.StatusConflict)
@@ -292,7 +292,7 @@ func TestRegisterHandler_TooShortUsernameReturns400(t *testing.T) {
 	}
 	rr := postJSON(t, newTestRouterWithRepo(repo), "/api/register", RegisterRequest{
 		Username: "ab",
-				Password: "hunter2",
+		Password: "hunter2",
 	})
 
 	decodeEnvelope(t, rr, http.StatusBadRequest)
@@ -311,7 +311,7 @@ func TestRegisterHandler_TooShortPasswordReturns400(t *testing.T) {
 	}
 	rr := postJSON(t, newTestRouterWithRepo(repo), "/api/register", RegisterRequest{
 		Username: testUsername,
-				Password: "x",
+		Password: "x",
 	})
 
 	decodeEnvelope(t, rr, http.StatusBadRequest)
@@ -327,7 +327,7 @@ func TestRegisterHandler_InternalErrorReturns500(t *testing.T) {
 	}
 	rr := postJSON(t, newTestRouterWithRepo(repo), "/api/register", RegisterRequest{
 		Username: testUsername,
-				Password: "hunter2",
+		Password: "hunter2",
 	})
 
 	env := decodeEnvelope(t, rr, http.StatusInternalServerError)

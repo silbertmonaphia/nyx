@@ -353,9 +353,9 @@ func (c *chatRAGEmbedder) Embed(_ context.Context, _ llm.EmbedRequest) ([][]floa
 
 // chatRAGRetriever implements rag.RetrieverIface for chat tests.
 type chatRAGRetriever struct {
-	passages  []rag.Passage
-	err       error
-	calls     int
+	passages   []rag.Passage
+	err        error
+	calls      int
 	lastUserID int
 }
 

@@ -265,9 +265,9 @@ func (s *Service) runBackfill(ctx context.Context, userID int) {
 		for i, f := range feeds {
 			if err := q.UpsertFeedEmbedding(ctx, ragdb.UpsertFeedEmbeddingParams{
 				//nolint:gosec // G115: feed_id is a SERIAL PK; handler-side caps keep this well below math.MaxInt32.
-				FeedID: int32(f.ID),
-				UserID: int64(userID),
-				Embedding: pgvector.NewVector(vecs[i]),
+				FeedID:      int32(f.ID),
+				UserID:      int64(userID),
+				Embedding:   pgvector.NewVector(vecs[i]),
 				ChunkText:   ChunkText(f),
 				ContentHash: hashes[i],
 			}); err != nil {

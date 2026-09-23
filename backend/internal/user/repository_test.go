@@ -37,8 +37,8 @@ type stubQuerier struct {
 	revokeFamilyCalls int
 	revokeByIDErr     error
 
-	execResp pgconn.CommandTag
-	execErr  error
+	execResp  pgconn.CommandTag
+	execErr   error
 	execCalls int
 
 	queryRowResp []any

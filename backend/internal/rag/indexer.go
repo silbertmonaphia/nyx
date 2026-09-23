@@ -24,9 +24,9 @@ import (
 // the operator sees them in logs; the contract is "never fail
 // the user's write because embedding failed".
 type Indexer struct {
-	q       *ragdb.Queries
+	q        *ragdb.Queries
 	embedder *Embedder
-	tracer  trace.Tracer
+	tracer   trace.Tracer
 }
 
 // NewIndexer builds an Indexer that issues SQL through the supplied

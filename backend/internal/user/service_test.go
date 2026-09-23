@@ -728,4 +728,3 @@ func TestLogout_RequiresRefreshToken(t *testing.T) {
 		t.Errorf("Logout with empty token should be nil (idempotent), got %v", err)
 	}
 }
-
