@@ -14,6 +14,7 @@ import (
 	"nyx/internal/llm"
 	"nyx/internal/llm/openai"
 	"nyx/internal/llm/vllm"
+	"nyx/internal/mcp"
 	"nyx/internal/middleware"
 	"nyx/internal/platform/api"
 	"nyx/internal/platform/auth"
@@ -105,19 +106,31 @@ func buildAndServe(cfg *config.Config) {
 		}
 	}()
 
-	// Initialize database
+	// Run migrations BEFORE the pool opens. golang-migrate opens its
+// own short-lived connection, so the pool's AfterConnect (which
+// registers the pgvector codec via pgxvec.RegisterTypes) doesn't
+// have to be tolerant of "type not found" — by the time the pool
+// spins up its first connection, migration 000014 has already run
+// CREATE EXTENSION vector. Running migrations first also means a
+// fresh dev volume gets its schema on boot without requiring a
+// separate `make up && go run cmd/api` dance.
+	//
+	// golang-migrate's API is synchronous and does not accept a
+	// context — RunMigrations therefore takes no ctx. Failures are
+	// fatal at the caller; RunMigrations only returns errors.
+	if migErr := database.RunMigrations(cfg.DBURL, cfg.MigrationPath); migErr != nil {
+		log.Fatal().Err(migErr).Msg("migrations failed")
+	}
+
+	// Initialize database. The pool's AfterConnect hook registers
+	// pgvector's vector / halfvec / sparsevec codecs; this fires
+	// per connection. Migration 000014 installed the extension in
+	// the step above, so the registration query finds the type.
 	db, err := database.New(context.Background(), cfg, observability.NewPgxTracer(tracing.Provider))
 	if err != nil {
 		log.Fatal().Err(err).Msg("Could not connect to database")
 	}
 	defer db.Close()
-
-	// Run migrations. golang-migrate's API is synchronous and does not
-	// accept a context — RunMigrations therefore takes no ctx. Failures
-	// are fatal at the caller; RunMigrations only returns errors.
-	if migErr := database.RunMigrations(cfg.DBURL, cfg.MigrationPath); migErr != nil {
-		log.Fatal().Err(migErr).Msg("migrations failed")
-	}
 
 	// Initialize cache. Disabled by default; when enabled we wait up to
 	// 10s for Redis to come up so we fail fast on misconfiguration rather
@@ -214,15 +227,21 @@ func buildAndServe(cfg *config.Config) {
 	user.RegisterUserOps(humaAPI, userHandler, tokens)
 
 	// Build the LLM provider (single-provider or router with
-// failover) + the RAG facade (nil when LLM is disabled). The
-// ragSvc drives the chat service's RAG injection; the indexer
-// swaps the feed service's noop indexer so subsequent writes
-// embed.
+	// failover) + the RAG facade (nil when LLM is disabled). The
+	// ragSvc drives the chat service's RAG injection; the indexer
+	// swaps the feed service's noop indexer so subsequent writes
+	// embed.
 	stopChatGC, _, ragIndexer := mountChatRoute(router, cfg, db, feedRepo, tracing.Provider, tokens)
 	defer stopChatGC()
 	if ragIndexer != nil {
 		feedService.SetIndexer(ragIndexer)
 	}
+
+	// MCP server — gated on MCP_ENABLED. Default-off so deployments
+	// without external agents pay no allocation. See FUTURE_BACKEND.md
+	// §11 for the architecture and per-owner auth contract.
+	stopMCPLimiter := mountMCPRoute(router, cfg, feedService, tracing.Provider, tokens)
+	defer stopMCPLimiter()
 
 	port := ":" + cfg.Port
 	server := &http.Server{
@@ -449,6 +468,43 @@ func buildLLMClient(cfg *config.Config, tracerProvider trace.TracerProvider) (ll
 	default:
 		return nil, fmt.Errorf("unknown LLM_PROVIDER %q", cfg.LLMProvider)
 	}
+}
+
+// mountMCPRoute installs the chi-direct /mcp route when
+// MCP_ENABLED=true. Mirror of mountChatRoute: gated on the feature
+// flag, constructs service + handler + per-user limiter, returns
+// the GC stop function the caller must call on graceful shutdown.
+//
+// The MCP server itself wraps feed.Service — it never imports a
+// repository directly. Per-owner scoping is enforced inside
+// feed.Service via the auth-stamped context that chi's NewAuth
+// middleware writes before the route handler runs. Cross-owner
+// reads bubble up as feed.ErrNotFound (single sentinel, no
+// existence leak) — same contract as the REST surface.
+func mountMCPRoute(router chi.Router, cfg *config.Config, feedSvc feed.Service, tracerProvider trace.TracerProvider, tokens auth.TokenService) func() {
+	if !cfg.MCPEnabled {
+		log.Info().Msg("MCP server disabled (MCP_ENABLED=false)")
+		return func() {}
+	}
+
+	mcpSvc := mcp.NewService(feedSvc, tracerProvider.Tracer("nyx.mcp"))
+	mcpHandler := mcp.NewHandler(mcpSvc, cfg.MCPPath, cfg.MCPMaxBodyBytes)
+
+	// Per-user limiter: 60 calls/min, burst 20. In-memory only;
+	// see internal/mcp/ratelimit.go for the cost trade-off. The
+	// chat limiter is 5 streams/min because each stream holds open
+	// for minutes; MCP tool calls are cheap short-lived RPCs so the
+	// cap is ten times higher.
+	mcpLimiter := mcp.NewUserRateLimiter(60.0/60.0, 20)
+	stopGC := mcpLimiter.RunGC(time.Minute, time.Hour)
+	mcp.RegisterMCPRoute(router, mcpHandler, tokens, mcpLimiter)
+
+	log.Info().
+		Str("path", cfg.MCPPath).
+		Int64("max_body_bytes", cfg.MCPMaxBodyBytes).
+		Msg("MCP server enabled")
+
+	return stopGC
 }
 
 // probeKeyFor returns the bearer key the per-request GET /v1/models
