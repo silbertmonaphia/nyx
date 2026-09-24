@@ -64,6 +64,15 @@ jobs:
     - name: Verify committed OpenAPI spec is up to date
       working-directory: backend
       run: make openapi-diff
+    - name: Migration safety check
+      working-directory: backend
+      # Fail if any new migration under backend/migrations/*.up.sql is a
+      # single-step destructive op (DROP COLUMN / DROP TABLE / SET NOT NULL
+      # on a populated column / ALTER COLUMN TYPE). Pre-shipped migrations
+      # are grandfathered in scripts/migrations-baseline.txt; new ones
+      # must follow the rules or carry a `-- safe-migration: <reason>`
+      # annotation. See Harness.md #1.
+      run: make migration-check
     - name: Test
       run: cd backend && go test -v ./...
     - name: Coverage gate
@@ -84,6 +93,12 @@ jobs:
       run: cd frontend && npm ci
     - name: Lint
       run: cd frontend && npm run lint
+    - name: Architecture boundary check
+      # Enforces the src/features/* + shared/ boundaries (see Harness.md
+      # #2). depcruise resolves the whole dep graph, so this is a global
+      # check — it can't be reduced to "staged files only". Runs after
+      # eslint so syntactic issues are caught first.
+      run: cd frontend && npm run lint:arch
     - name: Test
       run: cd frontend && npm test
     - name: Build

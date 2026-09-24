@@ -18,17 +18,28 @@
 
 ## P0 — 必须做（成本低、命中真痛点）
 
-### 1. Schema 迁移安全性 Harness
+### 1. ✅ Schema 迁移安全性 Harness (2026-09-24)
 
-- **是什么**：拦截单步破坏性迁移（DROP COLUMN、强制 NOT NULL、改类型）。
+- **是什么**：拦截单步破坏性迁移（DROP COLUMN / DROP TABLE / ALTER COLUMN SET NOT NULL / ALTER COLUMN TYPE）。
 - **为什么**：这个项目最大的潜在事故源。`golang-migrate` 不拦人写"一步 DROP"，AI 也最爱这么写。
-- **怎么做**：自定义 pre-commit / CI 脚本，扫描 `backend/migrations/*.up.sql`，禁止单步删列、改 NOT NULL、改类型，强制 expand → backfill → contract 三步走；或用 `atlas`/`sqitch` 这类带 lint 的迁移工具替换。
+- **怎么做**：
+  - `scripts/check-migrations.py`：扫描 `backend/migrations/*.up.sql`，剥离 `--` 行注释与 `/* ... */` 块注释后用正则匹配上述四种关键字；report 行号 + 匹配片段 + 修复指引。
+  - `scripts/migrations-baseline.txt`：列出已上线的 15 条 migration ID，grandfather 跳过（避免回头改历史）。
+  - 文件级豁免：`-- safe-migration: <reason>` 注释（必须带冒号 + 非空理由），用于"删临时表 / 空表 DROP / USING no-op cast"等确实合理的场景。
+  - 接线：`backend/Makefile` 新增 `migration-check` target；`.github/workflows/ci.yml` 的 `backend-test` job 在 `make openapi-diff` 之后跑一次，失败即非零退出。
+  - CI 不在 commit 阶段运行（pre-commit 只跑 lint-staged），因为 migration 文件通常一次性 commit 一组，pre-commit 抓不全；CI 兜底。
 
-### 2. 架构契约（frontend）— dependency-cruiser
+### 2. ✅ 架构契约（frontend）— dependency-cruiser (2026-09-24)
 
-- **是什么**：在前端 CI 强制 `src/features/*` 之间的依赖边界。
+- **是什么**：在前端 CI 强制 `src/features/*` 与 shared/ 之间的依赖边界。
 - **为什么**：AI 在 React 项目里跨层调用（hooks 直接调 store、components 直接 fetch services 之外的模块）是最高频违规；后端 clean-arch 分层已经够硬，frontend 这边是短板。
-- **怎么做**：先跑一条白名单规则 —— `features/<a>/*` 不许 import `features/<b>/*` 的 UI/hook 代码（共享的 `services/api.ts` 豁免）。`Zustand store` 本身就是 `hooks/` 读，所以"hooks 不许 import store"这种伪规则别写。`dependency-cruiser` 装在 `frontend/package.json` 的 devDep 里走 lint-staged（`cd frontend && npx depcruise --validate src/**/*.{ts,tsx}`，匹配 `.husky/pre-commit` 当前的 repo-root lint-staged + `cd frontend &&` 前缀模型），CI 再跑一次兜底。白名单先窄后宽，每加一条跑一遍真实测试避免误拦。
+- **怎么做**：
+  - `frontend/.dependency-cruiser.cjs`：两条 forbidden 规则 —— (a) `no-cross-feature-<a>-to-<b>`：所有 feature 对之间由 config 加载时从 `src/features/*` 目录动态生成，新增 feature 自动覆盖；`pathNot` 不支持跨字段反向引用，所以走显式枚举（depcruiser 配置文件是 structuredClone-able，predicate function 也不行）。(b) `shared-not-from-features`：components/hooks/services/store/api/utils/types/assets/ 不许 import features/。
+  - `services/api.ts` 是 shared，不属于 feature，所有 feature 都 import 它 —— 这是有意为之的 seam，不是漏洞。
+  - `frontend/package.json`：新增 `lint:arch` script + `dependency-cruiser@^18.4.0` devDep。
+  - `lint-staged.config.cjs`：在 eslint --fix 之后跑 `depcruise ... frontend/src/`（不分 staged 文件，因为 feature 边界是全局的，单文件无法脱离全图评估；项目小，全图 < 1s）。
+  - `.github/workflows/ci.yml`：`frontend-test` job 新增 `Architecture boundary check` step，跑 `npm run lint:arch`。
+  - 当前 60 modules / 121 deps，零违规；注入合成跨 feature import 测试两条规则都正确触发。
 
 ### 3. 双 Agent 对抗审判
 

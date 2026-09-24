@@ -1,4 +1,4 @@
-.PHONY: sqlc sqlc-diff sqlc-version openapi openapi-diff coverage coverage-check coverage-html help
+.PHONY: sqlc sqlc-diff sqlc-version openapi openapi-diff coverage coverage-check coverage-html migration-check help
 
 # COVERAGE_MIN is the per-package floor that `make coverage-check`
 # enforces. Each package's coverage must be at or above this number;
@@ -94,13 +94,22 @@ coverage-html:
 	go tool cover -html=coverage.out -o coverage.html
 	@echo "wrote backend/coverage.html"
 
+# Lint backend/migrations/*.up.sql for single-step destructive ops that
+# should be split into expand → backfill → contract. Pre-shipped migrations
+# are grandfathered via scripts/migrations-baseline.txt; new migrations
+# either follow the rules or carry a `-- safe-migration: <reason>`
+# annotation. Fails (non-zero) on any new violation. Wired into CI.
+migration-check:
+	@python3 $(CURDIR)/../scripts/check-migrations.py
+
 help:
 	@echo "Targets:"
-	@echo "  make sqlc           - regenerate internal/{movie,user}/db from queries/*.sql"
-	@echo "  make sqlc-diff      - regenerate and fail if there are uncommitted changes"
-	@echo "  make sqlc-version   - print installed sqlc version"
-	@echo "  make openapi        - regenerate ../api/openapi.json from the huma operations"
-	@echo "  make openapi-diff   - regenerate and fail if the committed spec is stale"
-	@echo "  make coverage       - print per-package coverage as a table"
-	@echo "  make coverage-check - fail if any package drops below $(COVERAGE_MIN)%"
-	@echo "  make coverage-html  - write backend/coverage.html for browser viewing"
+	@echo "  make sqlc             - regenerate internal/{movie,user}/db from queries/*.sql"
+	@echo "  make sqlc-diff        - regenerate and fail if there are uncommitted changes"
+	@echo "  make sqlc-version     - print installed sqlc version"
+	@echo "  make openapi          - regenerate ../api/openapi.json from the huma operations"
+	@echo "  make openapi-diff     - regenerate and fail if the committed spec is stale"
+	@echo "  make migration-check  - fail on single-step destructive migrations"
+	@echo "  make coverage         - print per-package coverage as a table"
+	@echo "  make coverage-check   - fail if any package drops below $(COVERAGE_MIN)%"
+	@echo "  make coverage-html    - write backend/coverage.html for browser viewing"
