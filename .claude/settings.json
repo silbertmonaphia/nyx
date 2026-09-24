@@ -12,7 +12,18 @@
         ]
       }
     ],
-    "SessionStart": []
+    "SessionStart": [],
+    "Stop": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"$CLAUDE_PROJECT_DIR/.claude/scripts/post-turn-reminder.sh\" 2>/dev/null || true"
+          }
+        ]
+      }
+    ]
   },
   "permissions": {
     "allow": [

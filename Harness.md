@@ -41,11 +41,14 @@
   - `.github/workflows/ci.yml`：`frontend-test` job 新增 `Architecture boundary check` step，跑 `npm run lint:arch`。
   - 当前 60 modules / 121 deps，零违规；注入合成跨 feature import 测试两条规则都正确触发。
 
-### 3. 双 Agent 对抗审判
+### 3. ✅ 双 Agent 对抗审判 (2026-09-24)
 
 - **是什么**：每次 backend/frontend 改动后自动跑一遍 `test-reviewer` 子 agent。
 - **为什么**：`test-reviewer` 已定义在 `.claude/agents/test-reviewer.md`，但 `settings.json` 没挂 hook 强制执行；现在是"有人想用才用"。思维盲区有便宜解药但没人按。
-- **怎么做**：挂 **`Stop` hook**（每轮 Claude turn 结束触发一次）或 `/review` slash command —— **不要**用 `PostToolUse` 按 edit 触发，多文件改动会爆 token 也拖慢反馈。`test-reviewer` 对 `git diff main...HEAD` 跑 `ReportFindings`，CONFIRMED 级别问题清零才放过。
+- **怎么做**：
+  - `.claude/commands/review.md`：slash command `/review` —— body 教主 session 用 Agent tool 起 `test-reviewer` 子 agent，scope 为 `git diff <base>...HEAD`（base = main，缺失时回退 mvp），强制 `ReportFindings` 输出，CONFIRMED 不清零就 `request changes`。
+  - `.claude/scripts/post-turn-reminder.sh` + `.claude/settings.json` 的 `Stop` hook：每轮 Claude turn 结束后检测工作树/HEAD 是否相对 base 有改动，是则打印一行提醒让用户手动 `/review`。**hook 不直接起 agent** —— Stop hook 只能跑 shell 命令，再起一个 Claude session 每轮都爆 token + 加延迟，不值；slash command 是重活的手动触发器，hook 只是提醒。
+  - **不用 `PostToolUse`**：多文件改动会触发 N 次，单 edit 拆 N 次跑 review 也拖慢反馈。
 
 ### 4. 供应链漏洞扫描
 
