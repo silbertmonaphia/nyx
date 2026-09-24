@@ -50,11 +50,14 @@
   - `.claude/scripts/post-turn-reminder.sh` + `.claude/settings.json` 的 `Stop` hook：每轮 Claude turn 结束后检测工作树/HEAD 是否相对 base 有改动，是则打印一行提醒让用户手动 `/review`。**hook 不直接起 agent** —— Stop hook 只能跑 shell 命令，再起一个 Claude session 每轮都爆 token + 加延迟，不值；slash command 是重活的手动触发器，hook 只是提醒。
   - **不用 `PostToolUse`**：多文件改动会触发 N 次，单 edit 拆 N 次跑 review 也拖慢反馈。
 
-### 4. 供应链漏洞扫描
+### 4. ✅ 供应链漏洞扫描 (2026-09-24)
 
 - **是什么**：`govulncheck`（Go）+ `npm audit --audit-level=high`（frontend）。
 - **为什么**：10 行 YAML 就能捡现成 CVE，比手动追依赖快得多。`gitleaks` 防的是 secrets 进 git，不防已知漏洞。
-- **怎么做**：GitHub Actions 加两条 job：`cd backend && govulncheck ./...`、`cd frontend && npm audit --audit-level=high`。
+- **怎么做**：在 `.github/workflows/ci.yml` 加两个独立 job（与 backend-test / frontend-test 并行，e2e-test + release 把它们列入 `needs`）：
+  - `govulncheck`：setup-go v5.6.0 (SHA pinned)、`go install golang.org/x/vuln/cmd/govulncheck@v1.1.4`、`govulncheck ./...`（默认 source 模式，只报从项目代码可达的漏洞，减少假阳）。
+  - `npm-audit`：setup-node v4.4.0 (SHA pinned)、`npm ci` 锁 lockfile、`npm audit --audit-level=high`（high/critical 才 fail gate，moderate 仅 log）。
+  - 两个 job 各 3-5 分钟 timeout，独立失败 → 阻断 release。
 
 ### 5. Prompt injection 防御
 

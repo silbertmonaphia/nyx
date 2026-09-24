@@ -105,7 +105,7 @@ jobs:
       run: cd frontend && npm run build
 
   e2e-test:
-    needs: [backend-test, frontend-test]
+    needs: [backend-test, frontend-test, govulncheck, npm-audit]
     runs-on: ubuntu-latest
     services:
       postgres:
@@ -212,6 +212,54 @@ jobs:
         path: frontend/test-results/
         retention-days: 14
 
+  # Supply-chain vuln scans — run alongside backend-test / frontend-test
+  # so a known-CVE dep blocks the merge before e2e-test (and release) get
+  # to spend a long build. govulncheck is govulncheck default (source mode
+  # = "vulns reachable from the project's source code"), npm audit uses
+  # --audit-level=high so moderate vulns don't noise the gate.
+  govulncheck:
+    name: Go vulnerability scan (govulncheck)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+      - name: Set up Go
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
+        with:
+          go-version: '1.26.1'
+          cache-dependency-path: backend/go.sum
+      - name: Install govulncheck
+        run: go install golang.org/x/vuln/cmd/govulncheck@v1.1.4
+      - name: Scan backend
+        working-directory: backend
+        # govulncheck exits non-zero on any reachable vuln. The output is
+        # the canonical action item — govulncheck prints the OSV id, the
+        # affected symbol path, and the fixed-in version. Bump the dep or
+        # document an exception in the PR.
+        run: govulncheck ./...
+
+  npm-audit:
+    name: npm audit (frontend)
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - uses: actions/checkout@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+      - name: Set up Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '22'
+          cache: 'npm'
+          cache-dependency-path: frontend/package-lock.json
+      - name: Install dependencies
+        run: cd frontend && npm ci
+      - name: Audit
+        # --audit-level=high fails on high/critical only; moderate vulns
+        # are reported in the log but don't gate the merge. Pin to a
+        # specific audit-signatures version is not possible — npm pulls
+        # the registry data fresh; CI just records what npm saw at run
+        # time.
+        run: cd frontend && npm audit --audit-level=high
+
   # Release job — only runs on push (not on PRs), and only after CI
   # is green. Drives semantic-release which:
   #   - analyzes Conventional Commits since the last tag per package
@@ -222,7 +270,7 @@ jobs:
   #     via scripts/bump-version.sh
   #   - tags (e.g. backend@0.4.1) and publishes GitHub Releases
   release:
-    needs: [e2e-test]
+    needs: [e2e-test, govulncheck, npm-audit]
     if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/mvp')
     runs-on: ubuntu-latest
     timeout-minutes: 15
