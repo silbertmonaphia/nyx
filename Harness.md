@@ -32,7 +32,7 @@
 ### 2. ✅ 架构契约（frontend）— dependency-cruiser (2026-09-24)
 
 - **是什么**：在前端 CI 强制 `src/features/*` 与 shared/ 之间的依赖边界。
-- **为什么**：AI 在 React 项目里跨层调用（hooks 直接调 store、components 直接 fetch services 之外的模块）是最高频违规；后端 clean-arch 分层已经够硬，frontend 这边是短板。
+- **为什么**：AI 在 React 项目里跨层调用（hooks 直接调 store、components 直接 fetch services 之外的模块）是最高频违规。后端在**类型契约层**（sentinel errors + `api.MapError` 强制错误翻译 + sqlc 自动生成边界 + `feed`/`user` 域间互不依赖）比 frontend 硬，但在**路径/import 层**和 frontend 同样没有自动化兜底 —— frontend 先补这条边。后端路径层兜底是 P1 候选（见 §10 草稿）。
 - **怎么做**：
   - `frontend/.dependency-cruiser.cjs`：两条 forbidden 规则 —— (a) `no-cross-feature-<a>-to-<b>`：所有 feature 对之间由 config 加载时从 `src/features/*` 目录动态生成，新增 feature 自动覆盖；`pathNot` 不支持跨字段反向引用，所以走显式枚举（depcruiser 配置文件是 structuredClone-able，predicate function 也不行）。(b) `shared-not-from-features`：components/hooks/services/store/api/utils/types/assets/ 不许 import features/。
   - `services/api.ts` 是 shared，不属于 feature，所有 feature 都 import 它 —— 这是有意为之的 seam，不是漏洞。
@@ -96,6 +96,16 @@
 - **是什么**：Playwright 截图 + 基线像素对比。
 - **为什么**：AI 改前端"逻辑对、样式崩"是高发问题。
 - **怎么做**：仅当 SPA 视觉改动频繁 + 设计师参与时才值。`playwright` 自带 `toHaveScreenshot()`，或接 Chromatic。先在登录、Feed 列表两个核心页跑通，再扩展。
+
+### 10. 架构契约（backend）— go-arch-lint
+
+- **是什么**：在 backend CI 强制 `handler → service → repository → db` 单向依赖 + 域间（`feed`/`user`）互不依赖 + `platform/**` 不依赖任何 domain。
+- **为什么**：与 §2 是同一类问题，frontend 用 `dependency-cruiser` 守住了；后端在**类型契约层**（sentinel + `MapError` + sqlc 边界）比 frontend 硬，但**路径/import 层**完全靠 reviewer —— `service.go` 可以合法 import `huma_handler.go`、`*/service.go` 可以直接吃 `platform/database` 绕过 repository，AI 写跨层代码时只有人眼兜底。
+- **怎么做**：
+  - `backend/.arch-lint.yml`（DSL）：`deny` 规则四条 —— `service→handler`、`repository→handler/service`、`domain→platform/database`、`platform→domain/{feed,user}`。`allow` 例外只放 `platform/api`（handler/service 都用）、`reqctx`（每层都读 context 值）。
+  - `go-arch-lint` 作为 `golangci-lint` 的 module plugin 接入（或单独跑 `make arch-lint`），CI 在 `golangci-lint run` 之后执行。
+  - pre-commit 不跑（路径边界是全图评估，单文件无意义；同 frontend 策略）。
+  - 注入合成跨层 import 跑通：让 `feed/service.go` 临时 import `huma_handler`，验证 CI 红。
 
 ---
 
