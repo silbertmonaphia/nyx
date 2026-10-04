@@ -1,3 +1,5 @@
+doc/
+
 # Node.js
 node_modules/
 dist/
