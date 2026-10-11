@@ -343,6 +343,19 @@ services:
       # at the cost of ~10-30% per-token latency on small batches.
       # Comment out to re-enable cudagraphs once you measure the hit.
       - "--enforce-eager"
+      # Tool calling: the Python agent's react step (_run_react in
+      # backend/agent_py/agent/executor.py) binds tool schemas via the
+      # OpenAI-compatible API and expects structured `tool_calls` in
+      # the response. Without these two flags vLLM returns raw text
+      # and the parser in _extract_tool_calls silently sees []. Requires
+      # vllm>=0.8.5; pinned at v0.29.0 in the image above.
+      # Parser is `hermes` because Qwen3-Instruct (the 4B-Instruct-2507
+      # default here) emits Hermes-style JSON tool calls. The Qwen3-Coder
+      # family uses XML and wants `qwen3_xml` instead — switch if you
+      # swap to a Coder model.
+      - "--enable-auto-tool-choice"
+      - "--tool-call-parser"
+      - "hermes"
       # Cap GPU memory so the vllm-embed service (which shares the
       # same device when --profile embed is on) gets a predictable
       # slice. Without this cap the chat container claims the whole
