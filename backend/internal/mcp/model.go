@@ -30,8 +30,3 @@ const (
 	ToolUpdateFeed = "update_feed"
 	ToolDeleteFeed = "delete_feed"
 )
-
-// maxPageSize is the hard upper bound on page_size for the list_feeds
-// tool. Matches the REST cap at feed/huma_handler.go:258-260 so the
-// two surfaces cannot diverge.
-const maxPageSize = 100

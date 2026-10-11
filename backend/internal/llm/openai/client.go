@@ -117,8 +117,8 @@ func buildStreamRequest(model string, req llm.ChatRequest) openai.ChatCompletion
 		// IncludeUsage asks OpenAI to emit a trailing chunk with the
 		// usage summary; vLLM honours it. Without this flag, the SDK
 		// never sees Usage on any chunk and *ChatUsage comes back nil.
-		StreamOptions: &openai.StreamOptions{IncludeUsage: true},
-		MaxTokens:     req.MaxTokens,
+		StreamOptions:       &openai.StreamOptions{IncludeUsage: true},
+		MaxCompletionTokens: req.MaxTokens,
 	}
 	if req.Temperature != nil {
 		streamReq.Temperature = *req.Temperature

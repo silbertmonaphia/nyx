@@ -119,8 +119,8 @@ func (r *Registry) Dispatch(ctx context.Context, name string, args any) (result 
 	}
 
 	// Struct-tag validation — fail closed BEFORE the body runs.
-	if err := validate(t.ArgType, args); err != nil {
-		return nil, fmt.Errorf("%w: %w", ErrInvalidArgs, err)
+	if validationErr := validate(t.ArgType, args); validationErr != nil {
+		return nil, fmt.Errorf("%w: %w", ErrInvalidArgs, validationErr)
 	}
 
 	// Panic recovery + safe-error mapping. The deferred function

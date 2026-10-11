@@ -55,7 +55,7 @@ func writeSSE(w http.ResponseWriter, payload string) {
 // TestChat_StreamsChunksAndUsage exercises the happy path:
 // three content chunks + a usage chunk should fire onDelta three
 // times in order and return the usage. Asserts the request shape
-// (Stream=true, IncludeUsage=true, MaxTokens, Model, Messages) so
+// (Stream=true, IncludeUsage=true, MaxTokens→MaxCompletionTokens, Model, Messages) so
 // drift between the SDK and our wrapper is caught here, not in prod.
 func TestChat_StreamsChunksAndUsage(t *testing.T) {
 	var captured atomic.Value // *openai.ChatCompletionRequest
@@ -104,13 +104,13 @@ func TestChat_StreamsChunksAndUsage(t *testing.T) {
 	assert.Equal(t, 7, usage.TotalTokens)
 
 	// Verify the request shape — catches drift if a future SDK
-	// rename breaks StreamOptions or MaxTokens.
+	// rename breaks StreamOptions or MaxCompletionTokens.
 	reqPtr, _ := captured.Load().(*openai.ChatCompletionRequest)
 	require.NotNil(t, reqPtr)
 	assert.True(t, reqPtr.Stream)
 	require.NotNil(t, reqPtr.StreamOptions)
 	assert.True(t, reqPtr.StreamOptions.IncludeUsage)
-	assert.Equal(t, 100, reqPtr.MaxTokens)
+	assert.Equal(t, 100, reqPtr.MaxCompletionTokens)
 	assert.Equal(t, "test-model", reqPtr.Model)
 	require.Len(t, reqPtr.Messages, 1)
 	assert.Equal(t, "user", reqPtr.Messages[0].Role)
@@ -198,7 +198,7 @@ func TestChat_ContextCanceled_StopsStream(t *testing.T) {
 				return
 			default:
 			}
-			writeSSE(w, fmt.Sprintf(`{"id":"x","object":"chat.completion.chunk","created":1,"model":"m","choices":[{"index":0,"delta":{"content":"x"},"finish_reason":null}]}`))
+			writeSSE(w, `{"id":"x","object":"chat.completion.chunk","created":1,"model":"m","choices":[{"index":0,"delta":{"content":"x"},"finish_reason":null}]}`)
 			flusher.Flush()
 			time.Sleep(20 * time.Millisecond)
 		}
