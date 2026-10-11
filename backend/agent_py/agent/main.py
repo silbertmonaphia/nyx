@@ -30,6 +30,7 @@ from .config import Settings, get_settings
 from .graph import run_agent_stream
 from .observability import setup_observability, shutdown_observability
 from .rag_client import RagClient
+from .ratelimit import IpRateLimiter, RateLimitMiddleware
 from .state import new_state
 from .tools_client import ToolsClient
 from .types import ChatRequest, Event
@@ -81,6 +82,18 @@ async def lifespan(app: FastAPI):
 def create_app(settings: Settings | None = None) -> FastAPI:
     settings = settings or get_settings()
     app = FastAPI(title="nyx-agent", lifespan=lifespan)
+
+    # Per-IP rate limit on /agent/run only. /healthz and /metrics stay
+    # open for compose / Prometheus scraping. See ratelimit.py for the
+    # rationale (defense-in-depth for the no-auth-at-this-hop trust
+    # boundary).
+    app.add_middleware(
+        RateLimitMiddleware,
+        limiter=IpRateLimiter(
+            requests_per_second=settings.requests_per_second,
+            burst=settings.burst,
+        ),
+    )
 
     @app.get("/healthz")
     async def healthz() -> Response:

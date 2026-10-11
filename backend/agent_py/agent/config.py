@@ -43,6 +43,15 @@ class Settings(BaseSettings):
     otel_endpoint: str = "http://jaeger:4318"
     otel_service_name: str = "nyx-agent"
 
+    # --- Per-IP rate limit (defense in depth; /agent/run is on the
+    # private network and has no app-layer auth — see README "Trust
+    # model" + docker-compose.yml networks: section). Limits apply
+    # per source IP per 1-second sliding window. Generous enough that
+    # a single Go backend instance never trips; tight enough that a
+    # compromised container can't drain the LLM budget.
+    requests_per_second: float = 100.0
+    burst: int = 200
+
     # NOTE: there is intentionally NO JWT verification config here. The Python
     # service trusts the network boundary (compose bridge / k8s NetworkPolicy
     # restricting ingress to the Go backend). Go verifies the user JWT at the
