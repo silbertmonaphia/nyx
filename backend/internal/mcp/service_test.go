@@ -102,7 +102,8 @@ func TestService_ListFeeds_PageSizeClampedTo100(t *testing.T) {
 	stub := &stubFeedService{}
 	svc := newTestService(stub)
 
-	_, _ = svc.handleListFeeds(context.Background(), mcp.CallToolRequest{}, listFeedsArgs{
+	ctx := reqctx.WithUserID(context.Background(), 1)
+	_, _ = svc.handleListFeeds(ctx, mcp.CallToolRequest{}, listFeedsArgs{
 		Page:     1,
 		PageSize: 500,
 	})
@@ -114,7 +115,8 @@ func TestService_ListFeeds_OrderDefaultsToDesc(t *testing.T) {
 	stub := &stubFeedService{}
 	svc := newTestService(stub)
 
-	_, _ = svc.handleListFeeds(context.Background(), mcp.CallToolRequest{}, listFeedsArgs{
+	ctx := reqctx.WithUserID(context.Background(), 1)
+	_, _ = svc.handleListFeeds(ctx, mcp.CallToolRequest{}, listFeedsArgs{
 		Order: "sideways",
 	})
 
@@ -125,8 +127,9 @@ func TestService_ListFeeds_DefaultsApplied(t *testing.T) {
 	stub := &stubFeedService{}
 	svc := newTestService(stub)
 
+	ctx := reqctx.WithUserID(context.Background(), 1)
 	// Page and page_size both zero → defaults of 1 / 20.
-	_, _ = svc.handleListFeeds(context.Background(), mcp.CallToolRequest{}, listFeedsArgs{})
+	_, _ = svc.handleListFeeds(ctx, mcp.CallToolRequest{}, listFeedsArgs{})
 
 	assert.Equal(t, 1, stub.lastListPage)
 	assert.Equal(t, 20, stub.lastListSize)
@@ -138,7 +141,8 @@ func TestService_GetFeed_ForwardsID(t *testing.T) {
 	}
 	svc := newTestService(stub)
 
-	res, err := svc.handleGetFeed(context.Background(), mcp.CallToolRequest{}, getFeedArgs{ID: 7})
+	ctx := reqctx.WithUserID(context.Background(), 42)
+	res, err := svc.handleGetFeed(ctx, mcp.CallToolRequest{}, getFeedArgs{ID: 7})
 	require.NoError(t, err)
 	require.NotNil(t, res)
 	assert.Equal(t, 7, stub.lastGetID)

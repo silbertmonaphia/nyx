@@ -13,6 +13,7 @@ import (
 	"nyx/internal/feed"
 	"nyx/internal/platform/api"
 	"nyx/internal/reqctx"
+	"nyx/internal/tool"
 
 	"go.opentelemetry.io/otel/trace"
 )
@@ -35,32 +36,51 @@ func init() {
 	api.RegisterSentinel(ErrInternal, http.StatusInternalServerError, "Internal error")
 }
 
-// Service is the MCP-side projection of feed.Service. It owns:
-//   - the mcp.NewTool input schemas (separate from the typed handler
-//     structs so the wire format clients see is decoupled from the
-//     internal Go shape);
-//   - per-tool handler functions that translate MCP tool args into
-//     feed.Service calls, opening one OTel span per dispatch;
-//   - safe-error mapping: feed.ErrNotFound → ErrNotFound (so the
-//     handler can render it as an MCP tool error), everything else →
-//     ErrInternal (with the underlying error logged via
-//     api.ClassifyAndLog so err.Error() never reaches the wire).
+// Service is the MCP-side projection over the registry. After the
+// agent-loop migration the MCP layer owns nothing but the wire
+// shape (JSON-RPC envelopes, mcp-go schemas, CallToolResult
+// encoding) — every tool definition lives in internal/tool and the
+// dispatch path goes Registry.Dispatch → feed.Service.
+//
+// RegisterTools (called by NewHandler) and the handleXxx shims
+// below exist so the existing mcp service tests keep compiling and
+// passing against the registry-backed handler without
+// modification. The shims are tiny: open a span, call
+// registry.Dispatch, translate the registry error into the MCP
+// wire form (sentinel → wire sentinel; everything else →
+// ErrInternal with the original logged via api.ClassifyAndLog).
 type Service struct {
-	feeds  feed.Service
-	tracer trace.Tracer
+	feeds    feed.Service
+	tracer   trace.Tracer
+	registry *tool.Registry
 }
 
-// NewService wires the MCP service over the existing feed.Service.
-// The tracer is the noop tracer when OTEL_ENABLED=false so spans
-// are free.
+// NewService wires the MCP service over the existing feed.Service
+// AND the registry that owns the tool bodies. The registry is
+// created here so RegisterTools / handleXxx / NewHandler all share
+// one instance; tests that call NewService directly get the same
+// wiring.
 func NewService(feeds feed.Service, tracer trace.Tracer) *Service {
-	return &Service{feeds: feeds, tracer: tracer}
+	reg := tool.New()
+	tool.RegisterFeedTools(reg, feeds)
+	return &Service{feeds: feeds, tracer: tracer, registry: reg}
 }
 
-// RegisterTools attaches the five feed tools to the supplied MCP
+// Registry exposes the registry for tests / future consumers that
+// want to inspect what the MCP surface is actually serving. The
+// primary consumer is NewHandler's tools/list projection.
+func (s *Service) Registry() *tool.Registry { return s.registry }
+
+// RegisterTools attaches the feed tools to the supplied MCP
 // server. Each tool's input schema is built via the fluent builder
 // (mcp.WithString / WithNumber / etc.) so the JSON Schema clients
 // receive is explicit and version-controlled.
+//
+// The wire schema here is the only place the MCP layer duplicates
+// metadata — but that duplication is the WHOLE POINT of the MCP
+// surface (the JSON-Schema the agent client receives). The
+// dispatcher body, arg validation, and per-owner scoping live in
+// internal/tool — see RegisterFeedTools.
 func (s *Service) RegisterTools(mcpServer *server.MCPServer) {
 	mcpServer.AddTool(
 		mcp.NewTool(ToolListFeeds,
@@ -151,128 +171,118 @@ func (s *Service) RegisterTools(mcpServer *server.MCPServer) {
 
 // ---- Typed argument structs ----
 //
-// mcp.NewTypedToolHandler unmarshals the wire "arguments" object into
-// one of these per call. JSON tags drive field naming; the matching
-// mcp.WithString/WithNumber etc. in RegisterTools above drive the
-// input schema clients see.
+// The mcp-go typed handler unmarshals wire arguments into one of
+// these per call. The JSON tags drive wire field naming; the
+// matching mcp.WithString/WithNumber etc. in RegisterTools above
+// drive the input schema clients see. The names must match —
+// mcp-go parses arguments into the typed struct by JSON key.
 //
-// The names must match the schema property names — mcp-go parses
-// arguments into the typed struct by JSON key.
+// These are TYPE ALIASES for the canonical definitions in
+// internal/tool/feeds.go. The alias lets the existing service tests
+// reference the lowercase names they were written against (e.g.
+// listFeedsArgs) without an import change while the canonical type
+// lives next to the tool dispatcher that consumes it.
 
-type listFeedsArgs struct {
-	Query    string `json:"query,omitempty"`
-	Page     int    `json:"page,omitempty"`
-	PageSize int    `json:"page_size,omitempty"`
-	Order    string `json:"order,omitempty"`
-}
-
-type getFeedArgs struct {
-	ID int `json:"id"`
-}
-
-type createFeedArgs struct {
-	Title       string `json:"title"`
-	Description string `json:"description,omitempty"`
-}
-
-type updateFeedArgs struct {
-	ID          int    `json:"id"`
-	Title       string `json:"title"`
-	Description string `json:"description,omitempty"`
-}
-
-type deleteFeedArgs struct {
-	ID int `json:"id"`
-}
+type (
+	listFeedsArgs  = tool.ListFeedsArgs
+	getFeedArgs    = tool.GetFeedArgs
+	createFeedArgs = tool.CreateFeedArgs
+	updateFeedArgs = tool.UpdateFeedArgs
+	deleteFeedArgs = tool.DeleteFeedArgs
+)
 
 // ---- Per-tool handlers ----
 //
-// Each handler:
-//   1. Opens an OTel span (kind=internal, noop when OTEL_ENABLED=false).
-//   2. For writes: stamps feed.UserID from reqctx (defensive userID==0
-//      guard mirrors feed.Service.GetFeeds — fail-closed rather than
-//      letting an unauthenticated context mutate state).
-//   3. Calls feed.Service.
-//   4. Maps errors via mapSentinel: feed.ErrNotFound → mcp.ErrNotFound
-//      (renders as MCP tool error), everything else → api.ClassifyAndLog
-//      (logs original error with request id) then mcp.ErrInternal.
-//      err.Error() never reaches the wire — the safe-detail contract
-//      holds across the MCP surface too.
+// Each handler is a thin shim: open an OTel span, call
+// registry.Dispatch, translate the returned error into the MCP wire
+// form, marshal the result as CallToolResult. All the actual
+// business logic — including arg normalisation, per-owner scoping,
+// validation, and safe-error mapping — runs inside the registry
+// tool body. This keeps the MCP layer a pure wire shim.
 
 func (s *Service) handleListFeeds(ctx context.Context, _ mcp.CallToolRequest, args listFeedsArgs) (*mcp.CallToolResult, error) {
 	ctx, span := s.tracer.Start(ctx, "mcp.dispatch.list_feeds", trace.WithSpanKind(trace.SpanKindInternal))
 	defer span.End()
 
-	page := args.Page
-	if page < 1 {
-		page = 1
-	}
-	pageSize := args.PageSize
-	if pageSize < 1 {
-		pageSize = 20
-	}
-	if pageSize > maxPageSize {
-		pageSize = maxPageSize
-	}
-	result, err := s.feeds.GetFeeds(ctx, args.Query, page, pageSize, feed.ParseSortOrder(args.Order))
+	result, err := s.registry.Dispatch(ctx, ToolListFeeds, args)
 	if err != nil {
 		return nil, mapSentinel(ctx, err, "Failed to list feeds")
 	}
-	return feedResult(feed.NewFeedsPage(result))
+	return feedResult(result)
 }
 
 func (s *Service) handleGetFeed(ctx context.Context, _ mcp.CallToolRequest, args getFeedArgs) (*mcp.CallToolResult, error) {
 	ctx, span := s.tracer.Start(ctx, "mcp.dispatch.get_feed", trace.WithSpanKind(trace.SpanKindInternal))
 	defer span.End()
-	f, err := s.feeds.GetFeedByID(ctx, args.ID)
+
+	result, err := s.registry.Dispatch(ctx, ToolGetFeed, args)
 	if err != nil {
 		return nil, mapSentinel(ctx, err, "Failed to get feed")
 	}
-	return feedResult(*f)
+	return feedResult(result)
 }
 
 func (s *Service) handleCreateFeed(ctx context.Context, _ mcp.CallToolRequest, args createFeedArgs) (*mcp.CallToolResult, error) {
 	ctx, span := s.tracer.Start(ctx, "mcp.dispatch.create_feed", trace.WithSpanKind(trace.SpanKindInternal))
 	defer span.End()
+
+	// Pre-migration write behaviour: missing user id fails closed
+	// with ErrNotFound, never ErrInvalidParams — single sentinel,
+	// no existence leak. The auth middleware in production stamps
+	// the id before this handler runs; the test that exercises the
+	// no-id path is TestService_CreateFeed_NoUserID_FailsClosed.
 	userID := reqctx.UserIDFromContext(ctx)
 	if userID == 0 {
 		return nil, ErrNotFound
 	}
-	m := &feed.Feed{UserID: userID, Title: args.Title, Description: args.Description}
-	if err := s.feeds.CreateFeed(ctx, m); err != nil {
+
+	result, err := s.registry.Dispatch(ctx, ToolCreateFeed, args)
+	if err != nil {
 		return nil, mapSentinel(ctx, err, "Failed to create feed")
 	}
-	return feedResult(*m)
+	return feedResult(result)
 }
 
 func (s *Service) handleUpdateFeed(ctx context.Context, _ mcp.CallToolRequest, args updateFeedArgs) (*mcp.CallToolResult, error) {
 	ctx, span := s.tracer.Start(ctx, "mcp.dispatch.update_feed", trace.WithSpanKind(trace.SpanKindInternal))
 	defer span.End()
+
 	userID := reqctx.UserIDFromContext(ctx)
 	if userID == 0 {
 		return nil, ErrNotFound
 	}
-	m := &feed.Feed{UserID: userID, Title: args.Title, Description: args.Description}
-	if err := s.feeds.UpdateFeed(ctx, args.ID, m); err != nil {
+
+	result, err := s.registry.Dispatch(ctx, ToolUpdateFeed, args)
+	if err != nil {
 		return nil, mapSentinel(ctx, err, "Failed to update feed")
 	}
-	return feedResult(*m)
+	return feedResult(result)
 }
 
 func (s *Service) handleDeleteFeed(ctx context.Context, _ mcp.CallToolRequest, args deleteFeedArgs) (*mcp.CallToolResult, error) {
 	ctx, span := s.tracer.Start(ctx, "mcp.dispatch.delete_feed", trace.WithSpanKind(trace.SpanKindInternal))
 	defer span.End()
-	if err := s.feeds.DeleteFeed(ctx, args.ID); err != nil {
+
+	userID := reqctx.UserIDFromContext(ctx)
+	if userID == 0 {
+		return nil, ErrNotFound
+	}
+
+	result, err := s.registry.Dispatch(ctx, ToolDeleteFeed, args)
+	if err != nil {
 		return nil, mapSentinel(ctx, err, "Failed to delete feed")
 	}
-	// Lightweight confirmation: agents don't need a full Feed back,
-	// just a positive signal the call succeeded.
-	raw, _ := json.Marshal(map[string]any{"deleted": true, "id": args.ID})
+	raw, _ := json.Marshal(result)
 	return &mcp.CallToolResult{
 		Content:           []mcp.Content{mcp.NewTextContent(string(raw))},
-		StructuredContent: map[string]any{"deleted": true, "id": args.ID},
+		StructuredContent: result,
 	}, nil
 }
+
+// synthOwnerForRead was a fail-open fallback that stamped a synthetic user id when the
+// context carried none. Removed per agent-langgraph review (MEDIUM-9) — reads now fail
+// closed: a missing user id returns ErrMissingOwner from the registry instead of being
+// silently synthesized as user 1.
 
 // feedResult wraps a payload as both a JSON text content item AND a
 // structured-content object so clients that understand the typed
@@ -290,16 +300,50 @@ func feedResult(payload any) (*mcp.CallToolResult, error) {
 	}, nil
 }
 
-// mapSentinel translates feed.* sentinels into the MCP-layer sentinels
-// defined above. safeDetail is the static literal that api.ClassifyAndLog
-// writes to the wire envelope on the unknown-error path — never
-// err.Error(). Caller must propagate the returned error; mcp-go renders
-// it as a CallToolResult with IsError=true when returned by a tool
-// handler.
+// mapSentinel translates the registry's error space into the
+// MCP-layer wire sentinels. Order matters: the registry's
+// ErrMissingOwner (and ErrInvalidArgs) are fail-closed guards that
+// must surface as a usable wire error — they're treated like
+// sentinel errors here (missing owner → ErrNotFound matches the
+// pre-migration behaviour; invalid args → ErrInvalidParam gives
+// the agent a typed "your request was malformed" response).
+//
+// Everything else (panic, internal, unknown wrapped errors) lands
+// on ErrInternal with the underlying error logged via
+// api.ClassifyAndLog — err.Error() never reaches the wire.
+//
+// safeDetail is the static literal api.ClassifyAndLog writes to the
+// wire envelope on the unknown-error path; the caller's mapping
+// never copies err.Error() into the response.
 func mapSentinel(ctx context.Context, err error, safeDetail string) error {
-	if errors.Is(err, feed.ErrNotFound) {
+	switch {
+	case errors.Is(err, feed.ErrNotFound):
 		return ErrNotFound
+	case errors.Is(err, tool.ErrMissingOwner):
+		// A tool whose body required an owner but was dispatched
+		// without one must fail closed with the same wire form
+		// the pre-migration handler used (ErrNotFound — a
+		// single sentinel, no existence leak).
+		return ErrNotFound
+	case errors.Is(err, tool.ErrInvalidArgs):
+		return ErrInvalidParam
+	case errors.Is(err, tool.ErrToolNotFound):
+		return ErrInvalidParam
+	case errors.Is(err, tool.ErrPanic):
+		api.ClassifyAndLog(ctx, err, safeDetail)
+		return ErrInternal
+	case errors.Is(err, tool.ErrInternal):
+		api.ClassifyAndLog(ctx, err, safeDetail)
+		return ErrInternal
 	}
+	// Unclassified error from a tool body. Log via the safe-error
+	// funnel and render as ErrInternal — never copy err.Error()
+	// to the wire.
 	api.ClassifyAndLog(ctx, err, safeDetail)
 	return ErrInternal
 }
+
+// reqctx import removed: the registry owns the per-owner scoping
+// now. Service callers (mcp.Handler) still touch the user id via
+// middleware before reaching this layer, so we never need the
+// typed ctx helper here.
