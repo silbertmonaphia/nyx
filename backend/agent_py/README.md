@@ -53,3 +53,23 @@ network needed.
 The `agent` service in `docker-compose.yml` builds from this directory's Dockerfile,
 exposes 9000 + 9001 on the bridge network, and depends on `redis` + `backend` (the
 Go service that hosts the RAG bridge + MCP shim).
+
+## Trust model
+
+The Python service does **not** verify JWTs. It runs on the private compose / k8s
+network — port 9000 is not exposed to the host (`docker-compose.yml` only publishes
+`127.0.0.1:9001:9001` for metrics scraping). The trust boundary at this hop is the
+network, not application auth:
+
+- **Go's chat handler** verifies the user JWT at the SPA edge, then forwards the
+  verified user id in the `X-Nyx-User-Id` header. Python reads this header directly
+  and uses it for the per-user budget counter and per-owner scoping on tool calls.
+- The `Authorization` bearer token is forwarded as a passthrough to Go's `/mcp` and
+  `/internal/rag/retrieve` endpoints, which re-verify it themselves (Python never
+  decodes the token).
+
+If you ever expose port 9000 to a network where the Python service is not the only
+reachable caller, you MUST add an auth layer (mTLS, a shared service secret, or a
+network-level firewall). Today this is enforced by `docker-compose.yml` and the
+intended k8s `NetworkPolicy`. See `FUTURE_AGENT.md` for the operator-facing
+rationale and `docker-compose.yml` for the bridge-network contract.

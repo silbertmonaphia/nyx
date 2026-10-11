@@ -107,9 +107,6 @@ def settings():
         redis_url="redis://stub:6379",
         otel_endpoint="http://jaeger:4318",
         otel_service_name="nyx-agent-test",
-        jwt_secret="any-secret-must-be-long-enough-for-hmac-validation",
-        jwt_algorithm="HS256",
-        allow_unverified_jwt=False,
     )
 
 
@@ -121,9 +118,9 @@ async def app_and_state(settings, monkeypatch):
     """
     redis = fakeaioredis.FakeRedis(decode_responses=True)
 
-    # S-1: get_settings() caches a module-level singleton; the lifespan uses
+    # get_settings() caches a module-level singleton; the lifespan uses
     # that singleton rather than the fixture's Settings instance. Patch
-    # get_settings() so the lifespan sees the fixture's configured secret.
+    # get_settings() so the lifespan sees the fixture's configuration.
     from agent import config as config_module
 
     monkeypatch.setattr(config_module, "get_settings", lambda: settings)
@@ -213,19 +210,23 @@ def _set_lm(app_and_state, lm_cls):
     app_and_state.lm = lm_cls()
 
 
-async def _post_chat(app, body):
-    import jwt as pyjwt
-    from agent import config as config_module
+async def _post_chat(app, body, user_id: int = 42):
+    """POST /agent/run with X-Nyx-User-Id set (the way Go forwards it after JWT verify).
 
-    settings = config_module.get_settings()
-    token = pyjwt.encode({"sub": "42"}, settings.jwt_secret, algorithm="HS256")
-
+    Authorization is still included as a passthrough so the test exercises the
+    RagClient/ToolsClient code paths that thread the bearer token to /mcp and
+    /internal/rag/retrieve. The token value is irrelevant — the Python service
+    does not verify it.
+    """
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
         return await client.post(
             "/agent/run",
             json=body,
-            headers={"Authorization": f"Bearer {token}"},
+            headers={
+                "X-Nyx-User-Id": str(user_id),
+                "Authorization": "Bearer stub-token-not-verified",
+            },
         )
 
 
@@ -329,3 +330,40 @@ async def test_react_step_emits_iteration_cap_error(app_and_state):
         and "react_max_iterations" in str(f.get("reason", ""))
     ]
     assert step_ends, f"expected step_end(failed, ...); got: {frames}"
+
+
+@pytest.mark.asyncio
+async def test_agent_run_missing_user_id_header_returns_400(app_and_state):
+    """The Python service does not verify JWTs — Go sets X-Nyx-User-Id after
+    JWT verification. A caller that omits the header gets a 400 (NOT 401 —
+    this hop has no auth, just a sanity check so user_id never silently
+    defaults to 0 and collides with the budget guard's per-user keying).
+    """
+    app = app_and_state
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        resp = await client.post(
+            "/agent/run",
+            json=ChatRequest(messages=[ChatMessage(role="user", content="hi")]).model_dump(),
+            headers={"Authorization": "Bearer whatever"},
+        )
+    assert resp.status_code == 400
+    assert "X-Nyx-User-Id" in resp.text
+
+
+@pytest.mark.asyncio
+async def test_agent_run_non_integer_user_id_header_returns_400(app_and_state):
+    """Defense against a misconfigured caller sending garbage in X-Nyx-User-Id."""
+    app = app_and_state
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        resp = await client.post(
+            "/agent/run",
+            json=ChatRequest(messages=[ChatMessage(role="user", content="hi")]).model_dump(),
+            headers={
+                "X-Nyx-User-Id": "not-a-number",
+                "Authorization": "Bearer whatever",
+            },
+        )
+    assert resp.status_code == 400
+    assert "must be an integer" in resp.text

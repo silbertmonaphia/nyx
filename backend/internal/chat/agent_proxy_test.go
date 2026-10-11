@@ -27,6 +27,7 @@ func newUpstreamServer(t *testing.T, status int, body string, ct string) (*httpt
 		captured.method = r.Method
 		captured.path = r.URL.Path
 		captured.authorization = r.Header.Get("Authorization")
+		captured.userID = r.Header.Get("X-Nyx-User-Id")
 		captured.contentType = r.Header.Get("Content-Type")
 		captured.accept = r.Header.Get("Accept")
 		buf, err := io.ReadAll(r.Body)
@@ -45,6 +46,7 @@ type capturedRequest struct {
 	method        string
 	path          string
 	authorization string
+	userID        string
 	contentType   string
 	accept        string
 	body          string
@@ -77,7 +79,7 @@ func TestAgentProxy_Run_ForwardsRequestBody(t *testing.T) {
 
 	resp, err := proxy.Run(context.Background(), ChatRequest{
 		Messages: []Message{{Role: RoleUser, Content: "hi"}},
-	}, "Bearer eyJhbGc.dummy.token")
+	}, 42, "Bearer eyJhbGc.dummy.token")
 	require.NoError(t, err)
 	require.NotNil(t, resp)
 	defer func() { _ = resp.Body.Close() }()
@@ -86,6 +88,8 @@ func TestAgentProxy_Run_ForwardsRequestBody(t *testing.T) {
 	assert.Equal(t, "/agent/run", captured.path)
 	assert.Equal(t, "Bearer eyJhbGc.dummy.token", captured.authorization,
 		"Authorization header forwarded verbatim — proxy MUST NOT re-mint or strip the token")
+	assert.Equal(t, "42", captured.userID,
+		"X-Nyx-User-Id header set from the verified user id")
 	assert.Equal(t, "application/json", captured.contentType)
 	assert.Equal(t, "text/event-stream", captured.accept)
 	assert.Contains(t, captured.body, `"messages"`,
@@ -107,7 +111,7 @@ func TestAgentProxy_Run_ReturnsBodyBytesForHandlerToForward(t *testing.T) {
 
 	resp, err := proxy.Run(context.Background(), ChatRequest{
 		Messages: []Message{{Role: RoleUser, Content: "hi"}},
-	}, "Bearer test")
+	}, 42, "Bearer test")
 	require.NoError(t, err)
 	defer func() { _ = resp.Body.Close() }()
 
@@ -135,7 +139,7 @@ func TestAgentProxy_Run_ConnectionRefused_ReturnsErrAgentUnavailable(t *testing.
 	proxy, err := NewAgentProxy(url, nil, 0)
 	require.NoError(t, err)
 
-	resp, err := proxy.Run(context.Background(), ChatRequest{}, "Bearer t")
+	resp, err := proxy.Run(context.Background(), ChatRequest{}, 42, "Bearer t")
 	if resp != nil {
 		_ = resp.Body.Close()
 	}
@@ -156,7 +160,7 @@ func TestAgentProxy_Run_5xx_ReturnsErrAgentUnavailable(t *testing.T) {
 			proxy, err := NewAgentProxy(srv.URL, nil, 0)
 			require.NoError(t, err)
 
-			resp, err := proxy.Run(context.Background(), ChatRequest{}, "Bearer t")
+			resp, err := proxy.Run(context.Background(), ChatRequest{}, 42, "Bearer t")
 			if resp != nil {
 				_ = resp.Body.Close()
 			}
@@ -183,7 +187,7 @@ func TestAgentProxy_Run_4xx_ReturnsResponseForByteForByteForward(t *testing.T) {
 			proxy, err := NewAgentProxy(srv.URL, nil, 0)
 			require.NoError(t, err)
 
-			resp, err := proxy.Run(context.Background(), ChatRequest{}, "Bearer t")
+			resp, err := proxy.Run(context.Background(), ChatRequest{}, 42, "Bearer t")
 			require.NoError(t, err, "%d must NOT be classified as unavailable", status)
 			require.NotNil(t, resp)
 			defer func() { _ = resp.Body.Close() }()
@@ -205,7 +209,7 @@ func TestAgentProxy_Run_2xx_ReturnsResponse(t *testing.T) {
 	proxy, err := NewAgentProxy(srv.URL, nil, 0)
 	require.NoError(t, err)
 
-	resp, err := proxy.Run(context.Background(), ChatRequest{}, "Bearer t")
+	resp, err := proxy.Run(context.Background(), ChatRequest{}, 42, "Bearer t")
 	require.NoError(t, err)
 	require.NotNil(t, resp)
 	defer func() { _ = resp.Body.Close() }()
@@ -234,7 +238,7 @@ func TestAgentProxy_Run_CtxCanceled_NetworkError(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel() // pre-cancel — client dial will fail
 
-	resp, err := proxy.Run(ctx, ChatRequest{}, "Bearer t")
+	resp, err := proxy.Run(ctx, ChatRequest{}, 42, "Bearer t")
 	if resp != nil {
 		_ = resp.Body.Close()
 	}
@@ -263,7 +267,7 @@ func TestNewAgentProxy_TrimsTrailingSlash(t *testing.T) {
 	proxy, err := NewAgentProxy(srv.URL+"/", nil, 0) // trailing slash
 	require.NoError(t, err)
 
-	resp, err := proxy.Run(context.Background(), ChatRequest{}, "Bearer t")
+	resp, err := proxy.Run(context.Background(), ChatRequest{}, 42, "Bearer t")
 	if resp != nil {
 		_ = resp.Body.Close()
 	}

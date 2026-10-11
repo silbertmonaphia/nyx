@@ -8,7 +8,7 @@ Hosts the Plan-and-Execute agent orchestrator as a Python service so the Go back
 
 ### Requirement: Service exposes Plan-and-Execute over SSE
 
-The service SHALL expose `POST /agent/run` that accepts a chat request (messages, optional model override, user identifier from the verified JWT) and returns a Server-Sent Events response whose frame kinds — `plan`, `step_start`, `tool_call`, `tool_result`, `step_end`, `delta`, `done`, `note`, `error`, `terminator` — and whose wire envelope (`event: <kind>\ndata: <json>\n\n`) are byte-for-byte identical to what the Go chat handler emits today for the agent path.
+The service SHALL expose `POST /agent/run` that accepts a chat request (messages, optional model override) and returns a Server-Sent Events response whose frame kinds — `plan`, `step_start`, `tool_call`, `tool_result`, `step_end`, `delta`, `done`, `note`, `error`, `terminator` — and whose wire envelope (`event: <kind>\ndata: <json>\n\n`) are byte-for-byte identical to what the Go chat handler emits today for the agent path.
 
 #### Scenario: Frame kinds and envelope match Go agent path
 
@@ -66,23 +66,28 @@ The orchestrator SHALL emit SSE frames in this order over a run: one `plan` fram
 - **WHEN** a client subscribes and parses every event kind
 - **THEN** it sees `plan` first, then per-step frames, then `done`, then `terminator`, and the user sees tool names + final reply in order
 
-### Requirement: Authenticated callers only
+### Requirement: Caller supplies verified user id via header
 
-The service SHALL require a Bearer access token in the `Authorization` header on `/agent/run` and SHALL reject any request without one with HTTP 401 before invoking the orchestrator. The user identifier used for per-owner scoping and budget enforcement SHALL be the identifier embedded in the verified JWT (not the request body).
+The service SHALL require the `X-Nyx-User-Id` request header on `/agent/run` and SHALL reject any request without it with HTTP 400 before invoking the orchestrator. The value MUST parse as an integer; non-integer values are rejected with HTTP 400. The Python service SHALL NOT verify JWTs — the network boundary (compose bridge / k8s NetworkPolicy restricting ingress to the backend) is the trust boundary at this hop. The `Authorization` bearer token is forwarded as a passthrough to the MCP and RAG bridges, which re-verify the JWT themselves.
 
-#### Scenario: Missing token rejected
+#### Scenario: Missing header rejected
 
-- **WHEN** `POST /agent/run` arrives without `Authorization: Bearer <token>`
-- **THEN** the service returns HTTP 401 and the orchestrator does not run
+- **WHEN** `POST /agent/run` arrives without `X-Nyx-User-Id`
+- **THEN** the service returns HTTP 400 with `detail` mentioning the header name and the orchestrator does not run
 
-#### Scenario: User id read from verified JWT
+#### Scenario: Non-integer header value rejected
 
-- **WHEN** a request arrives with a valid Bearer token
-- **THEN** the orchestrator reads the user identifier from the token claims (not from the request body's `user_id` field) and uses it for per-owner RAG retrieval, tool dispatch via MCP, and the budget counter key
+- **WHEN** `POST /agent/run` arrives with `X-Nyx-User-Id` that does not parse as an integer
+- **THEN** the service returns HTTP 400 with `detail` explaining the requirement
+
+#### Scenario: User id read from header, not body
+
+- **WHEN** a request arrives with a valid `X-Nyx-User-Id` header
+- **THEN** the orchestrator uses that value (not anything from the request body) for per-owner RAG retrieval, tool dispatch via MCP, and the budget counter key
 
 ### Requirement: Configurable via environment
 
-The service SHALL read `PYTHON_AGENT_LLM_BASE_URL`, `PYTHON_AGENT_LLM_API_KEY`, `PYTHON_AGENT_LLM_MODEL`, `PYTHON_AGENT_LLM_PLANNER_MODEL` (defaults to `PYTHON_AGENT_LLM_MODEL` when empty), `PYTHON_AGENT_PLAN_MAX_STEPS` (default 10), `PYTHON_AGENT_STEP_REACT_MAX_ITERATIONS` (default 5), `PYTHON_AGENT_MCP_URL` (default `http://backend:8080/mcp`), `PYTHON_AGENT_RAG_BRIDGE_URL` (default `http://backend:8080/internal/rag/retrieve`), `PYTHON_AGENT_REDIS_URL` (default `redis://redis:6379`), `PYTHON_AGENT_OTEL_ENDPOINT` (default `http://jaeger:4318`), `PYTHON_AGENT_OTEL_SERVICE_NAME` (default `nyx-agent`), `PYTHON_AGENT_METRICS_PORT` (default 9001), and optional `PYTHON_AGENT_JWT_SECRET` / `PYTHON_AGENT_JWT_ALGORITHM` / `PYTHON_AGENT_JWT_AUDIENCE` / `PYTHON_AGENT_JWT_ISSUER` from environment. The service SHALL refuse to start when required keys are missing and the corresponding feature is enabled.
+The service SHALL read `PYTHON_AGENT_LLM_BASE_URL`, `PYTHON_AGENT_LLM_API_KEY`, `PYTHON_AGENT_LLM_MODEL`, `PYTHON_AGENT_LLM_PLANNER_MODEL` (defaults to `PYTHON_AGENT_LLM_MODEL` when empty), `PYTHON_AGENT_PLAN_MAX_STEPS` (default 10), `PYTHON_AGENT_STEP_REACT_MAX_ITERATIONS` (default 5), `PYTHON_AGENT_MCP_URL` (default `http://backend:8080/mcp`), `PYTHON_AGENT_RAG_BRIDGE_URL` (default `http://backend:8080/internal/rag/retrieve`), `PYTHON_AGENT_REDIS_URL` (default `redis://redis:6379`), `PYTHON_AGENT_OTEL_ENDPOINT` (default `http://jaeger:4318`), `PYTHON_AGENT_OTEL_SERVICE_NAME` (default `nyx-agent`), `PYTHON_AGENT_METRICS_PORT` (default 9001) from environment. **No JWT verification config is read**: the service trusts the network boundary and uses the `X-Nyx-User-Id` header for identity. The service SHALL refuse to start when required keys are missing and the corresponding feature is enabled.
 
 #### Scenario: Default values applied when env unset
 

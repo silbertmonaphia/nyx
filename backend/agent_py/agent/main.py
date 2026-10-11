@@ -3,7 +3,11 @@
 Routes:
   - POST /agent/run  — accepts ChatRequest, streams the SSE envelope byte-for-byte to the
     Go chat handler's response. The Go side then proxies these bytes to the browser
-    unchanged. Bearer JWT verified; user id read from the token.
+    unchanged. User id read from `X-Nyx-User-Id` (set by Go after JWT verification).
+    The `Authorization` header is forwarded as a passthrough to the MCP and RAG
+    bridges (which re-verify the JWT); the Python service itself does NOT verify it.
+    The trust boundary at this hop is the private network — Python is reachable only
+    by Go in compose / k8s deployments (see FUTURE_AGENT.md + docker-compose.yml).
   - GET  /healthz     — 200 with `{"status":"ok"}` when Redis is reachable; 503 otherwise.
   - GET  /metrics     — Prometheus counters.
 """
@@ -18,8 +22,6 @@ from typing import AsyncIterator
 
 from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.responses import StreamingResponse
-import jwt
-from jwt.exceptions import PyJWTError
 from prometheus_client import generate_latest, CONTENT_TYPE_LATEST
 from redis.asyncio import Redis
 
@@ -30,7 +32,7 @@ from .observability import setup_observability, shutdown_observability
 from .rag_client import RagClient
 from .state import new_state
 from .tools_client import ToolsClient
-from .types import ChatRequest, Event, TerminatorEvent
+from .types import ChatRequest, Event
 
 log = logging.getLogger("nyx.agent")
 
@@ -38,17 +40,6 @@ log = logging.getLogger("nyx.agent")
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     settings = get_settings()
-
-    # S-1 defense in depth: refuse startup when JWT secret is unset and
-    # the operator hasn't explicitly opted in to unsigned mode. This
-    # closes the budget-DoS hole (a forged JWT could drain another user's
-    # hourly counter before Go's downstream validation rejected the work).
-    if not settings.jwt_secret and not settings.allow_unverified_jwt:
-        raise RuntimeError(
-            "refusing to start: PYTHON_AGENT_JWT_SECRET is unset and "
-            "PYTHON_AGENT_ALLOW_UNVERIFIED_JWT is not 'true'. Set the secret "
-            "for production, or opt in explicitly for local dev."
-        )
 
     tracer = setup_observability(settings)
 
@@ -78,7 +69,6 @@ async def lifespan(app: FastAPI):
             "llm_model": settings.llm_model,
             "planner_model": settings.planner_model,
             "budget_cap": settings.budget_per_user_per_hour,
-            "jwt_verified": bool(settings.jwt_secret),
         },
     )
     try:
@@ -126,14 +116,35 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.post("/agent/run")
     async def agent_run(req: Request) -> StreamingResponse:
-        # Auth: Bearer JWT.
-        auth = req.headers.get("authorization", "")
-        if not auth.startswith("Bearer "):
-            raise HTTPException(status_code=401, detail="missing bearer token")
-        bearer_token = auth.removeprefix("Bearer ").strip()
-        user_id = _user_id_from_token(bearer_token, settings)
-        if user_id is None:
-            raise HTTPException(status_code=401, detail="invalid bearer token")
+        # Trust model: this hop is on the private network (compose bridge / k8s
+        # NetworkPolicy restricting ingress to the backend). Python does NOT
+        # verify the JWT — Go's chat handler has already verified it. We read
+        # the user id from `X-Nyx-User-Id` (set by Go after verification) and
+        # forward the Authorization bearer token as a passthrough to the MCP
+        # and RAG bridges, which re-verify it themselves.
+        #
+        # The 400 below is NOT an auth check (this hop has no auth). It exists
+        # to make a misconfigured caller fail loudly with a clear message
+        # rather than silently running with user_id=0 — the budget guard keys
+        # on user_id, and 0 would either bypass enforcement or collide with
+        # any real user whose id happens to be 0.
+        user_id_raw = req.headers.get("x-nyx-user-id", "").strip()
+        if not user_id_raw:
+            raise HTTPException(
+                status_code=400,
+                detail="missing X-Nyx-User-Id header (set by the Go chat handler)",
+            )
+        try:
+            user_id = int(user_id_raw)
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=400,
+                detail=f"X-Nyx-User-Id must be an integer, got {user_id_raw!r}",
+            ) from exc
+
+        # Passthrough for downstream JWT-scoped bridges (Go re-verifies on /mcp
+        # and /internal/rag/retrieve). We never decode the token.
+        bearer_token = req.headers.get("authorization", "").removeprefix("Bearer ").strip()
 
         try:
             body = await req.json()
@@ -232,57 +243,6 @@ def _sse_encode(event: Event) -> bytes:
     """
     data = json.dumps(event.payload, separators=(",", ":"))
     return f"event: {event.kind}\ndata: {data}\n\n".encode("utf-8")
-
-
-def _user_id_from_token(token: str, settings: Settings) -> int | None:
-    """Decode the JWT, verifying signature unless explicitly opted out.
-
-    Modes (S-1 fix):
-      - With `jwt_secret` set: full HMAC verification + optional `aud`/`iss`
-        checks (matches Go's `auth.TokenService` semantics).
-      - Without `jwt_secret`: the service MUST be started with
-        `PYTHON_AGENT_ALLOW_UNVERIFIED_JWT=true` (checked at startup below);
-        otherwise the lifespan refuses to boot. This closes the budget-DoS
-        hole where a forged JWT could drain another user's hourly budget
-        before Go's downstream validation rejected the work.
-    """
-    decode_options: dict = {}
-    if settings.jwt_audience:
-        decode_options["audience"] = settings.jwt_audience
-    if settings.jwt_issuer:
-        decode_options["issuer"] = settings.jwt_issuer
-
-    if not settings.jwt_secret:
-        if not settings.allow_unverified_jwt:
-            # Defense in depth: the lifespan startup check would have
-            # already aborted, but a programmer who called this function
-            # directly gets a clear failure.
-            raise RuntimeError(
-                    "JWT secret unset and allow_unverified_jwt=false; "
-                    "set PYTHON_AGENT_JWT_SECRET or opt in via "
-                    "PYTHON_AGENT_ALLOW_UNVERIFIED_JWT=true"
-            )
-        decode_options["verify_signature"] = False
-
-    try:
-        if settings.jwt_secret:
-            claims = jwt.decode(
-                token,
-                key=settings.jwt_secret,
-                algorithms=[settings.jwt_algorithm],
-                options=decode_options,
-            )
-        else:
-            claims = jwt.decode(token, options=decode_options)
-    except PyJWTError:
-        return None
-    sub = claims.get("sub") or claims.get("user_id")
-    if sub is None:
-        return None
-    try:
-        return int(sub)
-    except (TypeError, ValueError):
-        return None
 
 
 app = create_app()

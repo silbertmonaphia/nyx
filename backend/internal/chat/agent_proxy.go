@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -31,19 +32,25 @@ import (
 //     handler MUST NOT forward 5xx bodies — the spec mandates an
 //     `error{code:"agent_unavailable"}` SSE frame instead so
 //     operators see agent-side failures clearly.
-//   - HTTP 4xx (including 401) → Run returns the response; the
-//     handler forwards the body verbatim. The spec scenario
-//     "Python returns 401 (JWT rejected)" requires no translation
-//     — the operator's Python service is misconfigured, not the
-//     client.
+//   - HTTP 4xx → Run returns the response; the handler forwards
+//     the body verbatim. The operator's Python service is
+//     misconfigured when 4xx fires (e.g. missing X-Nyx-User-Id),
+//     not the client; the spec requires we surface it unchanged.
 //   - HTTP 2xx → Run returns the response; the handler forwards
 //     the SSE body verbatim.
 //
-// Token safety: the caller passes the full Authorization header
-// value (e.g. "Bearer eyJhbGc…") and the proxy sets it on the
-// outbound request unmodified. The proxy MUST NOT log the token —
-// use the TokenFingerprint helper if a log line needs a
-// distinguishing tag for debugging.
+// Trust model: this hop is on the private network (compose bridge /
+// k8s NetworkPolicy restricting ingress to the Go backend). Python
+// does NOT verify the JWT — Go verified it at the SPA edge. The
+// proxy threads two things through:
+//
+//   - X-Nyx-User-Id: the verified user id from reqctx. Python reads
+//     this header to key the budget guard + per-user scope.
+//   - Authorization: the original bearer token, forwarded as a
+//     passthrough so Python can present it to Go's /mcp and
+//     /internal/rag/retrieve (which re-verify it). The proxy MUST
+//     NOT log the token value — use the TokenFingerprint helper if
+//     a log line needs a distinguishing tag for debugging.
 //
 // Thread-safety: AgentProxy has no mutable state; the underlying
 // *http.Client is safe for concurrent use. The constructor does
@@ -93,9 +100,16 @@ func NewAgentProxy(baseURL string, httpClient *http.Client, timeout time.Duratio
 // reading resp.Body and forwarding bytes verbatim to the SSE
 // response writer.
 //
+// userID is the verified user id from reqctx.UserIDFromContext,
+// set on the outbound request as `X-Nyx-User-Id`. Python reads
+// it directly (it does not decode the JWT) and uses it for the
+// per-user budget counter and per-owner scoping on tool calls.
+//
 // bearerToken is the full Authorization header value (typically
-// "Bearer <access_token>"). It is set on the outbound request
-// unchanged. The proxy never logs the token value.
+// "Bearer <access_token>"). It is forwarded as a passthrough so
+// Python can present it to Go's /mcp and /internal/rag/retrieve
+// endpoints, which re-verify the JWT themselves. The proxy never
+// logs the token value.
 //
 // Returns ErrAgentUnavailable when the upstream is unreachable
 // (network error) or returns HTTP 5xx. On ErrAgentUnavailable
@@ -106,7 +120,7 @@ func NewAgentProxy(baseURL string, httpClient *http.Client, timeout time.Duratio
 // per the spec's "Wire envelope is byte-for-byte identical"
 // requirement. The handler MAY inspect resp.StatusCode to decide
 // whether to forward; the proxy itself does not transform.
-func (p *AgentProxy) Run(ctx context.Context, req ChatRequest, bearerToken string) (*http.Response, error) {
+func (p *AgentProxy) Run(ctx context.Context, req ChatRequest, userID int, bearerToken string) (*http.Response, error) {
 	body, err := json.Marshal(req)
 	if err != nil {
 		// ChatRequest is a small struct with json tags on every
@@ -120,7 +134,10 @@ func (p *AgentProxy) Run(ctx context.Context, req ChatRequest, bearerToken strin
 	if err != nil {
 		return nil, ErrAgentUnavailable
 	}
-	httpReq.Header.Set("Authorization", bearerToken)
+	httpReq.Header.Set("X-Nyx-User-Id", strconv.Itoa(userID))
+	if bearerToken != "" {
+		httpReq.Header.Set("Authorization", bearerToken)
+	}
 	httpReq.Header.Set("Content-Type", "application/json")
 	httpReq.Header.Set("Accept", "text/event-stream")
 

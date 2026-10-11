@@ -251,12 +251,12 @@ func streamLegacy(fw *flushingWriter, r *http.Request, req ChatRequest, svc *Ser
 //  2. Write SSE headers (Content-Type, Cache-Control, Connection,
 //     X-Accel-Buffering). Status 200 because the SSE envelope is
 //     opened regardless of upstream outcome.
-//  3. Call AgentProxy.Run with the user's Authorization header.
-//     On ErrAgentUnavailable → emit error{code:"agent_unavailable"}
+//  3. Call AgentProxy.Run with the verified user id (forwarded
+//     as X-Nyx-User-Id) and the user's Authorization header
+//     (passthrough to /mcp + /internal/rag/retrieve). On
+//     ErrAgentUnavailable → emit error{code:"agent_unavailable"}
 //     + done + terminator and return. On HTTP non-5xx → forward
-//     body verbatim (Python may have returned 4xx with a JSON
-//     error envelope, which the spec scenario "Python returns 401
-//     (JWT rejected)" requires us NOT to translate).
+//     body verbatim.
 //  4. Read resp.Body in a loop, copy bytes straight to fw with
 //     Flush after each chunk. Client disconnect surfaces as a
 //     write error which we log + abandon.
@@ -274,7 +274,8 @@ func (h *Handler) streamProxy(w http.ResponseWriter, r *http.Request, req ChatRe
 	// zero userID with SSE headers already flushed would force
 	// us into a 200-then-error frame, which the SPA would have
 	// to special-case from a real 401.
-	if reqctx.UserIDFromContext(r.Context()) == 0 {
+	userID := reqctx.UserIDFromContext(r.Context())
+	if userID == 0 {
 		api.WriteError(w, r, http.StatusUnauthorized, "Authentication required", nil)
 		return
 	}
@@ -293,14 +294,14 @@ func (h *Handler) streamProxy(w http.ResponseWriter, r *http.Request, req ChatRe
 
 	fw := &flushingWriter{w: w}
 
-	// Forward the user's Authorization header verbatim. The
-	// Python service is responsible for JWT validation (the
-	// spec scenario "Python returns 401 (JWT rejected)" pins
-	// this contract — the Go proxy MUST NOT mint a service-to-
-	// service token, MUST NOT re-validate, MUST NOT log the
-	// value).
+	// Forward the user's Authorization header verbatim as a
+	// passthrough to /mcp + /internal/rag/retrieve (Go re-verifies
+	// on those endpoints). The Python agent itself does NOT verify
+	// it — the network boundary is the trust boundary at this hop.
+	// The Go proxy MUST NOT mint a service-to-service token, MUST
+	// NOT re-validate, MUST NOT log the value.
 	bearer := r.Header.Get("Authorization")
-	resp, err := h.service.Proxy().Run(r.Context(), req, bearer)
+	resp, err := h.service.Proxy().Run(r.Context(), req, userID, bearer)
 	if err != nil {
 		// Fail closed per the spec requirement "Python service
 		// unavailable fails closed": emit error + done + terminator

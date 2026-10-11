@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import os
 
-from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -44,32 +43,13 @@ class Settings(BaseSettings):
     otel_endpoint: str = "http://jaeger:4318"
     otel_service_name: str = "nyx-agent"
 
-    # --- JWT verification (CRITICAL-3 follow-up + S-1 fix) ---
-    # `jwt_secret` is the shared HMAC key with Go's auth package. When set, the
-    # Python service verifies the inbound JWT signature (HS256 by default), `aud`
-    # if `jwt_audience` is set, and `iss` if `jwt_issuer` is set. When unset, the
-    # service STILL refuses to start unless `allow_unverified_jwt=true` is
-    # explicitly opted in — the prior `verify_signature=False` default let a
-    # forged JWT drain another user's hourly budget counter before Go had a
-    # chance to reject the work, so the dev-only escape hatch must be
-    # intentional, not accidental.
-    jwt_secret: str | None = None
-    jwt_algorithm: str = "HS256"
-    jwt_audience: str | None = None
-    jwt_issuer: str | None = None
-    allow_unverified_jwt: bool = False
-
-    @field_validator("jwt_secret")
-    @classmethod
-    def _reject_short_secret(cls, v: str | None) -> str | None:
-        """Mirror Go's auth.MinSecretBytes=32 — refuse keys shorter than 32 bytes
-        when one IS configured (an empty/unset value is fine; the allow_unverified_jwt
-        opt-in is the dev path)."""
-        if v and len(v.encode("utf-8")) < 32:
-            raise ValueError(
-                f"PYTHON_AGENT_JWT_SECRET is {len(v)} bytes; minimum is 32 (auth.MinSecretBytes, RFC 7518 §3.2)"
-            )
-        return v
+    # NOTE: there is intentionally NO JWT verification config here. The Python
+    # service trusts the network boundary (compose bridge / k8s NetworkPolicy
+    # restricting ingress to the Go backend). Go verifies the user JWT at the
+    # SPA edge and forwards the verified user_id via the `X-Nyx-User-Id`
+    # header; the bearer token is forwarded as a passthrough to the MCP and
+    # RAG bridges (Go re-verifies on those endpoints). See FUTURE_AGENT.md +
+    # docker-compose.yml for the trust model.
 
     @property
     def planner_model(self) -> str:

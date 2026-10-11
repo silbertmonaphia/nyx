@@ -56,13 +56,14 @@ const cannedPythonSSEBytes = "event: plan\n" +
 // cannedPythonSSEUpstream stands up an httptest server that returns
 // the canned Python SSE bytes with the standard SSE response
 // headers the spec requires the proxy to forward unchanged. The
-// server also records every Authorization header it saw so tests
-// can assert on the token-forwarding contract.
-func cannedPythonSSEUpstream(t *testing.T, body string) (*httptest.Server, *string) {
+// server also records every Authorization + X-Nyx-User-Id header
+// it saw so tests can assert on the forwarding contract.
+func cannedPythonSSEUpstream(t *testing.T, body string) (*httptest.Server, *string, *string) {
 	t.Helper()
-	var lastAuth string
+	var lastAuth, lastUserID string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		lastAuth = r.Header.Get("Authorization")
+		lastUserID = r.Header.Get("X-Nyx-User-Id")
 		w.Header().Set("Content-Type", "text/event-stream; charset=utf-8")
 		w.Header().Set("Cache-Control", "no-cache")
 		w.Header().Set("Connection", "keep-alive")
@@ -71,7 +72,7 @@ func cannedPythonSSEUpstream(t *testing.T, body string) (*httptest.Server, *stri
 		_, _ = io.WriteString(w, body)
 	}))
 	t.Cleanup(srv.Close)
-	return srv, &lastAuth
+	return srv, &lastAuth, &lastUserID
 }
 
 // newProxyHarness wires the chat route on a fresh chi router with
@@ -104,7 +105,7 @@ func newProxyHarness(t *testing.T, proxy *AgentProxy) (http.Handler, auth.TokenS
 // must equal the upstream Python service's response body, with no
 // rewriting, wrapping, or extra fields.
 func TestAgentProxy_Integration_HandlerForwardsPythonBytesByteForByte(t *testing.T) {
-	srv, lastAuth := cannedPythonSSEUpstream(t, cannedPythonSSEBytes)
+	srv, lastAuth, lastUserID := cannedPythonSSEUpstream(t, cannedPythonSSEBytes)
 
 	proxy, err := NewAgentProxy(srv.URL, nil, 0)
 	require.NoError(t, err)
@@ -144,6 +145,13 @@ func TestAgentProxy_Integration_HandlerForwardsPythonBytesByteForByte(t *testing
 	// NOT strip the Bearer prefix, MUST NOT log the value).
 	assert.Equal(t, "Bearer "+bearerToken(t, tokens), *lastAuth,
 		"Authorization header forwarded verbatim from chat request to Python service")
+
+	// X-Nyx-User-Id is set from the JWT-verified user id (the
+	// Python service reads this header directly and does not decode
+	// the JWT itself). The token mint helper uses sub=1 so the
+	// upstream sees "1".
+	assert.Equal(t, "1", *lastUserID,
+		"X-Nyx-User-Id header must equal the verified user id")
 }
 
 // TestAgentProxy_Integration_FailClosedOnConnectionRefused pins the
@@ -266,47 +274,6 @@ func TestAgentProxy_Integration_FailClosedOnPython5xx(t *testing.T) {
 		"5xx from Python MUST surface as agent_unavailable — body MUST NOT be forwarded")
 }
 
-// TestAgentProxy_Integration_Python401ForwardedByteForByte pins the
-// spec scenario "Python returns 401 (JWT rejected)": a 4xx
-// response from the Python service is forwarded to the client
-// unchanged. The Go handler MUST NOT translate it into a different
-// client error — the operator's Python service is misconfigured,
-// not the client.
-func TestAgentProxy_Integration_Python401ForwardedByteForByte(t *testing.T) {
-	cannedBody := `{"error":"invalid jwt","detail":"signature mismatch"}`
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusUnauthorized)
-		_, _ = io.WriteString(w, cannedBody)
-	}))
-	defer srv.Close()
-
-	proxy, err := NewAgentProxy(srv.URL, nil, 0)
-	require.NoError(t, err)
-
-	harness, tokens := newProxyHarness(t, proxy)
-	server := httptest.NewServer(harness)
-	defer server.Close()
-
-	req, _ := http.NewRequest(http.MethodPost, server.URL+"/api/chat",
-		bytes.NewReader(chatRequest(Message{Role: RoleUser, Content: "hi"})))
-	req.Header.Set("Authorization", "Bearer "+bearerToken(t, tokens))
-	req.Header.Set("Content-Type", "application/json")
-
-	resp, err := server.Client().Do(req)
-	require.NoError(t, err)
-	defer func() { _ = resp.Body.Close() }()
-
-	// Status is still 200 (SSE envelope opened) — the 401 from
-	// Python is forwarded in the BODY, not as the HTTP status.
-	assert.Equal(t, http.StatusOK, resp.StatusCode)
-
-	body, err := io.ReadAll(resp.Body)
-	require.NoError(t, err)
-	assert.Equal(t, cannedBody, string(body),
-		"401 body from Python is forwarded verbatim — handler MUST NOT translate")
-}
-
 // TestAgentProxy_Integration_MultiFrameUpstreamStreamed asserts the
 // handler streams a multi-frame upstream response. The Python
 // service emits a longer stream; the handler must forward every
@@ -322,7 +289,7 @@ func TestAgentProxy_Integration_MultiFrameUpstreamStreamed(t *testing.T) {
 	upstream.WriteString("event: terminator\ndata: {\"reason\":\"\"}\n\n")
 	body := upstream.String()
 
-	srv, _ := cannedPythonSSEUpstream(t, body)
+	srv, _, _ := cannedPythonSSEUpstream(t, body)
 
 	proxy, err := NewAgentProxy(srv.URL, nil, 0)
 	require.NoError(t, err)
