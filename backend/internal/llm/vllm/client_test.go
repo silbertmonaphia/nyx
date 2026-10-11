@@ -322,15 +322,22 @@ func TestChat_MalformedChunkMidStream(t *testing.T) {
 	assert.Nil(t, usage)
 }
 
-// TestChat_ToolCallsIgnored asserts vLLM-emitted tool_call deltas
-// don't break the stream — our schema doesn't model them but Go's
-// permissive JSON decoder drops the unknown fields.
+// TestChat_ToolCallsIgnored pins the legacy Chat path's contract:
+// tool-call deltas are decoded from the SSE stream but dropped
+// before the legacy callback fires (the legacy
+// `func(string, *ChatUsage) error` signature cannot represent
+// tool calls). The typed callback is ChatDelta's job; Chat stays
+// backward-compatible so chat/service.go compiles untouched.
+//
+// Mirrors openai/client_test.go's TestChat_ToolCallsIgnored.
 func TestChat_ToolCallsIgnored(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/event-stream")
 		w.WriteHeader(http.StatusOK)
-		// Tool-call delta (no content).
+		// Tool-call delta (no content) — dropped on legacy path.
 		writeSSE(w, `{"choices":[{"index":0,"delta":{"role":"assistant","content":null,"tool_calls":[{"index":0,"id":"call_1","type":"function","function":{"name":"f","arguments":""}}]},"finish_reason":null}]}`)
+		// Tool-call args partial — dropped.
+		writeSSE(w, `{"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"arguments":"{\"limit\""}}]},"finish_reason":null}]}`)
 		// Two content frames after.
 		writeSSE(w, `{"choices":[{"index":0,"delta":{"content":"ok"},"finish_reason":null}]}`)
 		writeSSE(w, `{"choices":[{"index":0,"delta":{"content":"!"},"finish_reason":null}]}`)
@@ -353,6 +360,229 @@ func TestChat_ToolCallsIgnored(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, []string{"ok", "!"}, deltas)
 	require.NotNil(t, usage)
+}
+
+// TestChatDelta_ToolCallStreaming_SurfacesDeltas is the canned-SSE
+// replay test for vLLM's OpenAI-compatible wire shape. Fabricates
+// a parallel-pair tool call (two calls in one turn) and asserts
+// the assembled Delta sequence is identical to the OpenAI client's
+// (covered by internal/llm/parity_test.go and the openai client
+// test). The sequence:
+//
+//   - role-only frame (no Delta, no callback fire)
+//   - tool-call #0 name frame → DeltaToolCall{ID="call_a", Name="list_feeds"}
+//   - tool-call #1 name frame → DeltaToolCall{ID="call_b", Name="get_feed"}
+//   - tool-call #0 partial args → DeltaToolCall{Arguments:`{"limit":`}
+//   - tool-call #1 partial args → DeltaToolCall{Arguments:`{"id":`}
+//   - tool-call #0 final args → DeltaToolCall{Arguments:`10}`}
+//   - tool-call #1 final args → DeltaToolCall{Arguments:`42}`}
+//   - content frame → DeltaContent{"fetched "}
+//   - content frame → DeltaContent{"everything"}
+//   - stop frame (no Delta, no callback fire)
+//   - usage frame → DeltaUsage{TotalTokens:9}
+//
+// No deltas are silently dropped — that's the spec scenario
+// "vLLM canned SSE replay surfaces tool calls".
+func TestChatDelta_ToolCallStreaming_SurfacesDeltas(t *testing.T) {
+	var captured atomic.Value // outboundRequest
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		var req outboundRequest
+		_ = json.Unmarshal(body, &req)
+		captured.Store(&req)
+
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+
+		writeSSE(w, `{"choices":[{"index":0,"delta":{"role":"assistant","content":""},"finish_reason":null}]}`)
+		writeSSE(w, `{"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call_a","type":"function","function":{"name":"list_feeds","arguments":""}},{"index":1,"id":"call_b","type":"function","function":{"name":"get_feed","arguments":""}}]},"finish_reason":null}]}`)
+		writeSSE(w, `{"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"arguments":"{\"limit\":"}},{"index":1,"function":{"arguments":"{\"id\":"}}]},"finish_reason":null}]}`)
+		writeSSE(w, `{"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"arguments":"10}"}},{"index":1,"function":{"arguments":"42}"}}]},"finish_reason":null}]}`)
+		writeSSE(w, `{"choices":[{"index":0,"delta":{"content":"fetched "},"finish_reason":null}]}`)
+		writeSSE(w, `{"choices":[{"index":0,"delta":{"content":"everything"},"finish_reason":null}]}`)
+		writeSSE(w, `{"choices":[{"index":0,"delta":{},"finish_reason":"tool_calls"}]}`)
+		writeSSE(w, `{"choices":[],"usage":{"prompt_tokens":5,"completion_tokens":4,"total_tokens":9}}`)
+		writeSSE(w, "[DONE]")
+	}))
+	defer server.Close()
+
+	c := newTestClient(t, server.URL)
+
+	var frames []llm.Delta
+	var finalUsage *llm.ChatUsage
+	usage, err := c.ChatDelta(context.Background(), llm.ChatRequest{
+		Messages: []llm.Message{{Role: "user", Content: "hi"}},
+		Tools: []llm.Tool{{
+			Type:     "function",
+			Function: llm.ToolFunction{Name: "list_feeds"},
+		}, {
+			Type:     "function",
+			Function: llm.ToolFunction{Name: "get_feed"},
+		}},
+	}, func(d llm.Delta) error {
+		if d.Kind == llm.DeltaUsage {
+			finalUsage = d.Usage
+		}
+		frames = append(frames, d)
+		return nil
+	})
+	require.NoError(t, err)
+	require.NotNil(t, usage)
+	assert.Equal(t, 9, usage.TotalTokens)
+	assert.Equal(t, usage, finalUsage)
+
+	require.Len(t, frames, 9)
+	// Tool-call name emissions.
+	assert.Equal(t, "call_a", frames[0].ToolCall.ID)
+	assert.Equal(t, "list_feeds", frames[0].ToolCall.Name)
+	assert.Equal(t, 0, frames[0].ToolCall.Index)
+	assert.Equal(t, "call_b", frames[1].ToolCall.ID)
+	assert.Equal(t, "get_feed", frames[1].ToolCall.Name)
+	assert.Equal(t, 1, frames[1].ToolCall.Index)
+	// Partial args.
+	assert.Equal(t, `{"limit":`, frames[2].ToolCall.Arguments)
+	assert.Equal(t, 0, frames[2].ToolCall.Index)
+	assert.Equal(t, `{"id":`, frames[3].ToolCall.Arguments)
+	assert.Equal(t, 1, frames[3].ToolCall.Index)
+	// Final args.
+	assert.Equal(t, `10}`, frames[4].ToolCall.Arguments)
+	assert.Equal(t, `42}`, frames[5].ToolCall.Arguments)
+	// Content.
+	assert.Equal(t, "fetched ", frames[6].Content)
+	assert.Equal(t, "everything", frames[7].Content)
+	assert.Equal(t, llm.DeltaUsage, frames[8].Kind)
+
+	// Wire-shape assertion: tools + tool_choice serialise when set.
+	reqPtr, _ := captured.Load().(*outboundRequest)
+	require.NotNil(t, reqPtr)
+	require.Len(t, reqPtr.Tools, 2)
+	assert.Equal(t, "function", reqPtr.Tools[0].Type)
+	assert.Equal(t, "list_feeds", reqPtr.Tools[0].Function.Name)
+	assert.Equal(t, "function", reqPtr.Tools[1].Type)
+	assert.Equal(t, "get_feed", reqPtr.Tools[1].Function.Name)
+}
+
+// TestChatDelta_VLLMShapeDivergence_IndexOmitted exercises the spec
+// scenario "vLLM canned SSE replay surfaces tool calls — no deltas
+// silently dropped, including vLLM wire-shape divergence cases".
+//
+// Some vLLM builds omit the `index` field on tool-call frames
+// after the first chunk (they emit parallel calls across multiple
+// choices[] entries instead of one choice with a tool_calls array).
+// The client must still surface every DeltaToolCall frame, defaulting
+// the missing Index to 0.
+func TestChatDelta_VLLMShapeDivergence_IndexOmitted(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		// First chunk: index present.
+		writeSSE(w, `{"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"c1","type":"function","function":{"name":"f","arguments":""}}]},"finish_reason":null}]}`)
+		// Subsequent chunks: NO index (a divergent vLLM shape).
+		writeSSE(w, `{"choices":[{"index":0,"delta":{"tool_calls":[{"function":{"arguments":"{\"a\":"}}]},"finish_reason":null}]}`)
+		writeSSE(w, `{"choices":[{"index":0,"delta":{"tool_calls":[{"function":{"arguments":"1}"}}]},"finish_reason":null}]}`)
+		writeSSE(w, `{"choices":[],"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}}`)
+		writeSSE(w, "[DONE]")
+	}))
+	defer server.Close()
+
+	c := newTestClient(t, server.URL)
+	var frames []llm.Delta
+	_, err := c.ChatDelta(context.Background(), llm.ChatRequest{
+		Messages: []llm.Message{{Role: "user", Content: "hi"}},
+	}, func(d llm.Delta) error {
+		frames = append(frames, d)
+		return nil
+	})
+	require.NoError(t, err)
+
+	// Three tool-call frames; the latter two default Index to 0.
+	require.Len(t, frames, 4) // 3 tool calls + 1 usage
+	require.Equal(t, llm.DeltaToolCall, frames[0].Kind)
+	assert.Equal(t, "c1", frames[0].ToolCall.ID)
+	assert.Equal(t, "f", frames[0].ToolCall.Name)
+	assert.Equal(t, 0, frames[0].ToolCall.Index)
+
+	assert.Equal(t, llm.DeltaToolCall, frames[1].Kind)
+	assert.Equal(t, `{"a":`, frames[1].ToolCall.Arguments)
+	assert.Equal(t, 0, frames[1].ToolCall.Index, "missing Index defaults to 0")
+	assert.Empty(t, frames[1].ToolCall.ID, "partial frame has no ID")
+
+	assert.Equal(t, llm.DeltaToolCall, frames[2].Kind)
+	assert.Equal(t, `1}`, frames[2].ToolCall.Arguments)
+	assert.Equal(t, 0, frames[2].ToolCall.Index)
+	assert.Empty(t, frames[2].ToolCall.ID)
+
+	assert.Equal(t, llm.DeltaUsage, frames[3].Kind)
+}
+
+// TestChatDelta_RoleToolMessage_Accepted pins that buildRequest
+// accepts role:"tool" + ToolCallID + Name on a message (the wire
+// shape for a tool result). This is what makes the tool-call loop
+// re-feed the model with a tool result and continue.
+func TestChatDelta_RoleToolMessage_Accepted(t *testing.T) {
+	var captured atomic.Value
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		var req outboundRequest
+		_ = json.Unmarshal(body, &req)
+		captured.Store(&req)
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		writeSSE(w, `{"choices":[],"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}}`)
+		writeSSE(w, "[DONE]")
+	}))
+	defer server.Close()
+
+	c := newTestClient(t, server.URL)
+	_, err := c.ChatDelta(context.Background(), llm.ChatRequest{
+		Messages: []llm.Message{
+			{Role: "user", Content: "list feeds"},
+			{Role: "assistant", Content: "", ToolCalls: []llm.ToolCall{{ID: "call_a", Name: "list_feeds", Arguments: "{}"}}},
+			{Role: "tool", ToolCallID: "call_a", Name: "list_feeds", Content: "[]"},
+		},
+	}, func(llm.Delta) error { return nil })
+	require.NoError(t, err)
+
+	reqPtr, _ := captured.Load().(*outboundRequest)
+	require.NotNil(t, reqPtr)
+	require.Len(t, reqPtr.Messages, 3)
+	tool := reqPtr.Messages[2]
+	assert.Equal(t, "tool", tool.Role)
+	assert.Equal(t, "call_a", tool.ToolCallID)
+	assert.Equal(t, "list_feeds", tool.Name)
+	assert.Equal(t, "[]", tool.Content)
+	assert.Empty(t, tool.ToolCalls)
+}
+
+// TestChatDelta_PureToolCallTurn_NoStrayContent covers the spec
+// scenario "Pure tool-call turn has no stray content": a model turn
+// that emits only tool calls (no content) must surface DeltaToolCall
+// frames only — no DeltaContent frames, no empty string.
+func TestChatDelta_PureToolCallTurn_NoStrayContent(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		writeSSE(w, `{"choices":[{"index":0,"delta":{"role":"assistant","content":null,"tool_calls":[{"index":0,"id":"c1","type":"function","function":{"name":"f","arguments":"{}"}}]},"finish_reason":null}]}`)
+		writeSSE(w, `{"choices":[{"index":0,"delta":{},"finish_reason":"tool_calls"}]}`)
+		writeSSE(w, `{"choices":[],"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}}`)
+		writeSSE(w, "[DONE]")
+	}))
+	defer server.Close()
+
+	c := newTestClient(t, server.URL)
+	var frames []llm.Delta
+	_, err := c.ChatDelta(context.Background(), llm.ChatRequest{
+		Messages: []llm.Message{{Role: "user", Content: "hi"}},
+	}, func(d llm.Delta) error {
+		frames = append(frames, d)
+		return nil
+	})
+	require.NoError(t, err)
+	require.Len(t, frames, 2) // 1 tool call + 1 usage
+	assert.Equal(t, llm.DeltaToolCall, frames[0].Kind)
+	assert.Equal(t, "f", frames[0].ToolCall.Name)
+	assert.Equal(t, "{}", frames[0].ToolCall.Arguments)
+	assert.Equal(t, llm.DeltaUsage, frames[1].Kind)
 }
 
 // TestChat_BuffersLargeSSEFrames asserts a single SSE frame larger
@@ -546,10 +776,12 @@ func (u *urlErrorShim) Unwrap() error { return u.opErr }
 
 // TestBuildRequest_RejectsUnknownRoles confirms defense-in-depth: a
 // caller that bypasses the chat service's validate() still can't
-// poison the wire.
+// poison the wire. "tool" is now a real role (RoleTool carries
+// tool results back to the model), so the unknown-role case uses a
+// bogus literal to assert the rejection still fires.
 func TestBuildRequest_RejectsUnknownRoles(t *testing.T) {
 	_, err := buildRequest("m", llm.ChatRequest{
-		Messages: []llm.Message{{Role: "tool", Content: "x"}},
+		Messages: []llm.Message{{Role: "bogus", Content: "x"}},
 	})
 	require.Error(t, err)
 	assert.True(t, errors.Is(err, llm.ErrInvalidInput))

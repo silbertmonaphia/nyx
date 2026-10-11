@@ -26,12 +26,19 @@ import (
 //     SPA's AbortController fired or the handler's deadline elapsed.
 //     Surfaced as a stream-error frame, not a JSON envelope, because
 //     the response is already in SSE mode by the time this is hit.
+//   - ErrToolCallsUnsupported → 503 Service Unavailable. The router
+//     refused to fail over a tool-bearing request to the secondary
+//     provider because LLM_FALLBACK_TOOLS_ENABLED is off (parity for
+//     the fallback's tool-call integration test is not yet verified).
+//     Distinct from ErrProviderUnavailable so a client that retries
+//     gets the same answer — there is no transient recovery.
 var (
-	ErrProviderUnavailable = errors.New("llm provider unavailable")
-	ErrRateLimited         = errors.New("llm rate limited")
-	ErrInvalidInput        = errors.New("invalid chat input")
-	ErrContextCanceled     = errors.New("llm context canceled")
-	ErrAllProvidersFailed  = errors.New("llm all providers failed")
+	ErrProviderUnavailable  = errors.New("llm provider unavailable")
+	ErrRateLimited          = errors.New("llm rate limited")
+	ErrInvalidInput         = errors.New("invalid chat input")
+	ErrContextCanceled      = errors.New("llm context canceled")
+	ErrAllProvidersFailed   = errors.New("llm all providers failed")
+	ErrToolCallsUnsupported = errors.New("llm tool calls unsupported")
 )
 
 // Register each sentinel with api.MapError so handlers can funnel
@@ -44,4 +51,5 @@ func init() {
 	api.RegisterSentinel(ErrInvalidInput, http.StatusBadRequest, "Invalid chat input")
 	api.RegisterSentinel(ErrContextCanceled, 499, "Client closed request")
 	api.RegisterSentinel(ErrAllProvidersFailed, http.StatusBadGateway, "Upstream LLM unavailable")
+	api.RegisterSentinel(ErrToolCallsUnsupported, http.StatusServiceUnavailable, "LLM tool calls unsupported")
 }

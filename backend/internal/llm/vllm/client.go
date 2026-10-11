@@ -7,9 +7,10 @@
 //
 // The wire contract is identical to OpenAI's: POST /chat/completions
 // with {model, messages, stream:true, stream_options.include_usage:true,
-// max_tokens} returns text/event-stream frames of shape
+// max_tokens, tools?, tool_choice?} returns text/event-stream frames of
+// shape
 //
-//	data: {"choices":[{"delta":{"content":"..."}}]}\n\n
+//	data: {"choices":[{"delta":{"content":"...","tool_calls":[...]}}]}\n\n
 //
 // followed by a trailing usage frame
 //
@@ -19,6 +20,13 @@
 // stream_options.include_usage; older versions return no usage chunk
 // and the returned *ChatUsage is nil (the chat handler tolerates that —
 // see internal/chat/handler.go usageToMap).
+//
+// Tool calls: Chat (legacy callback) drops tool-call deltas — the
+// legacy `func(string, *ChatUsage) error` signature cannot represent
+// them. ChatDelta surfaces every frame through the typed Delta
+// callback so the executor can reassemble parallel calls by ID. The
+// SSE parser is shared between both paths; only the callback
+// behaviour differs.
 //
 // Error mapping mirrors openai/client.go's contract so the api.MapError
 // funnel renders the right HTTP status without any per-call switch:
@@ -57,10 +65,10 @@ import (
 	"nyx/internal/platform/config"
 )
 
-// Client implements llm.Provider against a self-hosted vLLM
-// OpenAI-compatible server. Constructed once at process startup and
-// reused across requests — the underlying *http.Client is
-// goroutine-safe.
+// Client implements llm.Provider (and llm.DeltaProvider) against a
+// self-hosted vLLM OpenAI-compatible server. Constructed once at
+// process startup and reused across requests — the underlying
+// *http.Client is goroutine-safe.
 type Client struct {
 	baseURL string
 	model   string
@@ -116,7 +124,9 @@ func NewClient(cfg *config.Config, tracer trace.Tracer) (*Client, error) {
 // OpenAI /chat/completions streaming contract — see the package doc
 // for the frame shapes. onDelta is fired for every non-empty content
 // fragment and once on the trailing usage chunk with an empty delta
-// and a populated *ChatUsage.
+// and a populated *ChatUsage. Tool-call deltas are dropped on this
+// path; ChatDelta is the typed-callback entry point for tool-aware
+// consumers.
 //
 // Errors funnel into llm sentinels via mapError so the api.MapError
 // handler renders the right HTTP status without any per-call switch.
@@ -142,9 +152,69 @@ func (c *Client) Chat(ctx context.Context, req llm.ChatRequest, onDelta func(del
 		return nil, fmt.Errorf("vllm: marshal request: %w", llm.ErrInvalidInput)
 	}
 
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/chat/completions", bytes.NewReader(payload))
+	resp, err := c.doStream(ctx, payload)
 	if err != nil {
 		span.RecordError(err)
+		return nil, err
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	return c.consumeSSE(ctx, span, resp.Body, onDelta)
+}
+
+// ChatDelta is the typed-callback streaming entry point. It surfaces
+// every frame vLLM emits — content deltas, tool-call deltas (partial
+// fields preserved so parallel calls can be reassembled by ID), the
+// trailing usage chunk, and provider notes — through a single
+// discriminated Delta value.
+//
+// Frame ordering matches the upstream emission order so the executor
+// can pair a DeltaToolCall with the following DeltaContent frame that
+// resumes the turn, and so the final DeltaUsage is always the last
+// frame before EOF.
+//
+// Errors from onDelta abort the stream and propagate to the caller
+// unchanged (same contract as Chat). Upstream errors map to llm
+// sentinels via mapError.
+func (c *Client) ChatDelta(ctx context.Context, req llm.ChatRequest, onDelta func(llm.Delta) error) (*llm.ChatUsage, error) {
+	ctx, span := c.tracer.Start(ctx, "llm.vllm.chat_delta",
+		trace.WithAttributes(
+			attribute.String("llm.provider", "vllm"),
+			attribute.String("llm.model", c.model),
+			attribute.Int("llm.messages", len(req.Messages)),
+			attribute.Int("llm.max_tokens", req.MaxTokens),
+			attribute.Int("llm.tools", len(req.Tools)),
+		),
+	)
+	defer span.End()
+
+	body, err := buildRequest(c.model, req)
+	if err != nil {
+		span.RecordError(err)
+		return nil, llm.ErrInvalidInput
+	}
+	payload, err := json.Marshal(body)
+	if err != nil {
+		span.RecordError(err)
+		return nil, fmt.Errorf("vllm: marshal request: %w", llm.ErrInvalidInput)
+	}
+
+	resp, err := c.doStream(ctx, payload)
+	if err != nil {
+		span.RecordError(err)
+		return nil, err
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	return c.consumeSSEDelta(ctx, span, resp.Body, onDelta)
+}
+
+// doStream issues the POST and returns the response, mapping any
+// transport / status error through mapError. Shared by Chat and
+// ChatDelta so the SSE plumbing is in one place.
+func (c *Client) doStream(ctx context.Context, payload []byte) (*http.Response, error) {
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/chat/completions", bytes.NewReader(payload))
+	if err != nil {
 		return nil, c.mapError(err)
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
@@ -158,34 +228,45 @@ func (c *Client) Chat(ctx context.Context, req llm.ChatRequest, onDelta func(del
 
 	resp, err := c.http.Do(httpReq)
 	if err != nil {
-		span.RecordError(err)
 		return nil, c.mapError(err)
 	}
-	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		// Drain the body so the connection can be reused; surface the
 		// status as a typed marker so mapError can route it without
 		// string-matching err.Error().
 		_, _ = io.Copy(io.Discard, resp.Body)
+		_ = resp.Body.Close()
 		statusErr := &upstreamStatusError{status: resp.StatusCode}
-		span.RecordError(statusErr)
 		return nil, c.mapError(statusErr)
 	}
+	return resp, nil
+}
 
-	return c.consumeSSE(ctx, span, resp.Body, onDelta)
+// newSSEScanner builds a bufio.Scanner with the project's buffer
+// ceiling (1 MiB) so a long single-token completion isn't silently
+// truncated. Both consumeSSE (legacy) and consumeSSEDelta (typed)
+// share this builder.
+func newSSEScanner(body io.Reader) *bufio.Scanner {
+	scanner := bufio.NewScanner(body)
+	scanner.Buffer(make([]byte, 0, 64*1024), 1<<20)
+	return scanner
 }
 
 // consumeSSE decodes one SSE stream into a sequence of onDelta calls.
 // Returns the trailing *ChatUsage (nil if vLLM didn't emit one) and
 // the first non-recoverable error.
+//
+// Tool-call deltas are decoded from sseFrame but dropped before the
+// callback is fired — Chat's legacy signature cannot represent them.
+// ChatDelta uses consumeSSEDelta for the full typed stream.
+//
+// Error semantics: a malformed JSON frame collapses to
+// ErrProviderUnavailable (same as the pre-change behaviour). A
+// cancelled context returns ErrContextCanceled so the handler's
+// client-disconnect detection treats it uniformly.
 func (c *Client) consumeSSE(ctx context.Context, span trace.Span, body io.Reader, onDelta func(delta string, finalUsage *llm.ChatUsage) error) (*llm.ChatUsage, error) {
-	// bufio.Scanner's default 64 KiB token size truncates long content
-	// deltas (a 70 KiB chunked completion would be silently split).
-	// Raise the ceiling to 1 MiB which comfortably fits any realistic
-	// single-token emission.
-	scanner := bufio.NewScanner(body)
-	scanner.Buffer(make([]byte, 0, 64*1024), 1<<20)
+	scanner := newSSEScanner(body)
 
 	var usage *llm.ChatUsage
 	for scanner.Scan() {
@@ -196,33 +277,13 @@ func (c *Client) consumeSSE(ctx context.Context, span trace.Span, body io.Reader
 			return usage, llm.ErrContextCanceled
 		}
 
-		line := scanner.Text()
-		if line == "" {
-			// Blank line = end of SSE frame. vLLM (and OpenAI)
-			// don't emit event:/id:/retry: on /chat/completions
-			// streams, so we don't track per-event state.
-			continue
-		}
-		if strings.HasPrefix(line, ":") {
-			// SSE comment / heartbeat — ignore.
-			continue
-		}
-		if !strings.HasPrefix(line, "data:") {
-			// Field we don't model (event:, id:, retry:). Skip.
-			continue
-		}
-		payload := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
-
-		if payload == "[DONE]" {
-			break
-		}
-
-		frame, err := decodeFrame(payload)
+		frame, err := c.decodeLine(scanner.Text())
 		if err != nil {
-			// Malformed mid-stream JSON — collapse to
-			// ErrProviderUnavailable, mirroring the OpenAI client.
 			span.RecordError(err)
 			return usage, c.mapError(fmt.Errorf("vllm: decode frame: %w", err))
+		}
+		if frame == nil {
+			continue
 		}
 
 		if frame.Usage != nil {
@@ -246,6 +307,11 @@ func (c *Client) consumeSSE(ctx context.Context, span trace.Span, body io.Reader
 		}
 
 		for _, choice := range frame.Choices {
+			// Tool-call frames carry no content; on the legacy path
+			// we drop them silently. ChatDelta surfaces them.
+			if choice.Delta.ToolCalls != nil {
+				continue
+			}
 			if choice.Delta.Content == "" {
 				// Role-change frame (OpenAI/vLLM emit the first
 				// chunk with role="assistant" and empty content).
@@ -260,6 +326,10 @@ func (c *Client) consumeSSE(ctx context.Context, span trace.Span, body io.Reader
 		}
 	}
 
+	if err := ctx.Err(); err != nil {
+		span.RecordError(err)
+		return usage, llm.ErrContextCanceled
+	}
 	if err := scanner.Err(); err != nil {
 		span.RecordError(err)
 		return usage, c.mapError(err)
@@ -267,6 +337,123 @@ func (c *Client) consumeSSE(ctx context.Context, span trace.Span, body io.Reader
 
 	span.SetStatus(codes.Ok, "")
 	return usage, nil
+}
+
+// consumeSSEDelta is the typed-callback counterpart of consumeSSE. It
+// surfaces content deltas, tool-call deltas (full or partial), the
+// terminal usage frame, and provider notes through a single
+// discriminated Delta value. Tool-call deltas keep their partial
+// fields (ID empty, Name empty, Arguments partial) so the executor
+// can reassemble parallel calls by ID across frames.
+//
+// Same error semantics as consumeSSE: malformed JSON →
+// ErrProviderUnavailable, ctx cancellation → ErrContextCanceled.
+func (c *Client) consumeSSEDelta(ctx context.Context, span trace.Span, body io.Reader, onDelta func(llm.Delta) error) (*llm.ChatUsage, error) {
+	scanner := newSSEScanner(body)
+
+	var usage *llm.ChatUsage
+	for scanner.Scan() {
+		if err := ctx.Err(); err != nil {
+			span.RecordError(err)
+			return usage, llm.ErrContextCanceled
+		}
+
+		frame, err := c.decodeLine(scanner.Text())
+		if err != nil {
+			span.RecordError(err)
+			return usage, c.mapError(fmt.Errorf("vllm: decode frame: %w", err))
+		}
+		if frame == nil {
+			continue
+		}
+
+		if frame.Usage != nil {
+			usage = &llm.ChatUsage{
+				PromptTokens:     frame.Usage.PromptTokens,
+				CompletionTokens: frame.Usage.CompletionTokens,
+				TotalTokens:      frame.Usage.TotalTokens,
+			}
+			span.SetAttributes(
+				attribute.Int("llm.prompt_tokens", usage.PromptTokens),
+				attribute.Int("llm.completion_tokens", usage.CompletionTokens),
+				attribute.Int("llm.total_tokens", usage.TotalTokens),
+			)
+			if err := onDelta(llm.Delta{Kind: llm.DeltaUsage, Usage: usage}); err != nil {
+				span.RecordError(err)
+				return usage, err
+			}
+			continue
+		}
+
+		for _, choice := range frame.Choices {
+			for _, tc := range choice.Delta.ToolCalls {
+				idx := 0
+				if tc.Index != nil {
+					idx = *tc.Index
+				}
+				if err := onDelta(llm.Delta{
+					Kind: llm.DeltaToolCall,
+					ToolCall: &llm.ToolCall{
+						ID:        tc.ID,
+						Name:      tc.Function.Name,
+						Arguments: tc.Function.Arguments,
+						Index:     idx,
+					},
+				}); err != nil {
+					span.RecordError(err)
+					return usage, err
+				}
+			}
+			if choice.Delta.Content == "" {
+				// Role-change frame or tool-call-only frame with
+				// no content — skip; no information to surface.
+				continue
+			}
+			if err := onDelta(llm.Delta{Kind: llm.DeltaContent, Content: choice.Delta.Content}); err != nil {
+				span.RecordError(err)
+				return usage, err
+			}
+		}
+	}
+
+	if err := ctx.Err(); err != nil {
+		span.RecordError(err)
+		return usage, llm.ErrContextCanceled
+	}
+	if err := scanner.Err(); err != nil {
+		span.RecordError(err)
+		return usage, c.mapError(err)
+	}
+
+	span.SetStatus(codes.Ok, "")
+	return usage, nil
+}
+
+// decodeLine parses one SSE line into an *sseFrame. Returns a nil
+// frame for blank lines, SSE comments, non-data fields, and the
+// [DONE] terminator — all of which are ignored. Returns an error
+// only for unparseable JSON payloads; the caller surfaces that as
+// ErrProviderUnavailable.
+func (c *Client) decodeLine(line string) (*sseFrame, error) {
+	if line == "" {
+		return nil, nil
+	}
+	if strings.HasPrefix(line, ":") {
+		return nil, nil
+	}
+	if !strings.HasPrefix(line, "data:") {
+		return nil, nil
+	}
+	payload := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
+	if payload == "[DONE]" {
+		return nil, nil
+	}
+
+	frame, err := decodeFrame(payload)
+	if err != nil {
+		return nil, err
+	}
+	return &frame, nil
 }
 
 // mapError turns a raw error into an llm sentinel. We can't reuse
@@ -437,13 +624,15 @@ func (c *Client) Embed(ctx context.Context, req llm.EmbedRequest) ([][]float32, 
 }
 
 // sseFrame is the subset of the OpenAI /vLLM chunk schema we read.
-// Tool-call deltas, finish_reason, logprobs, etc. are intentionally
-// ignored — Go's permissive JSON decoder drops unknown fields
-// without error, so adding them on the vLLM side never breaks us.
+// Tool-call deltas are now surfaced; Chat's legacy callback drops
+// them, ChatDelta surfaces them. Unknown fields (finish_reason,
+// logprobs, refusal, …) are dropped silently by the permissive
+// decoder so a future vLLM response-field addition never breaks us.
 type sseFrame struct {
 	Choices []struct {
 		Delta struct {
-			Content string `json:"content"`
+			Content   string        `json:"content"`
+			ToolCalls []sseToolCall `json:"tool_calls,omitempty"`
 		} `json:"delta"`
 	} `json:"choices"`
 	Usage *struct {
@@ -451,6 +640,20 @@ type sseFrame struct {
 		CompletionTokens int `json:"completion_tokens"`
 		TotalTokens      int `json:"total_tokens"`
 	} `json:"usage"`
+}
+
+// sseToolCall is the per-call subset of OpenAI's tool-call streaming
+// shape. Index is a pointer because OpenAI only emits it on the first
+// chunk of a parallel-call sequence; subsequent chunks omit it and
+// we default to 0.
+type sseToolCall struct {
+	Index    *int   `json:"index,omitempty"`
+	ID       string `json:"id,omitempty"`
+	Type     string `json:"type,omitempty"`
+	Function struct {
+		Name      string `json:"name,omitempty"`
+		Arguments string `json:"arguments,omitempty"`
+	} `json:"function"`
 }
 
 func decodeFrame(payload string) (sseFrame, error) {
@@ -463,7 +666,9 @@ func decodeFrame(payload string) (sseFrame, error) {
 
 // outboundRequest is the JSON body we POST to vLLM. Mirrors
 // internal/llm/openai/client.go's openai.ChatCompletionRequest
-// fields we use, minus the SDK dependency.
+// fields we use, minus the SDK dependency. Tools / ToolChoice are
+// only serialised when non-empty so the wire body is byte-identical
+// to the pre-change shape for zero-tools requests.
 type outboundRequest struct {
 	Model       string              `json:"model"`
 	Messages    []outboundMessage   `json:"messages"`
@@ -471,11 +676,44 @@ type outboundRequest struct {
 	Options     *outboundStreamOpts `json:"stream_options,omitempty"`
 	MaxTokens   int                 `json:"max_tokens,omitempty"`
 	Temperature *float32            `json:"temperature,omitempty"`
+	Tools       []outboundTool      `json:"tools,omitempty"`
+	ToolChoice  any                 `json:"tool_choice,omitempty"`
 }
 
+// outboundMessage mirrors openai.ChatCompletionMessage's JSON shape
+// for the four roles we model: system / user / assistant / tool.
+// Tool-bearing assistant messages carry ToolCalls; tool-result
+// messages carry ToolCallID + Name + Content. Empty Content is
+// emitted only for assistant messages with tool calls.
 type outboundMessage struct {
-	Role    string `json:"role"`
-	Content string `json:"content"`
+	Role       string             `json:"role"`
+	Content    string             `json:"content,omitempty"`
+	Name       string             `json:"name,omitempty"`
+	ToolCallID string             `json:"tool_call_id,omitempty"`
+	ToolCalls  []outboundToolCall `json:"tool_calls,omitempty"`
+}
+
+type outboundTool struct {
+	Type     string               `json:"type"`
+	Function outboundToolFunction `json:"function"`
+}
+
+type outboundToolFunction struct {
+	Name        string `json:"name"`
+	Description string `json:"description,omitempty"`
+	Parameters  any    `json:"parameters,omitempty"`
+}
+
+type outboundToolCall struct {
+	Index    int                `json:"index,omitempty"`
+	ID       string             `json:"id,omitempty"`
+	Type     string             `json:"type,omitempty"`
+	Function outboundToolCallFn `json:"function"`
+}
+
+type outboundToolCallFn struct {
+	Name      string `json:"name"`
+	Arguments string `json:"arguments"`
 }
 
 type outboundStreamOpts struct {
@@ -489,20 +727,57 @@ func buildRequest(model string, req llm.ChatRequest) (outboundRequest, error) {
 		// the chat service already validates, but a future caller
 		// that bypasses it shouldn't get to corrupt the wire.
 		switch m.Role {
-		case "system", "user", "assistant":
+		case "system", "user", "assistant", "tool":
 		default:
 			return outboundRequest{}, fmt.Errorf("invalid role %q: %w", m.Role, llm.ErrInvalidInput)
 		}
-		msgs[i] = outboundMessage{Role: m.Role, Content: m.Content}
+		entry := outboundMessage{
+			Role:       m.Role,
+			Content:    m.Content,
+			Name:       m.Name,
+			ToolCallID: m.ToolCallID,
+		}
+		if len(m.ToolCalls) > 0 {
+			entry.ToolCalls = make([]outboundToolCall, len(m.ToolCalls))
+			for j, tc := range m.ToolCalls {
+				entry.ToolCalls[j] = outboundToolCall{
+					Index: tc.Index,
+					ID:    tc.ID,
+					Type:  "function",
+					Function: outboundToolCallFn{
+						Name:      tc.Name,
+						Arguments: tc.Arguments,
+					},
+				}
+			}
+		}
+		msgs[i] = entry
 	}
-	return outboundRequest{
+	out := outboundRequest{
 		Model:       model,
 		Messages:    msgs,
 		Stream:      true,
 		Options:     &outboundStreamOpts{IncludeUsage: true},
 		MaxTokens:   req.MaxTokens,
 		Temperature: req.Temperature,
-	}, nil
+	}
+	if len(req.Tools) > 0 {
+		out.Tools = make([]outboundTool, len(req.Tools))
+		for i, t := range req.Tools {
+			out.Tools[i] = outboundTool{
+				Type: "function",
+				Function: outboundToolFunction{
+					Name:        t.Function.Name,
+					Description: t.Function.Description,
+					Parameters:  t.Function.Parameters,
+				},
+			}
+		}
+	}
+	if req.ToolChoice != nil {
+		out.ToolChoice = req.ToolChoice
+	}
+	return out, nil
 }
 
 // newHTTPClient builds an *http.Client whose Transport.DialContext

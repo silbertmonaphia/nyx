@@ -42,12 +42,21 @@ type ProviderSlot struct {
 // network error or 5xx response is treated as "this slot is sick,
 // use the other". The probe is bound to probeTimeout (2s default)
 // so a slow DNS lookup cannot blow out the request budget.
+//
+// failoverToolsEnabled gates whether tool-bearing requests may be
+// failed over to the secondary. Default false (NewRouter leaves it
+// off; SetFallbackToolsEnabled flips it on). The operator MUST keep
+// it off until both providers' tool-call integration tests are
+// green in CI — vLLM's tool-call wire shape is known to diverge
+// from OpenAI's, so failing open here is the vLLM-drops-tool-calls
+// problem the typed Delta stream exists to fix.
 type Router struct {
-	primary      ProviderSlot
-	secondary    *ProviderSlot // nil → single-provider passthrough
-	probeHTTP    *http.Client
-	tracer       trace.Tracer
-	probeTimeout time.Duration
+	primary              ProviderSlot
+	secondary            *ProviderSlot // nil → single-provider passthrough
+	probeHTTP            *http.Client
+	tracer               trace.Tracer
+	probeTimeout         time.Duration
+	failoverToolsEnabled bool
 }
 
 // NewRouter wires a Router around two slots. secondary may be nil
@@ -55,6 +64,11 @@ type Router struct {
 // haven't opted in to failover. probeTimeout is the per-request
 // probe ceiling; callers should pre-validate it via
 // config.validateDurations before reaching the wiring site.
+//
+// The returned Router has failoverToolsEnabled=false. Operators
+// opt in via SetFallbackToolsEnabled after verifying both
+// providers' tool-call integration tests are green in CI; the
+// router will otherwise refuse to fail over tool-bearing requests.
 func NewRouter(primary ProviderSlot, secondary *ProviderSlot, tracer trace.Tracer, probeTimeout time.Duration) *Router {
 	if probeTimeout <= 0 {
 		probeTimeout = 2 * time.Second
@@ -66,6 +80,27 @@ func NewRouter(primary ProviderSlot, secondary *ProviderSlot, tracer trace.Trace
 		tracer:       tracer,
 		probeTimeout: probeTimeout,
 	}
+}
+
+// SetFallbackToolsEnabled toggles whether tool-bearing requests
+// (requests with non-empty Tools) may be failed over to the
+// secondary provider. Default false (set at NewRouter time); the
+// operator MUST verify both providers' tool-call integration tests
+// are green in CI for ≥1 week before flipping it on (the rollout
+// task in FUTURE_AGENT.md / 6.1 enforces the window). Setting it
+// prematurely reproduces the vLLM-drops-tool-calls problem the
+// typed Delta stream exists to fix.
+func (r *Router) SetFallbackToolsEnabled(enabled bool) {
+	r.failoverToolsEnabled = enabled
+}
+
+// toolsBearing reports whether req carries tool definitions. The
+// router uses this to decide whether failover is permitted: zero
+// tools means the request shape is identical on both providers so
+// failover is always safe; non-zero tools means the secondary must
+// have demonstrated tool-call parity in CI.
+func toolsBearing(req ChatRequest) bool {
+	return len(req.Tools) > 0 || req.ToolChoice != nil
 }
 
 // Chat implements llm.Provider. Single-provider deployments skip
@@ -116,8 +151,73 @@ func (r *Router) Chat(ctx context.Context, req ChatRequest, onDelta func(delta s
 		return res.usage, errors.Join(ErrAllProvidersFailed, res.err)
 	}
 
+	// Gate: tool-bearing requests may not be failed over to the
+	// secondary unless the operator has explicitly opted in. We
+	// refuse before any retry attempt so the caller sees a typed
+	// sentinel — not a silent drop of in-flight tool-call deltas.
+	if toolsBearing(req) && !r.failoverToolsEnabled {
+		span.RecordError(ErrToolCallsUnsupported)
+		return res.usage, fmt.Errorf("router: tool-bearing request refused failover to %s: %w",
+			r.secondary.Name, ErrToolCallsUnsupported)
+	}
+
 	secondarySlot := r.secondaryByName(slot.Name)
 	return r.failoverToSecondary(ctx, span, req, res.partial, secondarySlot, onDelta)
+}
+
+// ChatDelta implements llm.DeltaProvider on the router so a single
+// router instance serves both Chat (legacy callback) and ChatDelta
+// (typed callback). The probe + failover logic mirrors Chat — the
+// same selectivity rule (only ErrProviderUnavailable before any
+// usage chunk was emitted triggers failover) applies to the typed
+// stream, so a ctx-cancel / 429 / post-usage error is surfaced
+// unchanged. Tool-bearing requests on the failover path require
+// SetFallbackToolsEnabled(true); without it, the router returns
+// ErrToolCallsUnsupported and the typed stream is closed without
+// replaying any in-flight tool-call deltas the caller received.
+func (r *Router) ChatDelta(ctx context.Context, req ChatRequest, onDelta func(Delta) error) (*ChatUsage, error) {
+	ctx, span := r.tracer.Start(ctx, "llm.router.chat_delta",
+		trace.WithAttributes(
+			attribute.String("llm.router.primary", r.primary.Name),
+			attribute.Bool("llm.router.has_secondary", r.secondary != nil),
+			attribute.Bool("llm.router.failover_tools_enabled", r.failoverToolsEnabled),
+			attribute.Int("llm.router.tools", len(req.Tools)),
+		),
+	)
+	defer span.End()
+
+	if r.secondary == nil {
+		return deltaCall(ctx, r.primary.Provider, req, onDelta)
+	}
+
+	slot, probeFailed := r.selectSlot(ctx, span)
+	res := r.callSlotDelta(ctx, slot, req, onDelta)
+	if res.err == nil {
+		span.SetStatus(codes.Ok, "")
+		return res.usage, nil
+	}
+	if res.usage != nil {
+		recordUsage(span, res.usage)
+	}
+
+	if !shouldFailover(res.err, res.terminalEmitted) {
+		span.RecordError(res.err)
+		return res.usage, res.err
+	}
+
+	if probeFailed {
+		span.RecordError(res.err)
+		return res.usage, errors.Join(ErrAllProvidersFailed, res.err)
+	}
+
+	if toolsBearing(req) && !r.failoverToolsEnabled {
+		span.RecordError(ErrToolCallsUnsupported)
+		return res.usage, fmt.Errorf("router: tool-bearing request refused failover to %s: %w",
+			r.secondary.Name, ErrToolCallsUnsupported)
+	}
+
+	secondarySlot := r.secondaryByName(slot.Name)
+	return r.failoverToSecondaryDelta(ctx, span, req, res, secondarySlot, onDelta)
 }
 
 // selectSlot probes the primary and returns the slot to call.
@@ -162,6 +262,46 @@ func (r *Router) callSlot(ctx context.Context, slot ProviderSlot, req ChatReques
 	}
 	usage, err := slot.Provider.Chat(ctx, req, inner)
 	return callSlotResult{usage: usage, err: err, partial: partial.String(), terminalEmitted: terminalEmitted}
+}
+
+// callSlotDelta is the typed-callback counterpart of callSlot. The
+// only state we need to carry across a failover is whether a usage
+// frame was emitted (terminalEmitted) — content deltas and
+// tool-call deltas travel through the caller's callback directly
+// and aren't accumulated by the router. The executor already has the
+// in-flight content/tool calls when the router fails over; the
+// replay request appends a synthetic assistant turn with the
+// accumulated partial content so the secondary can continue.
+func (r *Router) callSlotDelta(ctx context.Context, slot ProviderSlot, req ChatRequest, onDelta func(Delta) error) callSlotResult {
+	var partial strings.Builder
+	var terminalEmitted bool
+	inner := func(d Delta) error {
+		switch d.Kind {
+		case DeltaUsage:
+			terminalEmitted = true
+			return onDelta(d)
+		case DeltaContent:
+			partial.WriteString(d.Content)
+			return onDelta(d)
+		default:
+			// Tool-call / note deltas pass through unchanged.
+			return onDelta(d)
+		}
+	}
+	usage, err := deltaCall(ctx, slot.Provider, req, inner)
+	return callSlotResult{usage: usage, err: err, partial: partial.String(), terminalEmitted: terminalEmitted}
+}
+
+// deltaCall invokes a slot's ChatDelta method when the slot's
+// provider implements DeltaProvider. Slots whose provider doesn't
+// (legacy test stubs) get a typed error — the operator must wire
+// an implementation that supports tool calls.
+func deltaCall(ctx context.Context, p Provider, req ChatRequest, onDelta func(Delta) error) (*ChatUsage, error) {
+	dp, ok := p.(DeltaProvider)
+	if !ok {
+		return nil, fmt.Errorf("provider %T does not implement DeltaProvider: %w", p, ErrToolCallsUnsupported)
+	}
+	return dp.ChatDelta(ctx, req, onDelta)
 }
 
 // shouldFailover returns true when the router should retry on the
@@ -230,6 +370,56 @@ func (r *Router) failoverToSecondary(ctx context.Context, span trace.Span, req C
 	}
 	span.SetStatus(codes.Ok, "")
 	return usage2, nil
+}
+
+// failoverToSecondaryDelta mirrors failoverToSecondary for the typed
+// stream. The synthetic assistant turn carries the partial content
+// only — tool calls emitted by the primary are NOT replayed into
+// the secondary's prompt, because the model needs the textual
+// continuation; the executor already captured the tool calls
+// directly via its callback.
+func (r *Router) failoverToSecondaryDelta(ctx context.Context, span trace.Span, req ChatRequest, res callSlotResult, secondary ProviderSlot, onDelta func(Delta) error) (*ChatUsage, error) {
+	req2 := req
+	req2.Messages = make([]Message, 0, len(req.Messages)+1)
+	req2.Messages = append(req2.Messages, req.Messages...)
+	req2.Messages = append(req2.Messages, Message{Role: "assistant", Content: res.partial})
+
+	if req.OnNote != nil {
+		note := llmDeltaWithProvider(secondary.Name)
+		// Notify the typed stream with a DeltaNote frame so the
+		// executor / SSE writer can render "continued on …" before
+		// any new content arrives.
+		if nerr := onDelta(note); nerr != nil {
+			span.RecordError(nerr)
+			return res.usage, nerr
+		}
+	}
+
+	span.SetAttributes(attribute.Bool("llm.router.failover", true))
+
+	usage2, err2 := deltaCall(ctx, secondary.Provider, req2, onDelta)
+	if err2 != nil {
+		span.RecordError(err2)
+		span.SetStatus(codes.Error, "both providers failed")
+		return usage2, errors.Join(ErrAllProvidersFailed, ErrProviderUnavailable)
+	}
+	if usage2 != nil {
+		recordUsage(span, usage2)
+	}
+	span.SetStatus(codes.Ok, "")
+	return usage2, nil
+}
+
+// llmDeltaWithProvider builds a DeltaNote frame for the failover
+// notification. Centralised so the wire shape ("[continued on
+// <provider>]") stays in lock-step with the legacy callback's
+// string payload.
+func llmDeltaWithProvider(provider string) Delta {
+	return Delta{
+		Kind:     DeltaNote,
+		Note:     fmt.Sprintf("[continued on %s]", provider),
+		Provider: provider,
+	}
 }
 
 // recordUsage stamps prompt/completion/total counts onto the

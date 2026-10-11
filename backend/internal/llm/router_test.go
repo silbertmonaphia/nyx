@@ -672,3 +672,318 @@ func TestRouter_Embed_NoProbeRoundTrip(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, int64(0), hits.Load(), "embed must not issue a /v1/models probe")
 }
+
+// deltaProvider wraps a stub chat function so the router can drive
+// both Provider.Chat and DeltaProvider.ChatDelta. The same struct
+// implements both interfaces; the parity check is that the router
+// uses the typed callback for ChatDelta and the legacy callback for
+// Chat, never mixing them.
+type deltaProvider struct {
+	chatFn  func(ctx context.Context, req ChatRequest, onDelta func(delta string, finalUsage *ChatUsage) error) (*ChatUsage, error)
+	chatDFn func(ctx context.Context, req ChatRequest, onDelta func(Delta) error) (*ChatUsage, error)
+	embedFn func(ctx context.Context, req EmbedRequest) ([][]float32, error)
+}
+
+func (d *deltaProvider) Chat(ctx context.Context, req ChatRequest, onDelta func(delta string, finalUsage *ChatUsage) error) (*ChatUsage, error) {
+	return d.chatFn(ctx, req, onDelta)
+}
+
+func (d *deltaProvider) ChatDelta(ctx context.Context, req ChatRequest, onDelta func(Delta) error) (*ChatUsage, error) {
+	return d.chatDFn(ctx, req, onDelta)
+}
+
+func (d *deltaProvider) Embed(ctx context.Context, req EmbedRequest) ([][]float32, error) {
+	if d.embedFn == nil {
+		return nil, nil
+	}
+	return d.embedFn(ctx, req)
+}
+
+// TestRouter_ChatDelta_Passthrough pins that the typed-callback
+// router path with no secondary delegates straight to the primary's
+// ChatDelta. The captured Delta sequence is forwarded verbatim.
+func TestRouter_ChatDelta_Passthrough(t *testing.T) {
+	primary := &deltaProvider{
+		chatDFn: func(_ context.Context, _ ChatRequest, onDelta func(Delta) error) (*ChatUsage, error) {
+			require.NoError(t, onDelta(Delta{Kind: DeltaContent, Content: "hello"}))
+			require.NoError(t, onDelta(Delta{Kind: DeltaUsage, Usage: &ChatUsage{TotalTokens: 1}}))
+			return &ChatUsage{TotalTokens: 1}, nil
+		},
+	}
+	r := NewRouter(
+		ProviderSlot{Name: "openai", Provider: primary, BaseURL: "http://primary"},
+		nil,
+		noop.NewTracerProvider().Tracer("test"),
+		100*time.Millisecond,
+	)
+
+	var frames []Delta
+	usage, err := r.ChatDelta(context.Background(), ChatRequest{
+		Messages: []Message{{Role: "user", Content: "hi"}},
+	}, func(d Delta) error {
+		frames = append(frames, d)
+		return nil
+	})
+	require.NoError(t, err)
+	require.Len(t, frames, 2)
+	assert.Equal(t, DeltaContent, frames[0].Kind)
+	assert.Equal(t, "hello", frames[0].Content)
+	assert.Equal(t, DeltaUsage, frames[1].Kind)
+	require.NotNil(t, usage)
+	assert.Equal(t, 1, usage.TotalTokens)
+}
+
+// TestRouter_ChatDelta_ToolBearingRefusedWithoutGate pins the
+// task 1.8 / spec scenario "Unverified provider refuses tool-
+// bearing request": with SetFallbackToolsEnabled(false) (the
+// default), a tool-bearing request whose primary fails must NOT
+// be retried on the secondary — instead, the router returns
+// ErrToolCallsUnsupported.
+//
+// This is the vLLM-drops-tool-calls problem the typed Delta stream
+// exists to fix: failing open here would silently drop in-flight
+// tool-call deltas the caller already received.
+func TestRouter_ChatDelta_ToolBearingRefusedWithoutGate(t *testing.T) {
+	primaryHits := &atomic.Int64{}
+	primaryProbe := newProbeServer(t, primaryHits)
+	defer primaryProbe.Close()
+	secondaryHits := &atomic.Int64{}
+	secondaryProbe := newProbeServer(t, secondaryHits)
+	defer secondaryProbe.Close()
+
+	primaryCalled := &atomic.Int64{}
+	primary := &deltaProvider{
+		chatDFn: func(_ context.Context, _ ChatRequest, _ func(Delta) error) (*ChatUsage, error) {
+			primaryCalled.Add(1)
+			return nil, fmt.Errorf("primary down: %w", ErrProviderUnavailable)
+		},
+	}
+	secondaryCalled := &atomic.Int64{}
+	secondary := &deltaProvider{
+		chatDFn: func(_ context.Context, _ ChatRequest, _ func(Delta) error) (*ChatUsage, error) {
+			secondaryCalled.Add(1)
+			t.Fatal("secondary must NOT be called for tool-bearing requests without SetFallbackToolsEnabled")
+			return nil, nil
+		},
+	}
+
+	r := NewRouter(
+		ProviderSlot{Name: "openai", Provider: primary, BaseURL: primaryProbe.URL, ProbeKey: "k"},
+		&ProviderSlot{Name: "vllm", Provider: secondary, BaseURL: secondaryProbe.URL, ProbeKey: "k"},
+		noop.NewTracerProvider().Tracer("test"),
+		500*time.Millisecond,
+	)
+	// Default state: SetFallbackToolsEnabled was never called.
+	// (The bool field's zero value is false.)
+
+	tools := []Tool{{Type: "function", Function: ToolFunction{Name: "list_feeds"}}}
+	_, err := r.ChatDelta(context.Background(), ChatRequest{
+		Messages: []Message{{Role: "user", Content: "hi"}},
+		Tools:    tools,
+	}, func(Delta) error { return nil })
+
+	require.Error(t, err)
+	assert.True(t, errors.Is(err, ErrToolCallsUnsupported),
+		"expected ErrToolCallsUnsupported, got %v", err)
+	assert.Equal(t, int64(1), primaryCalled.Load(), "primary must be tried first")
+	assert.Equal(t, int64(0), secondaryCalled.Load(), "secondary must be refused")
+}
+
+// TestRouter_ChatDelta_ToolBearingAllowedWithGate pins the
+// complementary scenario "Both providers verified — failover
+// proceeds": with SetFallbackToolsEnabled(true), a tool-bearing
+// request whose primary fails IS retried on the secondary.
+func TestRouter_ChatDelta_ToolBearingAllowedWithGate(t *testing.T) {
+	primaryHits := &atomic.Int64{}
+	primaryProbe := newProbeServer(t, primaryHits)
+	defer primaryProbe.Close()
+	secondaryHits := &atomic.Int64{}
+	secondaryProbe := newProbeServer(t, secondaryHits)
+	defer secondaryProbe.Close()
+
+	primary := &deltaProvider{
+		chatDFn: func(_ context.Context, _ ChatRequest, _ func(Delta) error) (*ChatUsage, error) {
+			return nil, fmt.Errorf("primary down: %w", ErrProviderUnavailable)
+		},
+	}
+	secondaryCalled := &atomic.Int64{}
+	secondary := &deltaProvider{
+		chatDFn: func(_ context.Context, _ ChatRequest, onDelta func(Delta) error) (*ChatUsage, error) {
+			secondaryCalled.Add(1)
+			require.NoError(t, onDelta(Delta{Kind: DeltaContent, Content: "from-secondary"}))
+			require.NoError(t, onDelta(Delta{Kind: DeltaUsage, Usage: &ChatUsage{TotalTokens: 3}}))
+			return &ChatUsage{TotalTokens: 3}, nil
+		},
+	}
+
+	r := NewRouter(
+		ProviderSlot{Name: "openai", Provider: primary, BaseURL: primaryProbe.URL, ProbeKey: "k"},
+		&ProviderSlot{Name: "vllm", Provider: secondary, BaseURL: secondaryProbe.URL, ProbeKey: "k"},
+		noop.NewTracerProvider().Tracer("test"),
+		500*time.Millisecond,
+	)
+	r.SetFallbackToolsEnabled(true)
+
+	tools := []Tool{{Type: "function", Function: ToolFunction{Name: "list_feeds"}}}
+	var frames []Delta
+	usage, err := r.ChatDelta(context.Background(), ChatRequest{
+		Messages: []Message{{Role: "user", Content: "hi"}},
+		Tools:    tools,
+	}, func(d Delta) error { frames = append(frames, d); return nil })
+
+	require.NoError(t, err)
+	assert.Equal(t, int64(1), secondaryCalled.Load())
+	require.NotNil(t, usage)
+	assert.Equal(t, 3, usage.TotalTokens)
+	require.GreaterOrEqual(t, len(frames), 1)
+	assert.Equal(t, "from-secondary", frames[0].Content)
+}
+
+// TestRouter_ChatDelta_NonToolBearingStillFailsOver is the
+// regression guard: the gate only affects tool-bearing requests.
+// A non-tool request whose primary fails continues to failover to
+// the secondary even with SetFallbackToolsEnabled(false). The chat
+// service exercises this path today; changing the behaviour would
+// break the existing single-provider-with-fallback deployment.
+func TestRouter_ChatDelta_NonToolBearingStillFailsOver(t *testing.T) {
+	primaryHits := &atomic.Int64{}
+	primaryProbe := newProbeServer(t, primaryHits)
+	defer primaryProbe.Close()
+	secondaryHits := &atomic.Int64{}
+	secondaryProbe := newProbeServer(t, secondaryHits)
+	defer secondaryProbe.Close()
+
+	primary := &deltaProvider{
+		chatDFn: func(_ context.Context, _ ChatRequest, _ func(Delta) error) (*ChatUsage, error) {
+			return nil, fmt.Errorf("primary down: %w", ErrProviderUnavailable)
+		},
+	}
+	secondaryCalled := &atomic.Int64{}
+	secondary := &deltaProvider{
+		chatDFn: func(_ context.Context, _ ChatRequest, onDelta func(Delta) error) (*ChatUsage, error) {
+			secondaryCalled.Add(1)
+			require.NoError(t, onDelta(Delta{Kind: DeltaContent, Content: "ok"}))
+			return &ChatUsage{TotalTokens: 1}, nil
+		},
+	}
+
+	r := NewRouter(
+		ProviderSlot{Name: "openai", Provider: primary, BaseURL: primaryProbe.URL, ProbeKey: "k"},
+		&ProviderSlot{Name: "vllm", Provider: secondary, BaseURL: secondaryProbe.URL, ProbeKey: "k"},
+		noop.NewTracerProvider().Tracer("test"),
+		500*time.Millisecond,
+	)
+	// Default gate state — false — but no Tools so the request is
+	// not tool-bearing.
+
+	var frames []Delta
+	_, err := r.ChatDelta(context.Background(), ChatRequest{
+		Messages: []Message{{Role: "user", Content: "hi"}},
+	}, func(d Delta) error { frames = append(frames, d); return nil })
+
+	require.NoError(t, err)
+	assert.Equal(t, int64(1), secondaryCalled.Load())
+}
+
+// TestRouter_Chat_ToolBearingRefusedWithoutGate mirrors the
+// typed-callback test for the legacy Chat path. The behaviour is
+// the same: a tool-bearing request on the legacy callback is
+// refused from failover when the gate is off. This is a defensive
+// belt-and-braces — the chat service today never passes Tools, but
+// a future caller (or a test stub) must still see the gate.
+func TestRouter_Chat_ToolBearingRefusedWithoutGate(t *testing.T) {
+	primaryHits := &atomic.Int64{}
+	primaryProbe := newProbeServer(t, primaryHits)
+	defer primaryProbe.Close()
+	secondaryHits := &atomic.Int64{}
+	secondaryProbe := newProbeServer(t, secondaryHits)
+	defer secondaryProbe.Close()
+
+	primary := &stubProvider{
+		chatFn: func(_ context.Context, _ ChatRequest, _ func(string, *ChatUsage) error) (*ChatUsage, error) {
+			return nil, fmt.Errorf("primary down: %w", ErrProviderUnavailable)
+		},
+	}
+	secondary := &stubProvider{
+		chatFn: func(_ context.Context, _ ChatRequest, _ func(string, *ChatUsage) error) (*ChatUsage, error) {
+			t.Fatal("secondary must NOT be called for tool-bearing requests without SetFallbackToolsEnabled")
+			return nil, nil
+		},
+	}
+
+	r := NewRouter(
+		ProviderSlot{Name: "openai", Provider: primary, BaseURL: primaryProbe.URL, ProbeKey: "k"},
+		&ProviderSlot{Name: "vllm", Provider: secondary, BaseURL: secondaryProbe.URL, ProbeKey: "k"},
+		noop.NewTracerProvider().Tracer("test"),
+		500*time.Millisecond,
+	)
+
+	_, err := r.Chat(context.Background(), ChatRequest{
+		Messages: []Message{{Role: "user", Content: "hi"}},
+		Tools:    []Tool{{Type: "function", Function: ToolFunction{Name: "list_feeds"}}},
+	}, func(string, *ChatUsage) error { return nil })
+
+	require.Error(t, err)
+	assert.True(t, errors.Is(err, ErrToolCallsUnsupported))
+}
+
+// TestRouter_ToolChoiceOnly_IsToolBearing pins the edge case: a
+// request with ToolChoice set but Tools empty is still "tool-
+// bearing" — the model would not emit tool calls without Tool defs,
+// but the field is intentionally included in the wire for the
+// case where the operator wants to constrain behaviour (e.g.
+// tool_choice="none"). The router must treat it as tool-bearing
+// so the gate covers the directive path too.
+func TestRouter_ToolChoiceOnly_IsToolBearing(t *testing.T) {
+	primaryHits := &atomic.Int64{}
+	primaryProbe := newProbeServer(t, primaryHits)
+	defer primaryProbe.Close()
+	secondaryHits := &atomic.Int64{}
+	secondaryProbe := newProbeServer(t, secondaryHits)
+	defer secondaryProbe.Close()
+
+	primary := &deltaProvider{
+		chatDFn: func(_ context.Context, _ ChatRequest, _ func(Delta) error) (*ChatUsage, error) {
+			return nil, fmt.Errorf("primary down: %w", ErrProviderUnavailable)
+		},
+	}
+	secondary := &deltaProvider{
+		chatDFn: func(_ context.Context, _ ChatRequest, _ func(Delta) error) (*ChatUsage, error) {
+			t.Fatal("secondary must not run — gate should refuse")
+			return nil, nil
+		},
+	}
+	r := NewRouter(
+		ProviderSlot{Name: "openai", Provider: primary, BaseURL: primaryProbe.URL, ProbeKey: "k"},
+		&ProviderSlot{Name: "vllm", Provider: secondary, BaseURL: secondaryProbe.URL, ProbeKey: "k"},
+		noop.NewTracerProvider().Tracer("test"),
+		500*time.Millisecond,
+	)
+	// ToolChoice set, no Tools — still tool-bearing per the router's
+	// "toolsBearing" check.
+	_, err := r.ChatDelta(context.Background(), ChatRequest{
+		Messages:   []Message{{Role: "user", Content: "hi"}},
+		ToolChoice: "none",
+	}, func(Delta) error { return nil })
+	require.Error(t, err)
+	assert.True(t, errors.Is(err, ErrToolCallsUnsupported))
+}
+
+// TestSetFallbackToolsEnabled_Toggle pins the simple flip: setting
+// the gate to true persists for subsequent requests, and setting it
+// back to false revokes the opt-in. Operators toggle this when CI
+// confirms parity per the rollout in FUTURE_AGENT.md / 6.1.
+func TestSetFallbackToolsEnabled_Toggle(t *testing.T) {
+	r := NewRouter(
+		ProviderSlot{Name: "openai", Provider: &stubProvider{}, BaseURL: "http://x"},
+		&ProviderSlot{Name: "vllm", Provider: &stubProvider{}, BaseURL: "http://y"},
+		noop.NewTracerProvider().Tracer("test"),
+		100*time.Millisecond,
+	)
+	// Default off.
+	require.False(t, r.failoverToolsEnabled)
+	r.SetFallbackToolsEnabled(true)
+	require.True(t, r.failoverToolsEnabled)
+	r.SetFallbackToolsEnabled(false)
+	require.False(t, r.failoverToolsEnabled)
+}

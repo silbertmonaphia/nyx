@@ -15,6 +15,13 @@
 // non-empty Delta.Content is forwarded as a delta, and the trailing
 // usage chunk is returned once via *ChatUsage.
 //
+// Tool calls: the SDK already surfaces tool-call deltas on each
+// chunk's choice[].delta.tool_calls. Chat (legacy callback) drops
+// them — the legacy signature cannot represent them, and chat's
+// RAG-only path doesn't need them. ChatDelta surfaces every frame
+// through the typed Delta callback so the executor can reassemble
+// parallel calls by ID.
+//
 // Error mapping: provider failures bubble up as llm sentinels so the
 // api.MapError funnel can render the right HTTP status without any
 // per-call switch. 429 → ErrRateLimited, 5xx → ErrProviderUnavailable,
@@ -39,10 +46,10 @@ import (
 	"nyx/internal/platform/config"
 )
 
-// Client implements llm.Provider against an OpenAI-compatible
-// Chat Completions server. Constructed once at process startup and
-// reused across requests — the underlying *openai.Client is
-// goroutine-safe.
+// Client implements llm.Provider (and llm.DeltaProvider) against an
+// OpenAI-compatible Chat Completions server. Constructed once at
+// process startup and reused across requests — the underlying
+// *openai.Client is goroutine-safe.
 type Client struct {
 	http   *openai.Client
 	model  string
@@ -73,6 +80,70 @@ func NewClient(cfg *config.Config, tracer trace.Tracer) (*Client, error) {
 	}, nil
 }
 
+// buildStreamRequest translates an llm.ChatRequest into the SDK's
+// ChatCompletionRequest. Zero tools / nil tool choice are dropped so
+// the wire body is byte-identical to the pre-change shape — no
+// extra frames, no extra keys.
+func buildStreamRequest(model string, req llm.ChatRequest) openai.ChatCompletionRequest {
+	msgs := make([]openai.ChatCompletionMessage, len(req.Messages))
+	for i, m := range req.Messages {
+		entry := openai.ChatCompletionMessage{
+			Role:       m.Role,
+			Content:    m.Content,
+			Name:       m.Name,
+			ToolCallID: m.ToolCallID,
+		}
+		if len(m.ToolCalls) > 0 {
+			tcs := make([]openai.ToolCall, len(m.ToolCalls))
+			for j, tc := range m.ToolCalls {
+				tcs[j] = openai.ToolCall{
+					ID:   tc.ID,
+					Type: openai.ToolTypeFunction,
+					Function: openai.FunctionCall{
+						Name:      tc.Name,
+						Arguments: tc.Arguments,
+					},
+				}
+			}
+			entry.ToolCalls = tcs
+		}
+		msgs[i] = entry
+	}
+
+	streamReq := openai.ChatCompletionRequest{
+		Model:    model,
+		Messages: msgs,
+		Stream:   true,
+		// IncludeUsage asks OpenAI to emit a trailing chunk with the
+		// usage summary; vLLM honours it. Without this flag, the SDK
+		// never sees Usage on any chunk and *ChatUsage comes back nil.
+		StreamOptions: &openai.StreamOptions{IncludeUsage: true},
+		MaxTokens:     req.MaxTokens,
+	}
+	if req.Temperature != nil {
+		streamReq.Temperature = *req.Temperature
+	}
+	if len(req.Tools) > 0 {
+		tools := make([]openai.Tool, len(req.Tools))
+		for i, t := range req.Tools {
+			fn := openai.FunctionDefinition{
+				Name:        t.Function.Name,
+				Description: t.Function.Description,
+				Parameters:  t.Function.Parameters,
+			}
+			tools[i] = openai.Tool{
+				Type:     openai.ToolTypeFunction,
+				Function: &fn,
+			}
+		}
+		streamReq.Tools = tools
+	}
+	if req.ToolChoice != nil {
+		streamReq.ToolChoice = req.ToolChoice
+	}
+	return streamReq
+}
+
 // Chat streams one completion. Each non-empty Delta.Content from the
 // upstream is forwarded to onDelta in arrival order. The trailing
 // usage chunk (when the upstream emits one) triggers a final
@@ -81,6 +152,10 @@ func NewClient(cfg *config.Config, tracer trace.Tracer) (*Client, error) {
 // A non-nil error from onDelta aborts the read and is returned to
 // the caller unchanged — the chat handler uses this to surface
 // client disconnects mid-stream.
+//
+// Tool-call deltas are dropped on this path — the legacy callback
+// cannot represent them, and today's chat service never produces
+// requests with Tools set. Use ChatDelta for tool-aware consumers.
 //
 // Errors from the upstream are mapped to llm sentinels: 429 →
 // ErrRateLimited, 5xx → ErrProviderUnavailable, network/DNS →
@@ -99,27 +174,7 @@ func (c *Client) Chat(ctx context.Context, req llm.ChatRequest, onDelta func(del
 	)
 	defer span.End()
 
-	msgs := make([]openai.ChatCompletionMessage, len(req.Messages))
-	for i, m := range req.Messages {
-		msgs[i] = openai.ChatCompletionMessage{
-			Role:    m.Role,
-			Content: m.Content,
-		}
-	}
-
-	streamReq := openai.ChatCompletionRequest{
-		Model:    c.model,
-		Messages: msgs,
-		Stream:   true,
-		// IncludeUsage asks OpenAI to emit a trailing chunk with the
-		// usage summary; vLLM honours it. Without this flag, the SDK
-		// never sees Usage on any chunk and *ChatUsage comes back nil.
-		StreamOptions: &openai.StreamOptions{IncludeUsage: true},
-		MaxTokens:     req.MaxTokens,
-	}
-	if req.Temperature != nil {
-		streamReq.Temperature = *req.Temperature
-	}
+	streamReq := buildStreamRequest(c.model, req)
 
 	stream, err := c.http.CreateChatCompletionStream(ctx, streamReq)
 	if err != nil {
@@ -180,7 +235,8 @@ func (c *Client) Chat(ctx context.Context, req llm.ChatRequest, onDelta func(del
 			// OpenAI sends a zero-length Delta.Content on role-change
 			// frames (the very first chunk sets role="assistant" with
 			// no content). Skip those — they would otherwise produce
-			// empty SSE events.
+			// empty SSE events. Tool-call deltas are dropped on this
+			// path; ChatDelta is the typed-callback entry point.
 			if choice.Delta.Content == "" {
 				continue
 			}
@@ -189,6 +245,118 @@ func (c *Client) Chat(ctx context.Context, req llm.ChatRequest, onDelta func(del
 				// http.Flusher returned an error). Surface the error
 				// to the caller without mapping it to a sentinel —
 				// it's not an LLM problem.
+				span.RecordError(err)
+				return usage, err
+			}
+		}
+	}
+
+	span.SetStatus(codes.Ok, "")
+	return usage, nil
+}
+
+// ChatDelta is the typed-callback streaming entry point. It surfaces
+// every frame OpenAI emits — content deltas, tool-call deltas
+// (partial fields preserved so parallel calls can be reassembled by
+// ID), the trailing usage chunk, and provider notes — through a
+// single discriminated Delta value.
+//
+// Frame ordering matches the upstream emission order so the executor
+// can pair a DeltaToolCall with the following DeltaContent frame that
+// resumes the turn, and so the final DeltaUsage is always the last
+// frame before EOF.
+//
+// Errors from onDelta abort the stream and propagate to the caller
+// unchanged (same contract as Chat). Upstream errors map to llm
+// sentinels via mapError.
+func (c *Client) ChatDelta(ctx context.Context, req llm.ChatRequest, onDelta func(llm.Delta) error) (*llm.ChatUsage, error) {
+	ctx, span := c.tracer.Start(ctx, "llm.openai.chat_delta",
+		trace.WithAttributes(
+			attribute.String("llm.model", c.model),
+			attribute.Int("llm.messages", len(req.Messages)),
+			attribute.Int("llm.max_tokens", req.MaxTokens),
+			attribute.Int("llm.tools", len(req.Tools)),
+		),
+	)
+	defer span.End()
+
+	streamReq := buildStreamRequest(c.model, req)
+
+	stream, err := c.http.CreateChatCompletionStream(ctx, streamReq)
+	if err != nil {
+		span.RecordError(err)
+		return nil, c.mapError(err)
+	}
+	defer func() { _ = stream.Close() }()
+
+	var usage *llm.ChatUsage
+	for {
+		if err := ctx.Err(); err != nil {
+			span.RecordError(err)
+			return usage, llm.ErrContextCanceled
+		}
+
+		resp, err := stream.Recv()
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		if err != nil {
+			span.RecordError(err)
+			return usage, c.mapError(err)
+		}
+
+		if resp.Usage != nil {
+			usage = &llm.ChatUsage{
+				PromptTokens:     resp.Usage.PromptTokens,
+				CompletionTokens: resp.Usage.CompletionTokens,
+				TotalTokens:      resp.Usage.TotalTokens,
+			}
+			span.SetAttributes(
+				attribute.Int("llm.prompt_tokens", usage.PromptTokens),
+				attribute.Int("llm.completion_tokens", usage.CompletionTokens),
+				attribute.Int("llm.total_tokens", usage.TotalTokens),
+			)
+			if err := onDelta(llm.Delta{Kind: llm.DeltaUsage, Usage: usage}); err != nil {
+				span.RecordError(err)
+				return usage, err
+			}
+			continue
+		}
+
+		for _, choice := range resp.Choices {
+			delta := choice.Delta
+
+			// Tool-call deltas may arrive on the same frame as a
+			// zero-length content slice. The SDK models them as a
+			// slice so the executor can keep parallel calls ordered
+			// by Index; we forward each one as its own DeltaToolCall
+			// frame so the caller sees them in emission order.
+			for _, tc := range delta.ToolCalls {
+				idx := 0
+				if tc.Index != nil {
+					idx = *tc.Index
+				}
+				if err := onDelta(llm.Delta{
+					Kind: llm.DeltaToolCall,
+					ToolCall: &llm.ToolCall{
+						ID:        tc.ID,
+						Name:      tc.Function.Name,
+						Arguments: tc.Function.Arguments,
+						Index:     idx,
+					},
+				}); err != nil {
+					span.RecordError(err)
+					return usage, err
+				}
+			}
+
+			// Role-change / empty-content frames are skipped — they
+			// carry no information for a typed-callback consumer
+			// either.
+			if delta.Content == "" {
+				continue
+			}
+			if err := onDelta(llm.Delta{Kind: llm.DeltaContent, Content: delta.Content}); err != nil {
 				span.RecordError(err)
 				return usage, err
 			}
