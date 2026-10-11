@@ -32,11 +32,12 @@ Full stack: `cp .env.example .env && cp backend/.env.example backend/.env && cp 
 Local dev orchestrator (`Makefile` at repo root):
 
 - `make up` — `docker compose up -d db redis jaeger` (idempotent)
-- `make dev` — run backend (`go run ./cmd/api`) + frontend (`npm run dev`) together with shared Ctrl+C cleanup; logs to `/tmp/nyx-backend.log` and `/tmp/nyx-frontend.log`
-- `make stop` — kill the dev backend/frontend started by `make dev`
-- `make status` — show infra + dev processes
-- `make down` — stop the infra containers
-- `make logs` — tail infra logs
+- `make dev` — run backend (`go run ./cmd/api`) + frontend (`npm run dev`) + python agent (`backend/agent_py/.venv/bin/python -m agent.main`, when `AGENT_ENABLED=true`) together with shared Ctrl+C cleanup; logs to `/tmp/nyx-backend.log`, `/tmp/nyx-frontend.log`, `/tmp/nyx-agent.log`. Single-target variants: `make dev-backend`, `make dev-frontend`, `make dev-agent` (foreground by default; pass `DETACH=1` to background).
+- `make dev-agent` — foreground Python agent only.
+- `make stop` — kill the dev backend / frontend / agent started by `make dev` (or any of the singles).
+- `make status` — show infra + dev processes.
+- `make down` — stop the infra containers.
+- `make logs` — tail infra logs.
 
 ---
 
@@ -50,6 +51,7 @@ Local dev orchestrator (`Makefile` at repo root):
 - `backend/internal/reqctx/` — typed values stashed on `context.Context` (auth claims, request ID, etc.).
 - `backend/internal/{feed,user}/db/` — sqlc output, **do not edit by hand**. Regenerate with `make sqlc`. See `backend/SQLC.md`.
 - `backend/queries/*.sql` — sqlc input.
+- `backend/agent_py/` — Python Plan-and-Execute agent orchestrator (FastAPI + LangGraph + Pydantic + redis-py + OpenTelemetry + prometheus-client). Default-off via `AGENT_ENABLED=false`; the Go chat handler is a thin SSE proxy when enabled. Separate runtime in the same monorepo — `make dev` boots it alongside backend + frontend; compose brings it up under the `app` profile. See `FUTURE_AGENT.md` + `backend/agent_py/README.md`.
 - `frontend/src/features/{feeds,auth}/` — components, hooks, services, types, store. `services/api.ts` (axios), `store/` (Zustand), `test/setup.js` (IntersectionObserver polyfill).
 - Adding an HTTP endpoint: see `backend/HUMA.md`.
 
@@ -68,8 +70,12 @@ Local dev orchestrator (`Makefile` at repo root):
 - **Config**: env vars via viper (`internal/platform/config/config.go`). `.env` auto-loaded if present. `JWT_SECRET` is validated at startup: `config.Load()` refuses the built-in default and any key shorter than `auth.MinSecretBytes` (32 bytes, RFC 7518 §3.2). `auth.NewTokenService` repeats the check so the constructor is independently safe.
 - **Test infra**: `backend/internal/feed/repository_integration_test.go` boots a Postgres testcontainer; integration tests self-skip via `t.Skip()` when `dbURL == ""`. Never reintroduce an early `os.Exit(0)` in `TestMain` — it silently skips unit tests.
 - **Pre-commit** (`.husky/pre-commit`): `lint-staged` → `eslint --fix` + `vitest related --run --passWithNoTests`. Note: vitest v4's `related` is a subcommand, not a flag. Plus `gitleaks protect --staged --redact --verbose` runs first (CI is the authoritative gate; missing binary doesn't block commits).
+- **Destructive Bash commands are conservative**: the auto-mode classifier denies `rm`, `mv` to out-of-tree paths, `rmdir`, and other irreversible actions on files that pre-date the session. Don't try to work around the deny rules — instead, design the cleanup step as a breadcrumb comment + a manual `rm` the operator runs (or use `Edit` to empty the file's contents). Don't `mv` a tracked file to `/tmp/` to delete it from the repo; the deny-rule classifier will refuse and the workaround attempts will fail the same way.
 - **Tests**: backend uses pgxmock (haqndler/repo) + miniredis (cache); frontend uses vitest + RTL; e2e uses Playwright (auto-starts `vite dev`).
+- **Wire-contract tests**: when a component emits or consumes a wire format (SSE frames, JSON-RPC payloads, HTTP envelopes), the test must round-trip through the *consumer's* parser, not just assert the producer's in-process shape. Self-consistent wrongness (producer and consumer tests both wrong together) is the most common failure mode — both sides green, both sides wrong. Cross-runtime contracts (Go↔Python↔TypeScript SSE frame, FastAPI ↔ httpx MockTransport) need a single test that parses the wire bytes with the actual consumer.
 - **sqlc drift**: CI runs `make sqlc-diff` and fails if generated code is out of sync with `queries/*.sql` or migrations. Regenerate locally and commit before pushing.
+- **Multi-runtime design**: when the change spans more than one language (Go + Python, Go + TypeScript worker, etc.), the dev-loop story is part of the design phase, not the launch site. If one runtime requires docker and the others run locally, the iteration loop is broken — surface this before coding. The Python agent service was added to `make dev` for this reason; vLLM is opt-in via `--profile vllm` so local CPU dev doesn't pay the GPU spin-up cost.
+- **Spec/code drift**: writing the spec is not enough — cross-validate the spec against the test that exercises it. Spec drift where one section says GET and another says POST is a bug, not a doc issue.
 
 ---
 

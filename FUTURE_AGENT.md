@@ -165,3 +165,35 @@ Long runs inflate the model's context window. **Compression (older-step summaris
 | 5 | `agent-cross-session-memory` | `chat_sessions` / `chat_messages` + retention + summary + prefs | after privacy review |
 
 Tick the `[ ]` items above as each slice lands. Archive-after rule: both `agent-loop` (Go infra) and `agent-langgraph` (Python orchestrator) close together once the Python service is wired in prod.
+---
+
+## Lessons from `agent-langgraph` slice 1
+
+Patterns the next agent change should follow, learned the hard way in the `agent-loop` → `agent-langgraph` migration:
+
+### Wire-contract tests before commit
+
+- Self-consistent wrongness is the dominant failure mode when a wire format spans two runtimes. Both sides' unit tests passed while the bytes were wrong (`{kind, data}` wrapper that the frontend parser never read).
+- When a component emits a wire format, the test must round-trip through the *consumer's* parser — not just assert the producer's in-process shape. For Go ↔ Python ↔ TypeScript SSE frames, that means parsing the Python output with the actual `chatService.ts` parser, or asserting byte-for-byte equality against a frozen fixture.
+- Cross-runtime contract tests (Go proxy + Python service + frontend parser) are the highest-leverage tests in multi-runtime work. They fail loudly when any side drifts; the producer/consumer tests alone don't.
+
+### Spec drift is a bug, not a doc issue
+
+- Writing the spec is half the work. Cross-validating the spec against the wire test is the other half. `agent-langgraph` task 6.1 said "POST + JSON body" while the Go RAG endpoint was GET + query params — an internal contradiction that survived two reviewer passes.
+- Write the spec, then write the test that exercises it, then write the code. If the test contradicts the spec, the spec is wrong.
+
+### Multi-runtime design asks about dev-loop early
+
+- Adding a Python service that requires docker while vLLM, backend, and frontend all run locally breaks the iteration loop. The user's first complaint on agent-langgraph was "why does this one have to be docker?"
+- For multi-runtime work, the dev-loop story is part of the design phase. `make dev` now boots the Python service alongside the other two; vLLM stays opt-in via `--profile vllm` so local CPU dev doesn't pay GPU spin-up cost.
+
+### Subagent delegation patterns that worked
+
+- Chunk independent work (Go infra across `internal/llm` / `internal/tool` / `internal/mcp` / `internal/chat` / `internal/rag`) for parallel subagent runs. Each chunk had a tight scope (file lists, exact task IDs) so the subagent didn't drift.
+- For Python service work, subagent launches hit token-plan rate limits several times. Chunking `batched subagent launches into 5-10 tasks each` and falling back to direct file writes kept progress when the rate limit hit.
+- Auto-mode classifier denies destructive Bash (`rm`, `mv` to `/tmp/`, `rmdir`). Don't try workarounds — design the cleanup as a breadcrumb comment + a manual `rm` step the operator runs.
+
+### Self-review is weaker than expected
+
+- The `test-reviewer` agent caught 4 CRITICAL + 4 HIGH issues after I had marked the change "ready". None of those came from me. Run `/review` per chunk, not just at the end.
+- For changes that introduce a new wire surface (a new event kind, a new RPC method), update both the change's tests *and* the consumer's tests in the same PR. Otherwise both drift apart silently.
