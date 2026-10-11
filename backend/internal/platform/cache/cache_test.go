@@ -42,6 +42,15 @@ func TestNoopCache(t *testing.T) {
 	if err := c.Close(); err != nil {
 		t.Errorf("noop Close err=%v", err)
 	}
+	// Counter primitives — no-op returns succeed without error so
+	// callers that treat (0, nil) as "backend down" see the same
+	// shape for both noop and a real Redis that errored.
+	if v, err := c.IncrBy(ctx, "k", 5); err != nil || v != 0 {
+		t.Errorf("noop IncrBy: got v=%d err=%v, want 0/nil", v, err)
+	}
+	if err := c.Expire(ctx, "k", time.Minute); err != nil {
+		t.Errorf("noop Expire err=%v", err)
+	}
 }
 
 func TestRedisCacheHitMiss(t *testing.T) {
@@ -152,6 +161,35 @@ func TestRedisCachePing(t *testing.T) {
 	c, _ := newTestCache(t)
 	if err := c.Ping(context.Background()); err != nil {
 		t.Errorf("Ping: %v", err)
+	}
+}
+
+// TestRedisCacheIncrBy exercises the INCRBY primitive the agent
+// budget guard relies on. Counter semantics: missing key is treated
+// as zero, INCRBY adds, the new value is returned. A second INCRBY
+// stacks. Expire sets a TTL without touching the value.
+func TestRedisCacheIncrBy(t *testing.T) {
+	c, _ := newTestCache(t)
+	ctx := context.Background()
+
+	v, err := c.IncrBy(ctx, "agent:budget:u=1:h=2026010900", 100)
+	if err != nil {
+		t.Fatalf("IncrBy: %v", err)
+	}
+	if v != 100 {
+		t.Errorf("first IncrBy: got %d, want 100", v)
+	}
+
+	v, err = c.IncrBy(ctx, "agent:budget:u=1:h=2026010900", 50)
+	if err != nil {
+		t.Fatalf("IncrBy: %v", err)
+	}
+	if v != 150 {
+		t.Errorf("second IncrBy: got %d, want 150", v)
+	}
+
+	if err := c.Expire(ctx, "agent:budget:u=1:h=2026010900", time.Minute); err != nil {
+		t.Fatalf("Expire: %v", err)
 	}
 }
 

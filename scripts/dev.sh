@@ -1,22 +1,31 @@
 #!/usr/bin/env bash
-# Run the backend (Go) and/or frontend (Vite) against the local
-# docker-compose infra (db / redis / jaeger).
+# Run the backend (Go), the Python agent service (FastAPI on :9000),
+# and/or the frontend (Vite) against the local docker-compose infra
+# (db / redis / jaeger).
 #
-# Usage: ./scripts/dev.sh [backend|frontend|both] [--detach]
+# Usage: ./scripts/dev.sh [backend|frontend|agent|both|all] [--detach]
 #
 # Default is foreground — the started process attaches to your
 # terminal so output streams live and Ctrl+C kills it cleanly. Pass
 # --detach to run in background: stdout/stderr tee to the terminal
-# AND to /tmp/nyx-{backend,frontend}.log; the script waits on each
-# child, so Ctrl+C tears them down together. PIDs land in
+# AND to /tmp/nyx-{backend,frontend,agent}.log; the script waits on
+# each child, so Ctrl+C tears them down together. PIDs land in
 # /tmp/nyx-*.pid for `make stop`.
 #
-# `both` requires --detach — two foreground processes can't share
-# one terminal.
+# `both` and `all` require --detach — multiple foreground processes
+# can't share one terminal.
 #
 # Assumes the infra containers are already up for the backend —
 # bring them with `make up` or `docker compose up -d db redis
-# jaeger`. The frontend needs no infra.
+# jaeger`. The frontend needs no infra. The Python agent service
+# is only started when `AGENT_ENABLED=true` is set in
+# `backend/.env` (it'd otherwise be a wasted uvicorn process).
+#
+# When AGENT_ENABLED=true the script overrides the Go-side
+# `PYTHON_AGENT_URL` (default `http://agent:9000` — the compose
+# DNS name) and the Python-side bridge URLs (RAG/MCP default to
+# the in-network hostname `backend:8080`) to their localhost
+# equivalents so everything talks over the loopback.
 
 set -uo pipefail
 
@@ -26,8 +35,10 @@ cd "$REPO_ROOT"
 LOG_DIR="${TMPDIR:-/tmp}"
 BACKEND_LOG="$LOG_DIR/nyx-backend.log"
 FRONTEND_LOG="$LOG_DIR/nyx-frontend.log"
+AGENT_LOG="$LOG_DIR/nyx-agent.log"
 BACKEND_PID="$LOG_DIR/nyx-backend.pid"
 FRONTEND_PID="$LOG_DIR/nyx-frontend.pid"
+AGENT_PID="$LOG_DIR/nyx-agent.pid"
 
 mode="${1:-both}"
 detach=false
@@ -36,24 +47,32 @@ case "$#" in
   1) ;;
   2) case "${2}" in
        --detach) detach=true ;;
-       *) echo "usage: $0 [backend|frontend|both] [--detach]" >&2; exit 2 ;;
+       *) echo "usage: $0 [backend|frontend|agent|both|all] [--detach]" >&2; exit 2 ;;
      esac ;;
-  *) echo "usage: $0 [backend|frontend|both] [--detach]" >&2; exit 2 ;;
+  *) echo "usage: $0 [backend|frontend|agent|both|all] [--detach]" >&2; exit 2 ;;
 esac
 
 case "$mode" in
-  backend|frontend|both) ;;
-  *) echo "usage: $0 [backend|frontend|both] [--detach]" >&2; exit 2 ;;
+  backend|frontend|agent|both|all) ;;
+  *) echo "usage: $0 [backend|frontend|agent|both|all] [--detach]" >&2; exit 2 ;;
 esac
 
-if [[ "$mode" == "both" && "$detach" != "true" ]]; then
-  echo "'both' requires --detach — two foreground processes can't share one terminal" >&2
-  echo "  run './scripts/dev.sh both --detach' or pick one of backend / frontend" >&2
+if [[ "$mode" == "both" || "$mode" == "all" ]] && "$detach" != "true"; then
+  echo "'$mode' requires --detach — multiple foreground processes can't share one terminal" >&2
+  echo "  run './scripts/dev.sh $mode --detach' or pick one of backend / frontend / agent" >&2
   exit 2
 fi
 
-needs_backend()  { [[ "$mode" == backend  || "$mode" == both ]]; }
-needs_frontend() { [[ "$mode" == frontend || "$mode" == both ]]; }
+# `all` is `both` + agent.
+if [[ "$mode" == "all" ]]; then
+  needs_backend=true
+  needs_frontend=true
+  needs_agent=true
+else
+  needs_backend()  { [[ "$mode" == backend  || "$mode" == both ]]; }
+  needs_frontend() { [[ "$mode" == frontend || "$mode" == both ]]; }
+  needs_agent()    { [[ "$mode" == agent ]]; }
+fi
 
 # --- backend preflight -------------------------------------------------
 if needs_backend; then
@@ -137,6 +156,36 @@ if needs_frontend; then
   command -v npm >/dev/null || { echo "npm not on PATH" >&2; exit 1; }
 fi
 
+# --- agent preflight (Python service on :9000) ----------------------------
+# Auto-start when `mode == agent` (operator asked for it), OR when
+# `AGENT_ENABLED=true` is set in `backend/.env` (in which case the Go
+# backend needs the agent running to answer chat requests).
+agent_enabled_in_env=false
+if [[ -f backend/.env ]] && grep -qE '^AGENT_ENABLED=(true|1|yes)\b' backend/.env; then
+  agent_enabled_in_env=true
+fi
+if needs_agent || $agent_enabled_in_env; then
+  command -v python3 >/dev/null || { echo "python3 not on PATH" >&2; exit 1; }
+
+  if [[ ! -d backend/agent_py/.venv ]]; then
+    echo "backend/agent_py/.venv missing — create it with:" >&2
+    echo "  cd backend/agent_py && python3 -m venv .venv && .venv/bin/pip install -e '.[dev]'" >&2
+    exit 1
+  fi
+
+  # Override the in-network hostnames the Python defaults assume, so the
+  # locally-running service talks to the local Go backend on :8080.
+  # Same pattern as the DB_URL / REDIS_URL override below.
+  export PYTHON_AGENT_MCP_URL='http://127.0.0.1:8080/mcp'
+  export PYTHON_AGENT_RAG_BRIDGE_URL='http://127.0.0.1:8080/internal/rag/retrieve'
+
+  # Tell the locally-running Go backend to call the locally-running
+  # Python agent on :9000 (rather than the compose DNS name `agent`).
+  if [[ -z "${PYTHON_AGENT_URL:-}" ]]; then
+    export PYTHON_AGENT_URL='http://127.0.0.1:9000'
+  fi
+fi
+
 # --- start -------------------------------------------------------------
 if $detach; then
   # Detached mode: each child runs as a backgrounded pipeline so the
@@ -146,7 +195,8 @@ if $detach; then
     local code=$?
     [[ -f "$BACKEND_PID"  ]] && kill "$(cat "$BACKEND_PID")"  2>/dev/null || true
     [[ -f "$FRONTEND_PID" ]] && kill "$(cat "$FRONTEND_PID")" 2>/dev/null || true
-    rm -f "$BACKEND_PID" "$FRONTEND_PID"
+    [[ -f "$AGENT_PID"    ]] && kill "$(cat "$AGENT_PID")"    2>/dev/null || true
+    rm -f "$BACKEND_PID" "$FRONTEND_PID" "$AGENT_PID"
     exit "$code"
   }
   trap cleanup INT TERM EXIT
@@ -168,16 +218,25 @@ if $detach; then
       2>&1 | tee "$FRONTEND_LOG" &
   fi
 
+  if needs_agent; then
+    echo ">> agent    → $AGENT_LOG"
+    # Boot the Python orchestrator locally. `python -m agent.main`
+    # is the entrypoint added in the `python -m agent.main boots` fix.
+    ( cd backend/agent_py && echo $BASHPID > "$AGENT_PID" && exec .venv/bin/python -m agent.main ) \
+      2>&1 | tee "$AGENT_LOG" &
+  fi
+
   cat <<EOF
 
     backend  : http://localhost:8080/api
     frontend : http://localhost:5173
-    jaeger   : http://localhost:16686
+    agent    : http://localhost:9000  (proxy :9001 for /metrics)
 
-    tail backend  : tail -f $BACKEND_LOG
-    tail frontend : tail -f $FRONTEND_LOG
+    tail backend : tail -f $BACKEND_LOG
+    tail frontend: tail -f $FRONTEND_LOG
+    tail agent   : tail -f $AGENT_LOG
 
-Ctrl+C to stop$( [[ "$mode" != "both" ]] && echo " $mode" ).
+Ctrl+C to stop$( [[ "$mode" == "both" ]] && echo " both" ).
 EOF
 
   # Wait for whichever children were started. Capture each exit code so
@@ -185,6 +244,7 @@ EOF
   # terminal AND to the per-process log file via tee.
   backend_exit=0
   frontend_exit=0
+  agent_exit=0
   [[ -f "$BACKEND_PID"  ]] && wait "$(cat "$BACKEND_PID")"  2>/dev/null || backend_exit=$?
   [[ -f "$FRONTEND_PID" ]] && wait "$(cat "$FRONTEND_PID")" 2>/dev/null || frontend_exit=$?
 
@@ -209,5 +269,11 @@ else
     echo ">> frontend starting in foreground (Ctrl+C to stop)"
     cd frontend || exit 1
     exec npm run dev
+  fi
+
+  if needs_agent; then
+    echo ">> agent    starting in foreground (Ctrl+C to stop)"
+    cd backend/agent_py || exit 1
+    exec .venv/bin/python -m agent.main
   fi
 fi

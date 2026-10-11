@@ -30,6 +30,18 @@ var cacheOps = promauto.NewCounterVec(
 // Cache is the interface used by service-layer code. Get returns
 // (false, nil) on a cache miss — callers must distinguish a miss from
 // an error so they can fall through to the source of truth.
+//
+// IncrBy atomically increments the integer value at key by delta and
+// returns the new value. A missing key is treated as zero, so the
+// first call with delta=N yields N. The noop implementation returns
+// (0, nil) — counter call-sites that fail closed on a real-Redis
+// error treat (0, noopErr) as "no counter backend" rather than
+// "backend down". IncrBy is the counter primitive the agent budget
+// guard relies on; today's chat handlers don't use it.
+//
+// Expire sets/updates the TTL on key without touching the value. The
+// noop implementation is a no-op. Expire is paired with IncrBy by the
+// budget guard so the per-hour counter resets at the hour boundary.
 type Cache interface {
 	Get(ctx context.Context, key string, dst any) (bool, error)
 	Set(ctx context.Context, key string, value any, ttl time.Duration) error
@@ -37,6 +49,8 @@ type Cache interface {
 	DeletePrefix(ctx context.Context, prefix string) error
 	Ping(ctx context.Context) error
 	Close() error
+	IncrBy(ctx context.Context, key string, delta int64) (int64, error)
+	Expire(ctx context.Context, key string, ttl time.Duration) error
 }
 
 // noopCache satisfies Cache without doing anything. It is used when
@@ -54,6 +68,8 @@ func (noopCache) Delete(context.Context, ...string) error               { return
 func (noopCache) DeletePrefix(context.Context, string) error            { return nil }
 func (noopCache) Ping(context.Context) error                            { return nil }
 func (noopCache) Close() error                                          { return nil }
+func (noopCache) IncrBy(context.Context, string, int64) (int64, error)  { return 0, nil }
+func (noopCache) Expire(context.Context, string, time.Duration) error   { return nil }
 
 // redisCache wraps a *redis.Client.
 type redisCache struct {
@@ -144,6 +160,21 @@ func (c *redisCache) DeletePrefix(ctx context.Context, prefix string) error {
 
 func (c *redisCache) Ping(ctx context.Context) error {
 	return c.client.Ping(ctx).Err()
+}
+
+// IncrBy atomically increments the integer value at key by delta.
+// Used by the agent budget guard to charge per-user token usage.
+// Returns the new counter value (post-increment); missing keys
+// behave as zero, so the first call with delta=N yields N.
+func (c *redisCache) IncrBy(ctx context.Context, key string, delta int64) (int64, error) {
+	return c.client.IncrBy(ctx, key, delta).Result()
+}
+
+// Expire sets the TTL on key without changing its value. The agent
+// budget guard calls it once after the counter's first increment so
+// the per-hour key naturally expires and resets at the hour boundary.
+func (c *redisCache) Expire(ctx context.Context, key string, ttl time.Duration) error {
+	return c.client.Expire(ctx, key, ttl).Err()
 }
 
 func (c *redisCache) Close() error {

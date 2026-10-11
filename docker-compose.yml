@@ -163,6 +163,58 @@ services:
     tmpfs:
       - /tmp
 
+  # Python Plan-and-Execute agent orchestrator. Opt-in profile —
+  # brought up alongside `backend` when `AGENT_ENABLED=true` is set in
+  # `backend/.env`. Replaces the Go `internal/agent/` package that shipped
+  # in OpenSpec change `agent-loop` (superseded by `agent-langgraph`).
+  # RAG stays in Go (the bridge endpoint `/internal/rag/retrieve` lives on
+  # the backend); tools dispatch via MCP JSON-RPC at `http://backend:8080/mcp`.
+  agent:
+    profiles: ["app"]
+    build:
+      context: ./backend/agent_py
+    mem_limit: 512m
+    cpus: "1.00"
+    ports:
+      # Loopback only — same posture as the vllm services. The Go proxy
+      # reaches the agent on the bridge network; the agent's `/metrics` is
+      # scraped by Prometheus on the bridge network too.
+      - "127.0.0.1:9001:9001"
+    env_file:
+      - backend/.env
+    environment:
+      # In-network hostnames for the bridges the agent calls into.
+      - PYTHON_AGENT_MCP_URL=http://backend:8080/mcp
+      - PYTHON_AGENT_RAG_BRIDGE_URL=http://backend:8080/internal/rag/retrieve
+      - PYTHON_AGENT_REDIS_URL=redis://redis:6379
+      - PYTHON_AGENT_OTEL_ENDPOINT=http://jaeger:4318
+      # Compose-side defaults the operator is expected to set in
+      # `backend/.env`. Listed here so a quick `docker compose --profile
+      # app up` works once `backend/.env` is filled in.
+      - PYTHON_AGENT_LLM_BASE_URL=${PYTHON_AGENT_LLM_BASE_URL:-http://vllm:8000/v1}
+      - PYTHON_AGENT_LLM_MODEL=${PYTHON_AGENT_LLM_MODEL:-Qwen/Qwen3-4B-Instruct-2507}
+      - PYTHON_AGENT_LLM_PLANNER_MODEL=${PYTHON_AGENT_LLM_PLANNER_MODEL:-}
+      - AGENT_BUDGET_PER_USER_PER_HOUR=${AGENT_BUDGET_PER_USER_PER_HOUR:-200000}
+    depends_on:
+      redis:
+        condition: service_healthy
+      backend:
+        condition: service_healthy
+      vllm:
+        condition: service_healthy
+        required: false
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:9000/healthz"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+      start_period: 30s
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    read_only: true
+    tmpfs:
+      - /tmp
+
   frontend:
     # See `backend` above — both app containers sit behind the
     # `app` profile so the default `docker compose up` only stands
