@@ -69,7 +69,6 @@ func loadConfigOrFatal() *config.Config {
 // during startup fail closed via log.Fatal — the operator sees
 // a clear, single-line root cause in the boot log.
 func buildAndServe(cfg *config.Config) {
-
 	// Build the JWT TokenService. config.Load already validated that
 	// cfg.JWTSecret is non-default and at least MinSecretBytes long;
 	// NewTokenService repeats the check so a future config drift can't
@@ -231,7 +230,7 @@ func buildAndServe(cfg *config.Config) {
 	// ragSvc drives the chat service's RAG injection; the indexer
 	// swaps the feed service's noop indexer so subsequent writes
 	// embed.
-	stopChatGC, _, ragIndexer := mountChatRoute(router, cfg, db, feedRepo, tracing.Provider, tokens)
+	stopChatGC, ragSvc, ragIndexer := mountChatRoute(router, cfg, db, feedRepo, tracing.Provider, tokens)
 	defer stopChatGC()
 	if ragIndexer != nil {
 		feedService.SetIndexer(ragIndexer)
@@ -242,6 +241,15 @@ func buildAndServe(cfg *config.Config) {
 	// §11 for the architecture and per-owner auth contract.
 	stopMCPLimiter := mountMCPRoute(router, cfg, feedService, tracing.Provider, tokens)
 	defer stopMCPLimiter()
+
+	// RAG bridge — service-to-service endpoint the Python agent
+	// (langgraph) calls for retrieval-augmented context. Mounted
+	// on chi directly (not huma) so the path stays out of the
+	// OpenAPI document; the /internal/ prefix signals it's
+	// never linked from frontend. Gated on ragSvc != nil because
+	// the bridge wraps *rag.Service — deployments without an
+	// embedder (LLM_ENABLED=false) have nothing to bridge.
+	mountRAGBridgeRoute(router, ragSvc, tokens)
 
 	port := ":" + cfg.Port
 	server := &http.Server{
@@ -423,7 +431,34 @@ func mountChatRoute(router chi.Router, cfg *config.Config, db *pgxpool.Pool, fee
 		ragSvc, ragIndexer = mountRAGFacade(cfg, db, feedRepo, primary, llmClient, tracerProvider)
 	}
 
-	chatService := chat.NewService(llmClient, cfg, ragSvc, tracerProvider.Tracer("nyx.chat"))
+	// Agent path (AGENT_ENABLED=true → Go chat handler is a thin
+	// SSE proxy to the Python LangGraph orchestrator). The proxy
+	// is constructed only when both flags are set: AGENT_ENABLED
+	// gates the handler dispatch and PYTHON_AGENT_URL supplies the
+	// upstream base URL. With AGENT_ENABLED=false the chat service
+	// is built without a proxy and the legacy single-turn path
+	// runs unchanged (byte-for-byte identical to pre-agent-langgraph).
+	//
+	// Default http.Client transport — production can wrap this with
+	// otelhttp.NewTransport to add OTel spans on the outbound dial;
+	// the 60s timeout is the upper bound; the handler wraps Run in
+	// the request-scoped ctx so client disconnect cancels the call.
+	var chatService *chat.Service
+	if cfg.AgentEnabled {
+		if cfg.PythonAgentURL == "" {
+			log.Fatal().Msg("AGENT_ENABLED=true but PYTHON_AGENT_URL is empty — refusing to start (fail closed)")
+		}
+		proxy, perr := chat.NewAgentProxy(cfg.PythonAgentURL, &http.Client{Timeout: 60 * time.Second}, 60*time.Second)
+		if perr != nil {
+			log.Fatal().Err(perr).Msg("failed to construct AgentProxy")
+		}
+		chatService = chat.NewServiceWithProxy(llmClient, cfg, tracerProvider.Tracer("nyx.chat"), proxy)
+		log.Info().
+			Str("python_agent_url", cfg.PythonAgentURL).
+			Msg("Agent path enabled (Go handler is SSE proxy to Python LangGraph)")
+	} else {
+		chatService = chat.NewService(llmClient, cfg, ragSvc, tracerProvider.Tracer("nyx.chat"))
+	}
 	chatHandler := chat.NewHandler(chatService)
 	// Per-user limiter: 5 streams/min, burst 3. In-memory only;
 	// see chat/ratelimit.go for the cost trade-off.
@@ -568,6 +603,41 @@ func mountMCPRoute(router chi.Router, cfg *config.Config, feedSvc feed.Service, 
 	return stopGC
 }
 
+// mountRAGBridgeRoute installs the chi-direct /internal/rag/retrieve
+// route the Python agent service uses to call rag.Service.Retrieve
+// without reimplementing it. Mirrors mountMCPRoute's "direct on chi,
+// no huma registration" pattern so the path stays out of the OpenAPI
+// document — the /internal/ prefix signals service-to-service and
+// is never linked from frontend.
+//
+// Gated on ragSvc != nil because the bridge wraps *rag.Service —
+// deployments without an embedder (LLM_ENABLED=false) have nothing
+// to bridge. Behind middleware.NewAuth so the handler can read the
+// user id from the verified JWT via reqctx.UserIDFromContext;
+// query-param user_id is ignored as authoritative (spec §3.1).
+func mountRAGBridgeRoute(router chi.Router, ragSvc *rag.Service, tokens auth.TokenService) {
+	if ragSvc == nil {
+		log.Info().Msg("RAG bridge disabled (LLM_ENABLED=false; ragSvc is nil)")
+		return
+	}
+	// Group, not Route: we want the exact path /internal/rag/retrieve
+	// without a trailing slash. chi.Route("/x", ...) makes the inner
+	// router scoped to /x and would force /internal/rag/retrieve/
+	// (trailing slash) — Group only scopes middleware, not the URL.
+	//
+	// r.Get takes http.HandlerFunc, but rag.Handler returns
+	// http.Handler. The closure adapts the handler without
+	// allocating an extra wrapping type.
+	bridgeHandler := rag.Handler(ragSvc)
+	router.Group(func(r chi.Router) {
+		r.Use(middleware.NewAuth(tokens))
+		r.Get("/internal/rag/retrieve", func(w http.ResponseWriter, req *http.Request) {
+			bridgeHandler.ServeHTTP(w, req)
+		})
+	})
+	log.Info().Msg("RAG bridge enabled at /internal/rag/retrieve")
+}
+
 // probeKeyFor returns the bearer key the per-request GET /v1/models
 // probe should send as Authorization. vLLM allows an empty key
 // (started without --api-key); OpenAI requires a non-empty one.
@@ -639,5 +709,4 @@ func warnEmbeddingDimMismatch(db *pgxpool.Pool, expected int) {
 			Int("configured_dim", expected).
 			Msg("feed_embeddings.embedding dim mismatch — run a migration to drop+recreate the column (see FUTURE_BACKEND.md §rag), or set EMBEDDING_DIMENSIONS to match the live column")
 	}
-
 }

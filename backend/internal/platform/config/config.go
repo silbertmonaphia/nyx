@@ -190,6 +190,23 @@ type Config struct {
 	MCPEnabled      bool   `mapstructure:"MCP_ENABLED"`
 	MCPPath         string `mapstructure:"MCP_PATH"`
 	MCPMaxBodyBytes int64  `mapstructure:"MCP_MAX_BODY_BYTES"`
+
+	// Agent path (AGENT_ENABLED=true → Go chat handler is a thin SSE
+	// proxy to the Python LangGraph orchestrator). The Go-side
+	// Plan-and-Execute loop was retired in
+	// openspec/changes/agent-langgraph; the per-step planner,
+	// executor, budget guard, and tool dispatch live in the Python
+	// service under backend/agent_py/. AGENT_ENABLED is the master
+	// switch; PYTHON_AGENT_URL points at the orchestrator's
+	// /agent/run endpoint (default empty → operator has not
+	// configured the agent path → cmd/api/main.go keeps the
+	// single-turn chat handler wired). Plan / react / budget caps
+	// and the planner-model override were dropped from this Config
+	// when the Go agent package was deleted — those keys now live
+	// in the Python service's pydantic-settings (see
+	// openspec/changes/agent-langgraph/design.md §9).
+	AgentEnabled   bool   `mapstructure:"AGENT_ENABLED"`
+	PythonAgentURL string `mapstructure:"PYTHON_AGENT_URL"`
 }
 
 func Load() (*Config, error) {
@@ -372,6 +389,19 @@ func setDefaults() {
 	viper.SetDefault("MCP_ENABLED", false)
 	viper.SetDefault("MCP_PATH", "/mcp")
 	viper.SetDefault("MCP_MAX_BODY_BYTES", 65536)
+
+	// Agent path defaults. AGENT_ENABLED=false (default) keeps
+	// the chat handler on the single-turn path; the legacy code
+	// path is byte-for-byte unchanged from before the
+	// agent-langgraph swap. PYTHON_AGENT_URL has no default — an
+	// empty value at config.Load time means the operator has not
+	// configured the agent service; cmd/api/main.go checks both
+	// flags and refuses to wire a proxy when PYTHON_AGENT_URL is
+	// empty even if AGENT_ENABLED=true (fail-closed: a misconfigured
+	// agent path returns the standard "agent_unavailable" SSE
+	// frame rather than silently routing to the legacy path).
+	viper.SetDefault("AGENT_ENABLED", false)
+	viper.SetDefault("PYTHON_AGENT_URL", "")
 }
 
 // bindEnvVars explicitly wires every env-sourced viper key. See Load
@@ -398,6 +428,7 @@ func bindEnvVars() {
 		"EMBEDDING_DIMENSIONS",
 		"RAG_TOP_K", "RAG_MAX_CONTEXT_CHARS", "RAG_MAX_BACKFILL_PER_REQUEST",
 		"MCP_ENABLED", "MCP_PATH", "MCP_MAX_BODY_BYTES",
+		"AGENT_ENABLED", "PYTHON_AGENT_URL",
 	} {
 		_ = viper.BindEnv(key)
 	}

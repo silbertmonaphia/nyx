@@ -765,3 +765,69 @@ func TestLoad_EmbedConfigAllowPrivateHonoured(t *testing.T) {
 		t.Error("LLMEmbeddingAllowPrivateURL = false, want true")
 	}
 }
+
+// TestLoad_AgentEnabledDefaultsFalse pins the default for the
+// agent-path master switch: AGENT_ENABLED must default to false so
+// the legacy single-turn chat handler keeps running on every
+// deployment that has not explicitly opted into the Python
+// LangGraph orchestrator. The agent-langgraph swap keeps the legacy
+// wire shape byte-identical when this flag is off; flipping it on
+// without setting PYTHON_AGENT_URL is a misconfiguration the
+// cmd/api/main.go fail-closed check catches at startup.
+func TestLoad_AgentEnabledDefaultsFalse(t *testing.T) {
+	t.Setenv("DB_URL", "postgres://x")
+	t.Setenv("JWT_SECRET", auth.TestSecret)
+	t.Setenv("AGENT_ENABLED", "")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg.AgentEnabled {
+		t.Error("AgentEnabled default = true, want false (single-turn chat path)")
+	}
+}
+
+// TestLoad_PythonAgentURLDefaultsEmpty pins the default for the
+// Python orchestrator endpoint: PYTHON_AGENT_URL must default to
+// empty so the agent path is opt-in. With both flags at their
+// defaults the chat handler is the legacy single-turn path with
+// zero proxy construction.
+func TestLoad_PythonAgentURLDefaultsEmpty(t *testing.T) {
+	t.Setenv("DB_URL", "postgres://x")
+	t.Setenv("JWT_SECRET", auth.TestSecret)
+	t.Setenv("PYTHON_AGENT_URL", "")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg.PythonAgentURL != "" {
+		t.Errorf("PythonAgentURL default = %q, want empty (no proxy wired)", cfg.PythonAgentURL)
+	}
+}
+
+// TestLoad_AgentEnabledTrueHonoured pins the env-driven flip:
+// setting AGENT_ENABLED=true in the environment is reflected in
+// the parsed Config. cmd/api/main.go reads cfg.AgentEnabled and,
+// when true + PYTHON_AGENT_URL non-empty, wires AgentProxy. This
+// test pins only the config-load layer; the wiring logic lives in
+// cmd/api/main.go's mountChatRoute (where it's the same shape as
+// MCP_ENABLED / LLM_ENABLED gates).
+func TestLoad_AgentEnabledTrueHonoured(t *testing.T) {
+	t.Setenv("DB_URL", "postgres://x")
+	t.Setenv("JWT_SECRET", auth.TestSecret)
+	t.Setenv("AGENT_ENABLED", "true")
+	t.Setenv("PYTHON_AGENT_URL", "http://agent:9000")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if !cfg.AgentEnabled {
+		t.Error("AgentEnabled = false, want true from env")
+	}
+	if cfg.PythonAgentURL != "http://agent:9000" {
+		t.Errorf("PythonAgentURL = %q, want %q", cfg.PythonAgentURL, "http://agent:9000")
+	}
+}
