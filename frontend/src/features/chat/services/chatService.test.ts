@@ -415,4 +415,196 @@ describe('chatService.streamMessage', () => {
     // present false is harmless.
     expect(body.rag).toBe(false);
   });
+
+  // ---- Agent-loop SSE kinds (openspec/changes/agent-loop) ----
+  // The new frames are additive on the same /api/chat stream. Each
+  // variant below verifies the parser reconstructs the wire shape
+  // byte-for-byte; old single-turn events (delta / note / error /
+  // done / terminator) still parse identically.
+
+  it('parses a plan event with mixed step kinds', async () => {
+    const sse =
+      'event: plan\ndata: {"steps":[{"id":"step_1","kind":"rag","query":"hi"},{"id":"step_2","kind":"tool","tool":"list_feeds","args":{"limit":10}},{"id":"step_3","kind":"llm","prompt":"answer"},{"id":"step_4","kind":"react","tool":"get_feed","args":{"id":"x"},"max_iterations":3}]}\n\n' +
+      'event: done\ndata: {"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}}\n\n' +
+      'data: [DONE]\n\n';
+    fetchMock.mockResolvedValueOnce(sseResponse([sse]));
+
+    const events: unknown[] = [];
+    for await (const e of chatService.streamMessage(
+      [{ role: 'user', content: 'hi' }],
+      new AbortController().signal,
+    )) {
+      events.push(e);
+    }
+
+    expect(events[0]).toEqual({
+      kind: 'plan',
+      steps: [
+        { id: 'step_1', kind: 'rag', query: 'hi', tool: undefined, args: undefined, prompt: undefined, max_iterations: undefined },
+        { id: 'step_2', kind: 'tool', tool: 'list_feeds', args: { limit: 10 }, query: undefined, prompt: undefined, max_iterations: undefined },
+        { id: 'step_3', kind: 'llm', prompt: 'answer', tool: undefined, args: undefined, query: undefined, max_iterations: undefined },
+        { id: 'step_4', kind: 'react', tool: 'get_feed', args: { id: 'x' }, max_iterations: 3, query: undefined, prompt: undefined },
+      ],
+    });
+    expect(events.at(-1)).toEqual({ kind: 'terminator' });
+  });
+
+  it('parses step_start / tool_call / tool_result / step_end in sequence', async () => {
+    const sse =
+      'event: plan\ndata: {"steps":[{"id":"step_1","kind":"tool","tool":"list_feeds","args":{"limit":10}}]}\n\n' +
+      'event: step_start\ndata: {"step_id":"step_1","kind":"tool"}\n\n' +
+      'event: tool_call\ndata: {"step_id":"step_1","call_id":"c1","name":"list_feeds","args":{"limit":10}}\n\n' +
+      'event: tool_result\ndata: {"step_id":"step_1","call_id":"c1","ok":true,"result":[{"id":1}]}\n\n' +
+      'event: step_end\ndata: {"step_id":"step_1","status":"ok","reason":""}\n\n' +
+      'event: delta\ndata: {"delta":"done"}\n\n' +
+      'event: done\ndata: {"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}}\n\n' +
+      'data: [DONE]\n\n';
+    fetchMock.mockResolvedValueOnce(sseResponse([sse]));
+
+    const events: unknown[] = [];
+    for await (const e of chatService.streamMessage(
+      [{ role: 'user', content: 'hi' }],
+      new AbortController().signal,
+    )) {
+      events.push(e);
+    }
+
+    expect(events).toEqual([
+      {
+        kind: 'plan',
+        steps: [
+          { id: 'step_1', kind: 'tool', tool: 'list_feeds', args: { limit: 10 }, query: undefined, prompt: undefined, max_iterations: undefined },
+        ],
+      },
+      { kind: 'step_start', step_id: 'step_1', step_kind: 'tool' },
+      {
+        kind: 'tool_call',
+        step_id: 'step_1',
+        call_id: 'c1',
+        name: 'list_feeds',
+        args: { limit: 10 },
+      },
+      {
+        kind: 'tool_result',
+        step_id: 'step_1',
+        call_id: 'c1',
+        ok: true,
+        result: [{ id: 1 }],
+        error: undefined,
+      },
+      { kind: 'step_end', step_id: 'step_1', status: 'ok', reason: '' },
+      { kind: 'delta', delta: 'done' },
+      {
+        kind: 'done',
+        usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
+      },
+      { kind: 'terminator' },
+    ]);
+  });
+
+  it('parses a failed tool_result frame with the safe error marker', async () => {
+    const sse =
+      'event: tool_result\ndata: {"step_id":"step_1","call_id":"c1","ok":false,"error":"tool_call_failed"}\n\n' +
+      'event: done\ndata: {"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}}\n\n' +
+      'data: [DONE]\n\n';
+    fetchMock.mockResolvedValueOnce(sseResponse([sse]));
+
+    const events: unknown[] = [];
+    for await (const e of chatService.streamMessage(
+      [{ role: 'user', content: 'hi' }],
+      new AbortController().signal,
+    )) {
+      events.push(e);
+    }
+
+    expect(events[0]).toEqual({
+      kind: 'tool_result',
+      step_id: 'step_1',
+      call_id: 'c1',
+      ok: false,
+      result: undefined,
+      error: 'tool_call_failed',
+    });
+  });
+
+  it('parses a step_end with status failed and reason', async () => {
+    const sse =
+      'event: step_end\ndata: {"step_id":"step_2","status":"failed","reason":"react_max_iterations"}\n\n' +
+      'event: done\ndata: {"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}}\n\n' +
+      'data: [DONE]\n\n';
+    fetchMock.mockResolvedValueOnce(sseResponse([sse]));
+
+    const events: unknown[] = [];
+    for await (const e of chatService.streamMessage(
+      [{ role: 'user', content: 'hi' }],
+      new AbortController().signal,
+    )) {
+      events.push(e);
+    }
+
+    expect(events[0]).toEqual({
+      kind: 'step_end',
+      step_id: 'step_2',
+      status: 'failed',
+      reason: 'react_max_iterations',
+    });
+  });
+
+  it('parses an error frame with the new typed code field', async () => {
+    const sse =
+      'event: error\ndata: {"error":"plan too large","request_id":"req-1","code":"plan_too_large"}\n\n' +
+      'data: [DONE]\n\n';
+    fetchMock.mockResolvedValueOnce(sseResponse([sse]));
+
+    const events: unknown[] = [];
+    for await (const e of chatService.streamMessage(
+      [{ role: 'user', content: 'hi' }],
+      new AbortController().signal,
+    )) {
+      events.push(e);
+    }
+
+    expect(events).toEqual([
+      {
+        kind: 'error',
+        error: 'plan too large',
+        request_id: 'req-1',
+        code: 'plan_too_large',
+      },
+      { kind: 'terminator' },
+    ]);
+  });
+
+  it('drops malformed plan / step_start / tool_call / tool_result / step_end frames', async () => {
+    // Each malformed frame is dropped silently; surrounding well-
+    // formed frames still flow through. The stream parser must not
+    // tear down the response on a single bad agent frame.
+    const sse =
+      'event: plan\ndata: not-json\n\n' +
+      'event: step_start\ndata: {"step_id":"x"}\n\n' + // missing kind
+      'event: tool_call\ndata: {"name":"x"}\n\n' + // missing step_id + call_id
+      'event: tool_result\ndata: {"step_id":"x"}\n\n' + // missing call_id
+      'event: step_end\ndata: {"step_id":"x","status":"weird"}\n\n' + // bad status
+      'event: delta\ndata: {"delta":"alive"}\n\n' +
+      'event: done\ndata: {"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}}\n\n' +
+      'data: [DONE]\n\n';
+    fetchMock.mockResolvedValueOnce(sseResponse([sse]));
+
+    const events: unknown[] = [];
+    for await (const e of chatService.streamMessage(
+      [{ role: 'user', content: 'hi' }],
+      new AbortController().signal,
+    )) {
+      events.push(e);
+    }
+
+    expect(events).toEqual([
+      { kind: 'delta', delta: 'alive' },
+      {
+        kind: 'done',
+        usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
+      },
+      { kind: 'terminator' },
+    ]);
+  });
 });

@@ -1,6 +1,6 @@
 import { create } from "zustand";
 import { chatService } from "../services/chatService";
-import type { Message } from "../types/chat";
+import type { ChatStep, Message } from "../types/chat";
 
 // Per-message `usage` payload delivered on `event: done`. Lives on
 // the assistant message itself so a follow-up render can show token
@@ -19,6 +19,12 @@ export interface ChatMessage {
   // on the assistant row so a follow-up render can show it without
   // keeping the event out-of-band.
   notes?: string[];
+  // Agent-loop per-step trace. Populated from `plan` / `step_start`
+  // / `tool_call` / `tool_result` / `step_end` SSE events when
+  // AGENT_ENABLED=true; absent on the single-turn path. Ephemeral
+  // — the store is not persisted (FUTURE_FRONTEND.md §10), so this
+  // field stays in-memory only and never lands in localStorage.
+  steps?: ChatStep[];
 }
 
 interface ChatState {
@@ -201,6 +207,117 @@ export const useChatStore = create<ChatState>((set, get) => ({
               ...target,
               notes: [...(target.notes ?? []), event.text],
             };
+            return { messages: next };
+          });
+        } else if (event.kind === "plan") {
+          // Agent-loop plan event: seed the per-step trace so the
+          // UI can render planned steps before `step_start` fires.
+          // The planner's id+kind pairs are the canonical IDs the
+          // subsequent step-scoped frames reference; storing them
+          // up-front means a step_start / tool_call / step_end
+          // arriving before we've rendered anything still finds a
+          // row to update.
+          set((state) => {
+            const next = state.messages.slice();
+            const target = next[assistantIndex];
+            if (!target || target.role !== "assistant") return state;
+            const steps: ChatStep[] = event.steps.map((s) => ({
+              id: s.id,
+              kind: s.kind,
+              status: "running",
+              toolName: s.tool,
+              toolArgs: s.args,
+            }));
+            next[assistantIndex] = { ...target, steps };
+            return { messages: next };
+          });
+        } else if (event.kind === "step_start") {
+          // Open a step's row. If the `plan` event already seeded
+          // it, mark it running and update kind (the plan's kind
+          // and step_start's kind are identical today but we keep
+          // them decoupled for the case where a planner revision
+          // ever diverges). If no plan preceded this event (legacy
+          // fallback), append a fresh step row.
+          set((state) => {
+            const next = state.messages.slice();
+            const target = next[assistantIndex];
+            if (!target || target.role !== "assistant") return state;
+            const steps = (target.steps ?? []).slice();
+            const idx = steps.findIndex((s) => s.id === event.step_id);
+            if (idx >= 0) {
+              steps[idx] = {
+                ...steps[idx],
+                kind: event.step_kind,
+                status: "running",
+              };
+            } else {
+              steps.push({
+                id: event.step_id,
+                kind: event.step_kind,
+                status: "running",
+              });
+            }
+            next[assistantIndex] = { ...target, steps };
+            return { messages: next };
+          });
+        } else if (event.kind === "tool_call") {
+          // Annotate the step with the dispatched tool's name + args.
+          // Multiple tool calls per step (react sub-loop) overwrite
+          // the previous — the UI shows the latest, matching the
+          // ChatStep type's singular fields.
+          set((state) => {
+            const next = state.messages.slice();
+            const target = next[assistantIndex];
+            if (!target || target.role !== "assistant") return state;
+            const steps = (target.steps ?? []).slice();
+            const idx = steps.findIndex((s) => s.id === event.step_id);
+            if (idx >= 0) {
+              steps[idx] = {
+                ...steps[idx],
+                toolName: event.name,
+                toolArgs: event.args,
+              };
+              next[assistantIndex] = { ...target, steps };
+            }
+            return { messages: next };
+          });
+        } else if (event.kind === "tool_result") {
+          // Record the dispatch outcome on the step. Failed calls
+          // carry a static safe marker (matches the wire's
+          // "tool_call_failed" literal) and never the underlying
+          // err.Error(); we store it verbatim so the UI can show
+          // the same marker.
+          set((state) => {
+            const next = state.messages.slice();
+            const target = next[assistantIndex];
+            if (!target || target.role !== "assistant") return state;
+            const steps = (target.steps ?? []).slice();
+            const idx = steps.findIndex((s) => s.id === event.step_id);
+            if (idx >= 0) {
+              steps[idx] = {
+                ...steps[idx],
+                toolResult: event.ok ? event.result : event.error,
+              };
+              next[assistantIndex] = { ...target, steps };
+            }
+            return { messages: next };
+          });
+        } else if (event.kind === "step_end") {
+          // Close the step's row with its final status + reason.
+          set((state) => {
+            const next = state.messages.slice();
+            const target = next[assistantIndex];
+            if (!target || target.role !== "assistant") return state;
+            const steps = (target.steps ?? []).slice();
+            const idx = steps.findIndex((s) => s.id === event.step_id);
+            if (idx >= 0) {
+              steps[idx] = {
+                ...steps[idx],
+                status: event.status === "ok" ? "ok" : "failed",
+                reason: event.reason || undefined,
+              };
+              next[assistantIndex] = { ...target, steps };
+            }
             return { messages: next };
           });
         } else if (event.kind === "error") {

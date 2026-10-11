@@ -185,3 +185,161 @@ describe('ChatPanel useFeeds toggle', () => {
     useChatStore.setState({ useFeeds: false });
   });
 });
+
+// ---- Agent-loop steps region (openspec/changes/agent-loop) ----
+// When the assistant row carries `steps`, ChatPanel renders an
+// "agent steps" <details> with one row per step. The single-turn
+// path emits no steps, so this region stays hidden.
+
+describe('ChatPanel agent steps', () => {
+  beforeEach(() => {
+    resetStore();
+  });
+
+  it('renders nothing in single-turn mode (no steps block)', () => {
+    // Seed a clean single-turn assistant row — no `steps` field.
+    useChatStore.setState({
+      messages: [
+        { role: 'user', content: 'hi' },
+        { role: 'assistant', content: 'hello' },
+      ],
+      isStreaming: false,
+      error: null,
+    });
+
+    render(<ChatPanel open={true} onOpenChange={() => {}} />);
+
+    expect(screen.queryByTestId('chat-agent-steps')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('chat-agent-step')).not.toBeInTheDocument();
+  });
+
+  it('renders the steps block when the assistant row carries steps', () => {
+    useChatStore.setState({
+      messages: [
+        { role: 'user', content: 'hi' },
+        {
+          role: 'assistant',
+          content: 'final answer',
+          steps: [
+            { id: 's1', kind: 'rag', status: 'ok' },
+            {
+              id: 's2',
+              kind: 'tool',
+              status: 'ok',
+              toolName: 'list_feeds',
+              toolArgs: { limit: 10 },
+              toolResult: [{ id: 1 }],
+            },
+          ],
+        },
+      ],
+      isStreaming: false,
+      error: null,
+    });
+
+    render(<ChatPanel open={true} onOpenChange={() => {}} />);
+
+    const block = screen.getByTestId('chat-agent-steps');
+    expect(block).toBeInTheDocument();
+    const rows = screen.getAllByTestId('chat-agent-step');
+    expect(rows).toHaveLength(2);
+    expect(rows[0]).toHaveAttribute('data-step-id', 's1');
+    expect(rows[0]).toHaveAttribute('data-step-status', 'ok');
+    expect(rows[1]).toHaveAttribute('data-step-id', 's2');
+
+    // Tool name surfaces as a labelled span so a screen reader
+    // announces it; the args stay collapsed by default.
+    expect(screen.getByTestId('chat-agent-step-tool')).toHaveTextContent(
+      'list_feeds',
+    );
+    expect(screen.getByTestId('chat-agent-step-args')).toBeInTheDocument();
+    expect(screen.getByTestId('chat-agent-step-result')).toHaveTextContent(
+      /result:/,
+    );
+  });
+
+  it('renders a failure row with status=failed and reason', () => {
+    useChatStore.setState({
+      messages: [
+        { role: 'user', content: 'hi' },
+        {
+          role: 'assistant',
+          content: 'partial',
+          steps: [
+            {
+              id: 's1',
+              kind: 'react',
+              status: 'failed',
+              reason: 'react_max_iterations',
+            },
+          ],
+        },
+      ],
+      isStreaming: false,
+      error: null,
+    });
+
+    render(<ChatPanel open={true} onOpenChange={() => {}} />);
+
+    const row = screen.getByTestId('chat-agent-step');
+    expect(row).toHaveAttribute('data-step-status', 'failed');
+    expect(screen.getByTestId('chat-agent-step-reason')).toHaveTextContent(
+      'react_max_iterations',
+    );
+  });
+
+  it('streams steps into the panel as events arrive', async () => {
+    // Drive a real stream through the store so the panel sees the
+    // steps accumulate live, then assert the final state.
+    mockedService.streamMessage.mockImplementationOnce(
+      async function* () {
+        yield {
+          kind: 'plan',
+          steps: [{ id: 's1', kind: 'tool', tool: 'list_feeds' }],
+        };
+        yield { kind: 'step_start', step_id: 's1', step_kind: 'tool' };
+        yield {
+          kind: 'tool_call',
+          step_id: 's1',
+          call_id: 'c1',
+          name: 'list_feeds',
+          args: { limit: 5 },
+        };
+        yield {
+          kind: 'tool_result',
+          step_id: 's1',
+          call_id: 'c1',
+          ok: true,
+          result: [],
+        };
+        yield { kind: 'step_end', step_id: 's1', status: 'ok', reason: '' };
+        yield { kind: 'delta', delta: 'final ' };
+        yield {
+          kind: 'done',
+          usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
+        };
+        yield { kind: 'terminator' };
+      },
+    );
+
+    render(<ChatPanel open={true} onOpenChange={vi.fn()} />);
+    const input = screen.getByTestId('chat-input') as HTMLTextAreaElement;
+    await userEvent.type(input, 'list them');
+    await userEvent.click(screen.getByTestId('chat-send'));
+
+    // Wait for the streamed content + steps to land.
+    await waitFor(() => {
+      expect(screen.getByTestId('chat-agent-steps')).toBeInTheDocument();
+    });
+    await waitFor(() => {
+      expect(screen.getByTestId('chat-message-assistant')).toHaveTextContent(
+        'final ',
+      );
+    });
+
+    const tool = screen.getByTestId('chat-agent-step-tool');
+    expect(tool).toHaveTextContent('list_feeds');
+    const row = screen.getByTestId('chat-agent-step');
+    expect(row).toHaveAttribute('data-step-status', 'ok');
+  });
+});

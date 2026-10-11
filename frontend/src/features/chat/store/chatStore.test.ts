@@ -438,4 +438,242 @@ describe('useChatStore', () => {
       });
     });
   });
+
+  // ---- Agent-loop step trace (openspec/changes/agent-loop) ----
+  // Steps live on the assistant row's `steps` array, populated
+  // incrementally as the SSE stream emits plan / step_start /
+  // tool_call / tool_result / step_end frames. The trace is
+  // ephemeral — never persisted to localStorage.
+
+  describe('agent steps', () => {
+    it('seeds the assistant row with steps from a plan event', async () => {
+      mockedService.streamMessage.mockImplementationOnce(
+        (_messages: unknown, signal: AbortSignal) =>
+          makeStream(
+            [
+              {
+                kind: 'plan',
+                steps: [
+                  { id: 's1', kind: 'rag' },
+                  { id: 's2', kind: 'tool', tool: 'list_feeds', args: { limit: 10 } },
+                ],
+              },
+              {
+                kind: 'done',
+                usage: {
+                  prompt_tokens: 1,
+                  completion_tokens: 1,
+                  total_tokens: 2,
+                },
+              },
+            ],
+            signal,
+          ),
+      );
+
+      await act(async () => {
+        useChatStore.getState().send('hi');
+      });
+
+      await act(async () => {
+        releaseStream();
+      });
+
+      const assistant = useChatStore
+        .getState()
+        .messages.find((m) => m.role === 'assistant');
+      expect(assistant?.steps?.map((s) => ({ id: s.id, kind: s.kind, status: s.status, toolName: s.toolName }))).toEqual([
+        { id: 's1', kind: 'rag', status: 'running', toolName: undefined },
+        { id: 's2', kind: 'tool', status: 'running', toolName: 'list_feeds' },
+      ]);
+    });
+
+    it('updates steps on step_start / tool_call / tool_result / step_end', async () => {
+      mockedService.streamMessage.mockImplementationOnce(
+        (_messages: unknown, signal: AbortSignal) =>
+          makeStream(
+            [
+              { kind: 'plan', steps: [{ id: 's1', kind: 'tool', tool: 'list_feeds' }] },
+              { kind: 'step_start', step_id: 's1', step_kind: 'tool' },
+              {
+                kind: 'tool_call',
+                step_id: 's1',
+                call_id: 'c1',
+                name: 'list_feeds',
+                args: { limit: 10 },
+              },
+              {
+                kind: 'tool_result',
+                step_id: 's1',
+                call_id: 'c1',
+                ok: true,
+                result: [{ id: 1 }],
+              },
+              { kind: 'step_end', step_id: 's1', status: 'ok', reason: '' },
+              {
+                kind: 'done',
+                usage: {
+                  prompt_tokens: 1,
+                  completion_tokens: 1,
+                  total_tokens: 2,
+                },
+              },
+            ],
+            signal,
+          ),
+      );
+
+      await act(async () => {
+        useChatStore.getState().send('hi');
+      });
+
+      await act(async () => {
+        releaseStream();
+      });
+
+      const assistant = useChatStore
+        .getState()
+        .messages.find((m) => m.role === 'assistant');
+      expect(assistant?.steps?.[0]).toEqual({
+        id: 's1',
+        kind: 'tool',
+        status: 'ok',
+        toolName: 'list_feeds',
+        toolArgs: { limit: 10 },
+        toolResult: [{ id: 1 }],
+      });
+    });
+
+    it('appends a step row when step_start arrives without a preceding plan', async () => {
+      // Defensive fallback: a server that forgets to emit `plan`
+      // first still gets a row per step so the UI has something to
+      // render.
+      mockedService.streamMessage.mockImplementationOnce(
+        (_messages: unknown, signal: AbortSignal) =>
+          makeStream(
+            [
+              { kind: 'step_start', step_id: 's9', step_kind: 'rag' },
+              { kind: 'step_end', step_id: 's9', status: 'ok', reason: '' },
+              {
+                kind: 'done',
+                usage: {
+                  prompt_tokens: 1,
+                  completion_tokens: 1,
+                  total_tokens: 2,
+                },
+              },
+            ],
+            signal,
+          ),
+      );
+
+      await act(async () => {
+        useChatStore.getState().send('hi');
+      });
+
+      await act(async () => {
+        releaseStream();
+      });
+
+      const assistant = useChatStore
+        .getState()
+        .messages.find((m) => m.role === 'assistant');
+      expect(assistant?.steps?.[0]?.id).toBe('s9');
+      expect(assistant?.steps?.[0]?.status).toBe('ok');
+    });
+
+    it('records tool_call_failed on a failed tool_result', async () => {
+      mockedService.streamMessage.mockImplementationOnce(
+        (_messages: unknown, signal: AbortSignal) =>
+          makeStream(
+            [
+              { kind: 'step_start', step_id: 's1', step_kind: 'tool' },
+              {
+                kind: 'tool_call',
+                step_id: 's1',
+                call_id: 'c1',
+                name: 'list_feeds',
+                args: {},
+              },
+              {
+                kind: 'tool_result',
+                step_id: 's1',
+                call_id: 'c1',
+                ok: false,
+                error: 'tool_call_failed',
+              },
+              {
+                kind: 'step_end',
+                step_id: 's1',
+                status: 'failed',
+                reason: 'tool_error',
+              },
+              {
+                kind: 'done',
+                usage: {
+                  prompt_tokens: 1,
+                  completion_tokens: 1,
+                  total_tokens: 2,
+                },
+              },
+            ],
+            signal,
+          ),
+      );
+
+      await act(async () => {
+        useChatStore.getState().send('hi');
+      });
+
+      await act(async () => {
+        releaseStream();
+      });
+
+      const assistant = useChatStore
+        .getState()
+        .messages.find((m) => m.role === 'assistant');
+      expect(assistant?.steps?.[0]).toMatchObject({
+        id: 's1',
+        status: 'failed',
+        reason: 'tool_error',
+        toolResult: 'tool_call_failed',
+      });
+    });
+
+    it('keeps steps ephemeral — localStorage stays empty after a run', async () => {
+      mockedService.streamMessage.mockImplementationOnce(
+        (_messages: unknown, signal: AbortSignal) =>
+          makeStream(
+            [
+              { kind: 'plan', steps: [{ id: 's1', kind: 'rag' }] },
+              { kind: 'step_start', step_id: 's1', step_kind: 'rag' },
+              { kind: 'step_end', step_id: 's1', status: 'ok', reason: '' },
+              {
+                kind: 'done',
+                usage: {
+                  prompt_tokens: 1,
+                  completion_tokens: 1,
+                  total_tokens: 2,
+                },
+              },
+            ],
+            signal,
+          ),
+      );
+
+      await act(async () => {
+        useChatStore.getState().send('hi');
+      });
+
+      await act(async () => {
+        releaseStream();
+      });
+
+      // The `useFeeds` toggle may write to localStorage; the agent
+      // step trace never does.
+      const keys = Object.keys(localStorage);
+      const hasStepsKey = keys.some((k) => /steps|agent|chat\.history/i.test(k));
+      expect(hasStepsKey).toBe(false);
+    });
+  });
 });

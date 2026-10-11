@@ -234,6 +234,7 @@ export const chatService = {
               const parsed = JSON.parse(dataStr) as {
                 error?: unknown;
                 request_id?: unknown;
+                code?: unknown;
               };
               yield {
                 kind: "error",
@@ -245,6 +246,7 @@ export const chatService = {
                   typeof parsed.request_id === "string"
                     ? parsed.request_id
                     : "",
+                code: typeof parsed.code === "string" ? parsed.code : undefined,
               };
             } catch {
               yield {
@@ -255,6 +257,150 @@ export const chatService = {
             }
             yield { kind: "terminator" };
             return;
+          } else if (currentEvent === "plan") {
+            // Agent-loop `plan` event — once per run, before any
+            // step. Steps are seeded with whatever the planner
+            // emitted (id + kind + kind-specific optionals). The
+            // store mirrors the array verbatim so each step has a
+            // row to update as `step_start` / `tool_call` / etc.
+            // stream. Malformed frames drop silently — a bad plan
+            // shouldn't tear the whole stream down.
+            try {
+              const parsed = JSON.parse(dataStr) as {
+                steps?: unknown;
+              };
+              if (Array.isArray(parsed.steps)) {
+                const steps: import("../types/chat").ChatPlanStep[] = [];
+                for (const s of parsed.steps) {
+                  if (!s || typeof s !== "object") continue;
+                  const obj = s as Record<string, unknown>;
+                  if (typeof obj.id !== "string") continue;
+                  if (
+                    obj.kind !== "rag" &&
+                    obj.kind !== "tool" &&
+                    obj.kind !== "llm" &&
+                    obj.kind !== "react"
+                  ) {
+                    continue;
+                  }
+                  steps.push({
+                    id: obj.id,
+                    kind: obj.kind,
+                    tool: typeof obj.tool === "string" ? obj.tool : undefined,
+                    args: obj.args,
+                    prompt:
+                      typeof obj.prompt === "string" ? obj.prompt : undefined,
+                    query:
+                      typeof obj.query === "string" ? obj.query : undefined,
+                    max_iterations:
+                      typeof obj.max_iterations === "number"
+                        ? obj.max_iterations
+                        : undefined,
+                  });
+                }
+                yield { kind: "plan", steps };
+              }
+            } catch {
+              // Drop malformed plan frame; the run trace will be
+              // partial but the stream stays alive.
+            }
+          } else if (currentEvent === "step_start") {
+            try {
+              const parsed = JSON.parse(dataStr) as {
+                step_id?: unknown;
+                kind?: unknown;
+              };
+              const id =
+                typeof parsed.step_id === "string" ? parsed.step_id : null;
+              const kind = parsed.kind;
+              if (
+                id !== null &&
+                (kind === "rag" ||
+                  kind === "tool" ||
+                  kind === "llm" ||
+                  kind === "react")
+              ) {
+                yield {
+                  kind: "step_start",
+                  step_id: id,
+                  step_kind: kind,
+                };
+              }
+            } catch {
+              // Drop malformed step_start frame.
+            }
+          } else if (currentEvent === "tool_call") {
+            try {
+              const parsed = JSON.parse(dataStr) as {
+                step_id?: unknown;
+                call_id?: unknown;
+                name?: unknown;
+                args?: unknown;
+              };
+              if (
+                typeof parsed.step_id === "string" &&
+                typeof parsed.call_id === "string" &&
+                typeof parsed.name === "string"
+              ) {
+                yield {
+                  kind: "tool_call",
+                  step_id: parsed.step_id,
+                  call_id: parsed.call_id,
+                  name: parsed.name,
+                  args: parsed.args,
+                };
+              }
+            } catch {
+              // Drop malformed tool_call frame.
+            }
+          } else if (currentEvent === "tool_result") {
+            try {
+              const parsed = JSON.parse(dataStr) as {
+                step_id?: unknown;
+                call_id?: unknown;
+                ok?: unknown;
+                result?: unknown;
+                error?: unknown;
+              };
+              if (
+                typeof parsed.step_id === "string" &&
+                typeof parsed.call_id === "string"
+              ) {
+                yield {
+                  kind: "tool_result",
+                  step_id: parsed.step_id,
+                  call_id: parsed.call_id,
+                  ok: parsed.ok === true,
+                  result: parsed.ok === true ? parsed.result : undefined,
+                  error:
+                    typeof parsed.error === "string" ? parsed.error : undefined,
+                };
+              }
+            } catch {
+              // Drop malformed tool_result frame.
+            }
+          } else if (currentEvent === "step_end") {
+            try {
+              const parsed = JSON.parse(dataStr) as {
+                step_id?: unknown;
+                status?: unknown;
+                reason?: unknown;
+              };
+              if (
+                typeof parsed.step_id === "string" &&
+                (parsed.status === "ok" || parsed.status === "failed")
+              ) {
+                yield {
+                  kind: "step_end",
+                  step_id: parsed.step_id,
+                  status: parsed.status,
+                  reason:
+                    typeof parsed.reason === "string" ? parsed.reason : "",
+                };
+              }
+            } catch {
+              // Drop malformed step_end frame.
+            }
           }
           // Unrecognised event types are ignored — the brief defers
           // new event types until we need them.

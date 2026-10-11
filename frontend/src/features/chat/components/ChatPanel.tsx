@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from "react";
-import { Send, Square } from "lucide-react";
+import { ChevronDown, Loader2, Send, Square } from "lucide-react";
 import {
   Dialog,
   DialogContent,
@@ -11,6 +11,101 @@ import { Button } from "~/components/ui/Button";
 import { Textarea } from "~/components/ui/Textarea";
 import { cn } from "~/utils/cn";
 import { useChat } from "../hooks/useChat";
+import type { ChatStep } from "../types/chat";
+
+/**
+ * Format an unknown JSON value as a one-line preview. Used in the
+ * collapsed "args" row of each agent step — the UI hides the full
+ * payload by default to keep the bubble readable, but the user can
+ * pop the <details> to see the raw JSON.
+ */
+function formatJsonPreview(value: unknown): string {
+  if (value === undefined) return "";
+  try {
+    const text = JSON.stringify(value);
+    if (text.length <= 80) return text;
+    return `${text.slice(0, 77)}…`;
+  } catch {
+    return String(value);
+  }
+}
+
+/**
+ * Single row in the "agent steps" trace. Renders the step's kind +
+ * status + (for tool steps) the latest tool name and a collapsible
+ * args preview. Pure presentational; the store owns the data.
+ */
+const StepRow: React.FC<{ step: ChatStep }> = ({ step }) => {
+  const argsPreview = formatJsonPreview(step.toolArgs);
+  const resultPreview = formatJsonPreview(step.toolResult);
+  const statusLabel =
+    step.status === "running"
+      ? "running"
+      : step.status === "ok"
+        ? "ok"
+        : "failed";
+  return (
+    <li
+      className="text-xs space-y-1"
+      data-testid="chat-agent-step"
+      data-step-id={step.id}
+      data-step-status={step.status}
+    >
+      <div className="flex items-center gap-2">
+        {step.status === "running" ? (
+          <Loader2
+            className="h-3 w-3 animate-spin text-muted-foreground"
+            aria-hidden="true"
+          />
+        ) : (
+          <span
+            className={cn(
+              "h-2 w-2 rounded-full",
+              step.status === "ok" ? "bg-emerald-500" : "bg-destructive",
+            )}
+            aria-hidden="true"
+          />
+        )}
+        <span className="font-mono text-muted-foreground">{step.kind}</span>
+        {step.toolName && (
+          <span className="font-medium" data-testid="chat-agent-step-tool">
+            {step.toolName}
+          </span>
+        )}
+        <span className="ml-auto text-[10px] uppercase tracking-wide text-muted-foreground">
+          {statusLabel}
+        </span>
+      </div>
+      {step.toolName && argsPreview && (
+        <details
+          className="ml-5 text-[10px] text-muted-foreground"
+          data-testid="chat-agent-step-args"
+        >
+          <summary className="cursor-pointer select-none">args</summary>
+          <pre className="mt-1 whitespace-pre-wrap break-words font-mono">
+            {JSON.stringify(step.toolArgs, null, 2)}
+          </pre>
+        </details>
+      )}
+      {step.status !== "running" && resultPreview && (
+        <div
+          className="ml-5 text-[10px] text-muted-foreground"
+          data-testid="chat-agent-step-result"
+        >
+          result: {resultPreview}
+        </div>
+      )}
+      {step.status === "failed" && step.reason && (
+        <div
+          className="ml-5 text-[10px] text-destructive"
+          data-testid="chat-agent-step-reason"
+        >
+          {step.reason}
+        </div>
+      )}
+    </li>
+  );
+};
 
 interface ChatPanelProps {
   open: boolean;
@@ -141,6 +236,23 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ open, onOpenChange }) => {
                       {n}
                     </div>
                   ))}
+                {m.role === "assistant" && m.steps && m.steps.length > 0 && (
+                  <details
+                    className="mt-2 text-xs"
+                    data-testid="chat-agent-steps"
+                    open={m.steps.some((s) => s.status === "running")}
+                  >
+                    <summary className="flex items-center gap-1 cursor-pointer select-none text-muted-foreground">
+                      <ChevronDown className="h-3 w-3" aria-hidden="true" />
+                      {m.steps.length} step{m.steps.length === 1 ? "" : "s"}
+                    </summary>
+                    <ul className="mt-1 space-y-2 border-l border-muted pl-2">
+                      {m.steps.map((s) => (
+                        <StepRow key={s.id} step={s} />
+                      ))}
+                    </ul>
+                  </details>
+                )}
                 {m.role === "assistant" && m.usage && (
                   <div className="mt-1 text-[10px] text-muted-foreground">
                     tokens: {m.usage.total_tokens} (
