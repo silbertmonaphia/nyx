@@ -1,4 +1,6 @@
 doc/
+minimax_*.png
+
 # Node.js
 node_modules/
 frontend/node_modules/
@@ -58,3 +60,13 @@ posts_douban/
 # Python (check-migrations.py + future scripts/check-*.py)
 __pycache__/
 *.pyc
+
+# Python agent service (backend/agent_py/)
+backend/agent_py/.venv/
+backend/agent_py/__pycache__/
+backend/agent_py/**/__pycache__/
+backend/agent_py/.pytest_cache/
+backend/agent_py/*.egg-info/
+backend/agent_py/**/*.egg-info/
+backend/agent_py/.mypy_cache/
+backend/agent_py/.ruff_cache/

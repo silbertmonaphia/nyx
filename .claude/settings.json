@@ -82,7 +82,17 @@
       "Bash(sudo docker compose up *)",
       "Bash(docker compose logs *)",
       "Bash(docker compose ps)",
-      "Bash(docker ps)"
+      "Bash(docker ps)",
+      "Bash(docker build *)",
+      "Bash(sudo docker build *)",
+
+      "Bash(python3 -m pip install*)",
+      "Bash(python3 -m venv*)",
+      "Bash(python3 -c*)",
+      "Bash(python3 -m pytest*)",
+      "Bash(python3 -m agent*)",
+      "Bash(source .venv/bin/activate*)",
+      "Bash(pip install*)"
     ],
     "deny": [
       "Bash(rm *)",

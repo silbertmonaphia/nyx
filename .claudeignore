@@ -1,4 +1,6 @@
 doc/
+minimax_*.png
+posts_douban/
 
 # Node.js
 node_modules/
