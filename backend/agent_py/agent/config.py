@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import os
 
+from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -59,6 +60,28 @@ class Settings(BaseSettings):
     # header; the bearer token is forwarded as a passthrough to the MCP and
     # RAG bridges (Go re-verifies on those endpoints). See FUTURE_AGENT.md +
     # docker-compose.yml for the trust model.
+
+    @model_validator(mode="after")
+    def _require_openai_key(self) -> "Settings":
+        """Refuse to start when the LLM target is OpenAI proper but no
+        API key is configured. Local vLLM / OpenRouter don't require a
+        key (vLLM may run with --api-key empty; OpenRouter uses a
+        Bearer token but the URL doesn't start with api.openai.com).
+
+        This is the spec scenario "Required key missing refuses startup"
+        narrowed to the case where missing the key is genuinely
+        catastrophic (every LLM call returns 401 immediately).
+        """
+        if (
+            not self.llm_api_key
+            and self.llm_base_url.startswith("https://api.openai.com/")
+        ):
+            raise ValueError(
+                "PYTHON_AGENT_LLM_API_KEY is required when "
+                "PYTHON_AGENT_LLM_BASE_URL targets api.openai.com; "
+                "set the key or point LLM_BASE_URL at a local vLLM."
+            )
+        return self
 
     @property
     def planner_model(self) -> str:

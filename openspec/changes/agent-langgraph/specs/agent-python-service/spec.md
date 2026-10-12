@@ -94,10 +94,11 @@ The service SHALL read `PYTHON_AGENT_LLM_BASE_URL`, `PYTHON_AGENT_LLM_API_KEY`, 
 - **WHEN** the service starts with no env vars set
 - **THEN** `PYTHON_AGENT_PLAN_MAX_STEPS=10`, `PYTHON_AGENT_STEP_REACT_MAX_ITERATIONS=5`, `PYTHON_AGENT_MCP_URL=http://backend:8080/mcp`, `PYTHON_AGENT_RAG_BRIDGE_URL=http://backend:8080/internal/rag/retrieve` are applied and the service starts
 
-#### Scenario: Required key missing refuses startup
+#### Scenario: Required key missing refuses startup (OpenAI-proper only)
 
-- **WHEN** `PYTHON_AGENT_REDIS_URL` is unset and the budget guard is enabled
-- **THEN** the service fails to start with a clear error naming the missing key
+- **WHEN** `PYTHON_AGENT_LLM_BASE_URL` targets `api.openai.com` but `PYTHON_AGENT_LLM_API_KEY` is empty
+- **THEN** the service fails to start with a clear error naming the missing key (every LLM call would 401; refuse to boot)
+- Local vLLM / OpenRouter / proxied hosts are NOT covered by this guard — empty key is allowed when the base URL does not start with `https://api.openai.com/`
 
 ### Requirement: Health endpoint for compose
 
