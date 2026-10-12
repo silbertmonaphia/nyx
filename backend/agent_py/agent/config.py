@@ -34,14 +34,32 @@ class Settings(BaseSettings):
     step_react_max_iterations: int = 5
 
     # --- Backend bridges ---
-    mcp_url: str = "http://backend:8080/mcp"
-    rag_bridge_url: str = "http://backend:8080/internal/rag/retrieve"
+    # Host-dev defaults: `make dev-agent` runs the agent on the host and
+    # `make dev-backend` serves on :8080 there. docker-compose.yml sets the
+    # in-network hostnames (`http://backend:8080/...`) explicitly for the
+    # agent container. Do NOT default to compose-only hostnames: on the
+    # host they don't resolve and the bridge fails (RAG degrades to empty
+    # context; tools error).
+    mcp_url: str = "http://localhost:8080/mcp"
+    rag_bridge_url: str = "http://localhost:8080/internal/rag/retrieve"
 
     # --- Redis ---
-    redis_url: str = "redis://redis:6379"
+    # Host-dev default. NOTE: the host-mapped port is 6380 (compose maps
+    # 6380->6379 to avoid clashing with a native Redis). Defaulting to the
+    # compose hostname made every llm step fail with `budget_unavailable`
+    # ("Budget guard unavailable") — 2026-10 dev report.
+    redis_url: str = "redis://localhost:6380"
 
     # --- OpenTelemetry ---
-    otel_endpoint: str = "http://jaeger:4318"
+    # Host-dev default: `make dev-agent` runs on the host and Jaeger
+    # publishes 4318 there — mirrors the Go backend's
+    # OTEL_EXPORTER_OTLP_ENDPOINT default (`config.go`). docker-compose.yml
+    # overrides this with the in-network hostname (`jaeger:4318`) for the
+    # agent container. Do NOT default to the compose hostname: on the host
+    # it doesn't resolve, and with HTTP_PROXY set the request goes through
+    # the proxy, which returns 502 ("Transient error Bad Gateway
+    # encountered while exporting spans batch" — 2026-10 dev-agent report).
+    otel_endpoint: str = "http://localhost:4318"
     otel_service_name: str = "nyx-agent"
 
     # --- Per-IP rate limit (defense in depth; /agent/run is on the

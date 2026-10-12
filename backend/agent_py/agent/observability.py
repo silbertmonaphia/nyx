@@ -7,6 +7,7 @@ call site that emits the corresponding event.
 
 from __future__ import annotations
 
+import requests
 from opentelemetry import trace
 from opentelemetry.sdk.resources import Resource
 from opentelemetry.sdk.trace import TracerProvider
@@ -55,7 +56,19 @@ def setup_observability(settings: Settings) -> trace.Tracer:
         return trace.get_tracer(_TRACER_NAME)
 
     resource = Resource.create({"service.name": settings.otel_service_name})
-    exporter = OTLPSpanExporter(endpoint=f"{settings.otel_endpoint}/v1/traces")
+    # Span export must never traverse an HTTP proxy: the endpoint is always
+    # internal (Jaeger on the host, or in-network in compose), and a proxy
+    # that can't reach it returns 502s — which the exporter then retries
+    # forever ("Transient error Bad Gateway encountered while exporting
+    # spans batch"). trust_env=False ignores HTTP_PROXY/NO_PROXY entirely
+    # for this session, so export behaviour is deterministic regardless of
+    # the operator's proxy config. (Verified against exporter 1.45.1: the
+    # `session` kwarg is documented and used for the POST.)
+    export_session = requests.Session()
+    export_session.trust_env = False
+    exporter = OTLPSpanExporter(
+        endpoint=f"{settings.otel_endpoint}/v1/traces", session=export_session
+    )
     provider = TracerProvider(resource=resource)
     provider.add_span_processor(BatchSpanProcessor(exporter))
     trace.set_tracer_provider(provider)
