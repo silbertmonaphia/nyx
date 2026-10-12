@@ -16,27 +16,46 @@ test.describe('Authentication and Feed CRUD', () => {
     await page.getByRole('button', { name: /Register/i }).last().click();
 
     // Fill form
-    await page.getByPlaceholder(/Your username/i).fill(testUser.username);
-    await page.getByPlaceholder(/••••••••/i).fill(testUser.password);
+    await page.getByLabel(/Username/i).fill(testUser.username);
+    await page.getByLabel(/Password/i).fill(testUser.password);
 
     // Submit
     await page.getByRole('button', { name: /^Register$/i }).click();
 
     // Verify toast and login state
     await expect(page.getByText(/Successfully registered!/i)).toBeVisible();
-    await expect(page.getByText(`Welcome, ${testUser.username}`)).toBeVisible();
+    // The header shows the username as plain text and a Logout button —
+    // both gate on `isAuthenticated`, so seeing them is proof the
+    // session landed.
+    await expect(page.getByText(testUser.username)).toBeVisible();
+    await expect(page.getByRole('button', { name: /Logout/i })).toBeVisible();
   });
 
   test('should perform CRUD operations on feeds', async ({ page }) => {
-    // We assume the user from previous test is still logged in if we run them together,
-    // but for isolation we'd usually login here.
-    // For this prototype, let's just do a fresh login if needed or run sequentially.
+    // Each test gets a fresh browser context, so the random
+    // `testUser.username` from the describe scope does not exist on
+    // the backend yet. Register first, then log out + log in to
+    // exercise the login path explicitly. Without the register step
+    // the login would 401 silently and the subsequent CRUD checks
+    // would time out waiting for the auth-gated "Add feed" button.
 
     await page.goto('/');
     await page.getByRole('button', { name: /Login \/ Register/i }).click();
-    await page.getByPlaceholder(/Your username/i).fill(testUser.username);
-    await page.getByPlaceholder(/••••••••/i).fill(testUser.password);
+    // Switch to Register
+    await page.getByRole('button', { name: /Register/i }).last().click();
+    await page.getByLabel(/Username/i).fill(testUser.username);
+    await page.getByLabel(/Password/i).fill(testUser.password);
+    await page.getByRole('button', { name: /^Register$/i }).click();
+    await expect(page.getByRole('button', { name: /Logout/i })).toBeVisible();
+
+    // Log out, then log back in to verify the Login path too.
+    await page.getByRole('button', { name: /Logout/i }).click();
+    await expect(page.getByRole('button', { name: /Logout/i })).toHaveCount(0);
+    await page.getByRole('button', { name: /Login \/ Register/i }).click();
+    await page.getByLabel(/Username/i).fill(testUser.username);
+    await page.getByLabel(/Password/i).fill(testUser.password);
     await page.getByRole('button', { name: /^Login$/i }).click();
+    await expect(page.getByRole('button', { name: /Logout/i })).toBeVisible();
 
     // 1. Create
     const feedTitle = `Test Feed ${Date.now()}`;
