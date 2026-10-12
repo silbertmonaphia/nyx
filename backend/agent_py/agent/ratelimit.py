@@ -64,6 +64,22 @@ class IpRateLimiter:
             q.append(now)
             return True
 
+    def evict_idle(self, max_idle_seconds: float = 60.0) -> int:
+        """Drop visitor entries whose latest request is older than
+        `max_idle_seconds`. The visitor dict would otherwise grow
+        unbounded over distinct source IPs seen during the process
+        lifetime. Safe to call concurrently with `allow`; takes the
+        same lock. Returns the number of evicted entries."""
+        cutoff = time.monotonic() - max_idle_seconds
+        evicted = 0
+        with self._lock:
+            for ip in list(self._visitors.keys()):
+                q = self._visitors[ip]
+                if not q or q[-1] < cutoff:
+                    del self._visitors[ip]
+                    evicted += 1
+        return evicted
+
     def active_ips(self) -> int:
         """Number of IPs currently tracked. For tests + observability."""
         with self._lock:
@@ -75,11 +91,26 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
     and /metrics stay open so compose + Prometheus can scrape without
     being rate-limited."""
 
+    # Amortized visitor-dict eviction. Every Nth request we sweep
+    # `evict_idle()` on the limiter so the dict doesn't grow over
+    # distinct source IPs seen during the process lifetime. 1024 is
+    # frequent enough that memory stays bounded under steady traffic,
+    # sparse enough that the lock-hold is invisible.
+    _EVICT_EVERY = 1024
+
     def __init__(self, app, limiter: IpRateLimiter):
         super().__init__(app)
         self.limiter = limiter
+        self._ops_since_evict = 0
 
     async def dispatch(self, request: Request, call_next):
+        # Amortized eviction before the gating check — keeps memory
+        # bounded even if /healthz polling never triggers a sweep.
+        self._ops_since_evict += 1
+        if self._ops_since_evict >= self._EVICT_EVERY:
+            self._ops_since_evict = 0
+            self.limiter.evict_idle()
+
         if request.url.path != "/agent/run":
             return await call_next(request)
         # `request.client` is None in some ASGI test transports;

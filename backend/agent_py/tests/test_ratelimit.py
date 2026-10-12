@@ -141,6 +141,48 @@ def test_ip_rate_limiter_rejects_bad_config():
         IpRateLimiter(requests_per_second=1, burst=0)
 
 
+def test_ip_rate_limiter_evict_idle_drops_stale_entries():
+    """Idle visitors must be evicted or the dict grows unbounded
+    over distinct source IPs seen during the process lifetime."""
+    limiter = IpRateLimiter(requests_per_second=10.0, burst=10)
+    # 100 distinct IPs, each doing one request.
+    for i in range(100):
+        limiter.allow(f"10.0.0.{i}")
+    assert limiter.active_ips() == 100
+    # Manually age every visitor's last request beyond the eviction
+    # threshold so evict_idle drops them all on the next call.
+    stale_time = time.monotonic() - 120.0  # > 60s default max_idle_seconds
+    with limiter._lock:  # noqa: SLF001 — test-only access
+        for q in limiter._visitors.values():  # noqa: SLF001
+            q.append(stale_time)
+    evicted = limiter.evict_idle()
+    assert evicted == 100
+    assert limiter.active_ips() == 0
+
+
+def test_ip_rate_limiter_evict_idle_keeps_recent_entries():
+    limiter = IpRateLimiter(requests_per_second=10.0, burst=10)
+    limiter.allow("1.2.3.4")
+    limiter.allow("5.6.7.8")
+    # Both visitors are recent; evict_idle should drop neither.
+    assert limiter.evict_idle() == 0
+    assert limiter.active_ips() == 2
+
+
+def test_ip_rate_limiter_evict_idle_threshold():
+    """evict_idle(max_idle_seconds=...) honors the argument."""
+    limiter = IpRateLimiter(requests_per_second=10.0, burst=10)
+    limiter.allow("1.2.3.4")
+    # Age just past a 1s threshold.
+    with limiter._lock:  # noqa: SLF001
+        limiter._visitors["1.2.3.4"].append(time.monotonic() - 1.5)  # noqa: SLF001
+    # 60s default keeps it; 1s threshold drops it.
+    assert limiter.evict_idle(max_idle_seconds=60.0) == 0
+    assert limiter.active_ips() == 1
+    assert limiter.evict_idle(max_idle_seconds=1.0) == 1
+    assert limiter.active_ips() == 0
+
+
 @pytest.mark.asyncio
 async def test_middleware_returns_429_after_burst(app_low_burst):
     """Burst=2 app: third request from the same client IP gets 429."""
