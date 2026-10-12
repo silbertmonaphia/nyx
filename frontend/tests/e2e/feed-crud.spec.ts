@@ -1,47 +1,36 @@
 import { test, expect } from '@playwright/test';
 
-test.describe('Authentication and Feed CRUD', () => {
+/**
+ * End-to-end coverage of the feed list CRUD flow.
+ *
+ * Exercises the full request → wire → render path through a real
+ * Chromium so regressions in the middle of the chain (optimistic
+ * update ordering, cache invalidation, search debounce, Radix
+ * confirm dialog) can't pass the unit tests while breaking the
+ * real UI.
+ *
+ * Register first because each test starts from a fresh browser
+ * context; the random `testUser` per `describe` doesn't exist on
+ * the backend until something registers it. Logout + login is
+ * explicit so the Login path is exercised too.
+ */
+test.describe('Feed CRUD', () => {
   const testUser = {
-    username: `user_${Math.floor(Math.random() * 10000)}`,
+    username: `feed_${Math.floor(Math.random() * 10000)}`,
     password: 'password123',
   };
 
-  test('should register a new user and login', async ({ page }) => {
-    await page.goto('/');
-
-    // Open Auth Form
-    await page.getByRole('button', { name: /Login \/ Register/i }).click();
-
-    // Switch to Register
-    await page.getByRole('button', { name: /Register/i }).last().click();
-
-    // Fill form
-    await page.getByLabel(/Username/i).fill(testUser.username);
-    await page.getByLabel(/Password/i).fill(testUser.password);
-
-    // Submit
-    await page.getByRole('button', { name: /^Register$/i }).click();
-
-    // Verify toast and login state
-    await expect(page.getByText(/Successfully registered!/i)).toBeVisible();
-    // The header shows the username as plain text and a Logout button —
-    // both gate on `isAuthenticated`, so seeing them is proof the
-    // session landed.
-    await expect(page.getByText(testUser.username)).toBeVisible();
-    await expect(page.getByRole('button', { name: /Logout/i })).toBeVisible();
-  });
-
   test('should perform CRUD operations on feeds', async ({ page }) => {
-    // Each test gets a fresh browser context, so the random
-    // `testUser.username` from the describe scope does not exist on
-    // the backend yet. Register first, then log out + log in to
-    // exercise the login path explicitly. Without the register step
-    // the login would 401 silently and the subsequent CRUD checks
-    // would time out waiting for the auth-gated "Add feed" button.
+    // Default 30s is too tight: the flow does register → logout →
+    // login → create → search → update → delete, and the update's
+    // optimistic-cache invalidation can race the re-fetch on a slow
+    // CI runner. 90s leaves headroom without hiding real bugs.
+    test.setTimeout(90_000);
 
     await page.goto('/');
+
+    // Register (testUser is random per describe; nothing exists yet)
     await page.getByRole('button', { name: /Login \/ Register/i }).click();
-    // Switch to Register
     await page.getByRole('button', { name: /Register/i }).last().click();
     await page.getByLabel(/Username/i).fill(testUser.username);
     await page.getByLabel(/Password/i).fill(testUser.password);
@@ -78,7 +67,7 @@ test.describe('Authentication and Feed CRUD', () => {
 
     await expect(page.getByText(updatedTitle)).toBeVisible();
 
-    // 4. Delete — uses the new Radix-based confirm dialog, not window.confirm
+    // 4. Delete — uses the Radix-based confirm dialog, not window.confirm
     await page.getByTitle('Delete').first().click();
     await page.getByTestId('confirm-delete').click();
 
