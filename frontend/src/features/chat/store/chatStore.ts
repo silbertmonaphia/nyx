@@ -322,10 +322,22 @@ export const useChatStore = create<ChatState>((set, get) => ({
           });
         } else if (event.kind === "error") {
           // Mid-stream error: surface the safe static error text.
-          set((state) => ({
-            error: event.error,
-            messages: state.messages.slice(0, assistantIndex + 1),
-          }));
+          // Don't leave a stranded empty bubble in the conversation
+          // history. If no deltas landed yet, drop the assistant row
+          // entirely; if any content was already streamed, keep it
+          // (the user saw it) and let the error toast explain the
+          // truncation. Mirrors the cancel-path intent.
+          set((state) => {
+            const assistant = state.messages[assistantIndex];
+            const hasContent =
+              assistant?.role === "assistant" && assistant.content.length > 0;
+            return {
+              error: event.error,
+              messages: hasContent
+                ? state.messages.slice(0, assistantIndex + 1)
+                : state.messages.slice(0, assistantIndex),
+            };
+          });
           break;
         } else {
           // `terminator` — clean end of stream, nothing to do.
@@ -346,9 +358,19 @@ export const useChatStore = create<ChatState>((set, get) => ({
       } else {
         const message =
           err instanceof Error ? err.message : "Chat request failed";
+        // Same empty-vs-partial rule as the mid-stream error branch:
+        // a stranded empty bubble pollutes the next message's
+        // history (planner sees `[user]hi, [assistant]''` and
+        // re-plans for the assistant instead of the user), so drop
+        // it. Partial content stays — the user saw it.
+        const assistant = get().messages[assistantIndex];
+        const hasContent =
+          assistant?.role === "assistant" && assistant.content.length > 0;
         set({
           error: message,
-          messages: get().messages.slice(0, assistantIndex + 1),
+          messages: hasContent
+            ? get().messages.slice(0, assistantIndex + 1)
+            : get().messages.slice(0, assistantIndex),
         });
       }
     } finally {

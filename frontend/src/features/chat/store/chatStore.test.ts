@@ -249,6 +249,95 @@ describe('useChatStore', () => {
       expect(useChatStore.getState().isStreaming).toBe(false);
     });
 
+    it('drops the empty assistant row on a mid-stream error before any delta', async () => {
+      // A `error` event with no preceding `delta` must not leave a
+      // stranded empty bubble in the conversation — that history
+      // would be sent to the planner on the next message and
+      // re-planned as if the assistant had said nothing.
+      mockedService.streamMessage.mockImplementationOnce(
+        (_messages: unknown, signal: AbortSignal) =>
+          makeStream(
+            [
+              {
+                kind: 'error',
+                error: 'upstream failed',
+                request_id: 'req-x',
+              },
+            ],
+            signal,
+          ),
+      );
+
+      await act(async () => {
+        useChatStore.getState().send('hi');
+      });
+
+      await act(async () => {
+        releaseStream();
+      });
+
+      expect(useChatStore.getState().error).toBe('upstream failed');
+      // The user message survives; the empty assistant row is gone.
+      expect(useChatStore.getState().messages).toEqual([
+        { role: 'user', content: 'hi' },
+      ]);
+    });
+
+    it('keeps the partial assistant row on a mid-stream error after a delta', async () => {
+      // Partial content was already streamed; the user saw it.
+      // Dropping it would silently lose visible state. The error
+      // toast explains the truncation; the row stays.
+      mockedService.streamMessage.mockImplementationOnce(
+        (_messages: unknown, signal: AbortSignal) =>
+          makeStream(
+            [
+              { kind: 'delta', delta: 'partial answer ' },
+              {
+                kind: 'error',
+                error: 'upstream failed',
+                request_id: 'req-x',
+              },
+            ],
+            signal,
+          ),
+      );
+
+      await act(async () => {
+        useChatStore.getState().send('hi');
+      });
+
+      await act(async () => {
+        releaseStream();
+      });
+
+      const messages = useChatStore.getState().messages;
+      expect(useChatStore.getState().error).toBe('upstream failed');
+      expect(messages.map((m) => m.role)).toEqual(['user', 'assistant']);
+      expect(
+        messages.find((m) => m.role === 'assistant')?.content,
+      ).toBe('partial answer ');
+    });
+
+    it('drops the empty assistant row when the service throws before any delta', async () => {
+      // Thrown-error path (e.g. fetch rejection) follows the same
+      // empty-vs-partial rule as the mid-stream error event.
+      mockedService.streamMessage.mockImplementationOnce(
+        () =>
+          (async function* () {
+            throw new Error('network down');
+          })(),
+      );
+
+      await act(async () => {
+        useChatStore.getState().send('hi');
+      });
+
+      expect(useChatStore.getState().error).toBe('network down');
+      expect(useChatStore.getState().messages).toEqual([
+        { role: 'user', content: 'hi' },
+      ]);
+    });
+
     it('refuses to send when isStreaming is true', async () => {
       // Hold the first stream open so a second send would collide.
       mockedService.streamMessage.mockImplementationOnce(
