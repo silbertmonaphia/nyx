@@ -8,11 +8,18 @@ Replaces the hand-rolled `await plan_node; await executor_node` pipeline with a 
 Each node appends typed events to `state["events_so_far"]`. The SSE emitter in `main.py`
 walks the events after each node yields (via `graph.astream`) so the client sees frames
 incrementally — a slow step doesn't block the user from seeing earlier ones.
+
+When a checkpointer is passed (langGraph `AsyncPostgresSaver` for production),
+every node transition is automatically checkpointed under
+`config={"configurable":{"thread_id": <run_id>}}` and resume is supported via
+`graph.get_state(config)`. The checkpointer is optional; in tests we still
+want the in-memory version (faster, no Postgres dependency).
 """
 
 from __future__ import annotations
 
 from functools import partial
+from typing import Any
 
 from langgraph.graph import END, START, StateGraph
 
@@ -61,14 +68,23 @@ def build_graph(
     budget: BudgetGuard,
     rag: RagClient,
     tools: ToolsClient,
+    checkpointer: Any | None = None,
 ):
-    """Build (and return) the compiled StateGraph ready for `astream(initial_state)`."""
+    """Build (and return) the compiled StateGraph ready for `astream(initial_state)`.
+
+    When `checkpointer` is provided (langGraph `AsyncPostgresSaver` in production),
+    per-step persistence is automatic; resume is supported via
+    `graph.get_state({"configurable":{"thread_id": run_id}})`. In tests
+    `checkpointer` is left as None and the graph runs purely in memory.
+    """
     builder = StateGraph(AgentState)
     builder.add_node("planner", _planner_step_factory(settings))
     builder.add_node("executor", _executor_step_factory(settings, budget, rag, tools))
     builder.add_edge(START, "planner")
     builder.add_edge("planner", "executor")
     builder.add_edge("executor", END)
+    if checkpointer is not None:
+        return builder.compile(checkpointer=checkpointer)
     return builder.compile()
 
 
@@ -130,15 +146,30 @@ async def run_agent_stream(
     budget: BudgetGuard,
     rag: RagClient,
     tools: ToolsClient,
+    graph=None,
+    graph_config: dict | None = None,
+    resumed: bool = False,
 ):
     """Async iterator: yields newly-appended events from `state["events_so_far"]`
     as the graph progresses. Yields one `AgentState` snapshot per node completion,
     plus a final snapshot after terminal-event emission.
+
+    `graph` is pre-built (the caller may have wired a checkpointer). When
+    `graph_config` is provided (typical when a checkpointer is in use),
+    `astream` resumes from the latest checkpoint for that `thread_id` —
+    so completed nodes are not re-executed. `resumed=True` skips the
+    initial `plan` re-emission if the plan is already in the resumed state.
     """
-    graph = build_graph(settings, budget, rag, tools)
+    if graph is None:
+        graph = build_graph(settings, budget, rag, tools)
+
     last_len = len(state.get("events_so_far", []))
 
-    async for chunk in graph.astream(state, stream_mode="values"):
+    astream_kwargs: dict = {"stream_mode": "values"}
+    if graph_config is not None:
+        astream_kwargs["config"] = graph_config
+
+    async for chunk in graph.astream(state, **astream_kwargs):
         # `chunk` is the post-node state snapshot.
         current_events = chunk.get("events_so_far", [])
         for ev in current_events[last_len:]:

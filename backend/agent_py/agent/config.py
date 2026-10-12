@@ -53,6 +53,21 @@ class Settings(BaseSettings):
     requests_per_second: float = 100.0
     burst: int = 200
 
+    # --- Run-state persistence (Postgres via langGraph PostgresSaver + thin
+    # `agent.runs` metadata table — see openspec/changes/agent-run-state/).
+    # Required when AGENT_ENABLED=true; alembic migrations run automatically
+    # on lifespan startup (same posture as the Go backend's golang-migrate on
+    # boot). Compose prod path sets `migrations_disabled=true` and relies on
+    # the dedicated `agent-migrate` one-shot service to run migrations before
+    # `agent` replicas boot — same single-source-of-truth story as Go.
+    database_url: str = ""
+    migrations_disabled: bool = False
+    retention_enabled: bool = True
+    retention_days: int = 30
+    retention_interval_seconds: int = 3600
+    database_pool_max_size: int = 10
+    database_pool_acquire_timeout_seconds: float = 5.0
+
     # NOTE: there is intentionally NO JWT verification config here. The Python
     # service trusts the network boundary (compose bridge / k8s NetworkPolicy
     # restricting ingress to the Go backend). Go verifies the user JWT at the
@@ -81,6 +96,60 @@ class Settings(BaseSettings):
                 "PYTHON_AGENT_LLM_BASE_URL targets api.openai.com; "
                 "set the key or point LLM_BASE_URL at a local vLLM."
             )
+        return self
+
+    @model_validator(mode="after")
+    def _normalize_database_url(self) -> "Settings":
+        """Ensure `PYTHON_AGENT_DATABASE_URL` carries `options=-c search_path=langgraph,agent`.
+
+        Consumers of this DSN:
+          - asyncpg pool (`RunMetadata`): all its SQL uses unqualified
+            `runs` — this search_path (the `agent` entry) is what makes
+            those resolve. The pool is the only consumer that actually
+            relies on the DSN options.
+          - alembic: carries the DSN but re-SETs its own search_path in
+            `migrations/env.py`.
+          - langGraph saver (psycopg): `options=` is stripped before the
+            URL reaches psycopg (`_build_checkpointer`) — psycopg passes
+            URL options as `-c name=value` CLI args to postgres, which
+            chokes on `=`. The saver's search_path is set explicitly in
+            `main.py` instead.
+
+        Canonical order is `langgraph,agent` — langgraph FIRST so that if
+        any future code path ever resolves unqualified langGraph DDL
+        through this search_path, `checkpoint_*` tables still land in
+        `langgraph.*` rather than `agent.*`. Any operator-supplied
+        `options=` (encoded or not) is stripped and replaced by this
+        canonical value. Excludes `public` so the Python agent is
+        structurally unable to touch Go's tables — a typo like `FROM
+        feed` raises `relation does not exist` instead of silently
+        corrupting Go's data.
+
+        Note: the value is URL-encoded — psycopg's URL parser rejects
+        `=` inside a query value; asyncpg accepts both forms.
+        """
+        from urllib.parse import quote
+
+        url = self.database_url
+        if not url:
+            return self
+
+        # Strip any pre-existing `options=...` key/value from the query
+        # string (both encoded and unencoded forms). Otherwise operators
+        # who paste `options=-c search_path=...` literally end up with
+        # TWO options= keys after the validator appends the encoded one.
+        # Match the unencoded form (bare `=`) and the encoded forms
+        # (`%3D` for `=`, `%26` for `&`).
+        import re as _re
+
+        url = _re.sub(r"&?options=[^&]*", "", url)
+        # Strip a leading `?` if we just removed the only query param.
+        url = _re.sub(r"\?$", "", url)
+
+        sep = "&" if "?" in url else "?"
+        encoded_value = quote("-c search_path=langgraph,agent", safe="")
+        url = f"{url}{sep}options={encoded_value}"
+        object.__setattr__(self, "database_url", url)
         return self
 
     @property

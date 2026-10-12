@@ -14,8 +14,10 @@ Routes:
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
+import re
 import uuid
 from contextlib import asynccontextmanager
 from typing import AsyncIterator
@@ -27,15 +29,24 @@ from redis.asyncio import Redis
 
 from .budget import BudgetGuard
 from .config import Settings, get_settings
-from .graph import run_agent_stream
+from .graph import build_graph, run_agent_stream
 from .observability import setup_observability, shutdown_observability
 from .rag_client import RagClient
 from .ratelimit import IpRateLimiter, RateLimitMiddleware
+from .retention import RetentionCron
+from .run_metadata import RunMetadata, RunMetadataUnavailable, build_pool
 from .state import new_state
 from .tools_client import ToolsClient
-from .types import ChatRequest, Event
+from .types import (
+    ChatRequest,
+    Event,
+    NoteEvent,
+    RunIDEvent,
+)
 
 log = logging.getLogger("nyx.agent")
+
+_UUID4_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$")
 
 
 @asynccontextmanager
@@ -62,6 +73,66 @@ async def lifespan(app: FastAPI):
     app.state.tracer = tracer
     app.state.settings = settings
 
+    # Run-state persistence: only initialise when `database_url` is set
+    # (allows local dev without Postgres). Migrations run automatically on
+    # startup — same posture as the Go backend's golang-migrate on boot —
+    # unless `PYTHON_AGENT_MIGRATIONS_DISABLED=true` (compose prod path
+    # relies on the dedicated `agent-migrate` one-shot service instead).
+    run_metadata: RunMetadata | None = None
+    checkpointer = None
+    retention: RetentionCron | None = None
+    if settings.database_url:
+        if not settings.migrations_disabled:
+            from migrations._dev_upgrade_hook import run_upgrade_head
+
+            await run_upgrade_head()
+
+        pool = await build_pool(
+            settings.database_url, max_size=settings.database_pool_max_size
+        )
+        # Fail fast on a bad DSN — try one query before the lifespan returns
+        # so an operator with a misconfigured URL sees the error at startup
+        # rather than on the first /agent/run. asyncpg pools are lazy so this
+        # is the cheapest "is this DSN actually reachable" check we can run.
+        try:
+            async with pool.acquire(
+                timeout=settings.database_pool_acquire_timeout_seconds
+            ) as conn:
+                await conn.execute("SELECT 1")
+        except Exception as exc:  # noqa: BLE001
+            log.error("database connectivity check failed: %r", exc)
+            raise
+        run_metadata = RunMetadata(
+            pool, acquire_timeout=settings.database_pool_acquire_timeout_seconds
+        )
+
+        # langGraph PostgresSaver — psycopg-based, so we strip the
+        # URL `options=...` (set search_path via SQL instead) and SET
+        # the search_path on the saver's connection so its setup() lands
+        # checkpoint_* tables in `langgraph.*`.
+        checkpointer = await _build_checkpointer(settings.database_url)
+        await _set_search_path_async(checkpointer.conn, "langgraph")
+        await checkpointer.setup()
+
+        if settings.retention_enabled and run_metadata is not None:
+            retention = RetentionCron(run_metadata, settings)
+            retention.start()
+    else:
+        # No DB configured — agent runs are NOT persisted. Run state
+        # will not survive a process restart, and `run_id` echo won't
+        # enable resume. Loud warning so operators don't think
+        # persistence is on when it isn't. To enable: set
+        # `PYTHON_AGENT_DATABASE_URL` in `backend/.env`.
+        log.warning(
+            "PYTHON_AGENT_DATABASE_URL is unset; agent runs are NOT persisted. "
+            "Process restart loses all in-flight state and `run_id` echo "
+            "will not enable resume. Set the env var to enable persistence."
+        )
+
+    app.state.run_metadata = run_metadata
+    app.state.checkpointer = checkpointer
+    app.state.retention = retention
+
     log.info(
         "agent_py started",
         extra={
@@ -70,13 +141,89 @@ async def lifespan(app: FastAPI):
             "llm_model": settings.llm_model,
             "planner_model": settings.planner_model,
             "budget_cap": settings.budget_per_user_per_hour,
+            "run_state_enabled": run_metadata is not None,
         },
     )
     try:
         yield
     finally:
+        if retention is not None:
+            await retention.stop()
+        if checkpointer is not None:
+            try:
+                await checkpointer.__aexit__(None, None, None)
+            except Exception:  # noqa: BLE001
+                pass
+        if run_metadata is not None:
+            # `pool` is local to the `if settings.database_url:` branch above;
+            # reaching here means it was created. Closing it releases all
+            # connections back to Postgres. Without this, the agent leaks
+            # one pool per restart in dev.
+            try:
+                await pool.close()
+            except Exception:  # noqa: BLE001
+                log.warning("failed to close asyncpg pool cleanly: %r", exc)
         shutdown_observability()
         await redis.aclose()
+
+
+async def _build_checkpointer(database_url: str):
+    """Build and return an open AsyncPostgresSaver usable as a graph checkpointer.
+
+    langGraph's `AsyncPostgresSaver.from_conn_string` is psycopg-based; psycopg's
+    URL parser rejects `=` inside `options=...` (we use `options=-c search_path=...`
+    for asyncpg). Strip the options before handing to langGraph; main.py will
+    `SET search_path` on the saver connection right after `setup()`.
+    """
+    import re as _re
+
+    from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
+    from langgraph.checkpoint.serde.jsonplus import JsonPlusSerializer
+
+    # Our AgentState channels hold custom agent.types pydantic objects
+    # (`Plan`/`PlanStep`/`StepKind`, `Event`, `ChatMessage`). langGraph's
+    # msgpack serde logs "Deserializing unregistered type ... will be
+    # blocked in a future version" for module-local types — register them
+    # now via the serializer's allowlist. Without this, a future
+    # langgraph bump would refuse to decode our checkpoints and resume
+    # would break. (Contract verified against the installed langgraph:
+    # `JsonPlusSerializer(allowed_msgpack_modules=[...])` and
+    # `from_conn_string(..., serde=...)` are both keyword-only.)
+    serde = JsonPlusSerializer(
+        allowed_msgpack_modules=[
+            ("agent.types", "Plan"),
+            ("agent.types", "PlanStep"),
+            ("agent.types", "StepKind"),
+            ("agent.types", "ChatMessage"),
+            ("agent.types", "Event"),
+        ]
+    )
+
+    # Strip both encoded and unencoded `options=...` from the URL.
+    saver_url = _re.sub(r"&?options=[^&]*", "", database_url)
+    saver_url = _re.sub(r"\?$", "", saver_url)
+
+    saver_cm = AsyncPostgresSaver.from_conn_string(saver_url, serde=serde)
+    saver = await saver_cm.__aenter__()
+    # Stash the context manager so the lifespan teardown can close it.
+    saver._cm = saver_cm  # type: ignore[attr-defined]
+    return saver
+
+
+async def _set_search_path_async(conn, schema: str) -> None:
+    """Set search_path on a psycopg AsyncConnection.
+
+    langGraph's `AsyncPostgresSaver.conn` is a psycopg AsyncConnection;
+    `.execute()` is async and must be awaited. We `SET search_path` so
+    langGraph's `setup()` (which creates unqualified `checkpoint_*`
+    tables) lands them in our schema rather than `public`.
+
+    Deliberately NO `public` in the path (matches the DSN validator and
+    `migrations/env.py`): the agent must be structurally unable to touch
+    Go's `public.*` tables. The saver only needs its own schema —
+    builtins resolve via `pg_catalog`, which is always searched first.
+    """
+    await conn.execute(f"SET search_path TO {schema}")
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
@@ -209,10 +356,74 @@ async def _stream_agent_run(
     (via `run_agent_stream`) so a slow step doesn't block earlier frames from
     reaching the client. After the final frames, we emit the sentinel
     `data: [DONE]` which the parser uses to yield its internal terminator.
+
+    Run-state resume (see openspec/changes/agent-run-state/):
+      - First frame of every run is `event: run_id` carrying the server-minted uuid4.
+      - If the client echoed a non-terminal `run_id`, we emit `note{kind:"resumed", ...}`
+        before `plan` and seed the graph state from langGraph's checkpoint.
+      - On terminal `done` we mark `agent.runs.status='completed'`; on `error{code != agent_unavailable}`
+        we mark `'failed'`. langGraph's checkpoint tables carry the state itself.
     """
+    run_metadata: RunMetadata | None = getattr(app.state, "run_metadata", None)
+    checkpointer = getattr(app.state, "checkpointer", None)
+
+    # Mint or resume run_id.
+    run_id = chat_req.run_id
+    resumed = False
+    if run_metadata is not None and run_id is not None:
+        existing = await run_metadata.get_run(run_id, user_id)
+        if existing is not None and existing.status not in ("completed", "failed"):
+            resumed = True
+        else:
+            # Wrong user, not found, or terminal — fall through to fresh path.
+            run_id = None
+
+    if run_id is None:
+        if run_metadata is not None:
+            try:
+                run_id = await run_metadata.create_run(user_id)
+            except RunMetadataUnavailable as exc:
+                log.warning("create_run failed; running without persistence: %r", exc)
+                run_id = str(uuid.uuid4())
+        else:
+            run_id = str(uuid.uuid4())
+
+    # First frame: server-minted run_id (echoed so client can resume later).
+    yield _sse_encode(
+        Event(
+            kind="run_id",
+            payload=RunIDEvent(run_id=run_id).model_dump(),
+        )
+    )
+
+    # Resume note (before plan frame).
+    if resumed:
+        yield _sse_encode(
+            Event(
+                kind="note",
+                payload=NoteEvent(
+                    text="resumed",
+                    kind="resumed",
+                    last_step_id=None,  # graph rehydrates the right node itself
+                    run_id=run_id,
+                ).model_dump(),
+            )
+        )
+    else:
+        yield _sse_encode(
+            Event(
+                kind="note",
+                payload=NoteEvent(
+                    text="fresh_run",
+                    kind="fresh_run",
+                    run_id=run_id,
+                ).model_dump(),
+            )
+        )
+
     state = new_state(
         user_id=user_id,
-        run_id=str(uuid.uuid4()),
+        run_id=run_id,
         request_id=request_id,
         messages=chat_req.messages,
         model=chat_req.model,
@@ -222,15 +433,69 @@ async def _stream_agent_run(
     rag = RagClient(base_url=settings.rag_bridge_url, bearer_token=bearer_token)
     tools = ToolsClient(base_url=settings.mcp_url, bearer_token=bearer_token)
 
-    async for event in run_agent_stream(
-        state,
+    # Build the graph with the checkpointer if persistence is enabled.
+    # Re-build per-request because the saver needs `thread_id` per-run.
+    graph = build_graph(
         settings=settings,
-        tracer=app.state.tracer,
         budget=app.state.budget,
         rag=rag,
         tools=tools,
-    ):
-        yield _sse_encode(event)
+        checkpointer=checkpointer,
+    )
+
+    graph_config: dict | None = None
+    if checkpointer is not None:
+        graph_config = {"configurable": {"thread_id": run_id}}
+
+    total_tokens = 0
+    error_code: str | None = None
+    try:
+        async for event in run_agent_stream(
+            state,
+            settings=settings,
+            tracer=app.state.tracer,
+            budget=app.state.budget,
+            rag=rag,
+            tools=tools,
+            graph=graph,
+            graph_config=graph_config,
+            resumed=resumed,
+        ):
+            yield _sse_encode(event)
+            # Track terminal totals for metadata persistence.
+            if event.kind == "done":
+                usage = event.payload.get("usage") or {}
+                total_tokens = int(usage.get("total_tokens", 0))
+            elif event.kind == "error":
+                error_code = event.payload.get("code")
+    finally:
+        # Persist terminal metadata if enabled. Non-fatal: emit a typed
+        # error event only if the user-facing run is still in flight and
+        # the metadata failure is the cause.
+        if run_metadata is not None:
+            try:
+                if error_code is not None and error_code != "agent_unavailable":
+                    await run_metadata.mark_failed(run_id, error_code)
+                elif error_code is None:
+                    await run_metadata.mark_completed(run_id, total_tokens)
+                # error_code == "agent_unavailable" → leave row as 'running';
+                # slice 4 fault tolerance adds a stale-run sweeper.
+            except RunMetadataUnavailable as exc:
+                log.warning(
+                    "metadata terminal write failed (non-fatal): run_id=%s err=%r",
+                    run_id,
+                    exc,
+                )
+                yield _sse_encode(
+                    Event(
+                        kind="error",
+                        payload={
+                            "error": "run metadata persistence failed",
+                            "code": "run_metadata_unavailable",
+                            "request_id": request_id,
+                        },
+                    )
+                )
 
     # Frontend parser triggers its own terminator on `data: [DONE]`. Old clients
     # that listen on `event: terminator` still work because we emit that event too.

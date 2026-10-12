@@ -59,6 +59,7 @@ class ChatRequest(BaseModel):
     messages: list[ChatMessage]
     agent: str | None = None
     model: str | None = None
+    run_id: str | None = None  # server-minted uuid4; client echoes for resume
 
 
 # --- SSE event payloads (mirror Go chat handler envelope) -----------------
@@ -103,6 +104,10 @@ class DeltaEvent(BaseModel):
 class NoteEvent(BaseModel):
     text: str
     provider: str | None = None
+    # Additive fields for run-state resume (FUTURE_AGENT.md §1.1).
+    kind: str | None = None  # "resumed" | "fresh_run" | None for legacy notes
+    last_step_id: str | None = None
+    run_id: str | None = None
 
 
 class DoneUsage(BaseModel):
@@ -123,6 +128,16 @@ class ErrorEvent(BaseModel):
     error: str
     code: str | None = None
     request_id: str | None = None
+
+
+class RunIDEvent(BaseModel):
+    """First frame of a fresh run — server mints a `run_id` and echoes it back.
+
+    Client SHOULD persist this and echo it on the next request to enable
+    resume after backend/Python restart (see `agent-run-state` spec).
+    """
+
+    run_id: str
 
 
 class TerminatorEvent(BaseModel):
@@ -146,6 +161,7 @@ class Event(BaseModel):
         "note",
         "error",
         "terminator",
+        "run_id",  # new — server-minted run_id (agent-run-state)
     ]
     payload: dict[str, Any] = Field(default_factory=dict)
 

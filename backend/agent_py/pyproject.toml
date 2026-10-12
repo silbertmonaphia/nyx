@@ -12,14 +12,23 @@ dependencies = [
     "uvicorn[standard]>=0.32",
     "langgraph>=0.2",
     "langchain-openai>=0.2",
+    "langgraph-checkpoint-postgres>=3.0",
     "pydantic>=2.9",
     "pydantic-settings>=2.6",
+    "asyncpg>=0.30",
+    "alembic>=1.13",
+    "sqlalchemy[asyncio]>=2.0",
     "redis>=5.2",
     "opentelemetry-api>=1.28",
     "opentelemetry-sdk>=1.28",
     "opentelemetry-exporter-otlp-proto-http>=1.28",
     "prometheus-client>=0.21",
     "httpx>=0.27",
+    # Direct use in observability.py: a trust_env=False session for the
+    # OTLP exporter so span export bypasses HTTP_PROXY. Also a transitive
+    # dep of opentelemetry-exporter-otlp-proto-http; declared here because
+    # we import it directly.
+    "requests>=2.32",
 ]
 
 [project.optional-dependencies]
@@ -28,6 +37,7 @@ dev = [
     "pytest-asyncio>=0.24",
     "fakeredis>=2.26",
     "vcrpy>=6.0",
+    "testcontainers[postgres]>=4.8",
 ]
 
 [tool.setuptools.packages.find]

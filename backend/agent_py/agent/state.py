@@ -35,7 +35,12 @@ class AgentState(TypedDict, total=False):
     step_outputs: dict[str, Any]
     cumulative_tokens: int
 
-    # --- Event stream (consumed by SSE emitter; never persisted) ---
+    # --- Event stream (replayed to the SSE emitter per node completion) ---
+    # NOTE: when a checkpointer is wired (production), ALL channels —
+    # including this one — are persisted into `langgraph.*` on every node
+    # transition; that's how a resumed run replays already-emitted frames.
+    # Consequence: checkpoint size grows with the event count. Acceptable
+    # while plans are small; langGraph retention prunes old checkpoints.
     events_so_far: list[Event]
 
     # --- Terminal markers ---

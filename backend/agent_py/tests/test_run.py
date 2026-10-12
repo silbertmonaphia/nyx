@@ -252,23 +252,28 @@ async def test_agent_run_emits_sse_frame_sequence(app_and_state):
     assert resp.status_code == 200
     text = resp.text
 
-    # The first frame must be `plan` with a flat `{steps: [...]}` payload
-    # (no `{kind, data}` wrapper — the kind lives in the SSE `event:` field).
-    assert text.startswith("event: plan\n")
+    # Slice 2 (agent-run-state): the stream opens with the server-minted
+    # `run_id` frame and a `note{kind:"fresh_run"}` before the plan.
+    # Old token-stream clients ignore unknown kinds — the envelope shape
+    # (`event: <kind>\ndata: <flat json>\n\n`) is unchanged.
+    assert text.startswith("event: run_id\n")
+
+    frames = _parsed_frames(text)
+    assert frames, f"expected at least one data frame; raw: {text!r}"
+    # Frame 0: run_id payload. Frame 1: fresh-run note. Frame 2: plan.
+    assert "run_id" in frames[0] and isinstance(frames[0]["run_id"], str)
+    assert frames[1].get("kind") == "fresh_run", (
+        f"second frame must announce a fresh run; parsed: {frames[:2]}"
+    )
+    assert "steps" in frames[2], f"third frame must be the plan; parsed: {frames[:3]}"
+    assert isinstance(frames[2]["steps"], list)
+    assert frames[2]["steps"][0]["id"] == "step_1"
+
     # `done`, `terminator`, and the sentinel `[DONE]` must all be present.
     assert "event: done\n" in text
     assert "event: terminator\n" in text
     assert "data: [DONE]\n\n" in text
 
-    # The plan JSON payload decodes back.
-    first_data_line = text.split("\n")[1]
-    assert first_data_line.startswith("data: ")
-    payload = json.loads(first_data_line.removeprefix("data: "))
-    assert "steps" in payload
-    assert isinstance(payload["steps"], list)
-    assert payload["steps"][0]["id"] == "step_1"
-
-    frames = _parsed_frames(text)
     # delta frame carries `{"delta": "<text>"}` flat, not `{"kind":..., "data":...}`.
     deltas = [f for f in frames if isinstance(f, dict) and "delta" in f]
     assert deltas, f"expected a delta frame on the wire; parsed: {frames}"

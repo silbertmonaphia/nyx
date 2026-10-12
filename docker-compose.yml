@@ -202,6 +202,17 @@ services:
       - PYTHON_AGENT_RAG_BRIDGE_URL=http://backend:8080/internal/rag/retrieve
       - PYTHON_AGENT_REDIS_URL=redis://redis:6379
       - PYTHON_AGENT_OTEL_ENDPOINT=http://jaeger:4318
+      # Run-state persistence — langGraph `AsyncPostgresSaver` (creates
+      # `langgraph.*` checkpoint tables on first run via its built-in
+      # `setup()`) + thin `agent.runs` metadata table.
+      # Migrations are NOT run inline — the dedicated `agent-migrate`
+      # one-shot service (below) is the single source of truth in compose,
+      # gated by `depends_on: agent-migrate (service_completed_successfully)`.
+      # Dev path (`make dev-agent`) sets `migrations_disabled=false` and
+      # runs alembic inline — same posture as the Go backend's
+      # golang-migrate on boot.
+      - PYTHON_AGENT_DATABASE_URL=postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}?options=-c%20search_path%3Dlanggraph%2Cagent
+      - PYTHON_AGENT_MIGRATIONS_DISABLED=true
       # Compose-side defaults the operator is expected to set in
       # `backend/.env`. Listed here so a quick `docker compose --profile
       # app up` works once `backend/.env` is filled in.
@@ -214,6 +225,11 @@ services:
         condition: service_healthy
       backend:
         condition: service_healthy
+      # Run-state migrations (prod path). `agent-migrate` is a one-shot
+      # that runs `alembic upgrade head` against `db` before `agent`
+      # boots. `agent-migrate` itself waits for `db` to be healthy.
+      agent-migrate:
+        condition: service_completed_successfully
       vllm:
         condition: service_healthy
         required: false
@@ -234,6 +250,30 @@ services:
     # a misconfigured proxy can't widen the trust surface.
     # Port 9000 is intentionally NOT published to the host — only
     # metrics on 127.0.0.1:9001:9001 for Prometheus scraping.
+    networks: [internal]
+
+  # One-shot alembic migrations for the Python agent's run-state
+  # tables. Runs `alembic upgrade head` against `db`, which creates
+  # the `langgraph` schema (so langGraph's `setup()` lands checkpoint
+  # tables there) and the `agent.runs` metadata table + index in
+  # the `agent` schema. Exits 0 on success; `agent` waits for this
+  # service to complete before starting. See
+  # openspec/changes/agent-run-state/.
+  agent-migrate:
+    profiles: ["app"]
+    build:
+      context: ./backend/agent_py
+    mem_limit: 256m
+    cpus: "0.25"
+    command: ["alembic", "upgrade", "head"]
+    env_file:
+      - backend/.env
+    environment:
+      - PYTHON_AGENT_DATABASE_URL=postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}?options=-c%20search_path%3Dlanggraph%2Cagent
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: "no"
     networks: [internal]
 
   frontend:
