@@ -3,7 +3,7 @@
 For each step runs the appropriate handler:
   - rag   → RagClient.retrieve → render context block into state.step_outputs[step.id]
   - tool  → ToolsClient.call   → render result
-  - llm   → direct LLM call with state.messages + step.prompt → accumulate text deltas
+  - llm   → direct LLM call with state.messages + step.prompt (+ data from earlier rag/tool steps) → accumulate text deltas
   - react → nested subgraph (model → tool → model), capped by max_iterations
 
 The executor is budget-aware: before every model call it consults BudgetGuard. Budget
@@ -192,6 +192,9 @@ async def _run_llm(state: AgentState, step, settings: Settings, tracer: trace.Tr
     )
 
     msgs = [SystemMessage(content=step.prompt or "")]
+    context = _render_prior_data(state, step.id)
+    if context:
+        msgs.append(SystemMessage(content=context))
     msgs.extend(_state_messages_to_lc(state.get("messages", [])))
 
     try:
@@ -237,6 +240,9 @@ async def _run_react(
         client = base_client
 
     messages = [SystemMessage(content=step.prompt or "")]
+    context = _render_prior_data(state, step.id)
+    if context:
+        messages.append(SystemMessage(content=context))
     messages.extend(_state_messages_to_lc(state.get("messages", [])))
 
     for i in range(max_iters):
@@ -342,6 +348,44 @@ def _state_messages_to_lc(messages) -> list:
         elif role == "system":
             out.append(SystemMessage(content=content or ""))
     return out
+
+
+def _render_prior_data(state: AgentState, current_step_id: str) -> str:
+    """Render earlier data-step outputs (rag context / tool results) as a context block.
+
+    Only `rag` and `tool` outputs are carried forward — they are the data
+    producers. `llm`/`react` steps produce user-visible text (the deltas
+    the client already renders); feeding them forward would only
+    duplicate answers. Returns "" when no earlier data step produced
+    anything, so data-free plans (e.g. a greeting) keep their exact
+    prior prompt shape.
+
+    Motivating bug (2026-10): "summarize recent 3 months feed" planned a
+    rag-only plan; the retrieved context was written to step_outputs and
+    never read by anything, so the summary could never see the feeds.
+    """
+    plan = state.get("plan")
+    outputs = state.get("step_outputs") or {}
+    if plan is None:
+        return ""
+    sections: list[str] = []
+    for s in plan.steps:
+        if s.id == current_step_id:
+            break
+        out = outputs.get(s.id)
+        if out is None:
+            continue
+        if s.kind.value == "rag" and isinstance(out, dict):
+            block = out.get("context_block")
+            if block:
+                sections.append(f"[{s.id} — retrieved context]\n{block}")
+        elif s.kind.value == "tool":
+            sections.append(
+                f"[{s.id} — tool result from {s.tool}]\n{json.dumps(out, default=str)}"
+            )
+    if not sections:
+        return ""
+    return "Data gathered by earlier steps:\n\n" + "\n\n".join(sections)
 
 
 def _extract_text(resp) -> str:

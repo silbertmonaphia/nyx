@@ -1,12 +1,16 @@
 """Planner node — one LLM call returning a JSON Plan.
 
 Validates the response via `Plan.model_validate_json(...)`. Rejects oversized plans
-(> settings.plan_max_steps), duplicate step ids, unknown step kinds.
+(> settings.plan_max_steps), duplicate step ids, unknown step kinds. Synthesizes
+the gaps the model cannot be trusted to fill: an empty plan becomes a single
+direct-answer `llm` step, and a plan that ends on a data step (rag/tool) gets a
+final answering `llm` step appended.
 """
 
 from __future__ import annotations
 
 import json
+import logging
 
 from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_openai import ChatOpenAI
@@ -25,6 +29,8 @@ from .types import (
     TerminatorEvent,
 )
 
+log = logging.getLogger("nyx.agent.planner")
+
 PLANNER_SYSTEM_PROMPT = """You are a planner that decomposes a user's chat request into an ordered sequence of agent steps. The steps are executed sequentially by an orchestrator that supports four kinds:
 
 - rag:    vector retrieval over the user's feed corpus; { query: <str> }
@@ -37,6 +43,9 @@ Return ONLY a JSON object matching this schema:
 
 Rules:
 - step `id` MUST be unique within the plan and stable across the run
+- plan for only the MOST RECENT user message; earlier messages are context, never re-answer them
+- `rag` and `tool` steps gather data and emit NO user-visible text; the plan MUST end with an `llm` step that writes the final answer using the data gathered by earlier steps
+- the plan MUST contain at least one step; for greetings, small talk, or anything needing no retrieval or tools, emit exactly one `llm` step that answers the user
 - prefer the minimum number of steps; don't insert filler
 - use `rag` only when the request is clearly about the user's own data
 - when unsure, prefer a single `llm` step
@@ -143,7 +152,21 @@ def _parse_and_validate(raw: str, max_steps: int) -> Plan | _PlanError:
     if not isinstance(steps, list):
         return _PlanError("plan_invalid", "Plan is invalid", "'steps' is not a list")
     if len(steps) == 0:
-        return _PlanError("plan_invalid", "Plan is invalid", "plan has zero steps")
+        # Small models read "prefer the minimum number of steps" literally
+        # and return {"steps": []} for greetings (deterministic on
+        # Qwen3-4B for "hi"). A zero-step plan would end the run with NO
+        # user-visible answer — the orchestrator's only reply mechanism is
+        # an `llm` step's delta frames — so synthesize the canonical
+        # direct-answer step instead of failing the run. The executor
+        # appends the conversation to the step prompt, so the model sees
+        # the actual message.
+        steps = [
+            {
+                "id": "step_1",
+                "kind": "llm",
+                "prompt": "Answer the user's message directly.",
+            }
+        ]
     if len(steps) > max_steps:
         return _PlanError("plan_too_large", "Plan exceeds maximum size", f"{len(steps)} > {max_steps}")
 
@@ -156,6 +179,41 @@ def _parse_and_validate(raw: str, max_steps: int) -> Plan | _PlanError:
                 return _PlanError("plan_invalid", "Plan is invalid", f"duplicate step id {parsed.id!r}")
             seen_ids.add(parsed.id)
             parsed_steps.append(parsed)
+
+        # Deterministic fallback, symmetric with the empty-plan synthesis
+        # above: rag/tool steps gather data but emit NO user-visible text.
+        # A plan whose last step is a data step finishes with nothing to
+        # show even though the run "succeeds" (2026-10 "summarize my
+        # feeds" bug). The system prompt asks the model to end with an
+        # `llm` step, but a small model's compliance is not a guarantee —
+        # enforce it here. `react` also produces text, so it qualifies as
+        # the answering step. (Deliberately not counted against
+        # max_steps: it guarantees one visible answer, and the model's
+        # own output was already capped above.)
+        if parsed_steps[-1].kind.value not in ("llm", "react"):
+            answer_id = "final_answer"
+            n = 2
+            while answer_id in seen_ids:
+                answer_id = f"final_answer_{n}"
+                n += 1
+            # Never silent: the parser modifying the model's plan is
+            # observable in the agent log (and, via the plan frame, on the
+            # wire — the appended step is visible to the client).
+            log.info(
+                "planner: model plan ended with a %s step; appended answering step %r",
+                parsed_steps[-1].kind.value,
+                answer_id,
+            )
+            parsed_steps.append(
+                PlanStep(
+                    id=answer_id,
+                    kind="llm",
+                    prompt=(
+                        "Write the final answer to the user's most recent "
+                        "request, using the data gathered by earlier steps."
+                    ),
+                )
+            )
         return Plan(steps=parsed_steps)
     except Exception as exc:  # noqa: BLE001
         return _PlanError("plan_invalid", "Plan is invalid", repr(exc))

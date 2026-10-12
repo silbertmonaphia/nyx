@@ -31,7 +31,7 @@ from .planner import plan_node
 from .rag_client import RagClient
 from .state import AgentState
 from .tools_client import ToolsClient
-from .types import DoneEvent, DoneUsage, Event, TerminatorEvent
+from .types import DoneEvent, DoneUsage, ErrorEvent, Event, TerminatorEvent
 
 
 def _executor_step_factory(
@@ -180,6 +180,24 @@ async def run_agent_stream(
     final = chunk if "chunk" in locals() else state  # last seen
     status = final.get("terminal_status", "ok")
     if status == "ok":
+        # Guard: a plan that gathered data but never produced an answer
+        # (e.g. a retrieval-only plan) must not finish silently green —
+        # the user would see steps but no text, and the run row would
+        # read `completed`. Emit a typed error; main.py's SSE consumer
+        # marks the run failed on any error frame.
+        events = final.get("events_so_far", [])
+        produced_text = any(
+            e.kind == "delta" and (e.payload or {}).get("delta") for e in events
+        )
+        if not produced_text:
+            yield Event(
+                kind="error",
+                payload=ErrorEvent(
+                    error="Agent produced no answer",
+                    code="empty_answer",
+                    request_id=final.get("request_id"),
+                ).model_dump(),
+            )
         usage = DoneUsage(
             prompt_tokens=0,
             completion_tokens=final.get("cumulative_tokens", 0),

@@ -91,6 +91,34 @@ class _LoopForeverLlm:
         )
 
 
+class _EmptyAnswerPlanLlm:
+    """Planner stub: rag-only plan; executor stub: empty answering text.
+
+    The parser appends an answering `llm` step to data-only plans
+    ([rag] becomes [rag_1, final_answer(llm)]), so the empty-answer path
+    is reached via that answering step producing no text — the second
+    `ainvoke` returns "". Pins the `empty_answer` guard in
+    `run_agent_stream`.
+    """
+
+    call_count = 0
+
+    def __init__(self, *args, **kwargs):
+        pass
+
+    async def ainvoke(self, messages):
+        from langchain_core.messages import AIMessage
+
+        type(self).call_count += 1
+        if type(self).call_count == 1:
+            return AIMessage(
+                content=json.dumps(
+                    {"steps": [{"id": "rag_1", "kind": "rag", "query": "feeds"}]}
+                )
+            )
+        return AIMessage(content="")
+
+
 @pytest.fixture
 def settings():
     return Settings(
@@ -335,6 +363,37 @@ async def test_react_step_emits_iteration_cap_error(app_and_state):
         and "react_max_iterations" in str(f.get("reason", ""))
     ]
     assert step_ends, f"expected step_end(failed, ...); got: {frames}"
+
+
+@pytest.mark.asyncio
+async def test_rag_only_plan_emits_empty_answer_error(app_and_state):
+    """A run that produces no visible text must not finish green.
+
+    2026-10 report: "summarize my feeds" planned a single rag step; the
+    retrieved context went to step_outputs (write-only at the time) and
+    the stream ended with done + zero deltas — the user saw a step and
+    no answer, and the run row read `completed`. The parser now appends
+    an answering llm step to data-only plans, so this test reaches the
+    guard via that step producing empty text. The guard in
+    `run_agent_stream` emits error{code:"empty_answer"} so the client
+    shows a failure rather than an empty bubble.
+    """
+    app = app_and_state
+    _set_lm(app_and_state, _EmptyAnswerPlanLlm)
+
+    resp = await _post_chat(
+        app,
+        ChatRequest(
+            messages=[ChatMessage(role="user", content="summarize my feeds")]
+        ).model_dump(),
+    )
+    assert resp.status_code == 200
+    frames = _parsed_frames(resp.text)
+    errors = [f for f in frames if isinstance(f, dict) and f.get("code") == "empty_answer"]
+    assert errors, f"expected empty_answer error; got: {frames}"
+    # Terminal frames still follow so old clients close the stream cleanly.
+    assert "event: done\n" in resp.text
+    assert "data: [DONE]\n\n" in resp.text
 
 
 @pytest.mark.asyncio
