@@ -13,6 +13,7 @@ OTel span `agent.budget` wraps every check with attributes:
 
 from __future__ import annotations
 
+import logging
 from datetime import datetime, timezone
 
 from opentelemetry import trace
@@ -20,9 +21,16 @@ from redis.asyncio import Redis
 
 from .types import BudgetDecision
 
-# 90 minutes; the counter outlives the hour it belongs to so a check that straddles the
-# UTC-hour boundary still sees the same key (we recompute the key on every check from the
-# current UTC hour).
+log = logging.getLogger("nyx.agent.budget")
+
+# 90 minutes — deliberately longer than the one-hour budget window, but the
+# TTL is NOT what enforces the window. The window lives in the KEY
+# (`h={utc_hour}`, recomputed on every check): the next hour computes a
+# different key, so no read ever touches an expired hour's counter. The TTL
+# exists only so Redis garbage-collects old counters; the 30-minute headroom
+# over the window is margin for clock skew between the app (which derives the
+# key) and Redis (which runs the TTL) plus last-second touches. `EXPIRE` rolls
+# on every check (not NX), refreshing the countdown.
 _TTL_SECONDS = 90 * 60
 
 
@@ -60,6 +68,17 @@ class BudgetGuard:
             except Exception as exc:  # noqa: BLE001 — we deliberately swallow all
                 span.add_event("redis_error", {"error": repr(exc)})
                 span.set_attribute("decision", "unavailable")
+                # Make the failure diagnosable: the wire only carries
+                # `budget_unavailable`, which can't distinguish "wrong
+                # host/port" from "Redis is down". Log the target host:port
+                # (never credentials) so the agent log names it. Hint: the
+                # host-mapped Redis port for this project is 6380, not 6379.
+                try:
+                    kw = self._redis.connection_pool.connection_kwargs
+                    target = f"{kw.get('host', '?')}:{kw.get('port', '?')}"
+                except Exception:  # noqa: BLE001 — stub Redis objects in tests
+                    target = "?"
+                log.warning("budget guard: redis unreachable at %s: %r", target, exc)
                 return BudgetDecision(
                     decision="unavailable",
                     tokens_used=0,
