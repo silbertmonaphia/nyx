@@ -48,6 +48,9 @@ services:
       interval: 5s
       timeout: 3s
       retries: 10
+    # Default network only. Only the Go backend reaches the DB;
+    # the Python agent goes through backend's /mcp + /internal/rag/retrieve.
+    networks: [default]
 
   redis:
     image: redis:7-alpine
@@ -74,6 +77,9 @@ services:
       interval: 5s
       timeout: 3s
       retries: 10
+    # Both networks: backend's cache layer uses the default side;
+    # the Python agent's per-user budget guard uses the internal side.
+    networks: [default, internal]
 
   # OpenTelemetry tracing — Jaeger v2 (single OTel Collector binary,
   # image `jaegertracing/jaeger`). The default config enables the OTLP
@@ -100,6 +106,10 @@ services:
       interval: 5s
       timeout: 3s
       retries: 10
+    # Both networks: backend exports spans here on the default side;
+    # the Python agent exports on the internal side (OTLP goes over
+    # the in-network hostname).
+    networks: [default, internal]
 
   backend:
     # Opt-in profile. Default `docker compose up` boots only the
@@ -162,6 +172,10 @@ services:
     read_only: true
     tmpfs:
       - /tmp
+    # Both networks: backend is the bridge between the SPA-facing
+    # default network and the internal network where the Python
+    # agent lives. SPA never resolves `agent` directly.
+    networks: [default, internal]
 
   # Python Plan-and-Execute agent orchestrator. Opt-in profile —
   # brought up alongside `backend` when `AGENT_ENABLED=true` is set in
@@ -214,6 +228,13 @@ services:
     read_only: true
     tmpfs:
       - /tmp
+    # Internal network ONLY. The Python agent is reachable by the
+    # Go backend (which is the only service on both networks); the
+    # SPA cannot resolve `agent` from the default network, so even
+    # a misconfigured proxy can't widen the trust surface.
+    # Port 9000 is intentionally NOT published to the host — only
+    # metrics on 127.0.0.1:9001:9001 for Prometheus scraping.
+    networks: [internal]
 
   frontend:
     # See `backend` above — both app containers sit behind the
@@ -286,6 +307,10 @@ services:
       - /var/cache/nginx:mode=0777
       - /var/run:mode=0777
       - /run:mode=0777
+    # Default network only. The SPA reaches the backend over the
+    # default bridge; it cannot reach the internal network at all,
+    # so the Python agent is structurally unreachable from the SPA.
+    networks: [default]
 
   # Self-hosted vLLM (opt-in profile). Operators bring this up with
   # `docker compose --profile vllm up`. When inactive, the rest of
@@ -428,6 +453,13 @@ services:
     security_opt: ["no-new-privileges:true"]
     tmpfs:
       - /tmp
+    # Both networks: backend reaches vLLM on the default side; the
+    # Python agent reaches vLLM on the internal side. Explicit
+    # membership (not relying on Compose V2 auto-attach semantics) so
+    # the chat agent's `PYTHON_AGENT_LLM_BASE_URL=http://vllm:8000/v1`
+    # resolves from `internal` regardless of which compose-spec version
+    # the operator runs.
+    networks: [default, internal]
 
   # Embedding endpoint for the RAG pipeline (opt-in profile). The
   # chat vllm service above serves a chat-tuned model (Qwen3-4B /
@@ -513,6 +545,38 @@ services:
     security_opt: ["no-new-privileges:true"]
     tmpfs:
       - /tmp
+    # Both networks: backend reaches vLLM on the default side; the
+    # Python agent reaches vLLM on the internal side. The embed
+    # profile is opt-in, but its network membership is the same shape.
+    networks: [default, internal]
+
+# Network topology: the Python agent service is reachable ONLY by the
+# Go backend. The trust model at /agent/run is the private network —
+# Python does not verify JWTs, and there is no app-layer auth at this
+# hop (see FUTURE_AGENT.md + backend/agent_py/README.md "Trust model").
+# To make that network boundary structural rather than conventional,
+# we split into two bridge networks:
+#
+#   default — the conventional compose bridge. frontend lives here and
+#     can resolve `backend` (so the SPA reaches the API over CORS).
+#     frontend cannot resolve `agent` because `agent` is NOT on this
+#     network.
+#   internal — closed bridge joining backend + agent + the infra
+#     services agent depends on (redis for the budget guard, jaeger
+#     for OTel export). Only services that explicitly join this network
+#     can reach the agent's port 9000. Adding a new service that needs
+#     to call the agent requires joining this network deliberately,
+#     so a future bug elsewhere can't quietly widen the trust surface.
+#
+# This is defense in depth, not a replacement for application-layer
+# defenses. The agent's port 9000 is still NOT published to the host
+# (`ports:` on the agent service is intentionally absent — only the
+# metrics port 9001 is published on loopback for Prometheus scraping).
+networks:
+  default:
+    name: nyx_default
+  internal:
+    name: nyx_internal
 
 volumes:
   db_data:
