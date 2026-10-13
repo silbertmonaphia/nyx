@@ -733,8 +733,16 @@ async def _reprompt_for_corrected_call(
         )
     )
     prompt_msgs.append(rejection)
+    exchange.append(rejection)
+    # Parallel-call invariant (review round 3): a ReAct turn may emit several
+    # tool calls at once; answering only the rejected one leaves its siblings
+    # unanswered and strict providers 400 the re-prompt. Placeholders answer
+    # them (their real results land in the live loop right after).
+    placeholders = _placeholder_tool_messages(prompt_msgs)
+    prompt_msgs.extend(placeholders)
+    exchange.extend(placeholders)
     prompt_msgs.append(feedback)
-    exchange.extend([rejection, feedback])
+    exchange.append(feedback)
 
     try:
         resp = await client.ainvoke(prompt_msgs)
@@ -813,6 +821,39 @@ def _tool_schema_text(schemas: list, tool_name: str) -> str:
     return "{}"
 
 
+def _placeholder_tool_messages(prompt_msgs: list) -> list:
+    """Answer any still-unanswered tool calls in the most recent assistant
+    turn that carries tool calls.
+
+    Strict OpenAI-compatible providers reject a prompt where a tool call in
+    an assistant turn has no matching tool response ("tool_call_ids did not
+    have response messages"). The re-prompt for one rejected call of a
+    parallel batch replays the whole turn, so its siblings need neutral
+    placeholders; their real results land in the live loop immediately
+    after this dispatch.
+    """
+    turn_ids: list[str] = []
+    for msg in reversed(prompt_msgs):
+        tcs = getattr(msg, "tool_calls", None)
+        if isinstance(msg, AIMessage) and tcs:
+            for tc in tcs:
+                call_id = tc.get("id") if isinstance(tc, dict) else getattr(tc, "id", None)
+                if isinstance(call_id, str) and call_id:
+                    turn_ids.append(call_id)
+            break
+    if not turn_ids:
+        return []
+    answered = {m.tool_call_id for m in prompt_msgs if isinstance(m, ToolMessage)}
+    return [
+        ToolMessage(
+            content="Tool call deferred: awaiting the sibling call's correction.",
+            tool_call_id=call_id,
+        )
+        for call_id in turn_ids
+        if call_id not in answered
+    ]
+
+
 def _record_terminal_tool_failure(state: AgentState, step_id: str, tool_name: str) -> None:
     """Mark a (step, tool) whose dispatch ended in a TERMINAL failure.
 
@@ -862,9 +903,14 @@ def _collect_failed_steps(state: AgentState, settings: Settings) -> list[str]:
     Single source of truth for the banner trigger (spec scenario: "one
     function that the SSE publisher calls"):
       - any `step_end` with `status == "failed"`;
-      - any `tool_result{ok: false}` whose `retry_count` equals the retry
-        allowance (the terminal failure *after* retries — intermediate
-        retry failures carry a smaller count and are excluded).
+      - any `tool_result{ok: false}` for a (step, tool) that either consumed
+        the full retry allowance (`retry_count == retry_max` — fallback for
+        states replayed from checkpoints predating the terminal marker) or
+        was recorded as a TERMINAL failure (`state["tool_terminal_failures"]`
+        — exhaustion, non-retryable, or model-declined; covers allowances
+        split across ReAct iterations). A dispatch that recovered on a later
+        attempt records nothing and its success frame is excluded by the
+        `ok is False` check.
     RAG-empty results reach `ok: true` and are excluded by construction.
     """
     events = state.get("events_so_far", [])

@@ -845,7 +845,7 @@ async def test_no_banner_when_recovered_on_last_allowed_retry(tracer):
     final = [e for e in state["events_so_far"] if e.kind == "tool_result"][-1]
     assert final.payload["ok"] is True
     assert final.payload["retry_count"] == 2  # full allowance consumed…
-    assert state.get("tool_terminal_failures") in (None, {})  # …but recovered
+    assert state.get("tool_terminal_failures") == {}  # …but recovered
     step_ends = [e for e in state["events_so_far"] if e.kind == "step_end"]
     assert [e.payload["status"] for e in step_ends] == ["ok"]
 
@@ -891,6 +891,49 @@ async def test_second_retry_reprompt_carries_prior_exchange(tracer, monkeypatch)
     # answered exactly once — no unanswered turns, no duplicates.
     assert assistant_ids == ["tc_1", "tc_2"]
     assert tool_ids == ["tc_1", "tc_2"]
+
+
+@pytest.mark.asyncio
+async def test_parallel_tool_calls_placeholders_answer_siblings(tracer, monkeypatch):
+    """Review round 3: a re-prompt for ONE call of a parallel batch must not
+    leave its siblings unanswered — strict OpenAI-compatible providers 400
+    on a tool call without a matching response message."""
+    step = PlanStep(id="react_1", kind="react", prompt="p", max_iterations=2)
+    state = _state([step], {})
+    # tc_a is rejected once then corrected; tc_b never fails.
+    tools = _ScriptedTools([ToolError("list_feeds: bad args"), {"items": []}])
+    parallel_turn = AIMessage(
+        content="",
+        tool_calls=[
+            {"id": "tc_a", "name": "list_feeds", "args": {"limit": "x"}},
+            {"id": "tc_b", "name": "get_feed", "args": {"id": 1}},
+        ],
+    )
+    _use_llm(
+        monkeypatch,
+        [
+            parallel_turn,
+            _tool_call(name="list_feeds", args={"limit": 5}, tc_id="tc_a2"),
+            AIMessage(content="done"),
+        ],
+    )
+
+    with tracer.start_as_current_span("x") as span:
+        await _run_react(state, step, _settings(), tracer, _StubBudget(), tools, span)
+
+    reprompt = _ScriptedLlm.captured[1]  # the re-prompt for tc_a
+    assistant_ids = [
+        tc["id"]
+        for m in reprompt
+        if isinstance(m, AIMessage)
+        for tc in (getattr(m, "tool_calls", None) or [])
+    ]
+    tool_ids = [m.tool_call_id for m in reprompt if isinstance(m, ToolMessage)]
+    # Both calls of the parallel turn are answered — the rejected one by the
+    # real rejection, the sibling by a placeholder.
+    assert set(assistant_ids) == {"tc_a", "tc_b"}
+    assert set(tool_ids) == {"tc_a", "tc_b"}
+    assert [i for i in assistant_ids if i not in tool_ids] == []
 
 
 @pytest.mark.asyncio

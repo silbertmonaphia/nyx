@@ -489,6 +489,10 @@ async def test_plan_too_large_stream_carries_partial_failure_note(app_and_state)
     done_idx = next(i for i, f in enumerate(frames) if isinstance(f, dict) and "usage" in f)
     assert error_idx < note_idx < done_idx, f"frame order: error@{error_idx} note@{note_idx} done@{done_idx}"
     assert frames[note_idx]["failed_steps"] == []
+    # Exactly one terminator frame — the pre-fix bug re-yielded it via the
+    # positional slice (review round 2 root-cause finding); pin it.
+    terminators = [f for f in frames if isinstance(f, dict) and list(f.keys()) == ["reason"]]
+    assert len(terminators) == 1, f"expected exactly one terminator; got {terminators}"
 
 
 @pytest.mark.asyncio
