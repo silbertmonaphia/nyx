@@ -87,7 +87,7 @@ The service SHALL require the `X-Nyx-User-Id` request header on `/agent/run` and
 
 ### Requirement: Configurable via environment
 
-The service SHALL read `PYTHON_AGENT_LLM_BASE_URL`, `PYTHON_AGENT_LLM_API_KEY`, `PYTHON_AGENT_LLM_MODEL`, `PYTHON_AGENT_LLM_PLANNER_MODEL` (defaults to `PYTHON_AGENT_LLM_MODEL` when empty), `PYTHON_AGENT_PLAN_MAX_STEPS` (default 10), `PYTHON_AGENT_STEP_REACT_MAX_ITERATIONS` (default 5), `PYTHON_AGENT_MCP_URL` (default `http://backend:8080/mcp`), `PYTHON_AGENT_RAG_BRIDGE_URL` (default `http://backend:8080/internal/rag/retrieve`), `PYTHON_AGENT_REDIS_URL` (default `redis://redis:6379`), `PYTHON_AGENT_OTEL_ENDPOINT` (default `http://jaeger:4318`), `PYTHON_AGENT_OTEL_SERVICE_NAME` (default `nyx-agent`), `PYTHON_AGENT_METRICS_PORT` (default 9001), `PYTHON_AGENT_PLANNER_RETRY_MAX` (default 1, must be ≥ 0), `PYTHON_AGENT_PLANNER_STRUCTURED_ENABLED` (default true), `PYTHON_AGENT_TOOL_RETRY_MAX` (default 2, must be ≥ 0), `PYTHON_AGENT_HEARTBEAT_INTERVAL_SECONDS` (default 30, must be ≥ 1), `PYTHON_AGENT_STALE_RUN_TIMEOUT_SECONDS` (default 900, must be ≥ 2× the heartbeat interval), `PYTHON_AGENT_SWEEP_INTERVAL_SECONDS` (default 300, must be ≥ 1), `PYTHON_AGENT_SWEEP_ENABLED` (default true), and optional `PYTHON_AGENT_JWT_SECRET` / `PYTHON_AGENT_JWT_ALGORITHM` / `PYTHON_AGENT_JWT_AUDIENCE` / `PYTHON_AGENT_JWT_ISSUER` from environment. The service SHALL refuse to start when required keys are missing and the corresponding feature is enabled. The service SHALL refuse to start when `PYTHON_AGENT_PLANNER_RETRY_MAX` or `PYTHON_AGENT_TOOL_RETRY_MAX` is set to a negative value, when `PYTHON_AGENT_HEARTBEAT_INTERVAL_SECONDS` or `PYTHON_AGENT_SWEEP_INTERVAL_SECONDS` is below 1, or when `PYTHON_AGENT_STALE_RUN_TIMEOUT_SECONDS` is smaller than twice `PYTHON_AGENT_HEARTBEAT_INTERVAL_SECONDS` (such a ratio would let the sweeper reap live runs).
+The service SHALL read `PYTHON_AGENT_LLM_BASE_URL`, `PYTHON_AGENT_LLM_API_KEY`, `PYTHON_AGENT_LLM_MODEL`, `PYTHON_AGENT_LLM_PLANNER_MODEL` (defaults to `PYTHON_AGENT_LLM_MODEL` when empty), `PYTHON_AGENT_PLAN_MAX_STEPS` (default 10), `PYTHON_AGENT_STEP_REACT_MAX_ITERATIONS` (default 5), `PYTHON_AGENT_MCP_URL` (default `http://backend:8080/mcp`), `PYTHON_AGENT_RAG_BRIDGE_URL` (default `http://backend:8080/internal/rag/retrieve`), `PYTHON_AGENT_REDIS_URL` (default `redis://redis:6379`), `PYTHON_AGENT_OTEL_ENDPOINT` (default `http://jaeger:4318`), `PYTHON_AGENT_OTEL_SERVICE_NAME` (default `nyx-agent`), `PYTHON_AGENT_METRICS_PORT` (default 9001), `PYTHON_AGENT_PLANNER_RETRY_MAX` (default 1, must be ≥ 0), `PYTHON_AGENT_PLANNER_STRUCTURED_ENABLED` (default true), `PYTHON_AGENT_TOOL_RETRY_MAX` (default 2, must be ≥ 0), `PYTHON_AGENT_HEARTBEAT_INTERVAL_SECONDS` (default 30, must be ≥ 1), `PYTHON_AGENT_STALE_RUN_TIMEOUT_SECONDS` (default 900, must be ≥ 2× the heartbeat interval), `PYTHON_AGENT_SWEEP_INTERVAL_SECONDS` (default 300, must be ≥ 1), `PYTHON_AGENT_SWEEP_ENABLED` (default true), `PYTHON_AGENT_LANGFUSE_ENABLED` (default false), `PYTHON_AGENT_LANGFUSE_HOST` (host-dev default `http://localhost:3000`; the compose agent service overrides to the in-network `http://langfuse-web:3000`), `PYTHON_AGENT_LANGFUSE_PUBLIC_KEY`, `PYTHON_AGENT_LANGFUSE_SECRET_KEY`, and optional `PYTHON_AGENT_JWT_SECRET` / `PYTHON_AGENT_JWT_ALGORITHM` / `PYTHON_AGENT_JWT_AUDIENCE` / `PYTHON_AGENT_JWT_ISSUER` from environment. The service SHALL refuse to start when required keys are missing and the corresponding feature is enabled. The service SHALL refuse to start when `PYTHON_AGENT_PLANNER_RETRY_MAX` or `PYTHON_AGENT_TOOL_RETRY_MAX` is set to a negative value, when `PYTHON_AGENT_HEARTBEAT_INTERVAL_SECONDS` or `PYTHON_AGENT_SWEEP_INTERVAL_SECONDS` is below 1, or when `PYTHON_AGENT_STALE_RUN_TIMEOUT_SECONDS` is smaller than twice `PYTHON_AGENT_HEARTBEAT_INTERVAL_SECONDS` (such a ratio would let the sweeper reap live runs). The service SHALL refuse to start when `PYTHON_AGENT_LANGFUSE_ENABLED=true` and `PYTHON_AGENT_LANGFUSE_PUBLIC_KEY` or `PYTHON_AGENT_LANGFUSE_SECRET_KEY` is unset.
 
 #### Scenario: Default values applied when env unset
 
@@ -118,6 +118,16 @@ The service SHALL read `PYTHON_AGENT_LLM_BASE_URL`, `PYTHON_AGENT_LLM_API_KEY`, 
 
 - **WHEN** `PYTHON_AGENT_PLANNER_STRUCTURED_ENABLED=false` is set
 - **THEN** the planner routes through the legacy free-text path (fence-stripping + `json.loads`); the structured binding is not invoked
+
+#### Scenario: Langfuse enabled without credentials refuses startup
+
+- **WHEN** `PYTHON_AGENT_LANGFUSE_ENABLED=true` is set with `PYTHON_AGENT_LANGFUSE_PUBLIC_KEY` or `PYTHON_AGENT_LANGFUSE_SECRET_KEY` unset
+- **THEN** the service refuses to start with a clear error naming the missing key; no port is bound
+
+#### Scenario: Langfuse defaults applied when unset
+
+- **WHEN** the service starts with no Langfuse env vars set
+- **THEN** `PYTHON_AGENT_LANGFUSE_ENABLED=false` and `PYTHON_AGENT_LANGFUSE_HOST=http://localhost:3000` are applied, no trace client is constructed, and the service starts
 
 ### Requirement: Health endpoint for compose
 
