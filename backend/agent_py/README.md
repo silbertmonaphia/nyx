@@ -109,7 +109,7 @@ retry behaviour:
   remote call (network, 5xx, 408, 429).
 
 Every retry attempt increments the counter by exactly 1; a successful
-first attempt does not. See `openspec/changes/agent-tool-dispatch-retry/`
+first attempt does not. See `openspec/specs/agent-tool-retry/spec.md`
 for the full rationale (per-step vs per-run budget, why a 422 Pydantic
 error from the bridge must route to the validator-feedback path not the
 transient path, OTel `retry_count` + `retry_reason` attributes on the

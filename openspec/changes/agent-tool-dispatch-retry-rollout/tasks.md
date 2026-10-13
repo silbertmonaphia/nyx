@@ -1,6 +1,6 @@
 # Tasks
 
-> Rollout gates split out of `agent-tool-dispatch-retry` per the rollout-split convention (`openspec/config.yaml`). The implementation change is code-complete and review-approved by the time this change is reached; these gates need a running provider stack / browser environment. PM-owned: do not archive from a dev session. Methodology: `design.md` in the implementation change; behaviour spec: `openspec/changes/agent-tool-dispatch-retry/specs/agent-tool-retry/spec.md`.
+> Rollout gates split out of `agent-tool-dispatch-retry` per the rollout-split convention (`openspec/config.yaml`). The implementation change is code-complete and review-approved (archived as `openspec/changes/archive/2026-10-13-agent-tool-dispatch-retry/`); these gates need a running provider stack / browser environment. PM-owned: do not archive from a dev session. Methodology: `design.md` in the archived implementation change; behaviour spec: `openspec/specs/agent-tool-retry/spec.md`.
 
 ## 1. Dev-stack live smokes (local stack)
 
@@ -26,7 +26,8 @@
 
 ## References
 
-- `openspec/changes/agent-tool-dispatch-retry/` — implementation change (tasks.md, design.md, specs/).
+- `openspec/changes/archive/2026-10-13-agent-tool-dispatch-retry/` — implementation change (tasks.md, design.md, specs/).
+- `openspec/specs/agent-tool-retry/` + `openspec/specs/agent-partial-failure/` — canonical contracts synced at archive.
 - `docs/agent-deployment.md` — rollout order, env vars, per-step verification queries, common gotchas.
 - `openspec/changes/agent-planner-structured-rollout/` — model for this rollout change's shape (sibling created 2026-10-13).
 - `openspec/changes/agent-production-rollout/` — the prod-rollout track; this change shares its production env-flip queue.
