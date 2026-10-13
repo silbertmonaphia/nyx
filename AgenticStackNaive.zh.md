@@ -3,6 +3,8 @@
 > 状态同步(2026-10-14): 本文件是最初的能力缺口需求拆解,原文保留;每项下加 ✅/🟡/⬜ 标注 —
 > ✅ 已落地、🟡 部分/在飞、⬜ 未做。现状盘点见 `AgentStack.zh.md`,故障面见 `AgentFaultTolerance.md`。
 
+最开始的最Naive的想法：LangChain[编排] + WebShaper[搜索] + Mem0[记忆]
+
 ## P0 核心骨架: 从单向 DAG 转为 Loop 与 Tool Routing
 1、工具调用 Tool Calling & Structured Output ✅
 LLM 能主动调用外部 API、数据库、计算器、代码执行器等
@@ -24,7 +26,7 @@ Plan-and-Execute 嵌套 ReAct? → 是:`react` step kind 嵌套 model→tool→m
 2、容错 Fault Tolerance 🟡
 针对单个子 Agent 调用超时或 LLM 吐出非法 JSON 时的 Retry、Fallback 机制
 → planner 结构化输出 + 有界 retry、tool dispatch 分类退避 retry、partial-failure banner 已落地;
-stale-run sweeper 在飞;剩余(ReAct 模型调用无 transient retry、cycle detection)见 `AgentFaultTolerance.md` #19
+stale-run sweeper 已落地(0a9b8f5);剩余(ReAct 模型调用无 transient retry、cycle detection)见 `AgentFaultTolerance.md` #19
 
 3、可观测性 Observability 🟡
 - 埋点记录 Trace ID

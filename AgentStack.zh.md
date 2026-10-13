@@ -25,7 +25,7 @@
 - **LangGraph Postgres checkpointer** (`langgraph-checkpoint-postgres>=3.0`),`thread_id = run_id` 维度的 checkpoint 恢复
 - **`agent.runs` 元数据表** (`agent/run_metadata.py`,alembic 管理) — `user_id` / `status` / `total_tokens` / `error_code` / `last_heartbeat_at` / 时间戳,可索引查询
 - **会话内 resume** — `POST /agent/run` 带 `run_id` 命中未终态行 → 从 checkpoint 续跑;心跳超时被 sweeper 回收后按终态行处理(新 run)
-- **stale-run sweeper**(工作区未提交,`agent/sweeper.py`)— 运行中每 30s touch `last_heartbeat_at`(失败仅 WARN),每 300s 扫描,心跳静默超 900s 的 `running` 行翻成 `failed`/`error_code='stale_run'`;该 timeout 同时是 crashed-run 的 resume 窗口。`PYTHON_AGENT_SWEEP_ENABLED=false` 是回滚开关
+- **stale-run sweeper**(已落地 0a9b8f5,`agent/sweeper.py`)— 运行中每 30s touch `last_heartbeat_at`(失败仅 WARN),每 300s 扫描,心跳静默超 900s 的 `running` 行翻成 `failed`/`error_code='stale_run'`;该 timeout 同时是 crashed-run 的 resume 窗口。`PYTHON_AGENT_SWEEP_ENABLED=false` 是回滚开关
 - **retention cron** (`agent/retention.py`) — 每小时清理终态行 30 天前数据(`DELETE ... RETURNING id`),再逐行 `adelete_thread` GC LangGraph checkpoint(单行 GC 失败仅 WARN,删行照旧)——全服务唯一的 checkpoint GC 路径;sweeper 有意保留被回收行的 checkpoint,由 retention 随行一并回收
 
 ### 3. 资源治理
@@ -60,8 +60,8 @@
 | **tool-args retry budget** (结构化工具调用 + 验证 + retry) | 已落地 | `executor._reprompt_for_corrected_call`(agent-tool-dispatch-retry,归档 2026-10-13) |
 | **tool execution transient retry** (timeout / network 指数退避) | 已落地 | `executor._dispatch_tool_with_retries` 分类 arg/transient/non_retryable,退避 250ms→5s(同切片) |
 | **partial-failure banner** (失败步骤可视化) | 已落地 | `frontend/src/features/chat/components/PartialFailureBanner.tsx`(同切片) |
-| **stale-run sweeper** (心跳/lease 回收 `running` 僵尸行) | 在飞(工作区未提交) | `agent/sweeper.py` + 迁移 `0003_add_run_heartbeat` |
-| **adelete_thread on retention** (LangGraph checkpoint_* 真 GC) | 在飞(工作区未提交) | `agent/retention.py`(同切片;旧注释已修正) |
+| **stale-run sweeper** (心跳/lease 回收 `running` 僵尸行) | 已落地(0a9b8f5) | `agent/sweeper.py` + 迁移 `0003_add_run_heartbeat` |
+| **adelete_thread on retention** (LangGraph checkpoint_* 真 GC) | 已落地(0a9b8f5) | `agent/retention.py`(同切片;旧注释已修正) |
 | **`/agent/runs` 查询端点** + 对话历史持久化 | 未做 | `agent.run_metadata.list_runs_for_user` 已经写好,只缺 endpoint |
 | **`chat_sessions` / `chat_messages` 表** + per-thread 历史注入 | 未做 | P2.1 路线图 |
 | **Task routing** (意图 → 计划模板) | 未做 | P0.4 明确推迟到 plan 模板收敛后 |
@@ -129,7 +129,7 @@
 ## 四、按 ROI 排的落地顺序(状态截至 2026-10-14)
 
 **已落地(原列表第 4、5 项)**:
-- `adelete_thread` 联动 retention + stale-run sweeper — 同属 `agent-stale-run-sweeper` 切片(工作区未提交,配套 `-rollout` 兄弟;旧文档与代码不符的注释已一并修正)
+- `adelete_thread` 联动 retention + stale-run sweeper — 同属 `agent-stale-run-sweeper` 切片(已落地 0a9b8f5,配套 `-rollout` 兄弟;旧文档与代码不符的注释已一并修正)
 
 **仍然排队的(按 ROI)**:
 1. **Langfuse 自托管** (A 类) — 插两个 callback 就有结构化 trace,迭代 planner 从盲调变成数据驱动

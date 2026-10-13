@@ -28,6 +28,7 @@ The following counters MUST exist and MUST be incremented on the corresponding p
 - `agent_tool_calls_total{tool, ok}` — incremented on every tool dispatch outcome
 - `agent_tokens_total{role, model}` — incremented with every token delta and usage frame, tagged by `role` (planner / executor / rag / react) and `model`
 - `agent_tool_retries_total{tool, reason}` — incremented once per retry attempt (not on first-try success); `tool` is the registry tool name, `reason` is one of `tool_arg_invalid` (registry rejected the call's arguments) or `tool_execution_transient` (network timeout, 5xx, 408, 429)
+- `agent_runs_swept_total` — incremented by the stale-run sweeper with the number of `running` rows reaped in each sweep iteration (see `agent-run-sweeper`); zero-reap iterations do not increment it
 
 #### Scenario: Planner vs executor token split is visible
 
@@ -43,6 +44,11 @@ The following counters MUST exist and MUST be incremented on the corresponding p
 
 - **WHEN** the counter is sampled
 - **THEN** the `tool` label set is the registered tool set (no free-form strings from model output); the `reason` label set is the closed enumeration `tool_arg_invalid` or `tool_execution_transient` — no other values appear
+
+#### Scenario: Reaped stale runs are visible
+
+- **WHEN** the sweeper reaps N stale `running` rows
+- **THEN** `agent_runs_swept_total` increases by N on the `:9001/metrics` endpoint, and an operator can graph reaped-run volume over time
 
 ### Requirement: Per-user token budget guard fails closed
 

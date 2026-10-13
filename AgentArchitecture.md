@@ -163,7 +163,7 @@ Compatibility: additive-only. Old clients ignore unknown kinds and never send
 record — per repo convention, wire-shape changes must round-trip through *its*
 parser, not just producer-side tests.
 
-## 6. Run persistence (landed 2026-10-13; sweeper additions 2026-10-14, uncommitted)
+## 6. Run persistence (landed 2026-10-13; sweeper additions landed 2026-10-14 in 0a9b8f5)
 
 Three schemas, disjoint ownership:
 
@@ -185,7 +185,7 @@ Three schemas, disjoint ownership:
   are **non-fatal**: failure emits `error{code:"run_metadata_unavailable"}` but
   the user's run continues. Terminal writes are authoritative over a premature
   reap: `mark_completed` clears `error_code`.
-- **Heartbeat + sweeper** (uncommitted, `agent-stale-run-sweeper`): while a run
+- **Heartbeat + sweeper** (landed 2026-10-14 in 0a9b8f5, `agent-stale-run-sweeper`): while a run
   streams, `_heartbeat_loop` (`main.py:241`) touches `last_heartbeat_at` every
   30 s; `StaleRunSweeper` (`sweeper.py`) runs every 300 s and flips rows with a
   heartbeat older than 900 s to `failed`/`error_code='stale_run'` (conditional
@@ -278,7 +278,7 @@ agent/
   observability.py OTel setup/teardown + Prometheus counters
   run_metadata.py  agent.runs CRUD + asyncpg pool (heartbeat, sweep, retention SQL)
   retention.py     hourly hard-delete cron + checkpoint GC via adelete_thread
-  sweeper.py       stale-run reaper cron (agent-stale-run-sweeper, uncommitted)
+  sweeper.py       stale-run reaper cron (agent-stale-run-sweeper, landed 2026-10-14)
 migrations/        alembic: 0001 langgraph checkpoint, 0002 runs metadata, 0003 run heartbeat
 tests/             fakeredis + httpx.MockTransport; no live network needed
 ```
@@ -298,8 +298,9 @@ tests/             fakeredis + httpx.MockTransport; no live network needed
 - Run-history UX and DB-backed conversation history are later slices
   (`FUTURE_AGENT.md` §1.1 / §2.1).
 - 2026-10-14 status: run-state, planner-structured, and tool-retry slices
-  committed and archived; `agent-stale-run-sweeper` implemented in the working
-  tree (uncommitted); rollout siblings remain (PM-owned).
+  committed and archived; `agent-stale-run-sweeper` committed (`0a9b8f5`) and
+  archived (canonical spec: `openspec/specs/agent-run-sweeper/`); rollout
+  siblings remain (PM-owned).
 
 
 # What's not done yet(gap to MVP agent)
