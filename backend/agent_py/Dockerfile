@@ -6,9 +6,13 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1
 
 # Build deps for some wheels (cryptography, etc.) — keep small.
+# libpq5: runtime for psycopg (a transitive dep of
+# langgraph-checkpoint-postgres). Without it `import psycopg` raises
+# `no pq wrapper available` in slim images.
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     curl \
+    libpq5 \
     && rm -rf /var/lib/apt/lists/*
 
 # Create a venv so deps live in a single, easy-to-copy tree.
@@ -19,6 +23,8 @@ WORKDIR /app
 
 # Copy project metadata first for layer caching.
 COPY pyproject.toml ./
+COPY alembic.ini ./
+COPY migrations ./migrations
 COPY agent ./agent
 
 # Install the package itself (no editable mode in the image).
