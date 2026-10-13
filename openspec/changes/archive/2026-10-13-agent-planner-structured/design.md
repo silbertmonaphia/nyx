@@ -27,7 +27,7 @@ The cost model is explicitly cheap-planner / capable-executor (config default `P
 - Expose parse-failure rate as a Prometheus label so dashboards and alerts can detect regression.
 
 **Non-Goals:**
-- Replacing the executor's `_run_tool` schema validation (that's `agent-fault-tolerance` slice 4 follow-up).
+- Replacing the executor's `_run_tool` schema validation (that's `agent-tool-dispatch-retry` slice 4 follow-up).
 - Adding JSON-mode `ResponseFormat` to the Go-side `internal/llm/` provider seam (that's `llm-structured-output` / `internal/llm/{openai,vllm}/client.go` §0.1).
 - Storing the parser-error history per `(user_id, run_id)` for analytics. Out of scope; counter-only.
 - Migrating the planner to a non-`ChatOpenAI` client (Anthropic, Cohere, etc.). Future work.

@@ -103,5 +103,5 @@ The Go chat proxy (`internal/chat/agent_proxy.go`), RAG bridge, MCP, tool regist
   - Connection string lives in env, not logs. `asyncpg` exceptions are wrapped; raw connection errors never reach the SSE wire.
 - **Roadmap**:
   - Tick `FUTURE_AGENT.md` §1.1 items as they land (`Run`/`Step` typed values in `internal/reqctx/` marked N/A since implementation moved to Python; DB-backed run state; run TTL).
-  - Slice 4 (`agent-fault-tolerance`) builds directly on top of `PostgresSaver` — mid-iteration react resume is free; only retry-on-malformed-tool-args and planner-self-check need building.
+  - Slice 4 (`agent-tool-dispatch-retry`) builds directly on top of `PostgresSaver` — mid-iteration react resume is free; only retry-on-malformed-tool-args, transient tool execution, and the partial-failure banner need building.
   - Slice 5 (`agent-cross-session-memory`) joins `agent.runs` against slice 5's session tables (cross-schema join; ownerships stay split — Python owns `agent.*`, Go owns `public.*`).

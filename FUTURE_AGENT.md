@@ -161,7 +161,7 @@ Long runs inflate the model's context window. **Compression (older-step summaris
 | 1b | `openspec/changes/agent-langgraph/` | `agent-python-service`, `agent-budget-guard-py`, `agent-rag-bridge`, `chat-agent-proxy` (Python orchestrator + Go chat proxy + Go RAG bridge) | when Python service lands |
 | 2 | `agent-run-state` | DB-backed Run/Step persistence (Python-side or Go-side — TBD) | when slice 1 is exercised |
 | 3 | `agent-task-routing` | intent → plan template plan | when recurring plan shapes emerge |
-| 4 | `agent-fault-tolerance` | retry on malformed tool args / planner self-check | after slice 1 has failure data |
+| 4 | `agent-tool-dispatch-retry` | retry on malformed tool args / transient tool execution + partial-failure banner | after slice 1 has failure data |
 | 5 | `agent-cross-session-memory` | `chat_sessions` / `chat_messages` + retention + summary + prefs | after privacy review |
 
 Tick the `[ ]` items above as each slice lands. Archive-after rule: both `agent-loop` (Go infra) and `agent-langgraph` (Python orchestrator) close together once the Python service is wired in prod.
