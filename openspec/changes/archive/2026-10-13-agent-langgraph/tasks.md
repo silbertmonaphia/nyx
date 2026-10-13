@@ -1,5 +1,7 @@
 # Tasks
 
+> **Scope of this change**: replace the Go agent orchestrator with a Python LangGraph implementation; add the Go chat SSE proxy; add the Go RAG bridge endpoint. Implementation is complete. **Production-rollout gates (manual smoke, 1-week CI green, env flips, rollback drill, archive) are deferred to `openspec/changes/agent-production-rollout/`** — that change owns the cross-cutting rollout for all three agent changes.
+
 ## 1. Remove Go agent package
 
 - [x] 1.1 Delete `backend/internal/agent/` (entire directory: `service.go`, `planner.go`, `executor.go`, `executor_react.go`, `executor_tool.go`, `budget.go`, `types.go`, `observability.go`, `metrics.go`, plus all tests) and verify `go build ./...` succeeds with no remaining references
@@ -70,7 +72,7 @@
 ## 11. End-to-end Go ↔ Python integration
 
 - [x] 11.1 New Go test `internal/chat/agent_proxy_integration_test.go`: brings up an `httptest.Server` returning canned Python SSE → asserts the chat handler's `POST /api/chat` response body byte-for-equals the canned SSE.
-- [ ] 11.2 Manual smoke test (requires docker compose): `make up`, trigger a chat that produces a `list_feeds` plan; verify the SSE stream contains `plan` → `step_start` → `tool_call` → `tool_result` → `step_end` → `delta` → `done` → `terminator` against the local stack.
+- [ ] 11.2 (moved) Manual smoke test (requires docker compose): `make up`, trigger a chat that produces a `list_feeds` plan; verify the SSE stream contains `plan` → `step_start` → `tool_call` → `tool_result` → `step_end` → `delta` → `done` → `terminator` against the local stack → see `agent-production-rollout/1.2`.
 
 ## 12. Reframe `FUTURE_AGENT.md` and `agent-loop`
 
@@ -83,9 +85,12 @@
 - [x] 13.1 Add `AGENT_ENABLED=true` (commented) and `PYTHON_AGENT_URL=http://agent:9000` (commented) to `backend/.env.example` and verify `make dev` boots with the agent path
 - [x] 13.2 Add `backend/agent_py/.env.example` with the full Python env surface from the proposal
 
-## 14. Rollout / production flip
+## 14. Deferred to `agent-production-rollout`
 
-- [ ] 14.1 Verify Python agent's pytest suite is green in CI for ≥1 week before flipping `AGENT_ENABLED=true` in production deploy env
-- [ ] 14.2 Flip `AGENT_ENABLED=true` + `PYTHON_AGENT_URL=https://agent.<prod-domain>` in production deploy env; document the rollout in deploy notes
-- [ ] 14.3 Rollback drill: set `AGENT_ENABLED=false` in a staging env and verify `/api/chat` reverts to single-turn behaviour with no other changes (the Go infra — provider seam, tool registry, MCP, RAG, chat SSE wire — is unaffected)
-- [ ] 14.4 Archive `agent-langgraph` once all 38 tasks are checked (after Python service is wired in prod). The `agent-loop` change is archived at the same time per the "archive-after" decision.
+> The five items below are cross-cutting production-rollout gates shared with `agent-loop` and `agent-run-state`. They moved out of this change to a single rollout change so the three implementation changes archive cleanly while the rollout work tracks as one workstream. See `openspec/changes/agent-production-rollout/tasks.md`.
+
+- [ ] 11.2 (moved) Manual smoke test against the local stack with a `list_feeds` plan → see `agent-production-rollout/1.2`.
+- [ ] 14.1 (moved) 1-week CI green before flipping `AGENT_ENABLED=true` in production → see `agent-production-rollout/2.1`.
+- [ ] 14.2 (moved) Flip `AGENT_ENABLED=true` + `PYTHON_AGENT_URL` in production + deploy notes → see `agent-production-rollout/2.3`.
+- [ ] 14.3 (moved) Rollback drill (`AGENT_ENABLED=false` in staging) → see `agent-production-rollout/2.4`.
+- [ ] 14.4 (moved) Archive once 14.1–14.3 clear (the "archive-after" decision is superseded: the three implementation changes archive now; only this rollout change remains open) → see `agent-production-rollout/2.5`.

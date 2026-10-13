@@ -79,7 +79,7 @@
   - Exits 0 on success, non-zero on failure.
 - [x] 9.4 Add `agent.depends_on: agent-migrate (condition: service_completed_successfully)`.
 - [x] 9.5 Add `PYTHON_AGENT_DATABASE_URL` to `backend/.env.example` (commented out; documented as required when `AGENT_ENABLED=true`).
-- [~] 9.6 Verify `make up` brings `db + redis + jaeger + backend + agent-migrate + agent + frontend` up. `make dev` boots backend + frontend; agent runs in compose (production-style) OR locally (dev-style with inline migrations). **Partial**: smoke caught two real Dockerfile bugs (missing `alembic.ini`/`migrations/` copy, missing `libpq5` for psycopg runtime) — both fixed in commit `4b75a96`. End-to-end migration exit-0 assertion not yet green (apt-mirror slowness blocked the rebuild in this session; subsequent rebuilds should complete). Re-run on a clean machine or after a `docker builder prune` to clear the broken layer cache.
+- [ ] 9.6 (moved) Verify `make up` brings `db + redis + jaeger + backend + agent-migrate + agent + frontend` up. `make dev` boots backend + frontend; agent runs in compose (production-style) OR locally (dev-style with inline migrations). **Partial progress**: smoke caught two real Dockerfile bugs (missing `alembic.ini`/`migrations/` copy, missing `libpq5` for psycopg runtime) — both fixed in commit `4b75a96`. The full-stack exit-0 assertion is deferred to the rollout change → see `agent-production-rollout/1.3`.
 
 ## 10. Tests
 
@@ -110,9 +110,11 @@
 - [x] 12.1 Add `PYTHON_AGENT_DATABASE_URL=postgresql://nyx:nyx@localhost:5433/nyx?options=-c search_path=langgraph,agent,public` (commented) to `backend/.env.example`. Verify `make dev` boots the agent path with inline migrations.
 - [x] 12.2 Add `backend/agent_py/.env.example` with `PYTHON_AGENT_DATABASE_URL` and the retention envs.
 
-## 13. Rollout / production flip
+## 13. Deferred to `agent-production-rollout`
 
-- [ ] 13.1 Verify Python agent's pytest suite is green in CI for ≥1 week before flipping production traffic to `AGENT_ENABLED=true` with `PYTHON_AGENT_DATABASE_URL` set. *(Time-gated: 1-week green-window. CI job `agent-alembic-check` added in commit `e73339c`; full pytest run is in `backend-test`'s existing setup once `TEST_ASYNC_PG_DSN` is wired into CI's postgres service.)*
-- [x] 13.2 Document the rollout in deploy notes: `agent-migrate` runs as part of the release pipeline before `agent` replicas roll out. Operationally: `alembic current` on the production agent-migrate exit confirms the head revision is applied. — Documented at `docs/agent-deployment.md` (commit `3d26f1b`). Two schemas (`langgraph`, `agent`) reachable via the configured DSN; `public` is owned by Go and the Python service never reads it.
-- [ ] 13.3 Rollback drill: drop both new schemas entirely (`DROP SCHEMA agent CASCADE; DROP SCHEMA langgraph CASCADE`) in a staging env and verify `/api/chat` reverts to single-run behaviour (no resume) with no other changes. `AGENT_ENABLED=false` reverts to no checkpointer. *(Staging-gated. Runbook written at `docs/runbooks/agent-run-state-rollback.md` (commit `52cd2c0`); the actual drill awaits a staging env with the `app` profile enabled.)*
-- [ ] 13.4 Archive `agent-run-state` once all tasks are checked. *(Blocked by 13.1 + 13.3; not archivable yet.)*
+> The rollout gates below are shared with `agent-loop` and `agent-langgraph`. They moved out of this change to a single rollout change so the three implementation changes archive cleanly while the rollout work tracks as one workstream. See `openspec/changes/agent-production-rollout/tasks.md`.
+
+- [x] 13.2 Document the rollout in deploy notes: `agent-migrate` runs as part of the release pipeline before `agent` replicas roll out. Operationally: `alembic current` on the production agent-migrate exit confirms the head revision is applied. — Documented at `docs/agent-deployment.md` (commit `3d26f1b`). Two schemas (`langgraph`, `agent`) reachable via the configured DSN; `public` is owned by Go and the Python service never reads it. **Kept in-place as done**: this was the implementation-side doc and it shipped with this change.
+- [ ] 13.1 (moved) 1-week CI green before flipping production traffic to `AGENT_ENABLED=true` → see `agent-production-rollout/2.1`.
+- [ ] 13.3 (moved) Rollback drill (drop both schemas in staging, verify `/api/chat` reverts to single-run) → see `agent-production-rollout/2.4`. Runbook written at `docs/runbooks/agent-run-state-rollback.md` (commit `52cd2c0`).
+- [ ] 13.4 (moved) Archive `agent-run-state` → superseded: this change archives now (implementation complete); the rollout change archives when 13.1 + 13.3 clear → see `agent-production-rollout/2.5`.

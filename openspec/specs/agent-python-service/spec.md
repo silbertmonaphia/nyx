@@ -66,19 +66,24 @@ The orchestrator SHALL emit SSE frames in this order over a run: one `plan` fram
 - **WHEN** a client subscribes and parses every event kind
 - **THEN** it sees `plan` first, then per-step frames, then `done`, then `terminator`, and the user sees tool names + final reply in order
 
-### Requirement: Authenticated callers only
+### Requirement: Caller supplies verified user id via header
 
-The service SHALL require a Bearer access token in the `Authorization` header on `/agent/run` and SHALL reject any request without one with HTTP 401 before invoking the orchestrator. The user identifier used for per-owner scoping and budget enforcement SHALL be the identifier embedded in the verified JWT (not the request body).
+The service SHALL require the `X-Nyx-User-Id` request header on `/agent/run` and SHALL reject any request without it with HTTP 400 before invoking the orchestrator. The value MUST parse as an integer; non-integer values are rejected with HTTP 400. The Python service SHALL NOT verify JWTs — the network boundary (compose bridge / k8s NetworkPolicy restricting ingress to the backend) is the trust boundary at this hop. The `Authorization` bearer token is forwarded as a passthrough to the MCP and RAG bridges, which re-verify the JWT themselves.
 
-#### Scenario: Missing token rejected
+#### Scenario: Missing header rejected
 
-- **WHEN** `POST /agent/run` arrives without `Authorization: Bearer <token>`
-- **THEN** the service returns HTTP 401 and the orchestrator does not run
+- **WHEN** `POST /agent/run` arrives without `X-Nyx-User-Id`
+- **THEN** the service returns HTTP 400 with `detail` mentioning the header name and the orchestrator does not run
 
-#### Scenario: User id read from verified JWT
+#### Scenario: Non-integer header value rejected
 
-- **WHEN** a request arrives with a valid Bearer token
-- **THEN** the orchestrator reads the user identifier from the token claims (not from the request body's `user_id` field) and uses it for per-owner RAG retrieval, tool dispatch via MCP, and the budget counter key
+- **WHEN** `POST /agent/run` arrives with `X-Nyx-User-Id` that does not parse as an integer
+- **THEN** the service returns HTTP 400 with `detail` explaining the requirement
+
+#### Scenario: User id read from header, not body
+
+- **WHEN** a request arrives with a valid `X-Nyx-User-Id` header
+- **THEN** the orchestrator uses that value (not anything from the request body) for per-owner RAG retrieval, tool dispatch via MCP, and the budget counter key
 
 ### Requirement: Configurable via environment
 

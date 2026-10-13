@@ -1,5 +1,7 @@
 # Tasks
 
+> **Scope of this change**: implementation of the Go agent infra (provider seam, tool registry, MCP shim, agent loop, observability) plus the frontend SSE parser for the new event kinds. Implementation is complete. **Production-rollout gates (manual smoke in prod, 1-week CI green, env flips, rollback drill) are deferred to `openspec/changes/agent-production-rollout/`** — that change owns the cross-cutting rollout.
+
 ## 1. Provider seam — tool-call support
 
 - [x] 1.1 Add `Tool` / `ToolCall` / `Delta` types to `backend/internal/llm/provider.go` and verify `go build ./...` succeeds and `go test ./internal/llm/...` passes (no consumer changes yet)
@@ -24,6 +26,8 @@
 
 ## 3. Agent loop + observability (behind `AGENT_ENABLED=false`)
 
+> **Implementation note (2026-10)**: the Go agent package (this section) was deleted in `agent-langgraph` and replaced by a Python LangGraph orchestrator. The Go tests for the deleted package are not part of the live test surface; the behaviour is covered by the Python tests in `agent-langgraph` and `agent-run-state`. The Go infra (provider seam, tool registry, MCP, chat SSE wire) survives and is what the Python service consumes.
+
 - [x] 3.1 Create `backend/internal/agent/` package skeleton (`service.go`, `planner.go`, `executor.go`, `budget.go`, `types.go`) with the planner JSON schema per design §6 and verify `go build ./...` succeeds
 - [x] 3.2 Implement the planner: one `provider.Chat` call with structured JSON output and verify with `internal/agent/planner_test.go` using a stubbed `llm.Provider` that returns canned plans, including rejection of plans exceeding `AGENT_PLAN_MAX_STEPS`
 - [x] 3.3 Implement the executor: sequential step runner, supports step kinds `rag` / `tool` / `llm` / `react` with iteration cap, and verify with `internal/agent/executor_test.go` using a stubbed registry + RAG service
@@ -46,12 +50,14 @@
 ## 5. Dev-environment flip
 
 - [x] 5.1 Set `AGENT_ENABLED=true` in `backend/.env.example` (local dev only) and verify `make dev` boots with the agent path
-- [ ] 5.2 Manual smoke test: trigger a chat that produces a `list_feeds` plan and verify the SSE stream shows `plan` → `step_start` → `tool_call` → `tool_result` → `step_end` → `delta` → `done` against the local stack
 - [x] 5.3 Update `FUTURE_AGENT.md` to tick the items this change shipped (P0.1, P0.2, P0.3, P1.2 partial — per the roadmap doc's checkbox convention) and verify by `grep -E '\[ \]' FUTURE_AGENT.md` that remaining items stay open
 
-## 6. Rollout / production flip
+## 6. Deferred to `agent-production-rollout`
 
-- [ ] 6.1 Verify both providers' tool-call integration tests have been green in CI for ≥1 week (recorded in deploy notes) before flipping `LLM_FALLBACK_TOOLS_ENABLED=true`
-- [ ] 6.2 Flip `LLM_FALLBACK_TOOLS_ENABLED=true` in production env and verify the per-provider failover paths still emit the same `Delta` shape end-to-end via a canary run
-- [ ] 6.3 Flip `AGENT_ENABLED=true` in production via deploy env and verify `agent_runs_total{kind,status}` and `agent_budget_exhausted_total` counters are reachable in Prometheus; document the rollout in deploy notes
-- [ ] 6.4 Rollback drill: set `AGENT_ENABLED=false` in a staging env and verify `/api/chat` reverts to single-turn behaviour with no other changes (the provider seam extensions are non-breaking; the registry migration is non-breaking)
+> The four items below are cross-cutting production-rollout gates shared with `agent-langgraph` and `agent-run-state`. They moved out of this change to a single rollout change so the three implementation changes archive cleanly while the rollout work tracks as one workstream. See `openspec/changes/agent-production-rollout/tasks.md`.
+
+- [ ] 5.2 (moved) Manual smoke test against the local stack with a `list_feeds` plan → see `agent-production-rollout/1.1`.
+- [ ] 6.1 (moved) 1-week CI green before flipping `LLM_FALLBACK_TOOLS_ENABLED=true` → see `agent-production-rollout/2.1`.
+- [ ] 6.2 (moved) Flip `LLM_FALLBACK_TOOLS_ENABLED=true` in production + canary → see `agent-production-rollout/2.2`.
+- [ ] 6.3 (moved) Flip `AGENT_ENABLED=true` in production + Prometheus reachability → see `agent-production-rollout/2.3`.
+- [ ] 6.4 (moved) Rollback drill (AGENT_ENABLED=false in staging) → see `agent-production-rollout/2.4`.
