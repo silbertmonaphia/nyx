@@ -25,5 +25,5 @@
 
 ## 3. Archive
 
-- [x] 3.1 After §1–§2 are checked: archive `agent-planner-structured` and this change. Verify `openspec validate --archived` passes post-archive.
-  Archived 2026-10-13 (§1–§2 all checked); `openspec validate --archived`: **✓ this change and `agent-planner-structured` both pass** (2 passed of 5 — the other 3 failures are pre-existing archives with incomplete tasks: agent-loop 39/45, agent-run-state 55/59, +1; unrelated to the planner work).
+- [ ] 3.1 After §1–§2 are checked: archive `agent-planner-structured` and this change. Verify `openspec validate --archived` passes post-archive.
+  Implementation change `agent-planner-structured` archived 2026-10-13. **This rollout change is deliberately left active — the PM archives it** (operator instruction 2026-10-13: rollout changes are PM territory; the dev session does not archive rollout siblings). Gates §1–§2 all passed with the evidence recorded above; `openspec validate --archived` passed for both changes during the gate run.
