@@ -607,4 +607,113 @@ describe('chatService.streamMessage', () => {
       { kind: 'terminator' },
     ]);
   });
+
+  // --- agent-tool-dispatch-retry wire frames ------------------------
+  // The two "frozen fixture" frames below are byte-for-byte the strings
+  // asserted by the Python producer tests
+  // (backend/agent_py/tests/test_executor.py :: test_tool_result_wire_fixture_retry_count
+  //  and :: test_partial_failure_note_wire_fixture). If either runtime
+  // changes the wire shape, both sides fail together — the producer and
+  // the consumer cannot drift silently.
+
+  it('parses the frozen tool_result retry_count fixture', async () => {
+    fetchMock.mockResolvedValueOnce(
+      sseResponse([
+        'event: tool_result\ndata: {"step_id":"step_1","call_id":"c1","ok":true,"result":{"items":[]},"error":null,"retry_count":2}\n\n' +
+          'event: done\ndata: {"usage":{"prompt_tokens":0,"completion_tokens":0,"total_tokens":0}}\n\n' +
+          'data: [DONE]\n\n',
+      ]),
+    );
+
+    const events: unknown[] = [];
+    for await (const e of chatService.streamMessage(
+      [{ role: 'user', content: 'hi' }],
+      new AbortController().signal,
+    )) {
+      events.push(e);
+    }
+
+    expect(events[0]).toEqual({
+      kind: 'tool_result',
+      step_id: 'step_1',
+      call_id: 'c1',
+      ok: true,
+      result: { items: [] },
+      error: undefined,
+      retryCount: 2,
+    });
+  });
+
+  it('parses the frozen partial_failure note fixture', async () => {
+    fetchMock.mockResolvedValueOnce(
+      sseResponse([
+        'event: note\ndata: {"text":"Run diverged from the plan","provider":null,"kind":"partial_failure","last_step_id":null,"run_id":null,"failed_steps":["step_3","step_5"]}\n\n' +
+          'data: [DONE]\n\n',
+      ]),
+    );
+
+    const events: unknown[] = [];
+    for await (const e of chatService.streamMessage(
+      [{ role: 'user', content: 'hi' }],
+      new AbortController().signal,
+    )) {
+      events.push(e);
+    }
+
+    expect(events[0]).toEqual({
+      kind: 'partial_failure',
+      failedSteps: ['step_3', 'step_5'],
+    });
+  });
+
+  it('drops malformed partial_failure frames without stopping the loop', async () => {
+    const sse =
+      'event: delta\ndata: {"delta":"ok"}\n\n' +
+      // failed_steps missing
+      'event: note\ndata: {"text":"x","provider":null,"kind":"partial_failure"}\n\n' +
+      // failed_steps contains a non-string
+      'event: note\ndata: {"kind":"partial_failure","failed_steps":["a",5]}\n\n' +
+      'data: [DONE]\n\n';
+    fetchMock.mockResolvedValueOnce(sseResponse([sse]));
+
+    const events: unknown[] = [];
+    for await (const e of chatService.streamMessage(
+      [{ role: 'user', content: 'hi' }],
+      new AbortController().signal,
+    )) {
+      events.push(e);
+    }
+
+    expect(events).toEqual([
+      { kind: 'delta', delta: 'ok' },
+      { kind: 'terminator' },
+    ]);
+  });
+
+  it('leaves retryCount undefined when the server frame predates the field', async () => {
+    fetchMock.mockResolvedValueOnce(
+      sseResponse([
+        'event: tool_result\ndata: {"step_id":"step_1","call_id":"c1","ok":false,"error":"tool_call_failed"}\n\n' +
+          'data: [DONE]\n\n',
+      ]),
+    );
+
+    const events: unknown[] = [];
+    for await (const e of chatService.streamMessage(
+      [{ role: 'user', content: 'hi' }],
+      new AbortController().signal,
+    )) {
+      events.push(e);
+    }
+
+    expect(events[0]).toEqual({
+      kind: 'tool_result',
+      step_id: 'step_1',
+      call_id: 'c1',
+      ok: false,
+      result: undefined,
+      error: 'tool_call_failed',
+      retryCount: undefined,
+    });
+  });
 });

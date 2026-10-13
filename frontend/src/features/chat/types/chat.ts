@@ -53,6 +53,25 @@ export type ChatError = {
 export type ChatNote = { kind: "note"; text: string; provider: string };
 export type ChatTerminator = { kind: "terminator" };
 
+// New in the agent-tool-dispatch-retry slice: the orchestrator emits
+// `note{kind: "partial_failure", failed_steps: [...]}` SSE frames
+// just before the run's final `delta` frames when the run diverged
+// from the plan. Parsed by chatService.ts into this discriminated
+// shape and surfaced on the assistant message as `partialFailure`
+// so `<PartialFailureBanner>` renders the warning above the final
+// answer without expanding the `agent-steps` disclosure.
+//
+// The shape is additive — old clients that ignore unknown note
+// kinds continue to render the final answer unchanged. The parser
+// only emits this variant when the inner `kind === "partial_failure"`
+// discriminator is present; legacy `note{text, provider}` frames
+// flow through `ChatNote` exactly as before.
+export type PartialFailureNote = {
+  kind: "partial_failure";
+  failedSteps: string[];
+};
+export type ChatPartialFailure = PartialFailureNote;
+
 // Step kinds the planner may emit. Locked per agent-loop design §6;
 // matching backend/internal/agent/types.go StepKind constants.
 export const stepKindSchema = z.enum(["rag", "tool", "llm", "react"]);
@@ -98,6 +117,10 @@ export type ChatToolResult = {
   ok: boolean;
   result?: unknown;
   error?: string;
+  // Additive retry counter (agent-tool-dispatch-retry §3.2): retries made
+  // for this dispatch — 0 on first-try success, N after N retries.
+  // Absent on frames from servers that predate the field.
+  retryCount?: number;
 };
 
 export type ChatStepEnd = {
@@ -117,7 +140,8 @@ export type ChatEvent =
   | ChatStepStart
   | ChatToolCall
   | ChatToolResult
-  | ChatStepEnd;
+  | ChatStepEnd
+  | ChatPartialFailure;
 
 /**
  * UI-side per-step record. Lives on `ChatMessage` and is rebuilt as
@@ -138,6 +162,9 @@ export interface ChatStep {
   toolArgs?: unknown;
   toolResult?: unknown;
   reason?: string;
+  // Retries made for the step's latest tool dispatch (latest-result
+  // semantics, like toolResult). Rendered as a small badge when > 0.
+  retryCount?: number;
 }
 
 /**

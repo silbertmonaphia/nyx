@@ -53,6 +53,12 @@ agent_planner_parse_failures_total = Counter(
     labelnames=("retry",),
 )
 
+agent_tool_retries_total = Counter(
+    "agent_tool_retries_total",
+    "Tool dispatch retries, labelled by tool name and reason (tool_arg_invalid | tool_execution_transient).",
+    labelnames=("tool", "reason"),
+)
+
 _provider: TracerProvider | None = None
 
 

@@ -50,6 +50,31 @@ class Settings(BaseSettings):
     # symmetric to `llm_fallback_*`.
     planner_structured_enabled: bool = True
 
+    # --- Tool-dispatch robustness (openspec/changes/agent-tool-dispatch-retry) ---
+    # Maximum retries on a tool-dispatch failure from the executor.
+    # Covers two failure classes: registry-rejected tool calls
+    # (Pydantic validation, missing required field, wrong type) and
+    # transient errors from the tool's remote call (network, MCP /
+    # RAG bridge timeouts). 0 = no retry (single attempt). Negative
+    # values are rejected at startup. The budget is per-step and
+    # per-tool — a retry exhausted on one tool does not consume budget
+    # for sibling tools in the same step, and a retry exhausted on one
+    # step does not consume budget for later steps.
+    tool_retry_max: int = 2
+    # Base backoff between retries on transient tool-execution errors.
+    # Actual sleep is `min(base * 2^attempt + jitter, ceiling)` with
+    # jitter ±20%. Only the transient path uses backoff; the
+    # validator-feedback path re-prompts the model immediately (no
+    # sleep). Integer milliseconds to keep the math round and avoid
+    # floating-point drift across the retry loop.
+    tool_retry_backoff_base_ms: int = 250
+    # Hard ceiling on the per-attempt backoff sleep. Cumulative
+    # wall-clock across the step's transient retries is bounded by
+    # `tool_retry_max * ceiling`; the step's overall timeout is
+    # enforced by the existing `AGENT_STEP_TIMEOUT` semantics, not by
+    # the retry loop.
+    tool_retry_backoff_ceiling_ms: int = 5000
+
     # --- Backend bridges ---
     # Host-dev defaults: `make dev-agent` runs the agent on the host and
     # `make dev-backend` serves on :8080 there. docker-compose.yml sets the
@@ -125,6 +150,23 @@ class Settings(BaseSettings):
             raise ValueError(
                 "PYTHON_AGENT_PLANNER_RETRY_MAX must be >= 0; "
                 f"got {self.planner_retry_max}"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _validate_tool_retry(self) -> Settings:
+        """Refuse to start when the tool-dispatch retry cap is negative.
+
+        Per `openspec/changes/agent-tool-dispatch-retry` (Configurable via
+        environment delta): `PYTHON_AGENT_TOOL_RETRY_MAX` must be ≥ 0.
+        0 means one attempt with no retry (the retry loop's outer bound is
+        `tool_retry_max`); any negative value is an operator mistake
+        and breaks the closed `[0, retry_max]` semantics.
+        """
+        if self.tool_retry_max < 0:
+            raise ValueError(
+                "PYTHON_AGENT_TOOL_RETRY_MAX must be >= 0; "
+                f"got {self.tool_retry_max}"
             )
         return self
 

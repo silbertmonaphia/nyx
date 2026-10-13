@@ -343,3 +343,124 @@ describe('ChatPanel agent steps', () => {
     expect(row).toHaveAttribute('data-step-status', 'ok');
   });
 });
+
+describe('ChatPanel partial-failure banner', () => {
+  beforeEach(() => {
+    resetStore();
+    mockedService.streamMessage.mockReset();
+  });
+
+  it('renders the banner with the failed step ids', () => {
+    useChatStore.setState({
+      messages: [
+        {
+          role: 'assistant',
+          content: 'Answer with gaps.',
+          partialFailure: { failedSteps: ['step_2', 'step_4'] },
+        },
+      ],
+    });
+    render(<ChatPanel open={true} onOpenChange={vi.fn()} />);
+
+    const banner = screen.getByTestId('chat-partial-failure-banner');
+    expect(banner).toHaveAttribute('data-failed-steps', 'step_2,step_4');
+    expect(banner).toHaveTextContent('step_2');
+    expect(banner).toHaveTextContent('step_4');
+    expect(banner).toHaveTextContent(/may be incomplete/);
+  });
+
+  it('renders the plan-level variant when no step ids are present', () => {
+    useChatStore.setState({
+      messages: [
+        { role: 'assistant', content: '', partialFailure: { failedSteps: [] } },
+      ],
+    });
+    render(<ChatPanel open={true} onOpenChange={vi.fn()} />);
+
+    const banner = screen.getByTestId('chat-partial-failure-banner');
+    expect(banner).toHaveAttribute('data-failed-steps', '');
+    expect(banner).toHaveTextContent('Run did not reach a terminal step');
+  });
+
+  it('does not render the banner for clean runs', () => {
+    useChatStore.setState({
+      messages: [{ role: 'assistant', content: 'All good.' }],
+    });
+    render(<ChatPanel open={true} onOpenChange={vi.fn()} />);
+
+    expect(screen.queryByTestId('chat-partial-failure-banner')).toBeNull();
+  });
+
+  it('shows the banner without expanding the agent-steps disclosure', () => {
+    useChatStore.setState({
+      messages: [
+        {
+          role: 'assistant',
+          content: 'Answer.',
+          partialFailure: { failedSteps: ['step_1'] },
+          steps: [
+            {
+              id: 'step_1',
+              kind: 'tool',
+              status: 'failed',
+              reason: 'tool unavailable',
+            },
+          ],
+        },
+      ],
+    });
+    render(<ChatPanel open={true} onOpenChange={vi.fn()} />);
+
+    // The disclosure is collapsed (no running steps) — the banner must
+    // still be visible, i.e. it is NOT nested inside the disclosure.
+    const disclosure = screen.getByTestId('chat-agent-steps');
+    expect(disclosure).not.toHaveAttribute('open');
+    expect(screen.getByTestId('chat-partial-failure-banner')).toBeInTheDocument();
+  });
+
+  it('renders the retry badge on a step that was retried', () => {
+    useChatStore.setState({
+      messages: [
+        {
+          role: 'assistant',
+          content: 'Answer.',
+          steps: [
+            {
+              id: 'step_1',
+              kind: 'tool',
+              status: 'ok',
+              toolName: 'list_feeds',
+              retryCount: 2,
+            },
+          ],
+        },
+      ],
+    });
+    render(<ChatPanel open={true} onOpenChange={vi.fn()} />);
+
+    expect(screen.getByTestId('chat-agent-step-retry')).toHaveTextContent('↻ 2');
+  });
+
+  it('omits the retry badge on first-try success', () => {
+    useChatStore.setState({
+      messages: [
+        {
+          role: 'assistant',
+          content: 'Answer.',
+          steps: [
+            {
+              id: 'step_1',
+              kind: 'tool',
+              status: 'ok',
+              toolName: 'list_feeds',
+              retryCount: 0,
+            },
+          ],
+        },
+      ],
+    });
+    render(<ChatPanel open={true} onOpenChange={vi.fn()} />);
+
+    expect(screen.queryByTestId('chat-agent-step-retry')).toBeNull();
+  });
+});

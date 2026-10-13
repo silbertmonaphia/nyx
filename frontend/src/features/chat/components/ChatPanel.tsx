@@ -11,6 +11,7 @@ import { Button } from "~/components/ui/Button";
 import { Textarea } from "~/components/ui/Textarea";
 import { cn } from "~/utils/cn";
 import { useChat } from "../hooks/useChat";
+import { PartialFailureBanner } from "./PartialFailureBanner";
 import type { ChatStep } from "../types/chat";
 
 /**
@@ -70,6 +71,15 @@ const StepRow: React.FC<{ step: ChatStep }> = ({ step }) => {
         {step.toolName && (
           <span className="font-medium" data-testid="chat-agent-step-tool">
             {step.toolName}
+          </span>
+        )}
+        {typeof step.retryCount === "number" && step.retryCount > 0 && (
+          <span
+            className="text-[10px] text-amber-600 dark:text-amber-400"
+            data-testid="chat-agent-step-retry"
+            title={`succeeded after ${step.retryCount} retr${step.retryCount === 1 ? "y" : "ies"}`}
+          >
+            ↻ {step.retryCount}
           </span>
         )}
         <span className="ml-auto text-[10px] uppercase tracking-wide text-muted-foreground">
@@ -225,6 +235,11 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ open, onOpenChange }) => {
                     : "bg-background border",
                 )}
               >
+                {m.role === "assistant" && m.partialFailure && (
+                  <PartialFailureBanner
+                    failedSteps={m.partialFailure.failedSteps}
+                  />
+                )}
                 {m.content || (isStreaming && m.role === "assistant" ? "…" : "")}
                 {m.role === "assistant" &&
                   m.notes?.map((n, ni) => (

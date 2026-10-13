@@ -32,7 +32,7 @@ When a tool dispatch fails because the registry rejected the call's arguments (P
 
 ### Requirement: Transient tool-execution failures are retried with bounded backoff
 
-When a tool dispatch fails with a transient error (network timeout, connection reset, 5xx from the MCP or RAG bridge, 408 / 429 from any HTTP-backed tool), the executor SHALL retry with exponential backoff (base 250 ms, factor 2, jittered) bounded by `PYTHON_AGENT_TOOL_RETRY_MAX` attempts and a hard ceiling of 5 s between attempts. Non-retryable errors (validation, ownership / scope failure, 4xx other than 408 / 429) MUST fail the step immediately with no retry. The classification of retryable vs non-retryable lives in the executor, not the registry; the registry only returns the typed error class.
+When a tool dispatch fails with a transient error (network timeout, connection reset, 5xx from the MCP or RAG bridge, 408 / 429 from any HTTP-backed tool), the executor SHALL retry with exponential backoff (base 250 ms, factor 2, jittered) bounded by `PYTHON_AGENT_TOOL_RETRY_MAX` attempts and a hard ceiling of 5 s between attempts. Non-retryable errors (ownership / scope failure, authentication failure, 4xx other than 408 / 429) MUST fail the step immediately with no retry. Registry validation rejections are NOT in this class — they follow the tool-arg retry path above. The classification of retryable vs non-retryable lives in the executor, not the registry; the registry only returns the typed error class.
 
 #### Scenario: Network timeout is retried
 

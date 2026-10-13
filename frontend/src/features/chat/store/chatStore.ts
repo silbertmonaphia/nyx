@@ -25,6 +25,11 @@ export interface ChatMessage {
   // — the store is not persisted (FUTURE_FRONTEND.md §10), so this
   // field stays in-memory only and never lands in localStorage.
   steps?: ChatStep[];
+  // Partial-failure signal (agent-tool-dispatch-retry): set when the
+  // stream carried a `note{kind: "partial_failure"}` frame — the run
+  // diverged from the plan and the answer below may be incomplete.
+  // Drives the <PartialFailureBanner> above the final answer.
+  partialFailure?: { failedSteps: string[] };
 }
 
 interface ChatState {
@@ -297,9 +302,25 @@ export const useChatStore = create<ChatState>((set, get) => ({
               steps[idx] = {
                 ...steps[idx],
                 toolResult: event.ok ? event.result : event.error,
+                retryCount: event.retryCount,
               };
               next[assistantIndex] = { ...target, steps };
             }
+            return { messages: next };
+          });
+        } else if (event.kind === "partial_failure") {
+          // The orchestrator's "run diverged from the plan" signal.
+          // Attach it to the streaming assistant row so the final
+          // answer renders with a warning banner above it. Deliberately
+          // does NOT touch content — the answer itself still renders.
+          set((state) => {
+            const next = state.messages.slice();
+            const target = next[assistantIndex];
+            if (!target || target.role !== "assistant") return state;
+            next[assistantIndex] = {
+              ...target,
+              partialFailure: { failedSteps: event.failedSteps },
+            };
             return { messages: next };
           });
         } else if (event.kind === "step_end") {

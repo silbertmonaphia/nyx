@@ -8,18 +8,7 @@ from __future__ import annotations
 
 from typing import Any, TypedDict
 
-from .types import (
-    ChatMessage,
-    DoneEvent,
-    ErrorEvent,
-    Event,
-    NoteEvent,
-    Plan,
-    PlanEvent,
-    StepEndEvent,
-    StepStartEvent,
-    TerminatorEvent,
-)
+from .types import ChatMessage, Event, Plan
 
 
 class AgentState(TypedDict, total=False):
@@ -34,6 +23,14 @@ class AgentState(TypedDict, total=False):
     plan: Plan | None
     step_outputs: dict[str, Any]
     cumulative_tokens: int
+
+    # --- Tool-dispatch retry budget (agent-tool-dispatch-retry) ---
+    # Per-(step, tool) retry consumption: step_id → tool name → retry
+    # attempts consumed in that step. Keyed by step id, so a fresh step
+    # naturally starts with a fresh budget while ReAct iterations within
+    # one step share their tool's budget (design.md §Open Questions,
+    # resolved 2026-10-13: per-step, per-tool across the entire react step).
+    tool_retry_used: dict[str, dict[str, int]]
 
     # --- Event stream (replayed to the SSE emitter per node completion) ---
     # NOTE: when a checkpointer is wired (production), ALL channels —
@@ -65,6 +62,7 @@ def new_state(
         plan=None,
         step_outputs={},
         cumulative_tokens=0,
+        tool_retry_used={},
         events_so_far=[],
         terminal_status="ok",
         terminal_reason=None,

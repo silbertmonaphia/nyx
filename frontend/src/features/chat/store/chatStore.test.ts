@@ -120,6 +120,90 @@ describe('useChatStore', () => {
       expect(assistant?.content).toBe('Hello');
     });
 
+    it('attaches a partial-failure signal to the assistant row', async () => {
+      mockedService.streamMessage.mockImplementationOnce(
+        (messages: unknown, signal: AbortSignal) =>
+          makeStream(
+            [
+              { kind: 'delta', delta: 'partial ' },
+              { kind: 'partial_failure', failedSteps: ['step_2'] },
+              { kind: 'delta', delta: 'answer' },
+            ],
+            signal,
+          ),
+      );
+
+      act(() => {
+        void useChatStore.getState().send('hi');
+      });
+
+      await waitFor(() => {
+        const assistant = useChatStore
+          .getState()
+          .messages.find((m) => m.role === 'assistant');
+        expect(assistant?.partialFailure).toEqual({ failedSteps: ['step_2'] });
+      });
+
+      await act(async () => {
+        releaseStream();
+      });
+
+      // Additive: the signal rides alongside the answer, it does not
+      // replace or truncate the streamed content.
+      const assistant = useChatStore
+        .getState()
+        .messages.find((m) => m.role === 'assistant');
+      expect(assistant?.content).toBe('partial answer');
+      expect(assistant?.partialFailure).toEqual({ failedSteps: ['step_2'] });
+    });
+
+    it('records retryCount from tool_result frames on the step row', async () => {
+      mockedService.streamMessage.mockImplementationOnce(
+        (messages: unknown, signal: AbortSignal) =>
+          makeStream(
+            [
+              { kind: 'step_start', step_id: 'step_1', step_kind: 'tool' },
+              {
+                kind: 'tool_call',
+                step_id: 'step_1',
+                call_id: 'c1',
+                name: 'list_feeds',
+                args: {},
+              },
+              {
+                kind: 'tool_result',
+                step_id: 'step_1',
+                call_id: 'c1',
+                ok: true,
+                result: { items: [] },
+                retryCount: 1,
+              },
+            ],
+            signal,
+          ),
+      );
+
+      act(() => {
+        void useChatStore.getState().send('hi');
+      });
+
+      await waitFor(() => {
+        const assistant = useChatStore
+          .getState()
+          .messages.find((m) => m.role === 'assistant');
+        expect(assistant?.steps?.[0]?.retryCount).toBe(1);
+      });
+
+      await act(async () => {
+        releaseStream();
+      });
+
+      const assistant = useChatStore
+        .getState()
+        .messages.find((m) => m.role === 'assistant');
+      expect(assistant?.steps?.[0]?.toolResult).toEqual({ items: [] });
+    });
+
     it('sets usage on the assistant row when an event:done arrives', async () => {
       mockedService.streamMessage.mockImplementationOnce(
         (messages: unknown, signal: AbortSignal) =>

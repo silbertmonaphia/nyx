@@ -17,11 +17,25 @@ class ToolAuthError(Exception):
 
 
 class ToolUnavailableError(Exception):
-    """Connect refused, timeout, or 5xx from the MCP server."""
+    """Connect refused, timeout, 5xx, 408, or 429 from the MCP server."""
 
 
 class ToolError(Exception):
     """JSON-RPC `error` response — semantic rejection (tool-not-found, validation, etc.)."""
+
+
+class ToolRejectedError(Exception):
+    """HTTP 4xx (other than 401/408/429) with no JSON-RPC error envelope.
+
+    Non-retryable: the request shape was rejected at the transport level and
+    retrying the same call cannot succeed. The executor fails the step
+    immediately (see agent-tool-dispatch-retry §4.4). `status_code` carries
+    the HTTP status for safe, non-leaking error text.
+    """
+
+    def __init__(self, message: str, status_code: int | None = None) -> None:
+        super().__init__(message)
+        self.status_code = status_code
 
 
 class ToolsClient:
@@ -107,8 +121,25 @@ class ToolsClient:
             raise ToolAuthError("MCP rejected the bearer token")
         if resp.status_code >= 500:
             raise ToolUnavailableError(f"MCP {resp.status_code}: {resp.text[:200]}")
+        if resp.status_code in (408, 429):
+            # Transient throttling / timeout — retryable with backoff.
+            raise ToolUnavailableError(f"MCP {resp.status_code}: retryable transport status")
         if resp.status_code != 200:
-            raise ToolError(f"MCP {resp.status_code}: {resp.text[:200]}")
+            # 4xx (other than 401/408/429). Status alone does not decide
+            # retryability: a body carrying a JSON-RPC error envelope is a
+            # semantic (registry) rejection and routes to the tool-arg
+            # retry path; a bare 4xx is a non-retryable transport rejection.
+            try:
+                data = resp.json()
+            except ValueError:
+                data = None
+            if isinstance(data, dict) and data.get("error") is not None:
+                err = data["error"]
+                msg = err.get("message", "tool error") if isinstance(err, dict) else str(err)
+                raise ToolError(f"{name}: {msg}")
+            raise ToolRejectedError(
+                f"MCP {resp.status_code}: {resp.text[:200]}", status_code=resp.status_code
+            )
 
         try:
             data = resp.json()

@@ -12,7 +12,8 @@ contract is byte-for-byte identical to what the Go chat handler emits today.
   `tool_result`, `step_end`, `delta`, `done`, `note`, `error`, `terminator`).
 - `GET /healthz` — 200 with `{"status":"ok"}` when Redis is reachable; 503 otherwise.
 - `GET /metrics` — Prometheus counters (`agent_runs_total`, `agent_steps_total`,
-  `agent_tool_calls_total`, `agent_tokens_total`, `agent_planner_parse_failures_total`).
+  `agent_tool_calls_total`, `agent_tokens_total`, `agent_planner_parse_failures_total`,
+  `agent_tool_retries_total`).
 
 ## Planner: structured output with bounded retry
 
@@ -70,6 +71,49 @@ See `openspec/changes/agent-planner-structured/` for the full rationale
 (why `json.loads` on free text fails at every model tier; how retries
 inject the validator's last error; cross-provider parity with vLLM
 `hermes` parser).
+
+## Tool dispatch: bounded retry on registry / transient failures
+
+The executor wraps every `tools.call(tc_name, args)` site in two retry
+loops that run in sequence — only one fires per failure class. Together
+they cover the two failure modes the planner-side retry deliberately
+leaves out: model-emitted tool calls that the registry rejects (Pydantic
+validation, missing required field, wrong type) and transient errors
+from the tool's remote call (network timeout, MCP / RAG bridge 5xx,
+408 / 429).
+
+| Env var                                     | Default | Purpose                                                                       |
+|---------------------------------------------|---------|-------------------------------------------------------------------------------|
+| `PYTHON_AGENT_TOOL_RETRY_MAX`               | `2`     | Retries on a tool-dispatch failure, capped at this value. 0 = no retry.       |
+| `PYTHON_AGENT_TOOL_RETRY_BACKOFF_BASE_MS`   | `250`   | Base backoff between transient retries. Effective sleep is `min(base * 2^n ± jitter, ceiling)`. |
+| `PYTHON_AGENT_TOOL_RETRY_BACKOFF_CEILING_MS`| `5000`  | Hard ceiling on the per-attempt backoff sleep.                                |
+
+- **Validator-feedback path** (registry rejected the call's arguments):
+  re-invoke the model up to `PYTHON_AGENT_TOOL_RETRY_MAX` times total,
+  appending the validator's error message to the re-prompt's final user
+  message under a `PREVIOUS_ATTEMPT_FAILED` block. No backoff sleep —
+  re-prompts are immediate. Budget is per-step and per-tool — exhaustion
+  in step A does not consume budget in step B.
+- **Transient-execution path** (network timeout, 5xx, 408, 429):
+  retry with exponential backoff (`min(base * 2^attempt + jitter, ceiling)`,
+  jitter ±20%). Non-retryable HTTP 4xx (other than 408 / 429) fails the
+  step immediately with no retry. The two retry paths MUST NOT both
+  fire on the same error — a validation error routes to the
+  validator-feedback path, a transport error routes here.
+
+The counter `agent_tool_retries_total{tool, reason}` exposes per-tool
+retry behaviour:
+
+- `reason="tool_arg_invalid"` — registry rejected the call's arguments.
+- `reason="tool_execution_transient"` — transient error from the tool's
+  remote call (network, 5xx, 408, 429).
+
+Every retry attempt increments the counter by exactly 1; a successful
+first attempt does not. See `openspec/changes/agent-tool-dispatch-retry/`
+for the full rationale (per-step vs per-run budget, why a 422 Pydantic
+error from the bridge must route to the validator-feedback path not the
+transient path, OTel `retry_count` + `retry_reason` attributes on the
+surrounding `agent.step.tool` span).
 
 ## Architecture
 

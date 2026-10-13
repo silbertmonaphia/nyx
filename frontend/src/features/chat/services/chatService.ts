@@ -218,8 +218,23 @@ export const chatService = {
               const parsed = JSON.parse(dataStr) as {
                 text?: unknown;
                 provider?: unknown;
+                kind?: unknown;
+                failed_steps?: unknown;
               };
               if (
+                parsed.kind === "partial_failure" &&
+                Array.isArray(parsed.failed_steps) &&
+                parsed.failed_steps.every((s) => typeof s === "string")
+              ) {
+                // agent-tool-dispatch-retry: the run diverged from the
+                // plan; the UI renders a banner above the final answer.
+                // This variant carries `provider: null`, so it must be
+                // matched before the legacy text/provider check below.
+                yield {
+                  kind: "partial_failure",
+                  failedSteps: parsed.failed_steps as string[],
+                };
+              } else if (
                 typeof parsed.text === "string" &&
                 typeof parsed.provider === "string"
               ) {
@@ -361,6 +376,7 @@ export const chatService = {
                 ok?: unknown;
                 result?: unknown;
                 error?: unknown;
+                retry_count?: unknown;
               };
               if (
                 typeof parsed.step_id === "string" &&
@@ -374,6 +390,13 @@ export const chatService = {
                   result: parsed.ok === true ? parsed.result : undefined,
                   error:
                     typeof parsed.error === "string" ? parsed.error : undefined,
+                  // Additive (agent-tool-dispatch-retry §3.2): absent on
+                  // frames from older servers, in which case the step row
+                  // simply shows no retry badge.
+                  retryCount:
+                    typeof parsed.retry_count === "number"
+                      ? parsed.retry_count
+                      : undefined,
                 };
               }
             } catch {

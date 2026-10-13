@@ -12,24 +12,40 @@ exhaustion emits `error{code:"budget_exceeded"}` + done + terminator.
 
 from __future__ import annotations
 
+import asyncio
 import json
+import random
 import uuid
+from typing import Any
 
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
 from langchain_openai import ChatOpenAI
 from opentelemetry import trace
+from pydantic import SecretStr
 
 from .budget import BudgetGuard
 from .config import Settings
-from .observability import agent_steps_total, agent_tokens_total, agent_tool_calls_total
+from .observability import (
+    agent_steps_total,
+    agent_tokens_total,
+    agent_tool_calls_total,
+    agent_tool_retries_total,
+)
 from .rag_client import RagAuthError, RagClient, RagUnavailableError
 from .state import AgentState
-from .tools_client import ToolAuthError, ToolError, ToolsClient, ToolUnavailableError
+from .tools_client import (
+    ToolAuthError,
+    ToolError,
+    ToolRejectedError,
+    ToolsClient,
+    ToolUnavailableError,
+)
 from .types import (
     DeltaEvent,
     DoneEvent,
     ErrorEvent,
     Event,
+    NoteEvent,
     Plan,
     StepEndEvent,
     StepStartEvent,
@@ -39,6 +55,24 @@ from .types import (
 )
 
 DEFAULT_ESTIMATED_TOKENS = 1000
+
+# Sentinel marker echoed into the tool-arg re-prompt; matches the planner's
+# `PREVIOUS_ATTEMPT_FAILED` block so the model sees a consistent convention.
+PREVIOUS_ATTEMPT_FAILED_HEADER = "PREVIOUS_ATTEMPT_FAILED"
+
+# Error codes that mean "the run diverged from the plan" before/without any
+# step completing. `run_metadata_unavailable` is deliberately absent — it is
+# non-fatal per agent-run-state; so are `empty_answer` and `agent_unavailable`
+# (not part of the partial-failure trigger list in the spec).
+_PLAN_LEVEL_ERROR_CODES = frozenset(
+    {
+        "plan_too_large",
+        "plan_invalid",
+        "react_iterations_exceeded",
+        "budget_exceeded",
+        "budget_unavailable",
+    }
+)
 
 
 async def executor_node(
@@ -54,6 +88,10 @@ async def executor_node(
     if plan is None:
         state["terminal_status"] = "failed"
         state["terminal_reason"] = "no_plan"
+        # The planner emits error+done+terminator for plan-level failures
+        # (plan_too_large / plan_invalid); surface the partial-failure note
+        # before its `done` frame so the banner trigger is complete.
+        _maybe_emit_partial_failure(state, settings)
         return state
     # Defensive: the planner always emits a typed `Plan` instance after the
     # structured-output migration (openspec/changes/agent-planner-structured).
@@ -83,7 +121,15 @@ async def executor_node(
                 if step.kind.value == "rag":
                     await _run_rag(state, step, rag, span)
                 elif step.kind.value == "tool":
-                    await _run_tool(state, step, tools, span)
+                    await _run_tool(
+                        state,
+                        step,
+                        settings=settings,
+                        tracer=tracer,
+                        budget=budget,
+                        tools=tools,
+                        span=span,
+                    )
                 elif step.kind.value == "llm":
                     await _run_llm(state, step, settings, tracer, budget, span)
                 elif step.kind.value == "react":
@@ -98,7 +144,7 @@ async def executor_node(
                     )
                 )
                 agent_steps_total.labels(step.kind.value, "budget_exceeded").inc()
-                return _terminate_with_error(state, "budget_exceeded", "Per-user budget exhausted")
+                return _terminate_with_error(state, "budget_exceeded", "Per-user budget exhausted", settings)
             except _BudgetUnavailableError:
                 state["events_so_far"].append(
                     Event(
@@ -107,7 +153,7 @@ async def executor_node(
                     )
                 )
                 agent_steps_total.labels(step.kind.value, "budget_unavailable").inc()
-                return _terminate_with_error(state, "budget_unavailable", "Budget guard unavailable")
+                return _terminate_with_error(state, "budget_unavailable", "Budget guard unavailable", settings)
             except Exception as exc:  # noqa: BLE001
                 ok = False
                 reason = repr(exc)
@@ -120,6 +166,11 @@ async def executor_node(
                 )
             )
             agent_steps_total.labels(step.kind.value, "ok" if ok else "failed").inc()
+
+    # Every step has run: surface a partial-failure note before the final
+    # answer's deltas when the run diverged from the plan (spec:
+    # agent-partial-failure). No-op on clean runs.
+    _maybe_emit_partial_failure(state, settings)
 
     return state
 
@@ -141,45 +192,36 @@ async def _run_rag(state: AgentState, step, rag: RagClient, span: trace.Span) ->
     state["step_outputs"][step.id] = {"context_block": result.context_block, "citations": result.citations}
 
 
-async def _run_tool(state: AgentState, step, tools: ToolsClient, span: trace.Span) -> None:
+async def _run_tool(
+    state: AgentState,
+    step,
+    *,
+    settings: Settings,
+    tracer: trace.Tracer,
+    budget: BudgetGuard,
+    tools: ToolsClient,
+    span: trace.Span,
+) -> None:
     if not step.tool:
         raise _step_runtime_error("tool", "step has no tool name")
     args = step.args or {}
-    call_id = str(uuid.uuid4())
-    state["events_so_far"].append(
-        Event(
-            kind="tool_call",
-            payload=ToolCallEvent(step_id=step.id, call_id=call_id, name=step.tool, args=args).model_dump(),
-        )
+    ok, result, error_text = await _dispatch_tool_with_retries(
+        state,
+        step_id=step.id,
+        tool_name=step.tool,
+        args=args,
+        tools=tools,
+        settings=settings,
+        tracer=tracer,
+        budget=budget,
+        span=span,
     )
-    try:
-        result = await tools.call(step.tool, args)
-        agent_tool_calls_total.labels(step.tool, "true").inc()
-        state["events_so_far"].append(
-            Event(
-                kind="tool_result",
-                payload=ToolResultEvent(step_id=step.id, call_id=call_id, ok=True, result=result).model_dump(),
-            )
-        )
-        state["step_outputs"][step.id] = result
-    except (ToolAuthError, ToolError) as exc:
-        agent_tool_calls_total.labels(step.tool, "false").inc()
-        state["events_so_far"].append(
-            Event(
-                kind="tool_result",
-                payload=ToolResultEvent(step_id=step.id, call_id=call_id, ok=False, error=repr(exc)).model_dump(),
-            )
-        )
-        raise _step_runtime_error("tool", repr(exc)) from exc
-    except ToolUnavailableError as exc:
-        agent_tool_calls_total.labels(step.tool, "false").inc()
-        state["events_so_far"].append(
-            Event(
-                kind="tool_result",
-                payload=ToolResultEvent(step_id=step.id, call_id=call_id, ok=False, error="tool unavailable").model_dump(),
-            )
-        )
-        raise _step_runtime_error("tool", "tool unavailable") from exc
+    if not ok:
+        # `error_text` is the safe, funnel-mapped message — it is the only
+        # text that reaches the wire (tool_result frame above) and the
+        # step_end reason.
+        raise _step_runtime_error("tool", error_text)
+    state["step_outputs"][step.id] = result
 
 
 async def _run_llm(state: AgentState, step, settings: Settings, tracer: trace.Tracer, budget: BudgetGuard, span: trace.Span) -> None:
@@ -282,36 +324,27 @@ async def _run_react(
 
             messages.append(resp)
             for tc in tool_calls:
-                call_id = str(uuid.uuid4())
                 tc_name = _tool_name(tc)
                 tc_id = _tool_id(tc)
                 args = _parse_args(_tool_arg(tc))
-                state["events_so_far"].append(
-                    Event(
-                        kind="tool_call",
-                        payload=ToolCallEvent(step_id=step.id, call_id=call_id, name=tc_name, args=args).model_dump(),
-                    )
+                # Route through the shared dispatcher: the retry budget is
+                # per-(step, tool) and shared across this step's ReAct
+                # iterations (design.md Open Questions, resolved 2026-10-13).
+                _ok, _result, content = await _dispatch_tool_with_retries(
+                    state,
+                    step_id=step.id,
+                    tool_name=tc_name,
+                    args=args,
+                    tools=tools,
+                    settings=settings,
+                    tracer=tracer,
+                    budget=budget,
+                    span=span,
+                    base_messages=messages,
+                    step_prompt=step.prompt,
+                    model_tool_call_id=tc_id,
                 )
-                try:
-                    result = await tools.call(tc_name, args)
-                    agent_tool_calls_total.labels(tc_name, "true").inc()
-                    state["events_so_far"].append(
-                        Event(
-                            kind="tool_result",
-                            payload=ToolResultEvent(step_id=step.id, call_id=call_id, ok=True, result=result).model_dump(),
-                        )
-                    )
-                    tool_msg = ToolMessage(content=json.dumps(result), tool_call_id=tc_id)
-                except Exception as exc:  # noqa: BLE001
-                    agent_tool_calls_total.labels(tc_name, "false").inc()
-                    state["events_so_far"].append(
-                        Event(
-                            kind="tool_result",
-                            payload=ToolResultEvent(step_id=step.id, call_id=call_id, ok=False, error=repr(exc)).model_dump(),
-                        )
-                    )
-                    tool_msg = ToolMessage(content=repr(exc), tool_call_id=tc_id)
-                messages.append(tool_msg)
+                messages.append(ToolMessage(content=content, tool_call_id=tc_id))
 
     # Cap hit — step failed.
     state["events_so_far"].append(
@@ -453,7 +486,7 @@ def _tool_id(tc) -> str:
     return tc.id
 
 
-def _terminate_with_error(state: AgentState, code: str, detail: str) -> AgentState:
+def _terminate_with_error(state: AgentState, code: str, detail: str, settings: Settings) -> AgentState:
     state["terminal_status"] = code
     state["terminal_reason"] = code
     state["events_so_far"].append(
@@ -462,8 +495,392 @@ def _terminate_with_error(state: AgentState, code: str, detail: str) -> AgentSta
             payload=ErrorEvent(error=detail, code=code, request_id=state.get("request_id")).model_dump(),
         )
     )
+    # Budget-driven termination is a plan divergence: surface the
+    # partial-failure note (with the step that tripped the budget) before
+    # the terminal frames.
+    _maybe_emit_partial_failure(state, settings)
     state["events_so_far"].append(Event(kind="done", payload=DoneEvent().model_dump()))
     state["events_so_far"].append(
         Event(kind="terminator", payload=TerminatorEvent(reason=code).model_dump())
     )
     return state
+
+
+# --- tool dispatch with retries ------------------------------------------
+
+
+async def _dispatch_tool_with_retries(
+    state: AgentState,
+    *,
+    step_id: str,
+    tool_name: str,
+    args: dict,
+    tools: ToolsClient,
+    settings: Settings,
+    tracer: trace.Tracer,
+    budget: BudgetGuard,
+    span: trace.Span,
+    base_messages: list | None = None,
+    step_prompt: str | None = None,
+    model_tool_call_id: str | None = None,
+) -> tuple[bool, Any, str]:
+    """Dispatch one tool call under the two retry paths.
+
+    Returns `(ok, result, content)`:
+      - `ok=True` → `result` is the raw tool result; `content` is its
+        JSON rendering (model-facing).
+      - `ok=False` → `result` is None; `content` is the safe error text
+        (the same text already placed on the terminal `tool_result` frame).
+
+    The two paths are mutually exclusive per failure (`_classify_tool_failure`):
+      - registry rejection (`ToolError`) → tool-arg path: re-prompt the model
+        with the validator's error so it emits a *corrected* call;
+      - transient (`ToolUnavailableError`: connect/timeout/5xx/408/429) →
+        retry the same call with jittered exponential backoff;
+      - everything else (auth, bare 4xx, untyped) → fail fast, no retry.
+
+    Budget: per-(step, tool) retry allowance of `settings.tool_retry_max`,
+    persisted in `state["tool_retry_used"]` — shared across ReAct iterations
+    within the step, fresh for each new step. A dispatch that starts with an
+    exhausted allowance still attempts the call once, then fails fast.
+    """
+    used_by_tool = state.setdefault("tool_retry_used", {}).setdefault(step_id, {})
+    used = used_by_tool.get(tool_name, 0)
+    allowance = max(settings.tool_retry_max - used, 0)
+
+    current_name = tool_name
+    current_args = args
+    retries_made = 0
+    last_error_text = ""
+
+    while True:
+        call_id = str(uuid.uuid4())
+        state["events_so_far"].append(
+            Event(
+                kind="tool_call",
+                payload=ToolCallEvent(
+                    step_id=step_id, call_id=call_id, name=current_name, args=current_args
+                ).model_dump(),
+            )
+        )
+        try:
+            result = await tools.call(current_name, current_args)
+        except Exception as exc:  # noqa: BLE001 — classified here, never re-raised raw
+            failure_class = _classify_tool_failure(exc)
+            last_error_text = _safe_tool_error_text(exc)
+            agent_tool_calls_total.labels(current_name, "false").inc()
+            # One failure frame per attempt. Intermediate retries carry the
+            # retries made *so far* (0 for the first-attempt failure); the
+            # terminal frame carries the same count at exhaustion — which
+            # equals the allowance, i.e. `tool_retry_max` on a fresh budget.
+            _emit_tool_result(
+                state, step_id, call_id, ok=False, error=last_error_text, retry_count=retries_made
+            )
+            can_retry = failure_class != "non_retryable" and retries_made < allowance
+            if not can_retry:
+                used_by_tool[tool_name] = used + retries_made
+                return False, None, last_error_text
+
+            retries_made += 1
+            reason = "tool_arg_invalid" if failure_class == "arg" else "tool_execution_transient"
+            agent_tool_retries_total.labels(tool_name, reason).inc()
+            span.set_attribute("retry_count", retries_made)
+            span.set_attribute("retry_reason", reason)
+
+            if failure_class == "transient":
+                await asyncio.sleep(_compute_backoff_ms(retries_made - 1, settings) / 1000.0)
+                continue
+
+            # Tool-arg path: re-prompt the model for a corrected call. The
+            # model saw the rejected call + validator error + schema; its
+            # first tool call becomes the next attempt.
+            corrected = await _reprompt_for_corrected_call(
+                state,
+                step_prompt=step_prompt,
+                tool_name=current_name,
+                args=current_args,
+                error_text=last_error_text,
+                base_messages=base_messages,
+                model_tool_call_id=model_tool_call_id if retries_made == 1 else None,
+                settings=settings,
+                tracer=tracer,
+                budget=budget,
+                tools=tools,
+            )
+            if corrected is None:
+                used_by_tool[tool_name] = used + retries_made
+                return (
+                    False,
+                    None,
+                    (
+                        f"model did not emit a corrected call for {tool_name} "
+                        f"(last rejection: {last_error_text})"
+                    ),
+                )
+            current_name, current_args = corrected
+            continue
+        else:
+            agent_tool_calls_total.labels(current_name, "true").inc()
+            _emit_tool_result(
+                state, step_id, call_id, ok=True, result=result, retry_count=retries_made
+            )
+            used_by_tool[tool_name] = used + retries_made
+            return True, result, json.dumps(result, default=str)
+
+
+async def _reprompt_for_corrected_call(
+    state: AgentState,
+    *,
+    step_prompt: str | None,
+    tool_name: str,
+    args: dict,
+    error_text: str,
+    base_messages: list | None,
+    model_tool_call_id: str | None,
+    settings: Settings,
+    tracer: trace.Tracer,
+    budget: BudgetGuard,
+    tools: ToolsClient,
+) -> tuple[str, dict] | None:
+    """Re-invoke the model to correct a rejected tool call.
+
+    Message-list shape (spec: `agent-tool-retry` » re-prompt structure):
+    prior context, the assistant message that emitted the bad call, the
+    matching tool result carrying the validator's error, and a final user
+    message quoting the error + the tool's argument schema.
+
+    Returns the corrected `(name, args)`, or None when the model declines to
+    emit any tool call. Raises the budget sentinels when the guard refuses
+    the model call (a re-prompt *is* a model call — it must be gated like one).
+    """
+    decision = await budget.check_and_increment(state["user_id"], DEFAULT_ESTIMATED_TOKENS, tracer)
+    if decision.decision == "exceeded":
+        raise _BudgetExceededError()
+    if decision.decision == "unavailable":
+        raise _BudgetUnavailableError()
+
+    model = state.get("model") or settings.llm_model
+    base_client = ChatOpenAI(
+        base_url=settings.llm_base_url,
+        api_key=SecretStr(settings.llm_api_key or "no-key"),
+        model=model,
+        temperature=0.0,
+    )
+    try:
+        schemas = await tools.list_tools()
+    except Exception:  # noqa: BLE001 — best-effort; the prompt still carries the error
+        schemas = []
+    if schemas:
+        client = base_client.bind_tools(schemas)
+    else:
+        client = base_client
+
+    tc_id = model_tool_call_id or str(uuid.uuid4())
+    prompt_msgs: list = []
+    if base_messages is not None:
+        # ReAct: the live loop messages already end with the assistant
+        # message that emitted the bad call.
+        prompt_msgs.extend(base_messages)
+    else:
+        if step_prompt:
+            prompt_msgs.append(SystemMessage(content=step_prompt))
+        prompt_msgs.extend(_state_messages_to_lc(state.get("messages", [])))
+    prompt_msgs.append(
+        AIMessage(content="", tool_calls=[{"id": tc_id, "name": tool_name, "args": args}])
+    )
+    prompt_msgs.append(
+        ToolMessage(content=f"Tool call rejected: {error_text}", tool_call_id=tc_id)
+    )
+    prompt_msgs.append(
+        HumanMessage(
+            content=(
+                f"{PREVIOUS_ATTEMPT_FAILED_HEADER}: {error_text}\n\n"
+                f"The `{tool_name}` tool expects arguments matching this schema:\n"
+                f"{_tool_schema_text(schemas, tool_name)}\n\n"
+                f"Emit a corrected tool call for `{tool_name}`."
+            )
+        )
+    )
+
+    try:
+        resp = await client.ainvoke(prompt_msgs)
+    except Exception as exc:
+        # The provider failed during the re-prompt — a hard step failure,
+        # not a retryable dispatch outcome. Class name only: no internal text.
+        raise _step_runtime_error("tool", f"re-prompt failed ({type(exc).__name__})") from exc
+
+    agent_tokens_total.labels("executor", model).inc(DEFAULT_ESTIMATED_TOKENS)
+    state["cumulative_tokens"] += DEFAULT_ESTIMATED_TOKENS
+
+    tool_calls = _extract_tool_calls(resp)
+    if not tool_calls:
+        return None
+    tc = tool_calls[0]
+    return _tool_name(tc), _parse_args(_tool_arg(tc))
+
+
+def _classify_tool_failure(exc: Exception) -> str:
+    """Route a tool failure: "arg" (re-prompt) | "transient" (backoff) | "non_retryable".
+
+    The classification lives here — the client only raises typed errors
+    (spec: `agent-tool-retry` » classification lives in the executor).
+    """
+    if isinstance(exc, ToolError):
+        # JSON-RPC error envelope — the registry rejected the call
+        # semantically (validation, unknown tool). A corrected call can win.
+        return "arg"
+    if isinstance(exc, ToolUnavailableError):
+        # Connect refused, timeout, 5xx, 408, 429 — the same call may win.
+        return "transient"
+    # ToolAuthError, ToolRejectedError, and anything untyped: retrying the
+    # same input cannot succeed; re-prompting cannot fix auth.
+    return "non_retryable"
+
+
+def _safe_tool_error_text(exc: Exception) -> str:
+    """Funnel tool errors to wire-safe text (never stack traces / internals).
+
+    `ToolError`'s message is the registry's typed validator text — already
+    mapped through the Go-side safe-error funnel (agent-tool-registry).
+    The rest collapse to static strings; `ToolRejectedError` keeps only the
+    HTTP status.
+    """
+    if isinstance(exc, ToolError):
+        return str(exc) or "tool call rejected by the tool registry"
+    if isinstance(exc, ToolAuthError):
+        return "tool authentication failed"
+    if isinstance(exc, ToolRejectedError):
+        code = getattr(exc, "status_code", None)
+        return f"tool call rejected (HTTP {code})" if code else "tool call rejected"
+    if isinstance(exc, ToolUnavailableError):
+        return "tool unavailable"
+    return "tool call failed"
+
+
+def _compute_backoff_ms(attempt: int, settings: Settings) -> float:
+    """Jittered exponential backoff: min(base · 2^attempt · jitter, ceiling)."""
+    raw = float(settings.tool_retry_backoff_base_ms) * (2**attempt)
+    jittered = raw * (1.0 + random.uniform(-0.2, 0.2))
+    return min(max(jittered, 0.0), float(settings.tool_retry_backoff_ceiling_ms))
+
+
+def _tool_schema_text(schemas: list, tool_name: str) -> str:
+    for s in schemas:
+        if not isinstance(s, dict):
+            continue
+        fn = s.get("function", s)
+        if isinstance(fn, dict) and fn.get("name") == tool_name:
+            return json.dumps(fn.get("parameters", {}), default=str)
+    return "{}"
+
+
+def _emit_tool_result(
+    state: AgentState,
+    step_id: str,
+    call_id: str,
+    *,
+    ok: bool,
+    result: Any | None = None,
+    error: str | None = None,
+    retry_count: int = 0,
+) -> None:
+    state["events_so_far"].append(
+        Event(
+            kind="tool_result",
+            payload=ToolResultEvent(
+                step_id=step_id,
+                call_id=call_id,
+                ok=ok,
+                result=result,
+                error=error,
+                retry_count=retry_count,
+            ).model_dump(),
+        )
+    )
+
+
+# --- partial-failure signal (spec: agent-partial-failure) -----------------
+
+
+def _collect_failed_steps(state: AgentState, settings: Settings) -> list[str]:
+    """Step ids whose terminal status diverged from the plan, in first-signal order.
+
+    Single source of truth for the banner trigger (spec scenario: "one
+    function that the SSE publisher calls"):
+      - any `step_end` with `status == "failed"`;
+      - any `tool_result{ok: false}` whose `retry_count` equals the retry
+        allowance (the terminal failure *after* retries — intermediate
+        retry failures carry a smaller count and are excluded).
+    RAG-empty results reach `ok: true` and are excluded by construction.
+    """
+    events = state.get("events_so_far", [])
+    retry_max = settings.tool_retry_max
+    seen: dict[str, None] = {}
+    for ev in events:
+        payload = ev.payload or {}
+        is_failed_step = ev.kind == "step_end" and payload.get("status") == "failed"
+        is_terminal_tool_failure = (
+            ev.kind == "tool_result"
+            and payload.get("ok") is False
+            and payload.get("retry_count", 0) == retry_max
+        )
+        if is_failed_step or is_terminal_tool_failure:
+            step_id = payload.get("step_id")
+            if step_id:
+                seen.setdefault(step_id, None)
+    return list(seen)
+
+
+def _has_plan_level_error(state: AgentState) -> bool:
+    for ev in state.get("events_so_far", []):
+        if ev.kind == "error" and (ev.payload or {}).get("code") in _PLAN_LEVEL_ERROR_CODES:
+            return True
+    return False
+
+
+def _note_insert_index(events: list) -> int:
+    """Position for the partial-failure note: before the final answer's deltas.
+
+    The final answer's deltas are the last contiguous run of `delta` events.
+    With no deltas (plan-level errors), the note goes before the first
+    `done` frame if one is already present (the planner emits done itself on
+    its terminal errors), else at the end (the graph appends done after the
+    executor returns).
+    """
+    last_delta = None
+    for i in range(len(events) - 1, -1, -1):
+        if events[i].kind == "delta":
+            last_delta = i
+            break
+    if last_delta is None:
+        for i, ev in enumerate(events):
+            if ev.kind == "done":
+                return i
+        return len(events)
+    start = last_delta
+    while start > 0 and events[start - 1].kind == "delta":
+        start -= 1
+    return start
+
+
+def _maybe_emit_partial_failure(state: AgentState, settings: Settings) -> None:
+    """Emit `note{kind: "partial_failure"}` when the run diverged from the plan.
+
+    Trigger: any collected failed step OR a plan-level error code. No-op
+    otherwise (clean runs, `run_metadata_unavailable`-only runs, RAG-empty).
+    """
+    failed_steps = _collect_failed_steps(state, settings)
+    if not failed_steps and not _has_plan_level_error(state):
+        return
+    events = state["events_so_far"]
+    events.insert(
+        _note_insert_index(events),
+        Event(
+            kind="note",
+            payload=NoteEvent(
+                text="Run diverged from the plan",
+                kind="partial_failure",
+                failed_steps=failed_steps,
+            ).model_dump(),
+        ),
+    )

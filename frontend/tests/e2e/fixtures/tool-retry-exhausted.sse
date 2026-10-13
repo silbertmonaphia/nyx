@@ -1,0 +1,53 @@
+event: run_id
+data: {"run_id":"00000000-0000-4000-8000-000000000002"}
+
+event: note
+data: {"text":"fresh_run","provider":null,"kind":"fresh_run","last_step_id":null,"run_id":"00000000-0000-4000-8000-000000000002","failed_steps":[]}
+
+event: plan
+data: {"steps":[{"id":"step_1","kind":"tool","tool":"list_feeds","args":{},"prompt":null,"query":null,"max_iterations":null},{"id":"step_2","kind":"llm","prompt":"Answer.","query":null,"max_iterations":null}]}
+
+event: step_start
+data: {"step_id":"step_1","kind":"tool"}
+
+event: tool_call
+data: {"step_id":"step_1","call_id":"c1","name":"list_feeds","args":{}}
+
+event: tool_result
+data: {"step_id":"step_1","call_id":"c1","ok":false,"result":null,"error":"list_feeds: limit must be an integer","retry_count":0}
+
+event: tool_call
+data: {"step_id":"step_1","call_id":"c2","name":"list_feeds","args":{"limit":"nope"}}
+
+event: tool_result
+data: {"step_id":"step_1","call_id":"c2","ok":false,"result":null,"error":"list_feeds: limit must be an integer","retry_count":1}
+
+event: tool_call
+data: {"step_id":"step_1","call_id":"c3","name":"list_feeds","args":{"limit":"still-nope"}}
+
+event: tool_result
+data: {"step_id":"step_1","call_id":"c3","ok":false,"result":null,"error":"list_feeds: limit must be an integer","retry_count":2}
+
+event: step_end
+data: {"step_id":"step_1","status":"failed","reason":"tool: list_feeds: limit must be an integer"}
+
+event: step_start
+data: {"step_id":"step_2","kind":"llm"}
+
+event: note
+data: {"text":"Run diverged from the plan","provider":null,"kind":"partial_failure","last_step_id":null,"run_id":null,"failed_steps":["step_1"]}
+
+event: delta
+data: {"delta":"I could not fetch your feeds, so this answer may be incomplete."}
+
+event: step_end
+data: {"step_id":"step_2","status":"ok","reason":null}
+
+event: done
+data: {"usage":{"prompt_tokens":0,"completion_tokens":0,"total_tokens":0}}
+
+event: terminator
+data: {"reason":null}
+
+data: [DONE]
+

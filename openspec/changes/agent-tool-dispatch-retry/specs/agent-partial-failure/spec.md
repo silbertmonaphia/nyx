@@ -33,7 +33,7 @@ When an agent run terminates with any **system-recognised** divergence from the 
 #### Scenario: Plan-level errors trigger the signal
 
 - **WHEN** the run terminates with `error{code: "plan_too_large"}`, `error{code: "plan_invalid"}`, `error{code: "react_iterations_exceeded"}`, `error{code: "budget_exceeded"}`, or `error{code: "budget_unavailable"}`
-- **THEN** the orchestrator emits `note{kind: "partial_failure", failed_steps: []}` (empty list — no step ran to completion); the banner tells the user the run did not reach a terminal step
+- **THEN** the orchestrator emits `note{kind: "partial_failure", failed_steps: <list>}` where `<list>` contains every step that ran and failed; the list is empty when the error fired before any step reached execution (e.g. `plan_too_large`), and the banner tells the user the run did not reach a terminal step
 
 #### Scenario: Non-fatal run-metadata errors do not trigger the signal
 
@@ -66,7 +66,7 @@ The orchestrator SHALL NOT classify a run as partial-failure on any other signal
 
 ### Requirement: UI renders a partial-failure banner above the final answer
 
-When the chat client receives a `note{kind: "partial_failure", failed_steps: [...]}` frame, the assistant message's final-answer region SHALL render a `<PartialFailureBanner>` component above the `delta` text, showing the list of failed step ids and a human-readable message ("部分步骤失败：以下回答可能不完整"). The banner SHALL have a stable test id (`data-testid="chat-partial-failure-banner"`) and SHALL carry a `data-failed-steps` attribute containing the comma-joined step ids. The banner is rendered in addition to (not instead of) the per-step row in the existing `agent-steps` disclosure.
+When the chat client receives a `note{kind: "partial_failure", failed_steps: [...]}` frame, the assistant message's final-answer region SHALL render a `<PartialFailureBanner>` component above the `delta` text, showing the list of failed step ids and a human-readable message ("Some steps failed — the answer below may be incomplete"). The banner SHALL have a stable test id (`data-testid="chat-partial-failure-banner"`) and SHALL carry a `data-failed-steps` attribute containing the comma-joined step ids. The banner is rendered in addition to (not instead of) the per-step row in the existing `agent-steps` disclosure.
 
 #### Scenario: Banner is visible without expanding the steps panel
 

@@ -93,6 +93,13 @@ class ToolResultEvent(BaseModel):
     ok: bool
     result: Any | None = None
     error: str | None = None
+    # Additive retry counter (openspec/changes/agent-tool-dispatch-retry §3.2).
+    # 0 on a first-try success; N when N retries were made for this dispatch.
+    # Intermediate failure frames carry the retries made *so far* (0 for the
+    # first-attempt failure); the terminal failure frame after retry-budget
+    # exhaustion carries the full `tool_retry_max`. Old consumers ignore
+    # unknown fields — `chatService.ts` reads it only when present.
+    retry_count: int = 0
 
 
 class StepEndEvent(BaseModel):
@@ -111,9 +118,16 @@ class NoteEvent(BaseModel):
     text: str
     provider: str | None = None
     # Additive fields for run-state resume (FUTURE_AGENT.md §1.1).
-    kind: str | None = None  # "resumed" | "fresh_run" | None for legacy notes
+    # `partial_failure` is the agent-tool-dispatch-retry variant: emitted
+    # immediately before the final answer's deltas when the run diverged
+    # from the plan (see specs/agent-partial-failure/spec.md).
+    kind: Literal["resumed", "fresh_run", "partial_failure"] | None = None
     last_step_id: str | None = None
     run_id: str | None = None
+    # Populated only when `kind == "partial_failure"`: the step ids whose
+    # terminal status diverged from the plan. Empty when the run failed
+    # before any step reached execution (plan-level errors).
+    failed_steps: list[str] = Field(default_factory=list)
 
 
 class DoneUsage(BaseModel):

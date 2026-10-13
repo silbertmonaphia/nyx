@@ -12,14 +12,33 @@ from __future__ import annotations
 from typing import ClassVar
 
 import pytest
-from langchain_core.messages import AIMessage
+from langchain_core.messages import AIMessage, ToolMessage
 from opentelemetry import trace
+from prometheus_client import REGISTRY
 
 from agent import executor as executor_module
 from agent.config import Settings
-from agent.executor import _run_llm, _run_react
+from agent.executor import (
+    _collect_failed_steps,
+    _maybe_emit_partial_failure,
+    _run_llm,
+    _run_react,
+    _run_tool,
+)
+from agent.main import _sse_encode
 from agent.state import new_state
-from agent.types import ChatMessage, Plan, PlanStep
+from agent.tools_client import ToolError, ToolRejectedError, ToolUnavailableError
+from agent.types import (
+    ChatMessage,
+    DoneEvent,
+    ErrorEvent,
+    Event,
+    NoteEvent,
+    Plan,
+    PlanStep,
+    StepEndEvent,
+    ToolResultEvent,
+)
 
 
 class _CapturingLlm:
@@ -52,7 +71,14 @@ class _StubTools:
 
 
 def _settings() -> Settings:
-    return Settings(llm_base_url="http://stub", metrics_port=0)
+    # `tool_retry_*` pinned: env-independent budget, and a zero backoff base
+    # so retry tests never actually sleep.
+    return Settings(
+        llm_base_url="http://stub",
+        metrics_port=0,
+        tool_retry_max=2,
+        tool_retry_backoff_base_ms=0,
+    )
 
 
 def _state(plan_steps, step_outputs):
@@ -174,3 +200,609 @@ async def test_react_step_receives_prior_rag_context(tracer):
 
     msgs = _CapturingLlm.captured[0]
     assert "FEEDDATA" in msgs[1].content
+
+
+# --- tool-dispatch retry (openspec/changes/agent-tool-dispatch-retry) -----
+
+
+class _ScriptedTools:
+    """ToolsClient stub with a scripted outcome per call.
+
+    An outcome that is an Exception instance is raised; anything else is
+    returned as the call result. The final outcome repeats once the script
+    is down to one entry, so `[exc]` means "always fails".
+    """
+
+    def __init__(self, script, schemas=None):
+        self.script = list(script)
+        self.schemas = schemas or []
+        self.calls = []
+
+    async def list_tools(self):
+        return self.schemas
+
+    async def call(self, name, arguments):
+        self.calls.append((name, arguments))
+        outcome = self.script.pop(0) if len(self.script) > 1 else self.script[0]
+        if isinstance(outcome, Exception):
+            raise outcome
+        return outcome
+
+
+class _ScriptedLlm:
+    """ChatOpenAI stub returning scripted AIMessages; records message lists.
+
+    Repeat-last semantics, same as `_ScriptedTools`.
+    """
+
+    captured: ClassVar[list] = []
+    responses: ClassVar[list] = []
+
+    def __init__(self, *args, **kwargs):
+        pass
+
+    def bind_tools(self, schemas):
+        return self
+
+    async def ainvoke(self, messages):
+        type(self).captured.append(list(messages))
+        if not type(self).responses:
+            return AIMessage(content="stub answer")
+        return (
+            type(self).responses.pop(0)
+            if len(type(self).responses) > 1
+            else type(self).responses[0]
+        )
+
+
+def _tool_call(name="list_feeds", args=None, tc_id="tc_1"):
+    return AIMessage(
+        content="", tool_calls=[{"id": tc_id, "name": name, "args": args or {}}]
+    )
+
+
+def _use_llm(monkeypatch, responses):
+    monkeypatch.setattr(executor_module, "ChatOpenAI", _ScriptedLlm)
+    _ScriptedLlm.captured = []
+    _ScriptedLlm.responses = list(responses)
+
+
+def _retry_counter(tool, reason):
+    return (
+        REGISTRY.get_sample_value(
+            "agent_tool_retries_total", {"tool": tool, "reason": reason}
+        )
+        or 0.0
+    )
+
+
+def _tool_steps(*step_ids, tool="list_feeds"):
+    return [PlanStep(id=sid, kind="tool", tool=tool, args={}) for sid in step_ids]
+
+
+@pytest.mark.asyncio
+async def test_executor_retries_on_registry_validation_failure(tracer, monkeypatch):
+    """Spec: validator rejection → re-prompt the model, dispatch the
+    corrected call, succeed with retry_count=1 (§3.3)."""
+    steps = _tool_steps("tool_1")
+    state = _state(steps, {})
+    tools = _ScriptedTools(
+        [ToolError("list_feeds: field limit: expected int, got str"), {"items": ["a"]}]
+    )
+    _use_llm(monkeypatch, [_tool_call(args={"limit": 5})])
+
+    before = _retry_counter("list_feeds", "tool_arg_invalid")
+    with tracer.start_as_current_span("x") as span:
+        await _run_tool(
+            state,
+            steps[0],
+            settings=_settings(),
+            tracer=tracer,
+            budget=_StubBudget(),
+            tools=tools,
+            span=span,
+        )
+
+    assert _retry_counter("list_feeds", "tool_arg_invalid") - before == 1
+    # The retry dispatched the MODEL'S corrected call, not the same args.
+    assert [c[1] for c in tools.calls] == [{}, {"limit": 5}]
+    results = [e for e in state["events_so_far"] if e.kind == "tool_result"]
+    assert results[0].payload["ok"] is False
+    assert results[0].payload["retry_count"] == 0  # first-attempt failure
+    assert results[-1].payload["ok"] is True
+    assert results[-1].payload["retry_count"] == 1
+    assert state["step_outputs"]["tool_1"] == {"items": ["a"]}
+
+
+@pytest.mark.asyncio
+async def test_executor_terminates_step_on_persistent_validation_failure(
+    tracer, monkeypatch
+):
+    """Spec: persistent rejection → step fails after exactly `tool_retry_max`
+    retries (§3.4); the terminal frame carries the validator's (safe) error."""
+    steps = _tool_steps("tool_1")
+    state = _state(steps, {})
+    tools = _ScriptedTools([ToolError("list_feeds: missing required field operator")])
+    _use_llm(monkeypatch, [_tool_call(args={"limit": 5})])
+
+    before = _retry_counter("list_feeds", "tool_arg_invalid")
+    with tracer.start_as_current_span("x") as span, pytest.raises(RuntimeError):
+        await _run_tool(
+            state,
+            steps[0],
+            settings=_settings(),
+            tracer=tracer,
+            budget=_StubBudget(),
+            tools=tools,
+            span=span,
+        )
+
+    # Exactly tool_retry_max increments — not retry_max + 1.
+    assert _retry_counter("list_feeds", "tool_arg_invalid") - before == 2
+    assert len(tools.calls) == 3  # first attempt + 2 retries
+    final = [e for e in state["events_so_far"] if e.kind == "tool_result"][-1]
+    assert final.payload["ok"] is False
+    assert final.payload["retry_count"] == 2
+    assert "missing required field" in final.payload["error"]
+
+
+@pytest.mark.asyncio
+async def test_per_step_budget_isolates_retry_state(tracer, monkeypatch):
+    """Spec: exhaustion in one step does not consume sibling steps' budget
+    (§3.5). Two failing tool steps each get a full budget."""
+    steps = _tool_steps("tool_1", "tool_2")
+    state = _state(steps, {})
+    tools = _ScriptedTools([ToolError("list_feeds: bad args")])
+    _use_llm(monkeypatch, [_tool_call(args={"limit": 5})])
+
+    before = _retry_counter("list_feeds", "tool_arg_invalid")
+    await executor_module.executor_node(
+        state,
+        settings=_settings(),
+        tracer=tracer,
+        budget=_StubBudget(),
+        rag=None,  # type: ignore[arg-type] — no rag steps in this plan
+        tools=tools,
+    )
+
+    assert _retry_counter("list_feeds", "tool_arg_invalid") - before == 4  # 2 × 2
+    assert len(tools.calls) == 6  # 3 attempts per step
+    step_ends = [e for e in state["events_so_far"] if e.kind == "step_end"]
+    assert [e.payload["status"] for e in step_ends] == ["failed", "failed"]
+
+
+@pytest.mark.asyncio
+async def test_retry_reprompt_contains_validator_error(tracer, monkeypatch):
+    """Spec: re-prompt structure — messages end with the assistant message
+    that emitted the bad call, the rejected tool result, and a final user
+    message quoting the validator's error + the tool's schema (§3.6)."""
+    steps = _tool_steps("tool_1")
+    state = _state(steps, {})
+    schemas = [
+        {
+            "type": "function",
+            "function": {
+                "name": "list_feeds",
+                "parameters": {
+                    "type": "object",
+                    "properties": {"limit": {"type": "integer"}},
+                },
+            },
+        }
+    ]
+    validator_msg = "list_feeds: limit must be an integer"
+    tools = _ScriptedTools([ToolError(validator_msg)], schemas=schemas)
+    _use_llm(monkeypatch, [_tool_call(args={"limit": 5})])
+
+    with tracer.start_as_current_span("x") as span, pytest.raises(RuntimeError):
+        await _run_tool(
+            state,
+            steps[0],
+            settings=_settings(),
+            tracer=tracer,
+            budget=_StubBudget(),
+            tools=tools,
+            span=span,
+        )
+
+    msgs = _ScriptedLlm.captured[0]
+    final_user = msgs[-1]
+    assert "PREVIOUS_ATTEMPT_FAILED" in final_user.content
+    assert validator_msg in final_user.content
+    assert '"limit"' in final_user.content  # argument schema included
+    tool_msg = msgs[-2]
+    assistant = msgs[-3]
+    assert isinstance(tool_msg, ToolMessage)
+    assert tool_msg.tool_call_id == assistant.tool_calls[0]["id"]
+    assert assistant.tool_calls[0]["name"] == "list_feeds"
+    # The original user request is carried over earlier in the list, not
+    # re-quoted inside the re-prompt's final user message.
+    assert any("summarize my feeds" in (m.content or "") for m in msgs[:-1])
+    assert "summarize my feeds" not in final_user.content
+
+
+@pytest.mark.asyncio
+async def test_executor_retries_on_transient_failure(tracer):
+    """Spec: transient failure → backoff retry of the same call; no model
+    re-prompt on this path (§4.2)."""
+    steps = _tool_steps("tool_1")
+    state = _state(steps, {})
+    tools = _ScriptedTools([ToolUnavailableError("MCP 503: overloaded"), {"items": []}])
+
+    before = _retry_counter("list_feeds", "tool_execution_transient")
+    with tracer.start_as_current_span("x") as span:
+        await _run_tool(
+            state,
+            steps[0],
+            settings=_settings(),
+            tracer=tracer,
+            budget=_StubBudget(),
+            tools=tools,
+            span=span,
+        )
+
+    assert _retry_counter("list_feeds", "tool_execution_transient") - before == 1
+    # The transient path never re-invokes the model (autouse _CapturingLlm).
+    assert _CapturingLlm.captured == []
+    assert len(tools.calls) == 2
+    final = [e for e in state["events_so_far"] if e.kind == "tool_result"][-1]
+    assert final.payload["ok"] is True
+    assert final.payload["retry_count"] == 1
+
+
+@pytest.mark.asyncio
+async def test_executor_terminates_step_on_persistent_transient_failure(tracer):
+    """Spec: persistent 5xx → step fails after `tool_retry_max` retries; the
+    wire carries static safe text, never the raw transport message (§4.3)."""
+    steps = _tool_steps("tool_1")
+    state = _state(steps, {})
+    tools = _ScriptedTools(
+        [ToolUnavailableError("MCP 503: upstream exploded: internal detail")]
+    )
+
+    before = _retry_counter("list_feeds", "tool_execution_transient")
+    with tracer.start_as_current_span("x") as span, pytest.raises(RuntimeError):
+        await _run_tool(
+            state,
+            steps[0],
+            settings=_settings(),
+            tracer=tracer,
+            budget=_StubBudget(),
+            tools=tools,
+            span=span,
+        )
+
+    assert _retry_counter("list_feeds", "tool_execution_transient") - before == 2
+    assert len(tools.calls) == 3
+    final = [e for e in state["events_so_far"] if e.kind == "tool_result"][-1]
+    assert final.payload["ok"] is False
+    assert final.payload["retry_count"] == 2
+    assert final.payload["error"] == "tool unavailable"
+    assert "exploded" not in final.payload["error"]
+
+
+@pytest.mark.asyncio
+async def test_4xx_non_retryable_fails_fast(tracer):
+    """Spec: a bare 4xx (no JSON-RPC envelope) is non-retryable — one
+    attempt, no counter increment, immediate step failure (§4.4)."""
+    steps = _tool_steps("tool_1")
+    state = _state(steps, {})
+    tools = _ScriptedTools(
+        [ToolRejectedError("MCP 400: bad request", status_code=400)]
+    )
+
+    before_arg = _retry_counter("list_feeds", "tool_arg_invalid")
+    before_transient = _retry_counter("list_feeds", "tool_execution_transient")
+    with tracer.start_as_current_span("x") as span, pytest.raises(RuntimeError):
+        await _run_tool(
+            state,
+            steps[0],
+            settings=_settings(),
+            tracer=tracer,
+            budget=_StubBudget(),
+            tools=tools,
+            span=span,
+        )
+
+    assert len(tools.calls) == 1
+    assert _retry_counter("list_feeds", "tool_arg_invalid") - before_arg == 0
+    assert _retry_counter("list_feeds", "tool_execution_transient") - before_transient == 0
+    final = [e for e in state["events_so_far"] if e.kind == "tool_result"][-1]
+    assert final.payload["ok"] is False
+    assert final.payload["retry_count"] == 0
+    assert final.payload["error"] == "tool call rejected (HTTP 400)"
+
+
+@pytest.mark.asyncio
+async def test_validation_error_routes_to_arg_path_not_transient(tracer, monkeypatch):
+    """Spec: a typed validation error MUST NOT trigger the transient retry
+    loop even when it surfaces through the transport (§4.5)."""
+    steps = _tool_steps("tool_1")
+    state = _state(steps, {})
+    tools = _ScriptedTools(
+        [ToolError("list_feeds: MCP 422 validation failed: limit must be an integer"), {"items": []}]
+    )
+    _use_llm(monkeypatch, [_tool_call(args={"limit": 5})])
+
+    before_arg = _retry_counter("list_feeds", "tool_arg_invalid")
+    before_transient = _retry_counter("list_feeds", "tool_execution_transient")
+    with tracer.start_as_current_span("x") as span:
+        await _run_tool(
+            state,
+            steps[0],
+            settings=_settings(),
+            tracer=tracer,
+            budget=_StubBudget(),
+            tools=tools,
+            span=span,
+        )
+
+    assert _retry_counter("list_feeds", "tool_arg_invalid") - before_arg == 1
+    assert _retry_counter("list_feeds", "tool_execution_transient") - before_transient == 0
+    assert len(_ScriptedLlm.captured) == 1  # routed via the model re-prompt
+    assert [c[1] for c in tools.calls] == [{}, {"limit": 5}]  # corrected args, not same
+
+
+@pytest.mark.asyncio
+async def test_react_step_shares_budget_across_iterations(tracer, monkeypatch):
+    """design.md §Open Questions (resolved 2026-10-13): the per-(step, tool)
+    budget spans the whole ReAct step — iteration 2 does NOT refresh it.
+    Iter 0 exhausts 2 retries (3 attempts); iter 1 fails fast (1 attempt)."""
+    step = PlanStep(id="react_1", kind="react", prompt="p", max_iterations=3)
+    state = _state([step], {})
+    tools = _ScriptedTools([ToolError("list_feeds: bad args")])
+    _use_llm(
+        monkeypatch,
+        [_tool_call(args={"limit": "x"})] * 4 + [AIMessage(content="done")],
+    )
+
+    before = _retry_counter("list_feeds", "tool_arg_invalid")
+    with tracer.start_as_current_span("x") as span:
+        await _run_react(state, step, _settings(), tracer, _StubBudget(), tools, span)
+
+    assert len(tools.calls) == 4  # 3 attempts in iter 0 + 1 fail-fast in iter 1
+    assert _retry_counter("list_feeds", "tool_arg_invalid") - before == 2
+    results = [e for e in state["events_so_far"] if e.kind == "tool_result"]
+    assert results[-1].payload["ok"] is False
+    assert results[-1].payload["retry_count"] == 0  # fail-fast makes no retries
+
+
+# --- partial-failure signal (spec: agent-partial-failure) -----------------
+
+
+def test_collect_failed_steps_priority():
+    """Spec scenario set for `_collect_failed_steps`: step-failed and
+    terminal-tool-failure count; RAG-empty and run_metadata_unavailable do
+    not; the intermediate retry failure does not."""
+    state = _state([], {})
+    state["events_so_far"].extend(
+        [
+            # RAG empty — legitimate no-results, not a failure.
+            Event(
+                kind="tool_result",
+                payload=ToolResultEvent(
+                    step_id="rag_1", call_id="c1", ok=True, result=[]
+                ).model_dump(),
+            ),
+            Event(
+                kind="step_end",
+                payload=StepEndEvent(step_id="rag_1", status="ok").model_dump(),
+            ),
+            # Intermediate retry failure (retry_count < tool_retry_max).
+            Event(
+                kind="tool_result",
+                payload=ToolResultEvent(
+                    step_id="mid", call_id="c2", ok=False, error="x", retry_count=1
+                ).model_dump(),
+            ),
+            # Terminal tool failure (retry_count == tool_retry_max).
+            Event(
+                kind="tool_result",
+                payload=ToolResultEvent(
+                    step_id="term_step", call_id="c3", ok=False, error="x", retry_count=2
+                ).model_dump(),
+            ),
+            # Failed step.
+            Event(
+                kind="step_end",
+                payload=StepEndEvent(step_id="fail_step", status="failed").model_dump(),
+            ),
+            # Non-fatal — explicitly excluded from the trigger.
+            Event(
+                kind="error",
+                payload=ErrorEvent(
+                    error="x", code="run_metadata_unavailable"
+                ).model_dump(),
+            ),
+        ]
+    )
+    assert _collect_failed_steps(state, _settings()) == ["term_step", "fail_step"]
+
+
+def test_no_banner_for_run_metadata_unavailable_with_all_steps_ok():
+    """Spec: non-fatal run-metadata errors do not trigger the banner."""
+    state = _state([], {})
+    state["events_so_far"].extend(
+        [
+            Event(
+                kind="step_end",
+                payload=StepEndEvent(step_id="s1", status="ok").model_dump(),
+            ),
+            Event(
+                kind="error",
+                payload=ErrorEvent(
+                    error="x", code="run_metadata_unavailable"
+                ).model_dump(),
+            ),
+        ]
+    )
+    _maybe_emit_partial_failure(state, _settings())
+    assert [e for e in state["events_so_far"] if e.kind == "note"] == []
+
+
+def test_no_banner_for_rag_empty_result():
+    """Spec: an empty retrieval is a valid plan outcome, not a failure."""
+    state = _state([], {})
+    state["events_so_far"].extend(
+        [
+            Event(
+                kind="tool_result",
+                payload=ToolResultEvent(
+                    step_id="rag_1", call_id="c", ok=True, result=[]
+                ).model_dump(),
+            ),
+            Event(
+                kind="step_end",
+                payload=StepEndEvent(step_id="rag_1", status="ok").model_dump(),
+            ),
+        ]
+    )
+    _maybe_emit_partial_failure(state, _settings())
+    assert [e for e in state["events_so_far"] if e.kind == "note"] == []
+
+
+def test_banner_with_empty_failed_steps_for_plan_too_large():
+    """Spec: plan-level errors fire the signal with an empty step list, and
+    the note is inserted before the already-present terminal `done` frame."""
+    state = _state([], {})
+    state["events_so_far"].extend(
+        [
+            Event(
+                kind="error",
+                payload=ErrorEvent(error="too many steps", code="plan_too_large").model_dump(),
+            ),
+            Event(kind="done", payload=DoneEvent().model_dump()),
+        ]
+    )
+    _maybe_emit_partial_failure(state, _settings())
+    assert [e.kind for e in state["events_so_far"]] == ["error", "note", "done"]
+    note = state["events_so_far"][1]
+    assert note.payload["kind"] == "partial_failure"
+    assert note.payload["failed_steps"] == []
+
+
+@pytest.mark.asyncio
+async def test_partial_failure_emitted_for_tool_retry_exhaustion(tracer, monkeypatch):
+    """Spec: exhaustion → a single note before the final answer's deltas,
+    naming the failed step."""
+    steps = [
+        PlanStep(id="tool_1", kind="tool", tool="list_feeds", args={}),
+        PlanStep(id="llm_2", kind="llm", prompt="Answer."),
+    ]
+    state = _state(steps, {})
+    tools = _ScriptedTools([ToolError("list_feeds: bad args")])
+    _use_llm(
+        monkeypatch,
+        [
+            _tool_call(args={"limit": 5}),
+            _tool_call(args={"limit": 5}),
+            AIMessage(content="final answer"),
+        ],
+    )
+
+    await executor_module.executor_node(
+        state,
+        settings=_settings(),
+        tracer=tracer,
+        budget=_StubBudget(),
+        rag=None,  # type: ignore[arg-type] — no rag steps
+        tools=tools,
+    )
+
+    events = state["events_so_far"]
+    note_idx = [i for i, e in enumerate(events) if e.kind == "note"]
+    assert len(note_idx) == 1
+    note = events[note_idx[0]]
+    assert note.payload["kind"] == "partial_failure"
+    assert note.payload["failed_steps"] == ["tool_1"]
+    final_delta_idx = max(
+        i
+        for i, e in enumerate(events)
+        if e.kind == "delta" and e.payload.get("delta") == "final answer"
+    )
+    assert note_idx[0] < final_delta_idx  # before the final answer's deltas
+
+
+@pytest.mark.asyncio
+async def test_no_banner_for_intermediate_retry_failure_recovered(tracer, monkeypatch):
+    """Spec: a retry that recovers within budget is not a partial failure."""
+    steps = _tool_steps("tool_1")
+    state = _state(steps, {})
+    tools = _ScriptedTools([ToolError("list_feeds: bad args"), {"items": []}])
+    _use_llm(monkeypatch, [_tool_call(args={"limit": 5})])
+
+    await executor_module.executor_node(
+        state,
+        settings=_settings(),
+        tracer=tracer,
+        budget=_StubBudget(),
+        rag=None,  # type: ignore[arg-type]
+        tools=tools,
+    )
+
+    assert [e for e in state["events_so_far"] if e.kind == "note"] == []
+
+
+@pytest.mark.asyncio
+async def test_banner_aggregates_two_failed_steps_in_plan_order(tracer, monkeypatch):
+    """Spec: multiple failures → one note listing every failed step id."""
+    steps = _tool_steps("tool_1", "tool_2") + [
+        PlanStep(id="llm_3", kind="llm", prompt="Answer.")
+    ]
+    state = _state(steps, {})
+    tools = _ScriptedTools([ToolError("list_feeds: bad args")])
+    _use_llm(
+        monkeypatch,
+        [_tool_call(args={"limit": 5})] * 4 + [AIMessage(content="final answer")],
+    )
+
+    await executor_module.executor_node(
+        state,
+        settings=_settings(),
+        tracer=tracer,
+        budget=_StubBudget(),
+        rag=None,  # type: ignore[arg-type]
+        tools=tools,
+    )
+
+    notes = [e for e in state["events_so_far"] if e.kind == "note"]
+    assert len(notes) == 1
+    assert notes[0].payload["failed_steps"] == ["tool_1", "tool_2"]
+
+
+# --- cross-runtime wire fixtures ------------------------------------------
+# Frozen SSE bytes; the identical strings are parsed by the TypeScript
+# consumer test in `frontend/src/features/chat/services/chatService.test.ts`
+# ("wire fixture" cases). Producer and consumer cannot drift silently —
+# changing a frame shape breaks both sides (FUTURE_AGENT.md lessons).
+
+
+def test_tool_result_wire_fixture_retry_count():
+    ev = Event(
+        kind="tool_result",
+        payload=ToolResultEvent(
+            step_id="step_1", call_id="c1", ok=True, result={"items": []}, retry_count=2
+        ).model_dump(),
+    )
+    assert _sse_encode(ev) == (
+        b"event: tool_result\n"
+        b'data: {"step_id":"step_1","call_id":"c1","ok":true,'
+        b'"result":{"items":[]},"error":null,"retry_count":2}\n\n'
+    )
+
+
+def test_partial_failure_note_wire_fixture():
+    ev = Event(
+        kind="note",
+        payload=NoteEvent(
+            text="Run diverged from the plan",
+            kind="partial_failure",
+            failed_steps=["step_3", "step_5"],
+        ).model_dump(),
+    )
+    assert _sse_encode(ev) == (
+        b"event: note\n"
+        b'data: {"text":"Run diverged from the plan","provider":null,'
+        b'"kind":"partial_failure","last_step_id":null,"run_id":null,'
+        b'"failed_steps":["step_3","step_5"]}\n\n'
+    )
