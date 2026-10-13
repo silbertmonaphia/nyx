@@ -35,7 +35,7 @@
 
 - [x] 5.1 Modify `backend/agent_py/agent/graph.py` — change `builder.compile()` to `builder.compile(checkpointer=AsyncPostgresSaver.from_conn_string(settings.database_url))`. The DSN's `options=-c search_path=langgraph,agent,public` controls schema location; the `langgraph` schema is pre-created by our `0001` alembic revision.
 - [x] 5.2 Add a `await saver.setup()` call once on app startup (after alembic migrations) to ensure langGraph's `checkpoint_*` tables exist — runs `MIGRATIONS` list against the configured connection, idempotent.
-- [ ] 5.3 Test (`backend/agent_py/tests/test_graph_persistence.py`):
+- [x] 5.3 Test (`backend/agent_py/tests/test_graph_persistence.py`): committed `e09f86b` — covers compiled-graph-carries-saver, per-node checkpoints land in `langgraph.checkpoints`, `graph.get_state(config)` round-trips post-execution state.
   - `TestCompile_HasPostgresSaver` — assert the compiled graph's `checkpointer` is an instance of `AsyncPostgresSaver`.
   - `TestGetState_AfterAstream` — start a graph run with `thread_id="<uuid>"`, complete two nodes, call `graph.get_state(config)`; assert returned state matches the last node's output.
   - `TestResume_FromCheckpoint` — start a run with `thread_id="<uuid>"`, complete all nodes; call `graph.get_state(config)` for the same `thread_id`; assert the full state is returned (no in-memory dict, real round-trip through `langgraph.*` schema in Postgres).
@@ -79,7 +79,7 @@
   - Exits 0 on success, non-zero on failure.
 - [x] 9.4 Add `agent.depends_on: agent-migrate (condition: service_completed_successfully)`.
 - [x] 9.5 Add `PYTHON_AGENT_DATABASE_URL` to `backend/.env.example` (commented out; documented as required when `AGENT_ENABLED=true`).
-- [ ] 9.6 Verify `make up` brings `db + redis + jaeger + backend + agent-migrate + agent + frontend` up. `make dev` boots backend + frontend; agent runs in compose (production-style) OR locally (dev-style with inline migrations).
+- [~] 9.6 Verify `make up` brings `db + redis + jaeger + backend + agent-migrate + agent + frontend` up. `make dev` boots backend + frontend; agent runs in compose (production-style) OR locally (dev-style with inline migrations). **Partial**: smoke caught two real Dockerfile bugs (missing `alembic.ini`/`migrations/` copy, missing `libpq5` for psycopg runtime) — both fixed in commit `4b75a96`. End-to-end migration exit-0 assertion not yet green (apt-mirror slowness blocked the rebuild in this session; subsequent rebuilds should complete). Re-run on a clean machine or after a `docker builder prune` to clear the broken layer cache.
 
 ## 10. Tests
 
@@ -92,15 +92,15 @@
   - `test_lifespan_creates_schemas_and_tables` — runs the real lifespan; asserts `langgraph.*` + `agent.*` schemas/tables exist AFTER shutdown (catches uncommitted/rolled-back DDL), and asserts no leak of table names into `public`. **Caught the leaked-`public.checkpoint_*` residue on first run.**
   - `test_metadata_roundtrip_after_lifespan` — create → get → mark_completed against the live schema; per-user scoping asserted.
 - [x] 10.6 Full Python test suite (`cd backend/agent_py && pytest`) passes — 39 passed. Includes updating `test_run.py::test_agent_run_emits_sse_frame_sequence` to the new frame order (`run_id` → `note{fresh_run}` → `plan`).
-- [ ] 10.1 `backend/agent_py/tests/test_run_metadata.py` — retention-delete, pagination, pool-exhaustion cases not yet covered (the roundtrip + scoping cases are covered by 10.8). Deferred; extend the smoke test file or add this file when touching RunMetadata next.
-- [ ] 10.2 `backend/agent_py/tests/test_graph_persistence.py` — (per task 5.3). Deferred — the smoke test covers saver setup + schema placement; `graph.get_state` round-trip not yet asserted.
-- [ ] 10.3 `backend/agent_py/tests/test_run_resume.py` — resume restart flow. Deferred.
-- [ ] 10.4 Wire `alembic check` into CI — on every PR touching `backend/agent_py/migrations/**`.
-- [ ] 10.5 Full backend test suite (`cd backend && SKIP_CONTAINERS=true go test ./...`) passes with zero regressions (the Go side is untouched, but verify).
+- [x] 10.1 `backend/agent_py/tests/test_run_metadata.py` — committed `0e696b7` — retention-delete, pagination, pool-exhaustion cases. The pool-exhaustion test caught a real `_with_retry` bug: `asyncio.TimeoutError` from `pool.acquire(timeout=...)` leaked out instead of becoming `RunMetadataUnavailable`; fixed in the same commit.
+- [x] 10.2 `backend/agent_py/tests/test_graph_persistence.py` — (per task 5.3). Three tests cover saver-wiring, per-node checkpoint write, and `get_state` round-trip.
+- [x] 10.3 `backend/agent_py/tests/test_run_resume.py` — committed `b029dd7` — two tests: planner doesn't re-run on resume, executor skips completed steps on resume.
+- [x] 10.4 Wire `alembic check` into CI — committed `e73339c` — new `agent-alembic-check` job gated on `backend/agent_py/migrations/**` path-filter; uses `alembic upgrade head` against a fresh DB (the project's `alembic check` requires a SQLAlchemy MetaData object which the chain doesn't register).
+- [x] 10.5 Full backend test suite (`cd backend && SKIP_CONTAINERS=true go test ./...`) passes with zero regressions — 20 packages, all `ok`, fresh run (no cache).
 
 ## 11. Reframe `FUTURE_AGENT.md`
 
-- [ ] 11.1 Tick `FUTURE_AGENT.md` §1.1 items as they land:
+- [x] 11.1 Tick `FUTURE_AGENT.md` §1.1 items as they land:
   - `[x]` **Run / Step structs flowed through `context.Context`** — *(N/A: implementation moved to Python; the Go-side typed values are no longer relevant.)*
   - `[x]` **DB-backed run state for crash recovery** — landed in `openspec/changes/agent-run-state/` via langGraph `PostgresSaver` (in `langgraph.*`) + thin `agent.runs` metadata table (in `agent.*`).
   - `[x]` **Run ttl** — landed in `openspec/changes/agent-run-state/` (cron over `agent.runs`).
@@ -112,7 +112,7 @@
 
 ## 13. Rollout / production flip
 
-- [ ] 13.1 Verify Python agent's pytest suite is green in CI for ≥1 week before flipping production traffic to `AGENT_ENABLED=true` with `PYTHON_AGENT_DATABASE_URL` set.
-- [ ] 13.2 Document the rollout in deploy notes: `agent-migrate` runs as part of the release pipeline before `agent` replicas roll out. Operationally: `alembic current` on the production agent-migrate exit confirms the head revision is applied. Three schemas (`public`, `langgraph`, `agent`) all reachable via the configured DSN.
-- [ ] 13.3 Rollback drill: drop both new schemas entirely (`DROP SCHEMA agent CASCADE; DROP SCHEMA langgraph CASCADE`) in a staging env and verify `/api/chat` reverts to single-run behaviour (no resume) with no other changes. `AGENT_ENABLED=false` reverts to no checkpointer.
-- [ ] 13.4 Archive `agent-run-state` once all tasks are checked.
+- [ ] 13.1 Verify Python agent's pytest suite is green in CI for ≥1 week before flipping production traffic to `AGENT_ENABLED=true` with `PYTHON_AGENT_DATABASE_URL` set. *(Time-gated: 1-week green-window. CI job `agent-alembic-check` added in commit `e73339c`; full pytest run is in `backend-test`'s existing setup once `TEST_ASYNC_PG_DSN` is wired into CI's postgres service.)*
+- [x] 13.2 Document the rollout in deploy notes: `agent-migrate` runs as part of the release pipeline before `agent` replicas roll out. Operationally: `alembic current` on the production agent-migrate exit confirms the head revision is applied. — Documented at `docs/agent-deployment.md` (commit `3d26f1b`). Two schemas (`langgraph`, `agent`) reachable via the configured DSN; `public` is owned by Go and the Python service never reads it.
+- [ ] 13.3 Rollback drill: drop both new schemas entirely (`DROP SCHEMA agent CASCADE; DROP SCHEMA langgraph CASCADE`) in a staging env and verify `/api/chat` reverts to single-run behaviour (no resume) with no other changes. `AGENT_ENABLED=false` reverts to no checkpointer. *(Staging-gated. Runbook written at `docs/runbooks/agent-run-state-rollback.md` (commit `52cd2c0`); the actual drill awaits a staging env with the `app` profile enabled.)*
+- [ ] 13.4 Archive `agent-run-state` once all tasks are checked. *(Blocked by 13.1 + 13.3; not archivable yet.)*

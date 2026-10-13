@@ -83,11 +83,11 @@ Recommendation: the second. Each step has a stable `id` so SSE frames can be cor
 
 ## P1 — Production engineering: state, observability, fault tolerance
 
-### 1.1 Agent state — **deferred to a follow-up change**
+### 1.1 Agent state — **landed in `openspec/changes/agent-run-state/`**
 
-- [ ] **`Run` / `Step` structs flowed through `context.Context`** — typed values in `internal/reqctx/` (`AgentRunID`, `AgentStepID`). In-memory for slice 1.
-- [ ] **DB-backed run state for crash recovery** — `agent_runs` + `agent_steps` tables; run state survives backend restart. Resume from last completed step.
-- [ ] **Run TTL** — auto-archive runs older than `AGENT_RUN_RETENTION_DAYS` (default 30). Cron + soft-delete.
+- [x] **`Run` / `Step` structs flowed through `context.Context`** — *(N/A: implementation moved to Python; the Go-side typed values in `internal/reqctx/` are no longer relevant to the agent runtime.)*
+- [x] **DB-backed run state for crash recovery** — `agent.runs` (in the `agent.*` schema) + langGraph's `checkpoint_*` tables (in `langgraph.*`); run state survives Python-service restart. Resume from the last checkpoint via `graph.get_state(config)`. See `openspec/changes/agent-run-state/proposal.md` and `docs/agent-deployment.md`.
+- [x] **Run TTL** — `RetentionCron` (in `backend/agent_py/agent/retention.py`) hard-deletes `agent.runs` rows where `status IN ('completed','failed')` AND `ended_at < now() - interval '<RETENTION_DAYS> day'`. Default 30 days. langGraph checkpoint tables pruned via langGraph's own retention story (out of this slice's scope).
 
 **Why defer**: in-memory state is fine for slice 1; DB persistence lands when the slice-1 loop is exercised enough to reveal which state shape actually needs persistence (plan, partial step output, tool results, etc.).
 
