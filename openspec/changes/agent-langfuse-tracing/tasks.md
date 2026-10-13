@@ -48,6 +48,15 @@
   `sk-lf-nyx-dev-agent`); tear down anytime with `docker compose -p nyx_lf_probe --env-file
   /tmp/nyx-langfuse-probe.env --profile langfuse down -v` (wipes the probe volumes). The real
   `make up-langfuse` path creates fresh volumes under the main project.
+  **Literal run (2026-10-14, post-commit):** operator appended the `LANGFUSE_*` block to the root
+  `.env` and ran the real path. First boot stalled in the web container's init phase (log went
+  silent right after MCP-feature registration, twice — including after a web-only `restart`);
+  the probe was torn down (freeing :3000) and a full `make down-langfuse` → `make up-langfuse`
+  cycle booted clean, health 200 within ~20s. Verified on the real project: only
+  `127.0.0.1:3000` published; `GET /api/public/projects` with the bootstrapped key pair → 200
+  (`nyx-dev` / `nyx-agent`), wrong keys → 401; the same cycle served as the literal
+  `down-langfuse` semantics check — `nyx-db-1` (up 2 weeks) / `nyx-redis-1` / `nyx-jaeger-1`
+  (up 12h) untouched throughout.
 
 - [x] 1.3 Makefile: `up-langfuse` / `down-langfuse` mirroring `up` / `down` semantics
   (idempotent, stop-only-langfuse-services for down), `make status` reports the langfuse
@@ -336,3 +345,27 @@
   with rationale: the custom OTLP exporter keeps the default timeout (dev-facing integration;
   the SDK default mirrors it). **Verified** — greps/read-through; e2e spec still green under
   the renamed knobs.
+
+## 6. Post-commit fix — shutdown hang with tracing enabled (peer report, 2026-10-14)
+
+> Reported by the `agent-web-tools` session: with `PYTHON_AGENT_LANGFUSE_ENABLED=true` in the
+> dev `.env`, `pytest tests/` hangs at fixture teardown. Reproduced here: `timeout 90 pytest`
+> → exit 124; faulthandler stack = `shutdown_langfuse` → `client.shutdown` →
+> `resource_manager.flush` → **unbounded `queue.join()`** on the SDK's ingestion queue. The
+> SDK's sibling threads are daemons, so the fix bounds the wait and abandons a wedged flush —
+> the documented best-effort delivery contract, never a process-wide stall.
+
+- [x] 6.1 `shutdown_langfuse` runs `client.shutdown()` on a daemon thread with a bounded
+  `Event.wait(5s)`; on timeout it logs a warning and returns (state reset first, so shutdown
+  stays idempotent and re-entrant). **Verified** — forced-env repro now completes:
+  `PYTHON_AGENT_LANGFUSE_ENABLED=true … pytest tests/test_run.py` → exit 0 (35.7s; bounded
+  stalls, zero unlimited hangs) where it previously hung past 90s.
+
+- [x] 6.2 Test hermeticity (the actual trigger): ten `Settings(...)` constructions across eight
+  lifespan-driving test files read the developer's `.env` implicitly — once that file enabled
+  tracing, every fixture teardown constructed/shut down a real client. All sites now pass
+  `_env_file=None`(the established convention in `test_config.py` / the langfuse test files).
+  **Verified** — with the dev `.env` (tracing enabled) present, plain
+  `pytest -q` → **243 passed, 34 skipped in 7.7s** (previously: hang). Real environment
+  variables still override, so an explicitly forced run remains possible — now bounded by
+  6.1.

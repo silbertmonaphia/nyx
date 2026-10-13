@@ -189,6 +189,7 @@ async def app_ctx(monkeypatch):
     import agent.config as config_module
 
     settings = config_module.Settings(
+        _env_file=None,  # hermetic: never read the developer's .env
         database_url=_DSN,
         llm_base_url="http://localhost:9999/v1",
         metrics_port=0,
@@ -390,6 +391,7 @@ async def test_sweeper_loop_survives_failed_iteration(monkeypatch):
     import agent.config as config_module
 
     settings = config_module.Settings(
+        _env_file=None,  # hermetic: never read the developer's .env
         llm_base_url="http://vllm:8000/v1",
         metrics_port=0,
         sweep_interval_seconds=1,
@@ -421,6 +423,7 @@ async def test_lifespan_wires_sweeper_when_enabled(monkeypatch):
     import agent.config as config_module
 
     settings = config_module.Settings(
+        _env_file=None,  # hermetic: never read the developer's .env
         database_url=_DSN,
         llm_base_url="http://localhost:9999/v1",
         metrics_port=0,

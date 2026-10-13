@@ -46,6 +46,7 @@ async def test_structured_path_emits_plan_frame_against_live_provider():
     from agent.state import new_state
 
     settings = Settings(
+        _env_file=None,  # hermetic: never read the developer's .env
         llm_base_url=LIVE_BASE_URL,  # type: ignore[arg-type]
         database_url=LIVE_DSN,  # type: ignore[arg-type]
     )

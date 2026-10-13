@@ -87,6 +87,7 @@ async def test_lifespan_creates_schemas_and_tables(monkeypatch):
     import agent.config as config_mod
 
     settings = config_mod.Settings(
+        _env_file=None,  # hermetic: never read the developer's .env
         database_url=_DSN,  # validator appends the encoded search_path option
         llm_base_url="http://localhost:9999/v1",  # bypass the OpenAI-key guard
         metrics_port=0,  # random free port; avoids collisions across tests
@@ -142,6 +143,7 @@ async def test_metadata_roundtrip_after_lifespan(monkeypatch):
     import agent.config as config_mod
 
     settings = config_mod.Settings(
+        _env_file=None,  # hermetic: never read the developer's .env
         database_url=_DSN,
         llm_base_url="http://localhost:9999/v1",
         metrics_port=0,

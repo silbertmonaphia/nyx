@@ -340,6 +340,11 @@ _langfuse_trace_id: ContextVar[Optional[str]] = ContextVar(
     "nyx_langfuse_trace_id", default=None
 )
 
+# Bound on the SDK shutdown/flush wait (see shutdown_langfuse). Long enough
+# for a healthy flush of a full run's batches; short enough that a wedged
+# SDK join cannot meaningfully stall service teardown.
+_LANGFUSE_SHUTDOWN_TIMEOUT_SECONDS = 5.0
+
 # Jaeger-side parent for OUR spans (see jaeger_span).
 _jaeger_parent: ContextVar[Any] = ContextVar("nyx_jaeger_parent", default=None)
 
@@ -477,13 +482,52 @@ def update_observation(observation: Any, **fields: Any) -> None:
 
 
 def shutdown_langfuse() -> None:
-    """Flush + shut down the tracing client. Idempotent, never raises."""
+    """Flush + shut down the tracing client. Idempotent, never raises,
+    and never blocks unboundedly.
+
+    The langfuse SDK's `client.shutdown()` can wedge: it calls
+    `resource_manager.flush()`, which does an UNBOUNDED `queue.join()` on
+    the SDK's ingestion queues. In a process that constructed several
+    clients (every lifespan boot constructs one), a queue can end up
+    drained-but-not-joined with no live consumer — observed as a full
+    pytest hang at fixture teardown once the dev `.env` enabled tracing
+    (faulthandler stack: shutdown_langfuse → client.shutdown →
+    resource_manager.flush → queue.join, exit 124 under `timeout`).
+    The SDK's sibling threads are daemons, so bounding the wait and
+    abandoning a wedged shutdown is safe: the interpreter still exits,
+    and the worst case is the last un-exported batch being dropped —
+    exactly the documented best-effort delivery contract (spec
+    `agent-llm-tracing` — "Trace delivery is best-effort").
+    """
     global _langfuse_client, _langfuse_provider, _langfuse_handler
-    if _langfuse_client is not None:
-        try:
-            _langfuse_client.shutdown()
-        except Exception:
-            logger.warning("langfuse shutdown failed", exc_info=True)
+    client = _langfuse_client
+    # Reset state first so a wedged SDK thread can never make shutdown
+    # non-idempotent or block a re-entrant call.
     _langfuse_client = None
     _langfuse_provider = None
     _langfuse_handler = None
+    if client is None:
+        return
+
+    import threading
+
+    finished = threading.Event()
+
+    def _do_shutdown() -> None:
+        try:
+            client.shutdown()
+        except Exception:
+            logger.warning("langfuse shutdown failed", exc_info=True)
+        finally:
+            finished.set()
+
+    worker = threading.Thread(
+        target=_do_shutdown, name="nyx-langfuse-shutdown", daemon=True
+    )
+    worker.start()
+    if not finished.wait(timeout=_LANGFUSE_SHUTDOWN_TIMEOUT_SECONDS):
+        logger.warning(
+            "langfuse shutdown did not complete within %.0fs; abandoning the "
+            "SDK's flush (traces may be dropped — best-effort delivery)",
+            _LANGFUSE_SHUTDOWN_TIMEOUT_SECONDS,
+        )

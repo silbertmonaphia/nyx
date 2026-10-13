@@ -167,6 +167,7 @@ def _settings():
     import agent.config as config_module
 
     return config_module.Settings(
+        _env_file=None,  # hermetic: never read the developer's .env
         database_url=_DSN,
         llm_base_url="http://localhost:9999/v1",
         metrics_port=0,
