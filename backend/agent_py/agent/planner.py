@@ -41,6 +41,7 @@ from .types import (
     DoneEvent,
     ErrorEvent,
     Event,
+    NoteEvent,
     Plan,
     PlanEvent,
     PlanStep,
@@ -560,6 +561,22 @@ def _emit_error(
             kind="error",
             payload=ErrorEvent(
                 error=detail, code=code, request_id=state.get("request_id")
+            ).model_dump(),
+        )
+    )
+    # agent-tool-dispatch-retry (spec: agent-partial-failure): a plan-level
+    # failure is a plan divergence. The note is emitted HERE, in the same
+    # planner chunk as error/done — `run_agent_stream` slices
+    # `events_so_far` positionally per node chunk, so a note inserted into
+    # this already-yielded range later (e.g. from the executor node) would
+    # never reach the wire. No step ran, so `failed_steps` is empty.
+    state["events_so_far"].append(
+        Event(
+            kind="note",
+            payload=NoteEvent(
+                text="Run diverged from the plan",
+                kind="partial_failure",
+                failed_steps=[],
             ).model_dump(),
         )
     )

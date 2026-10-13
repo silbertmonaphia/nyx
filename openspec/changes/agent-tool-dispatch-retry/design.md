@@ -66,11 +66,11 @@ The Go registry's `Dispatch` returns a typed error class. The Python executor in
 
 **Why not in the `ToolsClient` abstraction**: `ToolsClient` is the MCP / RAG HTTP wrapper. It could retry the *transport* layer (network timeouts on a single call), but it doesn't know about model re-prompting — that's an executor concern. The split is: `ToolsClient` retries the wire; the executor decides whether to re-prompt the model.
 
-### Wire shape: `tool_result` gains an optional `retry_count` field
+### Wire shape: `tool_result` gains a `retry_count` field
 
-The existing `ToolResultEvent` carries `step_id`, `call_id`, `ok`, and optional `result` / `error`. We add optional `retry_count: int` (defaults to 0; present only on the final result frame, ≥ 1 when a retry occurred). The `tool_call` frame stays unchanged.
+The existing `ToolResultEvent` carries `step_id`, `call_id`, `ok`, and optional `result` / `error`. We add `retry_count: int` (defaults to 0; serialized on every result frame — the retries made *so far* on an intermediate failure frame, 0 on a first-attempt failure, and the final count on the terminal/success frame). The `tool_call` frame stays unchanged.
 
-**Why optional**: backwards compatibility — old clients ignore unknown fields, so the addition is safe. Setting `retry_count: 0` on every success would inflate the payload for the common case; absent = 0.
+**Why defaulted, always serialized**: backwards compatibility — old clients ignore unknown fields, so the addition is safe. A defaulted field means every producer path gets a well-defined value without per-callsite plumbing; the frozen wire fixtures on both sides pin the serialized shape.
 
 **Why not a separate event kind**: the retry is a property of the eventual result, not a discrete event the client needs to render. Embedding it in the result frame keeps the stream simple.
 

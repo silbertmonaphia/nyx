@@ -7,7 +7,13 @@ import json
 import httpx
 import pytest
 
-from agent.tools_client import ToolAuthError, ToolError, ToolUnavailableError, ToolsClient
+from agent.tools_client import (
+    ToolAuthError,
+    ToolError,
+    ToolRejectedError,
+    ToolsClient,
+    ToolUnavailableError,
+)
 
 
 def _patched_async_client(handler, original):
@@ -112,3 +118,94 @@ async def test_list_tools_returns_openai_schemas(monkeypatch):
     assert schemas[0]["function"]["name"] == "list_feeds"
     # And confirm the request was a JSON-RPC `tools/list` call.
     assert captured["body"]["method"] == "tools/list"
+
+
+# --- status → exception mapping (agent-tool-dispatch-retry) ---------------
+# The executor's retry classification consumes the exception TYPE, so this
+# mapping is the production classifier's only input. A regression here (e.g.
+# 429 falling into the ToolError bucket) would silently disable retries with
+# every executor test still green — the mocks inject exceptions directly.
+
+
+@pytest.mark.asyncio
+async def test_call_408_and_429_raise_unavailable(monkeypatch):
+    """Throttling / request-timeout statuses are TRANSIENT (retryable)."""
+    status = {"code": 408}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(status["code"], text="retry later")
+
+    monkeypatch.setattr(httpx, "AsyncClient", _patched_async_client(handler, httpx.AsyncClient))
+    client = ToolsClient("http://mcp.test", "t")
+    with pytest.raises(ToolUnavailableError):
+        await client.call("list_feeds", {})
+    status["code"] = 429
+    with pytest.raises(ToolUnavailableError):
+        await client.call("list_feeds", {})
+
+
+@pytest.mark.asyncio
+async def test_call_bare_4xx_raises_rejected_with_status(monkeypatch):
+    """A 4xx body without a JSON-RPC envelope is a non-retryable transport
+    rejection; the exception carries the status for safe error text."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(400, text="<html>bad request</html>")
+
+    monkeypatch.setattr(httpx, "AsyncClient", _patched_async_client(handler, httpx.AsyncClient))
+    client = ToolsClient("http://mcp.test", "t")
+    with pytest.raises(ToolRejectedError) as excinfo:
+        await client.call("list_feeds", {})
+    assert excinfo.value.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_call_4xx_with_jsonrpc_envelope_raises_tool_error(monkeypatch):
+    """A 4xx whose body IS a JSON-RPC error envelope is a semantic (registry)
+    rejection — it must route to the tool-arg retry path, not fail-fast."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content)
+        return httpx.Response(
+            422,
+            json={
+                "jsonrpc": "2.0",
+                "id": body["id"],
+                "error": {"message": "limit must be an integer"},
+            },
+        )
+
+    monkeypatch.setattr(httpx, "AsyncClient", _patched_async_client(handler, httpx.AsyncClient))
+    client = ToolsClient("http://mcp.test", "t")
+    with pytest.raises(ToolError):
+        await client.call("list_feeds", {})
+
+
+@pytest.mark.asyncio
+async def test_call_iserror_result_raises_tool_error(monkeypatch):
+    """SEP-1303: mcp-go surfaces schema-validation / not-found failures as
+    `isError: true` results at HTTP 200 — the PRIMARY rejection channel for
+    MCP-delivered calls. They must raise ToolError (arg-retry path), not
+    return as a successful result."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content)
+        return httpx.Response(
+            200,
+            json={
+                "jsonrpc": "2.0",
+                "id": body["id"],
+                "result": {
+                    "content": [
+                        {"type": "text", "text": "invalid arguments: limit must be > 0"}
+                    ],
+                    "isError": True,
+                },
+            },
+        )
+
+    monkeypatch.setattr(httpx, "AsyncClient", _patched_async_client(handler, httpx.AsyncClient))
+    client = ToolsClient("http://mcp.test", "t")
+    with pytest.raises(ToolError) as excinfo:
+        await client.call("list_feeds", {})
+    assert "limit must be > 0" in str(excinfo.value)

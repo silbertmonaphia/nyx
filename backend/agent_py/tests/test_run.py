@@ -435,6 +435,62 @@ async def test_rag_only_plan_emits_empty_answer_error(app_and_state):
     assert "data: [DONE]\n\n" in resp.text
 
 
+class _TooLargePlanLlm:
+    """Planner stub: an 11-step plan exceeds the default PLAN_MAX_STEPS (10),
+    so the planner terminates with error{code:"plan_too_large"} before any
+    step runs. The executor never reaches the model."""
+
+    _PLAN: ClassVar[dict[str, Any]] = {
+        "steps": [{"id": f"step_{i}", "kind": "llm", "prompt": "x"} for i in range(11)]
+    }
+    call_count = 0
+
+    def __init__(self, *args, **kwargs):
+        pass
+
+    async def ainvoke(self, messages):
+        raise AssertionError("executor must not run for a plan_too_large run")
+
+    def bind(self, **kwargs):
+        type(self).call_count += 1
+        return _StubStructuredChain(self._PLAN)
+
+
+@pytest.mark.asyncio
+async def test_plan_too_large_stream_carries_partial_failure_note(app_and_state):
+    """F1 regression (test-review round 1): the plan-level partial-failure
+    note must appear IN THE STREAM, between the error frame and done.
+
+    `run_agent_stream` slices `events_so_far` positionally per node chunk —
+    a note inserted into the planner's already-yielded chunk (e.g. from the
+    executor node, where this was originally emitted) never reaches the
+    wire. The original unit test inspected state, not the stream, and passed
+    while the wire carried no note (self-consistent wrongness)."""
+    app = app_and_state
+    _set_lm(app_and_state, _TooLargePlanLlm)
+
+    resp = await _post_chat(
+        app,
+        ChatRequest(messages=[ChatMessage(role="user", content="hi")]).model_dump(),
+    )
+    assert resp.status_code == 200
+    frames = _parsed_frames(resp.text)
+
+    error_idx = next(
+        i
+        for i, f in enumerate(frames)
+        if isinstance(f, dict) and f.get("code") == "plan_too_large"
+    )
+    note_idx = next(
+        i
+        for i, f in enumerate(frames)
+        if isinstance(f, dict) and f.get("kind") == "partial_failure"
+    )
+    done_idx = next(i for i, f in enumerate(frames) if isinstance(f, dict) and "usage" in f)
+    assert error_idx < note_idx < done_idx, f"frame order: error@{error_idx} note@{note_idx} done@{done_idx}"
+    assert frames[note_idx]["failed_steps"] == []
+
+
 @pytest.mark.asyncio
 async def test_agent_run_missing_user_id_header_returns_400(app_and_state):
     """The Python service does not verify JWTs — Go sets X-Nyx-User-Id after

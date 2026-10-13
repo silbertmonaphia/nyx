@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import random
 import uuid
 from typing import Any
@@ -56,6 +57,8 @@ from .types import (
 
 DEFAULT_ESTIMATED_TOKENS = 1000
 
+log = logging.getLogger("nyx.agent.executor")
+
 # Sentinel marker echoed into the tool-arg re-prompt; matches the planner's
 # `PREVIOUS_ATTEMPT_FAILED` block so the model sees a consistent convention.
 PREVIOUS_ATTEMPT_FAILED_HEADER = "PREVIOUS_ATTEMPT_FAILED"
@@ -88,10 +91,12 @@ async def executor_node(
     if plan is None:
         state["terminal_status"] = "failed"
         state["terminal_reason"] = "no_plan"
-        # The planner emits error+done+terminator for plan-level failures
-        # (plan_too_large / plan_invalid); surface the partial-failure note
-        # before its `done` frame so the banner trigger is complete.
-        _maybe_emit_partial_failure(state, settings)
+        # No partial-failure note here: plan-level failures are emitted by
+        # the PLANNER's own terminal helper (`planner._emit_error`), in the
+        # same node chunk as error/done — `run_agent_stream` slices
+        # positionally, so a note inserted into the already-streamed
+        # planner range from this node would never reach the wire
+        # (test-review round 1, F1).
         return state
     # Defensive: the planner always emits a typed `Plan` instance after the
     # structured-output migration (openspec/changes/agent-planner-structured).
@@ -668,7 +673,10 @@ async def _reprompt_for_corrected_call(
     )
     try:
         schemas = await tools.list_tools()
-    except Exception:  # noqa: BLE001 — best-effort; the prompt still carries the error
+    except Exception as exc:  # noqa: BLE001 — best-effort; the prompt still carries the error
+        # Degraded, not fatal: the re-prompt proceeds without the argument
+        # schema. Log so a registry outage during retries is visible.
+        log.warning("re-prompt: tools/list failed; schema omitted from prompt: %r", exc)
         schemas = []
     if schemas:
         client = base_client.bind_tools(schemas)
@@ -685,9 +693,25 @@ async def _reprompt_for_corrected_call(
         if step_prompt:
             prompt_msgs.append(SystemMessage(content=step_prompt))
         prompt_msgs.extend(_state_messages_to_lc(state.get("messages", [])))
-    prompt_msgs.append(
-        AIMessage(content="", tool_calls=[{"id": tc_id, "name": tool_name, "args": args}])
-    )
+    # Append the synthetic assistant tool-call message ONLY when no message
+    # in the list already carries this call id (test-review round 1, F2):
+    # in the ReAct path the live messages end with the model's own assistant
+    # turn for this call, and appending a second copy produces two
+    # consecutive assistant tool-call turns — which strict OpenAI-compatible
+    # providers reject. For retries ≥ 2 in ReAct the corrected call is NOT
+    # in the list, so the synthetic message (fresh id, matching ToolMessage
+    # below) is appended and the pairing stays intact.
+    def _carries_bad_call(msg) -> bool:
+        for tc in getattr(msg, "tool_calls", None) or []:
+            call_id = tc.get("id") if isinstance(tc, dict) else getattr(tc, "id", None)
+            if call_id == tc_id:
+                return True
+        return False
+
+    if not any(_carries_bad_call(m) for m in prompt_msgs):
+        prompt_msgs.append(
+            AIMessage(content="", tool_calls=[{"id": tc_id, "name": tool_name, "args": args}])
+        )
     prompt_msgs.append(
         ToolMessage(content=f"Tool call rejected: {error_text}", tool_call_id=tc_id)
     )
@@ -815,6 +839,17 @@ def _collect_failed_steps(state: AgentState, settings: Settings) -> list[str]:
     """
     events = state.get("events_so_far", [])
     retry_max = settings.tool_retry_max
+    # Steps whose per-(step, tool) budget is fully consumed. Needed because
+    # a budget split across ReAct iterations can exhaust through frames whose
+    # individual retry_count never equals retry_max (test-review round 1, F3):
+    # 1 retry in iteration 1 + 1 in iteration 2 emits retry_count 0/1/1, yet
+    # the tool is exhausted. Default-clause `retry_count == retry_max` still
+    # covers the single-dispatch case; this set covers the split one.
+    exhausted_steps = {
+        step_id
+        for step_id, tools_used in (state.get("tool_retry_used") or {}).items()
+        if any(used >= retry_max for used in tools_used.values())
+    }
     seen: dict[str, None] = {}
     for ev in events:
         payload = ev.payload or {}
@@ -822,7 +857,10 @@ def _collect_failed_steps(state: AgentState, settings: Settings) -> list[str]:
         is_terminal_tool_failure = (
             ev.kind == "tool_result"
             and payload.get("ok") is False
-            and payload.get("retry_count", 0) == retry_max
+            and (
+                payload.get("retry_count", 0) == retry_max
+                or payload.get("step_id") in exhausted_steps
+            )
         )
         if is_failed_step or is_terminal_tool_failure:
             step_id = payload.get("step_id")
@@ -868,11 +906,18 @@ def _maybe_emit_partial_failure(state: AgentState, settings: Settings) -> None:
 
     Trigger: any collected failed step OR a plan-level error code. No-op
     otherwise (clean runs, `run_metadata_unavailable`-only runs, RAG-empty).
+    Idempotent — a run that already carries a partial-failure note (e.g.
+    the planner emitted one for a plan-level error) is left untouched.
     """
+    events = state["events_so_far"]
+    if any(
+        e.kind == "note" and (e.payload or {}).get("kind") == "partial_failure"
+        for e in events
+    ):
+        return
     failed_steps = _collect_failed_steps(state, settings)
     if not failed_steps and not _has_plan_level_error(state):
         return
-    events = state["events_so_far"]
     events.insert(
         _note_insert_index(events),
         Event(

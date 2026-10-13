@@ -14,12 +14,16 @@ from typing import ClassVar
 import pytest
 from langchain_core.messages import AIMessage, ToolMessage
 from opentelemetry import trace
+from opentelemetry.sdk.trace import TracerProvider as _SdkTracerProvider
+from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 from prometheus_client import REGISTRY
 
 from agent import executor as executor_module
 from agent.config import Settings
 from agent.executor import (
     _collect_failed_steps,
+    _compute_backoff_ms,
     _maybe_emit_partial_failure,
     _run_llm,
     _run_react,
@@ -806,3 +810,186 @@ def test_partial_failure_note_wire_fixture():
         b'"kind":"partial_failure","last_step_id":null,"run_id":null,'
         b'"failed_steps":["step_3","step_5"]}\n\n'
     )
+
+
+# --- test-review round 1 regressions ---------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_react_reprompt_does_not_duplicate_assistant_call(tracer, monkeypatch):
+    """F2 regression (test-review round 1): in the ReAct path the live
+    messages already end with the assistant turn that emitted the bad call —
+    the re-prompt must NOT append a second synthetic copy (two consecutive
+    assistant tool-call turns; strict providers reject that shape)."""
+    step = PlanStep(id="react_1", kind="react", prompt="p", max_iterations=2)
+    state = _state([step], {})
+    tools = _ScriptedTools([ToolError("list_feeds: bad args"), {"items": []}])
+    # Same call id on every model turn, mirroring the live loop.
+    tc = _tool_call(args={"limit": 1})
+    _use_llm(monkeypatch, [tc, tc, AIMessage(content="done")])
+
+    with tracer.start_as_current_span("x") as span:
+        await _run_react(state, step, _settings(), tracer, _StubBudget(), tools, span)
+
+    reprompt = _ScriptedLlm.captured[1]  # captured[0] is iteration 0's live call
+    assistant_turns = [
+        m for m in reprompt if isinstance(m, AIMessage) and getattr(m, "tool_calls", None)
+    ]
+    assert len(assistant_turns) == 1, "assistant tool-call turn must appear exactly once"
+    assert assistant_turns[0].tool_calls[0]["id"] == "tc_1"
+    tool_msgs = [m for m in reprompt if isinstance(m, ToolMessage)]
+    assert tool_msgs[-1].tool_call_id == "tc_1"  # rejection answers the same call
+
+
+def test_compute_backoff_ms_bounds_and_ceiling():
+    """Spec: min(base · 2^attempt ± 20% jitter, ceiling). Jitter bounds asserted
+    loosely (the exact draw is random); the ceiling clamp asserted exactly."""
+    settings = Settings(
+        llm_base_url="http://stub",
+        metrics_port=0,
+        tool_retry_backoff_base_ms=250,
+        tool_retry_backoff_ceiling_ms=5000,
+    )
+    assert 200 <= _compute_backoff_ms(0, settings) <= 300  # 250 ± 20%
+    assert 400 <= _compute_backoff_ms(1, settings) <= 600  # 500 ± 20%
+    assert _compute_backoff_ms(10, settings) == 5000.0  # 256000 → clamped
+
+
+@pytest.mark.asyncio
+async def test_tool_retry_max_zero_fails_fast(tracer):
+    """Spec / N4: `tool_retry_max=0` → exactly one attempt, no counter
+    increment, no model re-prompt, terminal frame with retry_count=0."""
+    settings = Settings(
+        llm_base_url="http://stub",
+        metrics_port=0,
+        tool_retry_max=0,
+        tool_retry_backoff_base_ms=0,
+    )
+    steps = _tool_steps("tool_1")
+    state = _state(steps, {})
+    tools = _ScriptedTools([ToolError("list_feeds: bad args")])
+
+    before = _retry_counter("list_feeds", "tool_arg_invalid")
+    with tracer.start_as_current_span("x") as span, pytest.raises(RuntimeError):
+        await _run_tool(
+            state,
+            steps[0],
+            settings=settings,
+            tracer=tracer,
+            budget=_StubBudget(),
+            tools=tools,
+            span=span,
+        )
+
+    assert len(tools.calls) == 1
+    assert _retry_counter("list_feeds", "tool_arg_invalid") - before == 0
+    assert _CapturingLlm.captured == []  # the autouse stub saw no re-prompt
+    final = [e for e in state["events_so_far"] if e.kind == "tool_result"][-1]
+    assert final.payload["ok"] is False
+    assert final.payload["retry_count"] == 0
+
+
+@pytest.mark.asyncio
+async def test_first_try_success_does_not_increment_retry_counters(tracer):
+    """Spec: a successful first attempt increments neither reason counter and
+    carries retry_count=0."""
+    steps = _tool_steps("tool_1")
+    state = _state(steps, {})
+    tools = _ScriptedTools([{"items": []}])
+
+    before_arg = _retry_counter("list_feeds", "tool_arg_invalid")
+    before_transient = _retry_counter("list_feeds", "tool_execution_transient")
+    with tracer.start_as_current_span("x") as span:
+        await _run_tool(
+            state,
+            steps[0],
+            settings=_settings(),
+            tracer=tracer,
+            budget=_StubBudget(),
+            tools=tools,
+            span=span,
+        )
+
+    assert _retry_counter("list_feeds", "tool_arg_invalid") - before_arg == 0
+    assert _retry_counter("list_feeds", "tool_execution_transient") - before_transient == 0
+    final = [e for e in state["events_so_far"] if e.kind == "tool_result"][-1]
+    assert final.payload["ok"] is True
+    assert final.payload["retry_count"] == 0
+
+
+@pytest.mark.asyncio
+async def test_retry_sets_span_attributes(monkeypatch):
+    """Spec: the surrounding `agent.step.tool` span carries `retry_count` and
+    `retry_reason` so operators can correlate retries with the run trace."""
+    exporter = InMemorySpanExporter()
+    provider = _SdkTracerProvider()
+    provider.add_span_processor(SimpleSpanProcessor(exporter))
+    sdk_tracer = provider.get_tracer("test-executor-span-attrs")
+
+    steps = _tool_steps("tool_1")
+    state = _state(steps, {})
+    tools = _ScriptedTools([ToolError("list_feeds: bad args"), {"items": []}])
+    _use_llm(monkeypatch, [_tool_call(args={"limit": 5})])
+
+    try:
+        with sdk_tracer.start_as_current_span("agent.step.tool") as span:
+            await _run_tool(
+                state,
+                steps[0],
+                settings=_settings(),
+                tracer=sdk_tracer,
+                budget=_StubBudget(),
+                tools=tools,
+                span=span,
+            )
+        spans = exporter.get_finished_spans()
+        assert spans, "expected one finished step span"
+        attrs = spans[0].attributes
+        assert attrs["retry_count"] == 1
+        assert attrs["retry_reason"] == "tool_arg_invalid"
+    finally:
+        provider.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_banner_fires_when_retry_budget_split_across_dispatches(
+    tracer, monkeypatch
+):
+    """F3 regression (test-review round 1): a budget exhausted by TWO
+    dispatches (1 retry each) — ReAct iteration 1 succeeds after one retry
+    (used=1), iteration 2 exhausts the remaining one (terminal frame
+    retry_count=1 ≠ retry_max) — must still flag the step. The literal
+    `retry_count == tool_retry_max` clause alone misses it."""
+    step = PlanStep(id="react_1", kind="react", prompt="p", max_iterations=3)
+    state = _state([step], {})
+    tools = _ScriptedTools(
+        [
+            ToolError("list_feeds: bad args"),
+            {"items": []},  # iteration-1 dispatch recovers after 1 retry
+            ToolError("list_feeds: bad args"),
+            ToolError("list_feeds: bad args"),  # iteration-2 dispatch exhausts
+        ]
+    )
+    tc = _tool_call(args={"limit": 1})
+    _use_llm(monkeypatch, [tc, tc, tc, tc, AIMessage(content="done")])
+
+    await executor_module.executor_node(
+        state,
+        settings=_settings(),
+        tracer=tracer,
+        budget=_StubBudget(),
+        rag=None,  # type: ignore[arg-type]
+        tools=tools,
+    )
+
+    notes = [e for e in state["events_so_far"] if e.kind == "note"]
+    assert len(notes) == 1
+    assert notes[0].payload["failed_steps"] == ["react_1"]
+    # Prove the split: no failure frame ever carried the full retry_count.
+    failures = [
+        e
+        for e in state["events_so_far"]
+        if e.kind == "tool_result" and e.payload["ok"] is False
+    ]
+    assert failures, "expected failure frames"
+    assert all(f.payload["retry_count"] < 2 for f in failures)

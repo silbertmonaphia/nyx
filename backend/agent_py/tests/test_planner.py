@@ -467,7 +467,13 @@ def test_plan_node_emits_error_and_done_on_retry_exhaustion(
     """Spec scenario "Persistent Pydantic failure terminates run": the node
     emits `error{code:"plan_invalid"}` followed by `done` (+ `terminator`)
     and never transitions past planning. Safe-error discipline: the detail
-    is the static string, not raw exception text."""
+    is the static string, not raw exception text.
+
+    The partial-failure note sits between error and done
+    (agent-tool-dispatch-retry): plan-level failures are a plan divergence,
+    and the note must ride the PLANNER's chunk — `run_agent_stream` slices
+    positionally, so a note inserted from the executor node would never
+    reach the wire (test-review round 1, F1)."""
     real_error = ValidationError.from_exception_data(
         title="Plan",
         line_errors=[
@@ -497,10 +503,13 @@ def test_plan_node_emits_error_and_done_on_retry_exhaustion(
     out = await_call(plan_node(state, scripted_settings, _NoopTracer()))
 
     kinds = [e.kind for e in out["events_so_far"]]
-    assert kinds == ["error", "done", "terminator"]
+    assert kinds == ["error", "note", "done", "terminator"]
     err_payload = out["events_so_far"][0].payload
     assert err_payload["code"] == "plan_invalid"
     assert err_payload["error"] == "Plan is invalid"
+    note_payload = out["events_so_far"][1].payload
+    assert note_payload["kind"] == "partial_failure"
+    assert note_payload["failed_steps"] == []
     assert out["terminal_status"] == "failed"
     assert out.get("plan") is None
 

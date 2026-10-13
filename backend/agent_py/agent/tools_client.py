@@ -150,4 +150,34 @@ class ToolsClient:
             err = data["error"]
             msg = err.get("message", "tool error") if isinstance(err, dict) else str(err)
             raise ToolError(f"{name}: {msg}")
-        return data.get("result", {})
+        result = data.get("result", {})
+        if isinstance(result, dict) and result.get("isError") is True:
+            # SEP-1303: mcp-go surfaces input-schema-validation failures AND
+            # tool-not-found as tool-level `isError: true` results at HTTP
+            # 200 (see internal/mcp/handler.go — WithInputSchemaValidation).
+            # That is the primary rejection channel for MCP-delivered calls;
+            # mapping it onto ToolError routes it through the executor's
+            # tool-arg retry path (re-prompt + counter) instead of feeding
+            # the rejection to the model as a successful result.
+            raise ToolError(f"{name}: {_iserror_text(result)}")
+        return result
+
+
+def _iserror_text(result: dict) -> str:
+    """Extract the human/model-facing text from an MCP isError result.
+
+    Shape per SEP-1303: `{"content": [{"type": "text", "text": "..."}], "isError": true}`.
+    The Go layer composes these messages for the LLM to self-correct on, so
+    passing the text through the ToolError funnel is intended.
+    """
+    content = result.get("content")
+    if isinstance(content, list):
+        texts: list[str] = []
+        for part in content:
+            if isinstance(part, dict):
+                text = part.get("text")
+                if isinstance(text, str):
+                    texts.append(text)
+        if texts:
+            return " ".join(texts)
+    return "tool call rejected"

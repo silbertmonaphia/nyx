@@ -29,7 +29,7 @@ event: tool_result
 data: {"step_id":"step_1","call_id":"c3","ok":false,"result":null,"error":"list_feeds: limit must be an integer","retry_count":2}
 
 event: step_end
-data: {"step_id":"step_1","status":"failed","reason":"tool: list_feeds: limit must be an integer"}
+data: {"step_id":"step_1","status":"failed","reason":"RuntimeError('tool: list_feeds: limit must be an integer')"}
 
 event: step_start
 data: {"step_id":"step_2","kind":"llm"}
