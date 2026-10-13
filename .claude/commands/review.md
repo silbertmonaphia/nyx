@@ -36,4 +36,4 @@ You are running the project's review pass. Use the Agent tool to spawn the
 - Frontend-only formatting churn — `npm run lint` is enough.
 - For harness / docs work (this file is harness work itself).
 
-See Harness.md #3 for the design rationale.
+See Harness.zh.md #3 for the design rationale.

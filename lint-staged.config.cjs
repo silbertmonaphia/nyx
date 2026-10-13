@@ -23,7 +23,7 @@ module.exports = {
     // the output clean when a staged file is outside eslint's ts
     // scope (vitest's `related` already filters by relatedness).
     './frontend/node_modules/.bin/eslint --config frontend/eslint.config.js --fix --no-warn-ignored',
-    // Architecture boundary linter (see Harness.md #2 + frontend/.dependency-cruiser.cjs).
+    // Architecture boundary linter (see Harness.zh.md #2 + frontend/.dependency-cruiser.cjs).
     // depcruise resolves the whole src/ dep graph regardless of the staged
     // file list — feature boundaries are global, so a single staged file
     // can only be evaluated in the context of the whole tree. Adding the

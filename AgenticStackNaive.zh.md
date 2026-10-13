@@ -3,7 +3,7 @@
 > 状态同步(2026-10-14): 本文件是最初的能力缺口需求拆解,原文保留;每项下加 ✅/🟡/⬜ 标注 —
 > ✅ 已落地、🟡 部分/在飞、⬜ 未做。现状盘点见 `AgentStack.zh.md`,故障面见 `AgentFaultTolerance.md`。
 
-最开始的最Naive的想法：LangChain[编排] + WebShaper[搜索] + Mem0[记忆]
+最开始的最Naive的想法：LangChain[编排] + WebShaper[搜索] + Mem0[记忆] + Milvus[RAG]
 
 ## P0 核心骨架: 从单向 DAG 转为 Loop 与 Tool Routing
 1、工具调用 Tool Calling & Structured Output ✅

@@ -71,7 +71,7 @@ jobs:
       # on a populated column / ALTER COLUMN TYPE). Pre-shipped migrations
       # are grandfathered in scripts/migrations-baseline.txt; new ones
       # must follow the rules or carry a `-- safe-migration: <reason>`
-      # annotation. See Harness.md #1.
+      # annotation. See Harness.zh.md #1.
       run: make migration-check
     - name: Test
       run: cd backend && go test -v ./...
@@ -167,7 +167,7 @@ jobs:
     - name: Lint
       run: cd frontend && npm run lint
     - name: Architecture boundary check
-      # Enforces the src/features/* + shared/ boundaries (see Harness.md
+      # Enforces the src/features/* + shared/ boundaries (see Harness.zh.md
       # #2). depcruise resolves the whole dep graph, so this is a global
       # check — it can't be reduced to "staged files only". Runs after
       # eslint so syntactic issues are caught first.

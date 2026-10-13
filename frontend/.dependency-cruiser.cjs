@@ -1,4 +1,4 @@
-// Architecture boundary linter — see Harness.md #2.
+// Architecture boundary linter — see Harness.zh.md #2.
 //
 // Rules enforced:
 //   1. no-cross-feature-<a>-to-<b>: a file inside features/<a> MUST NOT
