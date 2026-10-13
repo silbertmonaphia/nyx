@@ -14,7 +14,7 @@
 # requires `go`, `npm`, `python3`, and the `docker compose` plugin on
 # PATH. Backend invocations assume `make up` has been run.
 
-.PHONY: dev dev-backend dev-frontend dev-agent dev-vllm-main dev-vllm-embed dev-infra dev-pgsql-inspect dev-redis-inspect up down up-vllm down-vllm logs status stop help
+.PHONY: dev dev-backend dev-frontend dev-agent dev-vllm-main dev-vllm-embed dev-infra dev-pgsql-inspect dev-redis-inspect dev-gpu-inspect up down up-vllm down-vllm logs status stop help
 
 COMPOSE := docker compose
 
@@ -104,3 +104,7 @@ dev-pgsql-inspect:
 #: Open a redis-cli shell against the dev Redis — `redis-cli -h 127.0.0.1 -p 6380`.
 dev-redis-inspect:
 	redis-cli -h 127.0.0.1 -p 6380
+
+#: Show GPU state via nvidia-smi — memory, utilization, and per-process usage (useful to confirm the host vLLM targets freed VRAM).
+dev-gpu-inspect:
+	@PATH="$$PATH:/usr/lib/wsl/lib" nvidia-smi
