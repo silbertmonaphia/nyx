@@ -9,6 +9,14 @@ queries that langGraph's opaque `checkpoint_*` blob doesn't expose:
   - `create_run(user_id) -> uuid` — mints a server-side uuid4 for fresh runs.
   - `get_run(run_id, user_id)` — defensive per-user read used by the resume
     decision in `main.py`.
+  - `touch_heartbeat(run_id) -> bool` — conditional liveness refresh for the
+    stale-run sweeper (`openspec/changes/agent-stale-run-sweeper`); returns
+    False once the row is terminal.
+  - `sweep_stale_runs(timeout_seconds) -> [uuid]` — reaps zombie `running`
+    rows to `failed`/`stale_run`.
+  - `retention_delete_terminal(days) -> [uuid]` — deletes expired terminal
+    rows and returns their ids so the retention cron can GC their langGraph
+    checkpoint threads.
 
 State persistence itself is handled by langGraph's `AsyncPostgresSaver` (in
 `langgraph.*`). This module is the *metadata* mirror, not the state store.
@@ -125,7 +133,8 @@ class RunMetadata:
         async def _insert(conn: asyncpg.Connection) -> str:
             run_id = str(uuid_lib.uuid4())
             await conn.execute(
-                "INSERT INTO runs (id, user_id, status) VALUES ($1, $2, 'running')",
+                "INSERT INTO runs (id, user_id, status, last_heartbeat_at) "
+                "VALUES ($1, $2, 'running', now())",
                 run_id,
                 user_id,
             )
@@ -134,9 +143,15 @@ class RunMetadata:
         return await self._with_retry("create_run", _insert)
 
     async def mark_completed(self, run_id: str, total_tokens: int) -> None:
+        # Terminal writes are unconditional and authoritative (the live
+        # process knows the run's true outcome) — and `error_code=NULL`
+        # clears a `stale_run` written by the sweeper against a stalled
+        # heartbeat, so a premature reap cannot outlive a real completion
+        # (openspec/changes/agent-stale-run-sweeper, D3).
         async def _update(conn: asyncpg.Connection) -> None:
             await conn.execute(
-                "UPDATE runs SET status='completed', ended_at=now(), total_tokens=$2 "
+                "UPDATE runs SET status='completed', ended_at=now(), "
+                "total_tokens=$2, error_code=NULL "
                 "WHERE id=$1",
                 run_id,
                 total_tokens,
@@ -154,6 +169,27 @@ class RunMetadata:
             )
 
         await self._with_retry("mark_failed", _update)
+
+    async def touch_heartbeat(self, run_id: str) -> bool:
+        """Refresh `last_heartbeat_at` for a live run (stale-run sweeper).
+
+        Conditional on the row still being `running`, so a heartbeat can
+        never resurrect a terminal row (see the sweeper's first-writer-wins
+        semantics in `openspec/changes/agent-stale-run-sweeper`). Returns
+        True when the row was touched; False means the row is already
+        terminal or gone — a non-exceptional outcome the caller treats as
+        "stop heartbeating", not as an error.
+        """
+
+        async def _update(conn: asyncpg.Connection) -> bool:
+            tag = await conn.execute(
+                "UPDATE runs SET last_heartbeat_at=now() "
+                "WHERE id=$1 AND status='running'",
+                run_id,
+            )
+            return _parse_command_tag(tag) == 1
+
+        return await self._with_retry("touch_heartbeat", _update)
 
     async def get_run(self, run_id: str, user_id: int) -> RunSummary | None:
         """Defensive per-user read. Returns None for not-found / wrong-user / wrong-schema."""
@@ -185,30 +221,58 @@ class RunMetadata:
 
         return await self._with_retry("list_runs_for_user", _select)
 
-    async def retention_delete_terminal(self, retention_days: int) -> int:
-        """Delete completed/failed runs older than `retention_days`. Returns row count.
+    async def retention_delete_terminal(self, retention_days: int) -> list[str]:
+        """Delete completed/failed runs older than `retention_days`. Returns the deleted run ids.
 
         Hard delete only — `archived_at` column reserved for a future soft-delete
-        + GDPR-erase split. langGraph checkpoint tables are pruned via langGraph's
-        own retention story; this method touches only `agent.runs`.
+        + GDPR-erase split. The returned ids drive the langGraph
+        checkpoint-thread GC in the retention cron (`adelete_thread`); this
+        method itself touches only `agent.runs`. langGraph ships no retention
+        of its own, so that GC call is the only path that prunes
+        `langgraph.checkpoint_*` (the sweeper deliberately preserves
+        checkpoint data — see openspec/changes/agent-stale-run-sweeper).
         """
 
-        async def _delete(conn: asyncpg.Connection) -> int:
+        async def _delete(conn: asyncpg.Connection) -> list[str]:
             # `now() - ($1 * interval '1 day')` is the canonical "N days
             # ago" form in Postgres; works for any integer parameter
             # without string-concatenation (which would force asyncpg to
             # try to determine the literal type of `'$2 || days'` and
             # fail with IndeterminateDatatypeError).
-            result = await conn.execute(
+            rows = await conn.fetch(
                 "DELETE FROM runs "
                 "WHERE ended_at < now() - ($1 * interval '1 day') "
-                "AND status IN ('completed', 'failed')",
+                "AND status IN ('completed', 'failed') "
+                "RETURNING id",
                 retention_days,
             )
-            # asyncpg returns "DELETE <n>".
-            return _parse_command_tag(result)
+            return [str(r["id"]) for r in rows]
 
         return await self._with_retry("retention_delete_terminal", _delete)
+
+    async def sweep_stale_runs(self, timeout_seconds: int) -> list[str]:
+        """Reap zombie `running` rows (stale-run sweeper). Returns the reaped run ids.
+
+        Transitions every row matching `status='running' AND
+        last_heartbeat_at < now() - timeout` to `status='failed'`,
+        `error_code='stale_run'`, `ended_at=now()`. The `status='running'`
+        predicate makes the update first-writer-wins: a row driven terminal
+        between the sweeper's scan and its update is never modified, and a
+        live process's `mark_completed`/`mark_failed` stays authoritative.
+        """
+
+        async def _update(conn: asyncpg.Connection) -> list[str]:
+            rows = await conn.fetch(
+                "UPDATE runs SET status='failed', error_code='stale_run', "
+                "ended_at=now() "
+                "WHERE status='running' "
+                "AND last_heartbeat_at < now() - ($1 * interval '1 second') "
+                "RETURNING id",
+                timeout_seconds,
+            )
+            return [str(r["id"]) for r in rows]
+
+        return await self._with_retry("sweep_stale_runs", _update)
 
 
 def _row_to_summary(row: asyncpg.Record | Any) -> RunSummary:

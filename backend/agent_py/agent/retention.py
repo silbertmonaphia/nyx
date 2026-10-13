@@ -1,7 +1,12 @@
 """Hourly cron that hard-deletes terminal `agent.runs` rows.
 
-Targets the `agent.runs` metadata table only — langGraph's checkpoint tables
-are pruned via langGraph's own retention story and are NOT touched here.
+For every deleted run the cron also deletes the run's langGraph checkpoint
+thread via the checkpointer's `adelete_thread` — langGraph ships no retention
+story of its own, so this is the only path that prunes
+`langgraph.checkpoint_*` (the stale-run sweeper deliberately preserves
+checkpoint data; see `openspec/changes/agent-stale-run-sweeper`). A per-run
+GC failure is logged at WARN and does not abort the remaining deletes; the
+documented manual fallback is a direct SQL sweep of `langgraph.checkpoint_*`.
 
 OTel span `agent.run.retention` per iteration with `deleted_count` attribute.
 Prometheus counter `agent_run_retention_deleted_total` increments by `deleted_count`.
@@ -31,8 +36,22 @@ agent_run_retention_deleted_total = Counter(
 class RetentionCron:
     """Single asyncio task that fires every `retention_interval_seconds`."""
 
-    def __init__(self, run_metadata: "RunMetadata", settings: "Settings") -> None:
+    def __init__(
+        self,
+        run_metadata: RunMetadata,
+        checkpointer=None,
+        *,
+        settings: Settings,
+    ) -> None:
         self._run_metadata = run_metadata
+        # langGraph `AsyncPostgresSaver` (or None in metadata-only dev, where
+        # no checkpoint threads exist). Duck-typed: only `adelete_thread` is
+        # used, so tests can inject a fake without importing the framework.
+        self._checkpointer = checkpointer
+        # Keyword-only on purpose: `checkpointer` was inserted before
+        # `settings`, so a stale positional call `RetentionCron(rm, settings)`
+        # would silently bind settings to the checkpointer (test-review
+        # 2026-10-14).
         self._settings = settings
         self._task: asyncio.Task[None] | None = None
         self._stop = asyncio.Event()
@@ -54,7 +73,7 @@ class RetentionCron:
         self._stop.set()
         try:
             await asyncio.wait_for(self._task, timeout=10.0)
-        except asyncio.TimeoutError:
+        except TimeoutError:
             log.warning("retention cron did not stop within 10s; cancelling")
             self._task.cancel()
         finally:
@@ -69,16 +88,33 @@ class RetentionCron:
                 log.warning("retention cron iteration failed: %r", exc)
             try:
                 await asyncio.wait_for(self._stop.wait(), timeout=interval)
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 continue
 
     async def _run_once(self) -> None:
         with _tracer.start_as_current_span("agent.run.retention") as span:
-            deleted = await self._run_metadata.retention_delete_terminal(
+            deleted_ids = await self._run_metadata.retention_delete_terminal(
                 retention_days=self._settings.retention_days
             )
+            deleted = len(deleted_ids)
             span.set_attribute("deleted_count", deleted)
             agent_run_retention_deleted_total.inc(deleted)
+
+            # GC each deleted run's langGraph checkpoint thread. Failure for
+            # one run is logged (non-fatal): the metadata deletion stands and
+            # the remaining ids are still processed.
+            if self._checkpointer is not None:
+                for run_id in deleted_ids:
+                    try:
+                        await self._checkpointer.adelete_thread(run_id)
+                    except Exception as exc:  # noqa: BLE001
+                        log.warning(
+                            "retention: adelete_thread failed for run_id=%s "
+                            "(non-fatal): %r",
+                            run_id,
+                            exc,
+                        )
+
             if deleted:
                 log.info(
                     "retention cron: deleted %d terminal runs older than %d days",

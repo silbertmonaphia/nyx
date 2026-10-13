@@ -115,6 +115,30 @@ error from the bridge must route to the validator-feedback path not the
 transient path, OTel `retry_count` + `retry_reason` attributes on the
 surrounding `agent.step.tool` span).
 
+## Stale-run sweeper: reaping zombie runs
+
+A crashed or killed agent process leaves its `agent.runs` row stuck in
+`running` — indistinguishable from a live run. While a run's SSE stream
+is in flight, a background task touches its `last_heartbeat_at`; the
+sweeper marks any row still `running` with a heartbeat older than the
+stale timeout as `status='failed'`, `error_code='stale_run'`. The
+timeout doubles as the window in which a crashed run can still be
+**resumed** by echoing its `run_id`; after reaping, resume follows the
+terminal-row path (fresh run + `note{kind:"fresh_run"}`).
+
+| Env var                                  | Default | Purpose                                                                 |
+|------------------------------------------|---------|-------------------------------------------------------------------------|
+| `PYTHON_AGENT_HEARTBEAT_INTERVAL_SECONDS`| `30`    | How often a live run's heartbeat is refreshed. Failure is non-fatal.    |
+| `PYTHON_AGENT_STALE_RUN_TIMEOUT_SECONDS` | `900`   | Heartbeat silence past this marks the row dead. MUST be >= 2x heartbeat (startup refuses otherwise). |
+| `PYTHON_AGENT_SWEEP_INTERVAL_SECONDS`    | `300`   | Sweeper cron cadence. Worst-case reap latency = timeout + interval.     |
+| `PYTHON_AGENT_SWEEP_ENABLED`             | `true`  | Rollback switch: `false` stops reaping (heartbeats keep writing).       |
+
+Reaping does **not** delete langGraph checkpoint data — a reaped run's
+checkpoint thread is collected by the retention cron when it later
+deletes the terminal row, so a crashed run's state survives the same
+retention window as any other run (see
+`openspec/changes/agent-stale-run-sweeper/` for the full rationale).
+
 ## Architecture
 
 ```

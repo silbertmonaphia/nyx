@@ -169,7 +169,24 @@ async def run_agent_stream(
     if graph_config is not None:
         astream_kwargs["config"] = graph_config
 
-    async for chunk in graph.astream(state, **astream_kwargs):
+    # Resume-safety (found 2026-10-14 while landing agent-stale-run-sweeper):
+    # langgraph treats a non-None `astream` input as a state UPDATE — passing
+    # the freshly-built `new_state()` on resume CLOBBERS every checkpointed
+    # channel (plan, step_outputs, events_so_far …), so the planner and the
+    # already-completed steps re-ran (token + tool double-spend). Even an
+    # empty dict `{}` schedules from the entrypoint (verified: the planner
+    # re-ran); the correct pure-resume idiom is `None`, which continues from
+    # the checkpoint's pending nodes — and when the graph already reached
+    # END, yields the final snapshot without raising. Fall back to the fresh
+    # state only when no checkpoint exists yet (the process died before the
+    # first node finished).
+    stream_input: AgentState | dict | None = state
+    if resumed and graph_config is not None:
+        snapshot = await graph.aget_state(graph_config)
+        if snapshot is not None and snapshot.values:
+            stream_input = None
+
+    async for chunk in graph.astream(stream_input, **astream_kwargs):
         # `chunk` is the post-node state snapshot.
         current_events = chunk.get("events_so_far", [])
         for ev in current_events[last_len:]:

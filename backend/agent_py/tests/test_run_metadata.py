@@ -118,8 +118,14 @@ async def test_retention_deletes_only_old_terminal_rows(app_with_metadata):
             old,
         )
 
-    deleted = await rm.retention_delete_terminal(30)
-    assert deleted == 2, f"expected 2 deletions, got {deleted}"
+    deleted_ids = await rm.retention_delete_terminal(30)
+    assert len(deleted_ids) == 2, f"expected 2 deletions, got {len(deleted_ids)}"
+    # The returned ids are the GC handles for the retention cron's
+    # `adelete_thread` calls; both rows must actually be gone.
+    for rid in deleted_ids:
+        async with pool.acquire() as conn:
+            gone = await conn.fetchval("SELECT count(*) FROM runs WHERE id=$1", rid)
+        assert gone == 0, f"returned id {rid} still present"
 
     # After retention: the two 60-day terminal rows are gone; the
     # recent-completed and old-running rows survive.
@@ -202,6 +208,191 @@ async def test_list_paginates_and_scopes_to_user(app_with_metadata):
     # Total of user 1's pages = 25, all distinct.
     ids = {r.id for r in all_rows}
     assert len(ids) == 25
+
+
+# ---- create_run heartbeat ----------------------------------------------
+
+
+async def test_create_run_sets_last_heartbeat_at(app_with_metadata):
+    """Spec scenario "Fresh run inserts a metadata row with the right
+    shape" (agent-stale-run-sweeper delta): a fresh run carries
+    `last_heartbeat_at` within the last second, so the sweeper can see
+    the row is alive without waiting for the first heartbeat tick."""
+    rm = app_with_metadata.state.run_metadata
+    run_id = await rm.create_run(user_id=7)
+
+    async with rm._pool.acquire() as conn:
+        row = await conn.fetchrow(
+            "SELECT status, ended_at, "
+            "extract(epoch from (now() - last_heartbeat_at)) AS age_s "
+            "FROM runs WHERE id = $1",
+            run_id,
+        )
+    assert row["status"] == "running"
+    assert row["ended_at"] is None
+    assert 0 <= float(row["age_s"]) <= 1.0, (
+        f"last_heartbeat_at must be set at INSERT time; age={row['age_s']}s"
+    )
+
+
+# ---- terminal writes override a premature reap --------------------------
+
+async def test_mark_completed_overrides_premature_reap(app_with_metadata):
+    """Spec `agent-run-sweeper` — "Completion after a premature reap wins":
+    a row reaped while its process was actually alive and then genuinely
+    completed ends `completed` with `error_code IS NULL`."""
+    rm = app_with_metadata.state.run_metadata
+    run_id = await rm.create_run(user_id=7)
+    # Stall the heartbeat, reap the row (the sweeper's false-positive case).
+    async with rm._pool.acquire() as conn:
+        await conn.execute(
+            "UPDATE runs SET last_heartbeat_at = now() - interval '60 seconds' "
+            "WHERE id=$1",
+            run_id,
+        )
+    reaped = await rm.sweep_stale_runs(timeout_seconds=30)
+    assert reaped == [run_id]
+
+    # The live process finishes and writes its terminal state.
+    await rm.mark_completed(run_id, total_tokens=12345)
+
+    async with rm._pool.acquire() as conn:
+        row = await conn.fetchrow(
+            "SELECT status, error_code, total_tokens FROM runs WHERE id=$1",
+            run_id,
+        )
+    assert row["status"] == "completed"
+    assert row["error_code"] is None, (
+        "mark_completed must clear the sweeper's stale_run code"
+    )
+    assert row["total_tokens"] == 12345
+
+
+async def test_mark_failed_overrides_premature_reap(app_with_metadata):
+    """The live process's real failure code replaces the sweeper's
+    `stale_run` — terminal writes stay authoritative."""
+    rm = app_with_metadata.state.run_metadata
+    run_id = await rm.create_run(user_id=7)
+    async with rm._pool.acquire() as conn:
+        await conn.execute(
+            "UPDATE runs SET last_heartbeat_at = now() - interval '60 seconds' "
+            "WHERE id=$1",
+            run_id,
+        )
+    assert await rm.sweep_stale_runs(timeout_seconds=30) == [run_id]
+
+    await rm.mark_failed(run_id, error_code="react_iterations_exceeded")
+
+    async with rm._pool.acquire() as conn:
+        row = await conn.fetchrow(
+            "SELECT status, error_code FROM runs WHERE id=$1", run_id
+        )
+    assert row["status"] == "failed"
+    assert row["error_code"] == "react_iterations_exceeded"
+
+
+# ---- sweep_stale_runs ----------------------------------------------------
+
+
+async def test_sweep_reaps_only_stale_running_rows(app_with_metadata):
+    """Zombie `running` rows (heartbeat older than the timeout) are reaped
+    to failed/stale_run; fresh running rows and terminal rows are never
+    touched; a second sweep is a no-op (spec `agent-run-sweeper` —
+    "Zombie row is reaped after the timeout" / "Live and terminal rows
+    are untouched")."""
+    rm = app_with_metadata.state.run_metadata
+    pool = rm._pool
+    stale_id = str(_uuid.uuid4())
+    fresh_id = str(_uuid.uuid4())
+    completed_id = str(_uuid.uuid4())
+
+    async with pool.acquire() as conn:
+        await conn.execute("DELETE FROM runs")
+        await conn.execute(
+            "INSERT INTO runs (id, user_id, status, last_heartbeat_at) "
+            "VALUES ($1, 1, 'running', now() - interval '60 seconds')",
+            stale_id,
+        )
+        await conn.execute(
+            "INSERT INTO runs (id, user_id, status, last_heartbeat_at) "
+            "VALUES ($1, 1, 'running', now())",
+            fresh_id,
+        )
+        # Terminal + stale heartbeat: excluded by status, not by freshness —
+        # this is the race-safety predicate (the conditional update can never
+        # modify a row a live process already drove terminal).
+        await conn.execute(
+            "INSERT INTO runs (id, user_id, status, ended_at, last_heartbeat_at) "
+            "VALUES ($1, 1, 'completed', now(), now() - interval '60 seconds')",
+            completed_id,
+        )
+
+    reaped = await rm.sweep_stale_runs(timeout_seconds=30)
+    assert reaped == [stale_id], f"expected exactly the stale row; got {reaped}"
+
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            "SELECT status, error_code, ended_at FROM runs WHERE id=$1", stale_id
+        )
+        assert row["status"] == "failed"
+        assert row["error_code"] == "stale_run"
+        assert row["ended_at"] is not None
+        fresh = await conn.fetchrow("SELECT status FROM runs WHERE id=$1", fresh_id)
+        assert fresh["status"] == "running"
+        done = await conn.fetchrow(
+            "SELECT status, error_code FROM runs WHERE id=$1", completed_id
+        )
+        assert done["status"] == "completed"
+        assert done["error_code"] is None
+
+    # Idempotent: nothing left to reap on a second pass.
+    assert await rm.sweep_stale_runs(timeout_seconds=30) == []
+
+
+# ---- touch_heartbeat ----------------------------------------------------
+
+
+async def test_touch_heartbeat_advances_running_row(app_with_metadata):
+    """The heartbeat loop's building block (agent-stale-run-sweeper): a
+    conditional touch on a `running` row advances `last_heartbeat_at`."""
+    rm = app_with_metadata.state.run_metadata
+    run_id = await rm.create_run(user_id=7)
+    # Backdate so the advance is unambiguous.
+    async with rm._pool.acquire() as conn:
+        await conn.execute(
+            "UPDATE runs SET last_heartbeat_at = now() - interval '60 seconds' "
+            "WHERE id=$1",
+            run_id,
+        )
+
+    touched = await rm.touch_heartbeat(run_id)
+    assert touched is True
+
+    async with rm._pool.acquire() as conn:
+        age = await conn.fetchval(
+            "SELECT extract(epoch from (now() - last_heartbeat_at)) "
+            "FROM runs WHERE id=$1",
+            run_id,
+        )
+    assert 0 <= float(age) <= 1.0, f"heartbeat not refreshed; age={age}s"
+
+
+async def test_touch_heartbeat_noops_on_terminal_row(app_with_metadata):
+    """A heartbeat must never resurrect a terminal row: the conditional
+    update matches nothing, returns False, and the row is untouched."""
+    rm = app_with_metadata.state.run_metadata
+    run_id = await rm.create_run(user_id=7)
+    await rm.mark_completed(run_id, total_tokens=5)
+
+    touched = await rm.touch_heartbeat(run_id)
+    assert touched is False
+
+    async with rm._pool.acquire() as conn:
+        row = await conn.fetchrow(
+            "SELECT status, ended_at FROM runs WHERE id=$1", run_id
+        )
+    assert row["status"] == "completed"
+    assert row["ended_at"] is not None
 
 
 # ---- pool exhaustion ----------------------------------------------------

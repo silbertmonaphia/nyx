@@ -174,6 +174,29 @@ def _settings():
     )
 
 
+def _patch_settings(monkeypatch, settings):
+    """Point config AND agent.main at the test's Settings BEFORE any app/lifespan.
+
+    Two hazards this closes (found 2026-10-14 while landing
+    agent-stale-run-sweeper):
+
+    1. `agent.main` does `from .config import get_settings` — a from-import
+       copies the function *reference* at import time, so patching
+       `config.get_settings` alone does not rebind main's copy.
+    2. Patching inside the lifespan block (the old pattern in this file) is
+       too late: the lifespan's migrations + checkpointer already resolved
+       the AMBIENT settings (`.env` / env vars), so phase 1 ran on one
+       database while phase 2 ran on the test DSN — the "resume" then read
+       empty state from the wrong DB and the planner re-ran.
+    """
+    import agent.config as config_module
+    import agent.main as main_module
+
+    monkeypatch.setattr(config_module, "_settings", settings)
+    monkeypatch.setattr(config_module, "get_settings", lambda: settings)
+    monkeypatch.setattr(main_module, "get_settings", lambda: settings)
+
+
 async def test_planner_does_not_rerun_on_resume(monkeypatch):
     """langGraph's `astream(config={"configurable":{"thread_id": X}})` rehydrates
     the last checkpoint. If the planner already wrote a checkpoint, the
@@ -196,17 +219,13 @@ async def test_planner_does_not_rerun_on_resume(monkeypatch):
     _patch_common(monkeypatch)
     await _drop_schemas()
     settings = _settings()
+    _patch_settings(monkeypatch, settings)
 
     # --- Phase 1: drive a run; cancel mid-execution; checkpoint lands. ---
     from agent.main import create_app, lifespan
 
     app1 = create_app()
     async with lifespan(app1):
-        from agent import config as config_module
-
-        monkeypatch.setattr(config_module, "_settings", settings)
-        monkeypatch.setattr(config_module, "get_settings", lambda: settings)
-
         graph1 = build_graph(
             settings=app1.state.settings,
             budget=_StubBudget(),
@@ -267,13 +286,11 @@ async def test_planner_does_not_rerun_on_resume(monkeypatch):
     from agent.main import create_app as create_app2
     from agent.main import lifespan as lifespan2
 
+    # Same test-scoped patches are still active; re-assert for symmetry.
+    _patch_settings(monkeypatch, settings)
+
     app2 = create_app2()
     async with lifespan2(app2):
-        from agent import config as config_module2
-
-        monkeypatch.setattr(config_module2, "_settings", settings)
-        monkeypatch.setattr(config_module2, "get_settings", lambda: settings)
-
         graph2 = build_graph(
             settings=app2.state.settings,
             budget=_StubBudget(),
@@ -287,16 +304,13 @@ async def test_planner_does_not_rerun_on_resume(monkeypatch):
         # would increment to 3 BEFORE the executor's llm call; if
         # planner does NOT re-run, the next call is 3 (executor llm)
         # and returns "summary: no feeds".
-        async for _ in graph2.astream(
-            new_state(  # initial state value is irrelevant; langGraph uses the checkpoint
-                user_id=1,
-                run_id=run_id,
-                messages=[ChatMessage(role="user", content="hi")],
-                model="stub-model",
-            ),
-            config=config,
-            stream_mode="values",
-        ):
+        # Drain with `None` — the pure-resume idiom: langgraph treats any
+        # non-None `astream` input as a state UPDATE, so a full
+        # `new_state()` (or even `{}`) would clobber the checkpointed
+        # plan/step_outputs and re-run the planner + completed steps (the
+        # resume double-spend bug fixed 2026-10-14 in `run_agent_stream`;
+        # this test drives the graph directly).
+        async for _ in graph2.astream(None, config=config, stream_mode="values"):
             pass
 
         # call_count == 3 means: phase 1 used 2 (planner + executor llm
@@ -344,16 +358,12 @@ async def test_executor_skips_completed_steps_on_resume(monkeypatch):
     _patch_common(monkeypatch)
     await _drop_schemas()
     settings = _settings()
+    _patch_settings(monkeypatch, settings)
 
     from agent.main import create_app, lifespan
 
     app1 = create_app()
     async with lifespan(app1):
-        from agent import config as config_module
-
-        monkeypatch.setattr(config_module, "_settings", settings)
-        monkeypatch.setattr(config_module, "get_settings", lambda: settings)
-
         graph1 = build_graph(
             settings=app1.state.settings,
             budget=_StubBudget(),
@@ -391,13 +401,11 @@ async def test_executor_skips_completed_steps_on_resume(monkeypatch):
     from agent.main import create_app as create_app2
     from agent.main import lifespan as lifespan2
 
+    # Same test-scoped patches are still active; re-assert for symmetry.
+    _patch_settings(monkeypatch, settings)
+
     app2 = create_app2()
     async with lifespan2(app2):
-        from agent import config as config_module2
-
-        monkeypatch.setattr(config_module2, "_settings", settings)
-        monkeypatch.setattr(config_module2, "get_settings", lambda: settings)
-
         # Reset LLM counter; phase 2's executor llm is the next call.
         _StubLlm.call_count = 2
 
@@ -409,16 +417,9 @@ async def test_executor_skips_completed_steps_on_resume(monkeypatch):
             checkpointer=app2.state.checkpointer,
         )
 
-        async for _ in graph2.astream(
-            new_state(
-                user_id=1,
-                run_id=run_id,
-                messages=[ChatMessage(role="user", content="hi")],
-                model="stub-model",
-            ),
-            config=config,
-            stream_mode="values",
-        ):
+        # `None` input — resume must read state from the checkpoint, not
+        # from a clobbering `new_state()` input (see test 1's note).
+        async for _ in graph2.astream(None, config=config, stream_mode="values"):
             pass
 
         # EXPECTED (per spec): step_1 is skipped because step_outputs

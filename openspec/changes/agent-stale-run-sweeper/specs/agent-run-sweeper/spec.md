@@ -82,6 +82,11 @@ A crashed run's `running` row remains resumable via the existing resume path (ec
 - **WHEN** `POST /agent/run` echoes the `run_id` of a row already reaped (`status='failed'`, `error_code='stale_run'`)
 - **THEN** the service mints a fresh `run_id`, emits `note{kind:"fresh_run"}`, and does not call `graph.get_state` for the reaped thread
 
+#### Scenario: A stream closed before `done` stays resumable
+
+- **WHEN** the client disconnects (or the stream is cancelled) before the run emits `done`
+- **THEN** the metadata row stays `running` (it is NOT marked `completed`) — the run remains resumable by echoing its `run_id` inside the window, and the sweeper reaps it if it is never resumed
+
 #### Scenario: No wire change
 
 - **WHEN** any sweep occurs

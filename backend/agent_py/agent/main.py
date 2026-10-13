@@ -35,6 +35,7 @@ from .rag_client import RagClient
 from .ratelimit import IpRateLimiter, RateLimitMiddleware
 from .retention import RetentionCron
 from .run_metadata import RunMetadata, RunMetadataUnavailable, build_pool
+from .sweeper import StaleRunSweeper
 from .state import new_state
 from .tools_client import ToolsClient
 from .types import (
@@ -81,6 +82,7 @@ async def lifespan(app: FastAPI):
     run_metadata: RunMetadata | None = None
     checkpointer = None
     retention: RetentionCron | None = None
+    sweeper: StaleRunSweeper | None = None
     if settings.database_url:
         if not settings.migrations_disabled:
             from migrations._dev_upgrade_hook import run_upgrade_head
@@ -115,8 +117,15 @@ async def lifespan(app: FastAPI):
         await checkpointer.setup()
 
         if settings.retention_enabled and run_metadata is not None:
-            retention = RetentionCron(run_metadata, settings)
+            retention = RetentionCron(run_metadata, checkpointer, settings=settings)
             retention.start()
+
+        # Stale-run sweeper: reaps zombie `running` rows. Takes no
+        # checkpointer on purpose — reaping never deletes checkpoint data
+        # (retention collects it with the row); see sweeper.py.
+        if settings.sweep_enabled and run_metadata is not None:
+            sweeper = StaleRunSweeper(run_metadata, settings)
+            sweeper.start()
     else:
         # No DB configured — agent runs are NOT persisted. Run state
         # will not survive a process restart, and `run_id` echo won't
@@ -132,6 +141,7 @@ async def lifespan(app: FastAPI):
     app.state.run_metadata = run_metadata
     app.state.checkpointer = checkpointer
     app.state.retention = retention
+    app.state.sweeper = sweeper
 
     log.info(
         "agent_py started",
@@ -147,6 +157,8 @@ async def lifespan(app: FastAPI):
     try:
         yield
     finally:
+        if sweeper is not None:
+            await sweeper.stop()
         if retention is not None:
             await retention.stop()
         if checkpointer is not None:
@@ -224,6 +236,42 @@ async def _set_search_path_async(conn, schema: str) -> None:
     builtins resolve via `pg_catalog`, which is always searched first.
     """
     await conn.execute(f"SET search_path TO {schema}")
+
+
+async def _heartbeat_loop(
+    run_metadata: RunMetadata, run_id: str, interval_seconds: int
+) -> None:
+    """Refresh the run's heartbeat every `interval_seconds` until cancelled.
+
+    First touch is immediate (covers resume — a resumed run re-freshens
+    its row before any step can stall). Failures are logged and the loop
+    continues: the heartbeat is best-effort liveness metadata and must
+    never fail the run (`openspec/changes/agent-stale-run-sweeper`). A
+    False return means the row went terminal — stop quietly.
+    """
+    log.info(
+        "heartbeat loop started: run_id=%s interval=%ss", run_id, interval_seconds
+    )
+    while True:
+        try:
+            touched = await run_metadata.touch_heartbeat(run_id)
+            if not touched:
+                return
+        except asyncio.CancelledError:
+            raise
+        except RunMetadataUnavailable as exc:
+            log.warning(
+                "heartbeat touch failed (non-fatal): run_id=%s err=%r",
+                run_id,
+                exc,
+            )
+        except Exception as exc:  # noqa: BLE001 — never let heartbeat kill the run
+            log.warning(
+                "heartbeat touch raised unexpectedly: run_id=%s err=%r",
+                run_id,
+                exc,
+            )
+        await asyncio.sleep(interval_seconds)
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
@@ -447,8 +495,24 @@ async def _stream_agent_run(
     if checkpointer is not None:
         graph_config = {"configurable": {"thread_id": run_id}}
 
+    # Liveness heartbeat: while this stream owns the run, refresh
+    # `last_heartbeat_at` so the stale-run sweeper can tell a live run
+    # from a crash (openspec/changes/agent-stale-run-sweeper). Started
+    # immediately before the try so the task can never leak: the only
+    # awaits before this point are the two client-visible opening frames,
+    # and a disconnect there exits the generator before the task exists.
+    heartbeat_task: asyncio.Task[None] | None = None
+    if run_metadata is not None:
+        heartbeat_task = asyncio.create_task(
+            _heartbeat_loop(
+                run_metadata, run_id, settings.heartbeat_interval_seconds
+            ),
+            name=f"agent-heartbeat-{run_id}",
+        )
+
     total_tokens = 0
     error_code: str | None = None
+    saw_done = False
     try:
         async for event in run_agent_stream(
             state,
@@ -466,9 +530,19 @@ async def _stream_agent_run(
             if event.kind == "done":
                 usage = event.payload.get("usage") or {}
                 total_tokens = int(usage.get("total_tokens", 0))
+                saw_done = True
             elif event.kind == "error":
                 error_code = event.payload.get("code")
     finally:
+        # Stop the heartbeat before the terminal write so a late touch
+        # cannot interleave with (or outlive) the terminal transition.
+        if heartbeat_task is not None:
+            heartbeat_task.cancel()
+            try:
+                await heartbeat_task
+            except asyncio.CancelledError:
+                pass
+
         # Persist terminal metadata if enabled. Non-fatal: emit a typed
         # error event only if the user-facing run is still in flight and
         # the metadata failure is the cause.
@@ -476,10 +550,15 @@ async def _stream_agent_run(
             try:
                 if error_code is not None and error_code != "agent_unavailable":
                     await run_metadata.mark_failed(run_id, error_code)
-                elif error_code is None:
+                elif error_code is None and saw_done:
                     await run_metadata.mark_completed(run_id, total_tokens)
-                # error_code == "agent_unavailable" → leave row as 'running';
-                # slice 4 fault tolerance adds a stale-run sweeper.
+                # error_code == "agent_unavailable", or a stream closed before
+                # `done` (client disconnect / server cancellation) → leave the
+                # row `running`: the run is still resumable inside the window,
+                # and the stale-run sweeper reaps it if nobody comes back
+                # (test-review C1, 2026-10-14: this branch used to mark
+                # mid-run disconnects `completed`, which the sweeper and the
+                # retention GC then trusted).
             except RunMetadataUnavailable as exc:
                 log.warning(
                     "metadata terminal write failed (non-fatal): run_id=%s err=%r",
@@ -514,7 +593,7 @@ def _sse_encode(event: Event) -> bytes:
       - tool_call     → {step_id, call_id, name, args}
       - tool_result   → {step_id, call_id, ok, result, error}
       - step_end      → {step_id, status, reason}
-      - note          → {text, provider}
+      - note          → {text, provider?, kind?, last_step_id?, run_id?, failed_steps?}
       - done          → {usage: {prompt_tokens, completion_tokens, total_tokens}}
       - error         → {error, code, request_id}
       - terminator    → {reason}

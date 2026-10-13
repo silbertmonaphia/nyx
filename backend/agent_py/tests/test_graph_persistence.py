@@ -14,6 +14,7 @@ from __future__ import annotations
 import json
 import os
 import uuid
+from typing import Any, ClassVar
 
 import asyncpg
 import pytest
@@ -27,19 +28,51 @@ pytestmark = pytest.mark.skipif(
 )
 
 
-class _StubLlm:
-    """1-step plan on the first ainvoke (planner), a final text on the second (executor).
+class _StubStructuredChain:
+    """Shim for the planner's bound chain (structured path, default-on):
+    `bind(response_format=...) | JsonOutputParser() | RunnableLambda(...)`.
+    `__or__` chaining is ignored; `ainvoke` returns the canned plan
+    validated into `Plan` — what the real chain produces
+    (openspec/changes/agent-planner-structured)."""
 
-    Class-level `call_count` is shared across instances — the planner
-    and the executor each call `ChatOpenAI(...)` and get a fresh
-    instance, but we want the same call sequence: 1st call returns
-    the plan JSON, subsequent calls return the executor's final text.
+    def __init__(self, plan_payload: dict):
+        self._payload = plan_payload
+
+    def __or__(self, other):
+        return self
+
+    async def ainvoke(self, messages):
+        from agent.types import Plan
+
+        return Plan.model_validate(self._payload)
+
+
+class _StubLlm:
+    """1-step plan on the first planner call, a final text on the executor call.
+
+    The planner reaches the LLM via `bind(response_format=...)` (structured
+    path, default-on); the executor uses plain `ainvoke`. Both consume the
+    same canned plan, so the call sequence stays: call 1 = plan, call 2+ =
+    executor text. Class-level `call_count` is shared across instances —
+    the planner and the executor each construct their own instance.
     """
 
     call_count = 0  # class-level; shared across instances
+    _PLAN: ClassVar[dict[str, Any]] = {
+        "steps": [
+            {"id": "step_1", "kind": "tool", "tool": "list_feeds", "args": {}},
+            {"id": "step_2", "kind": "llm", "prompt": "summarise"},
+        ]
+    }
 
     def __init__(self, *args, **kwargs):
         pass
+
+    def bind(self, **kwargs):
+        # Planner path (structured, default-on): consume the call-1 slot as
+        # the legacy flow did, so the executor's answering call is n == 2.
+        type(self).call_count += 1
+        return _StubStructuredChain(self._PLAN)
 
     async def ainvoke(self, messages):
         from langchain_core.messages import AIMessage
@@ -47,21 +80,7 @@ class _StubLlm:
         type(self).call_count += 1
         n = type(self).call_count
         if n == 1:
-            return AIMessage(
-                content=json.dumps(
-                    {
-                        "steps": [
-                            {
-                                "id": "step_1",
-                                "kind": "tool",
-                                "tool": "list_feeds",
-                                "args": {},
-                            },
-                            {"id": "step_2", "kind": "llm", "prompt": "summarise"},
-                        ]
-                    }
-                )
-            )
+            return AIMessage(content=json.dumps(self._PLAN))
         return AIMessage(content="summary: no feeds")
 
 

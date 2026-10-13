@@ -87,6 +87,58 @@ def test_negative_tool_retry_max_refused():
     assert "PYTHON_AGENT_TOOL_RETRY_MAX" in str(excinfo.value)
 
 
+def test_sweep_settings_defaults(monkeypatch):
+    """Spec scenario "Default values applied when env unset": heartbeat 30s,
+    stale timeout 900s, sweep every 300s, sweeper on
+    (agent-stale-run-sweeper)."""
+    for key in (
+        "HEARTBEAT_INTERVAL_SECONDS",
+        "STALE_RUN_TIMEOUT_SECONDS",
+        "SWEEP_INTERVAL_SECONDS",
+        "SWEEP_ENABLED",
+    ):
+        monkeypatch.delenv(f"PYTHON_AGENT_{key}", raising=False)
+    s = Settings(_env_file=None, llm_base_url="http://vllm:8000/v1")
+    assert s.heartbeat_interval_seconds == 30
+    assert s.stale_run_timeout_seconds == 900
+    assert s.sweep_interval_seconds == 300
+    assert s.sweep_enabled is True
+
+
+def test_misconfigured_sweep_ratio_refused():
+    """Spec scenario "Misconfigured sweep ratio refuses startup": a stale
+    timeout below 2x the heartbeat interval would let the sweeper reap
+    live runs — refuse at startup naming both vars."""
+    with pytest.raises(ValueError) as excinfo:
+        Settings(
+            _env_file=None,
+            llm_base_url="http://vllm:8000/v1",
+            heartbeat_interval_seconds=30,
+            stale_run_timeout_seconds=45,
+        )
+    msg = str(excinfo.value)
+    assert "PYTHON_AGENT_STALE_RUN_TIMEOUT_SECONDS" in msg
+    assert "PYTHON_AGENT_HEARTBEAT_INTERVAL_SECONDS" in msg
+
+
+@pytest.mark.parametrize(
+    "kwargs",
+    [
+        {"heartbeat_interval_seconds": 0},
+        {"heartbeat_interval_seconds": -1},
+        {"sweep_interval_seconds": 0},
+        {"sweep_interval_seconds": -1},
+    ],
+)
+def test_below_one_sweep_intervals_refused(kwargs):
+    """Heartbeat / sweep intervals below 1 are operator mistakes —
+    refuse at startup naming the offending env var."""
+    with pytest.raises(ValueError) as excinfo:
+        Settings(_env_file=None, llm_base_url="http://vllm:8000/v1", **kwargs)
+    key = next(iter(kwargs)).upper()
+    assert f"PYTHON_AGENT_{key}" in str(excinfo.value)
+
+
 def test_settings_accepts_local_vllm_without_key():
     """Local vLLM (and OpenRouter) don't need an API key — empty key
     is fine when the base URL doesn't target api.openai.com."""

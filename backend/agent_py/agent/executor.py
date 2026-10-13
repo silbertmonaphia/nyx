@@ -93,6 +93,14 @@ async def executor_node(
     assert isinstance(plan, Plan), f"executor expected Plan, got {type(plan).__name__}"
 
     for step in plan.steps:
+        # Resume-aware skip (absorbed into agent-stale-run-sweeper,
+        # 2026-10-14 user-approved): a step whose output already exists in
+        # the checkpointed state completed in a prior phase — re-running it
+        # would double-spend tokens and re-invoke tools. Per the resume
+        # contract its frames were emitted in the prior phase, so nothing
+        # new is emitted for it here.
+        if step.id in (state.get("step_outputs") or {}):
+            continue
         with tracer.start_as_current_span(f"agent.step.{step.kind.value}") as span:
             span.set_attribute("step_id", step.id)
             span.set_attribute("kind", step.kind.value)

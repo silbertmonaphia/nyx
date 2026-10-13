@@ -128,6 +128,25 @@ class Settings(BaseSettings):
     database_pool_max_size: int = 10
     database_pool_acquire_timeout_seconds: float = 5.0
 
+    # --- Stale-run sweeper (openspec/changes/agent-stale-run-sweeper) ---
+    # Heartbeat cadence for live runs: while a run's SSE stream is in
+    # flight, a background task touches `agent.runs.last_heartbeat_at`
+    # this often. Touch failures are non-fatal (log-and-continue).
+    heartbeat_interval_seconds: int = 30
+    # A `running` row whose heartbeat is older than this is considered
+    # dead and reaped to `status='failed', error_code='stale_run'`. The
+    # threshold doubles as the window in which a crashed run can still
+    # be resumed by echoing its run_id; after reaping, resume follows
+    # the terminal-row path (fresh run). MUST be >= 2x
+    # heartbeat_interval_seconds (validated below) so a transient
+    # heartbeat hiccup cannot get a live run reaped.
+    stale_run_timeout_seconds: int = 900
+    # Sweeper cron cadence (mirrors `retention_interval_seconds`).
+    sweep_interval_seconds: int = 300
+    # Kill switch / rollback path: when false, no rows are reaped.
+    # Heartbeats keep writing (inert liveness metadata).
+    sweep_enabled: bool = True
+
     # NOTE: there is intentionally NO JWT verification config here. The Python
     # service trusts the network boundary (compose bridge / k8s NetworkPolicy
     # restricting ingress to the Go backend). Go verifies the user JWT at the
@@ -244,6 +263,35 @@ class Settings(BaseSettings):
         encoded_value = quote("-c search_path=langgraph,agent", safe="")
         url = f"{url}{sep}options={encoded_value}"
         object.__setattr__(self, "database_url", url)
+        return self
+
+    @model_validator(mode="after")
+    def _validate_sweep_settings(self) -> Settings:
+        """Refuse to start on a heartbeat / sweeper misconfiguration.
+
+        Per `openspec/changes/agent-stale-run-sweeper` (Configurable via
+        environment delta): heartbeat and sweep intervals must be >= 1,
+        and the stale timeout must be >= 2x the heartbeat interval — a
+        smaller ratio would let the sweeper reap live runs whose
+        heartbeat task is momentarily behind.
+        """
+        if self.heartbeat_interval_seconds < 1:
+            raise ValueError(
+                "PYTHON_AGENT_HEARTBEAT_INTERVAL_SECONDS must be >= 1; "
+                f"got {self.heartbeat_interval_seconds}"
+            )
+        if self.sweep_interval_seconds < 1:
+            raise ValueError(
+                "PYTHON_AGENT_SWEEP_INTERVAL_SECONDS must be >= 1; "
+                f"got {self.sweep_interval_seconds}"
+            )
+        if self.stale_run_timeout_seconds < 2 * self.heartbeat_interval_seconds:
+            raise ValueError(
+                "PYTHON_AGENT_STALE_RUN_TIMEOUT_SECONDS must be >= 2x "
+                "PYTHON_AGENT_HEARTBEAT_INTERVAL_SECONDS "
+                f"({self.heartbeat_interval_seconds}s); got "
+                f"{self.stale_run_timeout_seconds}s"
+            )
         return self
 
     @property
