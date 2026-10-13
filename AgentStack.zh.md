@@ -2,7 +2,8 @@
 
 本文档对照 `backend/agent_py/` 的实际代码与社区主流 agent 开发生态,
 盘点 Nyx 已具备的能力、下一切片要补的活、以及结构性缺口。
-详细 roadmap 见 `FUTURE_AGENT.md`,架构学习笔记见 `tmp_learn_agent.md`。
+详细 roadmap 见 `FUTURE_AGENT.md`,架构学习笔记见 `AgentArchitecture.md`,
+故障面索引见 `AgentFaultTolerance.md`。
 
 ---
 
@@ -10,21 +11,22 @@
 
 ### 1. 编排层 (LangGraph Plan-and-Execute)
 
-- **StateGraph** (`agent/graph.py:66`) — `START → planner → executor → END`
+- **StateGraph** (`agent/graph.py:80`) — `START → planner → executor → END`
 - **planner** (`agent/planner.py`) — 单次 LLM 调用,通过 OpenAI `response_format.json_schema` 显式 bind (`strict: false`) 输出 Pydantic `Plan`,配合 `JsonOutputParser | RunnableLambda(Plan.model_validate)`。`PYTHON_AGENT_PLANNER_RETRY_MAX=1` 的有界重试兜底截断 / schema drift
 - **executor** (`agent/executor.py`) — 顺序遍历 `Plan.steps`,四种 step kind:
   - `rag` → 调 Go `/internal/rag/retrieve`
   - `tool` → 调 Go MCP `tools/call` (JSON-RPC)
   - `llm` → 单次模型补全,作为一个 `delta` 流出去
   - `react` → 嵌套子图 (`model → tool → model`),上限 `PYTHON_AGENT_STEP_REACT_MAX_ITERATIONS=5`
-- SSE wire contract:10 个 kind 与 Go 旧版字节级兼容,旧客户端零感知
+- SSE wire contract:11 个 kind(run_id 为 run-state 新增;其余 10 个与 Go 旧版字节级兼容,旧客户端零感知)
 
 ### 2. 持久化 / 状态
 
 - **LangGraph Postgres checkpointer** (`langgraph-checkpoint-postgres>=3.0`),`thread_id = run_id` 维度的 checkpoint 恢复
-- **`agent.runs` 元数据表** (`agent/run_metadata.py`,alembic 管理) — `user_id` / `status` / `total_tokens` / `error_code` / 时间戳,可索引查询
-- **会话内 resume** — `POST /agent/run` 带 `run_id` 命中未终态行 → 从 checkpoint 续跑
-- **retention cron** (`agent/retention.py`) — 每小时清理终态行 30 天前数据,只动 `agent.runs`,LangGraph checkpoint 表留给框架
+- **`agent.runs` 元数据表** (`agent/run_metadata.py`,alembic 管理) — `user_id` / `status` / `total_tokens` / `error_code` / `last_heartbeat_at` / 时间戳,可索引查询
+- **会话内 resume** — `POST /agent/run` 带 `run_id` 命中未终态行 → 从 checkpoint 续跑;心跳超时被 sweeper 回收后按终态行处理(新 run)
+- **stale-run sweeper**(工作区未提交,`agent/sweeper.py`)— 运行中每 30s touch `last_heartbeat_at`(失败仅 WARN),每 300s 扫描,心跳静默超 900s 的 `running` 行翻成 `failed`/`error_code='stale_run'`;该 timeout 同时是 crashed-run 的 resume 窗口。`PYTHON_AGENT_SWEEP_ENABLED=false` 是回滚开关
+- **retention cron** (`agent/retention.py`) — 每小时清理终态行 30 天前数据(`DELETE ... RETURNING id`),再逐行 `adelete_thread` GC LangGraph checkpoint(单行 GC 失败仅 WARN,删行照旧)——全服务唯一的 checkpoint GC 路径;sweeper 有意保留被回收行的 checkpoint,由 retention 随行一并回收
 
 ### 3. 资源治理
 
@@ -33,8 +35,8 @@
 
 ### 4. 可观测
 
-- **OTel spans** — `agent.run` / `agent.step.{plan,tool,llm,react}` / `agent.budget` / `agent.run.retention` → OTLP/HTTP → Jaeger,跟 Go 后端同链路,SPA 通过 W3C `traceparent` 串联
-- **Prometheus counters** (`agent/observability.py`) — `agent_runs_total` / `agent_steps_total` / `agent_tool_calls_total` / `agent_tokens_total` / `agent_planner_parse_failures_total{retry}` / `agent_run_retention_deleted_total`,`:9001` 暴露
+- **OTel spans** — `agent.run` / `agent.step.{plan,tool,llm,react}` / `agent.planner.structured|retry` / `agent.budget` / `agent.run.retention` / `agent.run.sweep` → OTLP/HTTP → Jaeger,跟 Go 后端同链路,SPA 通过 W3C `traceparent` 串联
+- **Prometheus counters** (`agent/observability.py`) — `agent_runs_total` / `agent_steps_total` / `agent_tool_calls_total` / `agent_tokens_total` / `agent_planner_parse_failures_total{retry}` / `agent_tool_retries_total` / `agent_run_retention_deleted_total` / `agent_runs_swept_total`,`:9001` 暴露
 - **`/healthz`** — 同时 ping Redis 和 LLM `GET {base}/models` 取最差结果
 
 ### 5. 安全 / 隔离
@@ -51,14 +53,15 @@
 
 ---
 
-## 二、下一刀已经在排期 (`FUTURE_AGENT.md` 点名)
+## 二、切片状态(截至 2026-10-14)
 
-| 项 | 状态 | 文件位置 |
+| 项 | 状态 | 落点 |
 |---|---|---|
-| **tool-args retry budget** (结构化工具调用 + 验证 + retry) | 未做 | P1.3 的工具调用层(只有 planner 侧做了 `with_structured_output` + retry) |
-| **tool execution transient retry** (timeout / network 指数退避) | 未做 | 同上,`AGENT_TOOL_RETRY_MAX` 还没用 |
-| **stale-run sweeper** (心跳/lease 回收 `running` 僵尸行) | 未做 | `tmp_learn_agent.md` "What's not done" §1 记的 |
-| **adelete_thread on retention** (LangGraph checkpoint_* 真 GC) | 注释里说"留给框架"但框架没这功能 | `agent/retention.py` 当前注释是 wishful thinking |
+| **tool-args retry budget** (结构化工具调用 + 验证 + retry) | 已落地 | `executor._reprompt_for_corrected_call`(agent-tool-dispatch-retry,归档 2026-10-13) |
+| **tool execution transient retry** (timeout / network 指数退避) | 已落地 | `executor._dispatch_tool_with_retries` 分类 arg/transient/non_retryable,退避 250ms→5s(同切片) |
+| **partial-failure banner** (失败步骤可视化) | 已落地 | `frontend/src/features/chat/components/PartialFailureBanner.tsx`(同切片) |
+| **stale-run sweeper** (心跳/lease 回收 `running` 僵尸行) | 在飞(工作区未提交) | `agent/sweeper.py` + 迁移 `0003_add_run_heartbeat` |
+| **adelete_thread on retention** (LangGraph checkpoint_* 真 GC) | 在飞(工作区未提交) | `agent/retention.py`(同切片;旧注释已修正) |
 | **`/agent/runs` 查询端点** + 对话历史持久化 | 未做 | `agent.run_metadata.list_runs_for_user` 已经写好,只缺 endpoint |
 | **`chat_sessions` / `chat_messages` 表** + per-thread 历史注入 | 未做 | P2.1 路线图 |
 | **Task routing** (意图 → 计划模板) | 未做 | P0.4 明确推迟到 plan 模板收敛后 |
@@ -123,15 +126,17 @@
 
 ---
 
-## 四、按 ROI 排的落地顺序
+## 四、按 ROI 排的落地顺序(状态截至 2026-10-14)
 
+**已落地(原列表第 4、5 项)**:
+- `adelete_thread` 联动 retention + stale-run sweeper — 同属 `agent-stale-run-sweeper` 切片(工作区未提交,配套 `-rollout` 兄弟;旧文档与代码不符的注释已一并修正)
+
+**仍然排队的(按 ROI)**:
 1. **Langfuse 自托管** (A 类) — 插两个 callback 就有结构化 trace,迭代 planner 从盲调变成数据驱动
 2. **Inspect AI 或 Braintrust 评测基线** (A 类延伸) — 没有 golden set 就没有回归线,改 `PYTHON_AGENT_PLANNER_RETRY_MAX` / prompt 都不知道真不真
 3. **LiteLLM seam** (B 类) — 不接的话每个新 provider 都要在 `langchain-openai` 与 vLLM `hermes` parser 之间打补丁,vLLM tool-call 一致性问题会反复咬人
-4. **`adelete_thread` 联动 retention** (二档的 checkpoint GC) — 修复 `tmp_learn_agent.md` §3 文档与代码不符的 bug;存量 `langgraph.checkpoint_*` 也会一并清
-5. **stale-run sweeper** (二档 P0 缺陷) — 与其依赖"`agent_unavailable` 不写"作为 soft 信号,不如加 `last_heartbeat_at` + cron sweep 兜底
-6. **GPTCache / Redis LangCache** (C 类) — 同 prompt 直出秒回,降本路径里 cost-per-token 直接砍
-7. **Prompt registry + A/B harness** (F 类) — 配 Langfuse 用,把 planner prompt 拉出代码进 YAML/versioned,可以分流实验
+4. **GPTCache / Redis LangCache** (C 类) — 同 prompt 直出秒回,降本路径里 cost-per-token 直接砍
+5. **Prompt registry + A/B harness** (F 类) — 配 Langfuse 用,把 planner prompt 拉出代码进 YAML/versioned,可以分流实验
 
 > 更长的视野:跨 session 记忆(D)与 guardrails(E)是高门槛低频次,P2.1 已经在排期;code-execution 沙箱(G)按需开启。
 
@@ -142,5 +147,6 @@
 - `backend/agent_py/README.md` — Python service 入口
 - `backend/agent_py/pyproject.toml` — 依赖锁定
 - `FUTURE_AGENT.md` — P0/P1/P2 路线图与风险
-- `AgenticStack.md` — agent 能力维度的需求拆解 (P0/P1/P2)
-- `tmp_learn_agent.md` — `agent_py` 现状架构笔记 + "What's not done" 章节(此文件的英文原版)
+- `AgenticStackNaive.zh.md` — agent 能力维度的原始需求拆解 (P0/P1/P2)
+- `AgentArchitecture.md` — `agent_py` 现状架构笔记(英文,含 "What's not done" 章节)
+- `AgentFaultTolerance.md` — 故障面索引(英文)
