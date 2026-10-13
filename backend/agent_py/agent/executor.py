@@ -2,7 +2,7 @@
 
 For each step runs the appropriate handler:
   - rag   → RagClient.retrieve → render context block into state.step_outputs[step.id]
-  - tool  → ToolsClient.call   → render result
+  - tool  → ToolDispatcher.call (agent-native tool, else MCP) → render result
   - llm   → direct LLM call with state.messages + step.prompt (+ data from earlier rag/tool steps) → accumulate text deltas
   - react → nested subgraph (model → tool → model), capped by max_iterations
 
@@ -37,11 +37,11 @@ from .observability import (
 )
 from .rag_client import RagAuthError, RagClient, RagUnavailableError
 from .state import AgentState
+from .tool_dispatch import ToolDispatcher
 from .tools_client import (
     ToolAuthError,
     ToolError,
     ToolRejectedError,
-    ToolsClient,
     ToolUnavailableError,
 )
 from .types import (
@@ -75,7 +75,7 @@ async def executor_node(
     tracer: trace.Tracer,
     budget: BudgetGuard,
     rag: RagClient,
-    tools: ToolsClient,
+    tools: ToolDispatcher,
 ) -> AgentState:
     plan: Plan | None = state.get("plan")
     if plan is None:
@@ -229,7 +229,7 @@ async def _run_tool(
     settings: Settings,
     tracer: trace.Tracer,
     budget: BudgetGuard,
-    tools: ToolsClient,
+    tools: ToolDispatcher,
     span: trace.Span,
 ) -> None:
     if not step.tool:
@@ -293,7 +293,7 @@ async def _run_react(
     settings: Settings,
     tracer: trace.Tracer,
     budget: BudgetGuard,
-    tools: ToolsClient,
+    tools: ToolDispatcher,
     span: trace.Span,
 ) -> None:
     max_iters = step.max_iterations or settings.step_react_max_iterations
@@ -545,7 +545,7 @@ async def _dispatch_tool_with_retries(
     step_id: str,
     tool_name: str,
     args: dict,
-    tools: ToolsClient,
+    tools: ToolDispatcher,
     settings: Settings,
     tracer: trace.Tracer,
     budget: BudgetGuard,
@@ -709,7 +709,7 @@ async def _reprompt_for_corrected_call(
     settings: Settings,
     tracer: trace.Tracer,
     budget: BudgetGuard,
-    tools: ToolsClient,
+    tools: ToolDispatcher,
 ) -> tuple[str, dict, str, list] | None:
     """Re-invoke the model to correct a rejected tool call.
 

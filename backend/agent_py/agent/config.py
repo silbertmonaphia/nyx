@@ -162,6 +162,33 @@ class Settings(BaseSettings):
     langfuse_public_key: str = ""
     langfuse_secret_key: SecretStr = SecretStr("")
 
+    # --- Web tools (openspec/changes/agent-web-tools) ---
+    # Opt-in agent-native tools: web_fetch (SSRF-guarded page retrieval)
+    # and web_search (Brave Search API). Both default OFF: enabling
+    # introduces outbound egress and, for search, an external API
+    # key/cost. When off, the merged tool list equals the MCP registry
+    # list and the planner prompt is byte-identical to its pre-web-tools
+    # form.
+    web_fetch_enabled: bool = False
+    web_search_enabled: bool = False
+    # Brave Search API (web_search). Required when web_search_enabled —
+    # an empty key refuses startup (validator below). The base URL is
+    # the full endpoint so tests/e2e can point it at a local stub.
+    brave_api_key: SecretStr = SecretStr("")
+    brave_base_url: str = "https://api.search.brave.com/res/v1/web/search"
+    # Result caps / bounds. web_search_max_results is clamped to the hard
+    # cap of 10 at dispatch time; negative values are rejected at startup.
+    web_search_max_results: int = 5
+    web_fetch_max_bytes: int = 2 * 1024 * 1024
+    web_fetch_timeout_seconds: int = 10
+    web_fetch_max_chars: int = 20000
+    web_fetch_max_redirects: int = 5
+    # Dev/e2e escape hatch: lifts the private-address deny-list AND the
+    # 80/443 port restriction so fetches can reach local fixture servers
+    # (same posture as the Go backend's LLM_ALLOW_PRIVATE_URL). Logged
+    # loudly at startup. NEVER enable in a deployed environment.
+    web_fetch_allow_private: bool = False
+
     # NOTE: there is intentionally NO JWT verification config here. The Python
     # service trusts the network boundary (compose bridge / k8s NetworkPolicy
     # restricting ingress to the Go backend). Go verifies the user JWT at the
@@ -333,6 +360,37 @@ class Settings(BaseSettings):
                 " and ".join(missing)
                 + " required when PYTHON_AGENT_LANGFUSE_ENABLED=true"
             )
+        return self
+
+    @model_validator(mode="after")
+    def _validate_web_tools(self) -> Settings:
+        """Refuse to start on a broken web-tools config.
+
+        Per `openspec/changes/agent-web-tools` (agent-python-service delta
+        "New env keys for web tools"): `PYTHON_AGENT_WEB_SEARCH_ENABLED=true`
+        without `PYTHON_AGENT_BRAVE_API_KEY` would make every search call
+        fail with a 401 the operator only discovers at first use — fail
+        fast at startup instead. Negative numerics break the caps'
+        semantics (a negative max_bytes would refuse every body), so they
+        are operator mistakes too.
+        """
+        if self.web_search_enabled and not self.brave_api_key.get_secret_value():
+            raise ValueError(
+                "PYTHON_AGENT_BRAVE_API_KEY is required when "
+                "PYTHON_AGENT_WEB_SEARCH_ENABLED=true"
+            )
+        for name in (
+            "web_search_max_results",
+            "web_fetch_max_bytes",
+            "web_fetch_timeout_seconds",
+            "web_fetch_max_chars",
+            "web_fetch_max_redirects",
+        ):
+            value = getattr(self, name)
+            if value < 0:
+                raise ValueError(
+                    f"PYTHON_AGENT_{name.upper()} must be >= 0; got {value}"
+                )
         return self
 
     @property

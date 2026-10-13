@@ -115,6 +115,68 @@ error from the bridge must route to the validator-feedback path not the
 transient path, OTel `retry_count` + `retry_reason` attributes on the
 surrounding `agent.step.tool` span).
 
+## Web tools: agent-native search + fetch (opt-in)
+
+Two agent-native tools dispatched through the same retry funnel as the
+MCP registry tools (openspec/changes/agent-web-tools):
+
+- **`web_fetch`** — fetches a public http(s) URL and returns its readable
+  text (stdlib HTML→text extraction, byte + char caps, ports 80/443 only,
+  content-type allowlist).
+- **`web_search`** — Brave Search API queries returning compact ranked
+  results (title / URL / snippet).
+
+Both default **off**; with them off the merged tool list equals the MCP
+registry list and the planner prompt is byte-identical to its
+pre-web-tools form.
+
+| Env var | Default | Purpose |
+|---|---|---|
+| `PYTHON_AGENT_WEB_FETCH_ENABLED` | `false` | Register the `web_fetch` tool. |
+| `PYTHON_AGENT_WEB_SEARCH_ENABLED` | `false` | Register the `web_search` tool (requires the key below; empty key refuses startup). |
+| `PYTHON_AGENT_BRAVE_API_KEY` | — | Brave Search API subscription token. |
+| `PYTHON_AGENT_BRAVE_BASE_URL` | Brave endpoint | Overridden by tests/e2e to point at a stub. |
+| `PYTHON_AGENT_WEB_SEARCH_MAX_RESULTS` | `5` | Results per search (hard cap 10). |
+| `PYTHON_AGENT_WEB_FETCH_MAX_BYTES` | `2097152` | Response byte cap (streamed — an oversized body never fully enters memory). |
+| `PYTHON_AGENT_WEB_FETCH_TIMEOUT_SECONDS` | `10` | Request timeout (also used for the search provider call). |
+| `PYTHON_AGENT_WEB_FETCH_MAX_CHARS` | `20000` | Extracted-text cap, with truncation marker. |
+| `PYTHON_AGENT_WEB_FETCH_MAX_REDIRECTS` | `5` | Redirect hop cap; every hop re-validated by the SSRF guard. |
+| `PYTHON_AGENT_WEB_FETCH_ALLOW_PRIVATE` | `false` | Dev/e2e escape hatch: lifts the private-address deny-list AND the 80/443 port rule (local fixture servers). Logged loudly at startup. Never in a deployed environment. |
+
+**SSRF guard** (mirrors the Go backend's `checkHostNotPrivate` +
+per-dial re-check): scheme/port/userinfo validation, then every resolved
+address must pass the deny-list (loopback / RFC1918 / link-local incl.
+`169.254.169.254` / multicast / unspecified / reserved — IPv4 and IPv6,
+including IPv4-mapped and unique-local forms). The connection is **pinned
+to the validated resolved address** (Host header + TLS SNI keep the
+original hostname), so a name that re-resolves between validation and
+connect cannot reach a denied address. The fetch client ignores ambient
+proxy configuration (`trust_env=False`) by design — the pinned-dial
+guarantee only holds when the agent's own transport makes the connection —
+so public fetches require **direct egress** (proxy-only environments fail
+closed as transient connect errors). Guard refusals are correctable
+(model re-prompt); timeouts/DNS failures are transient (backoff retry);
+provider 4xx (e.g. a bad key) fails fast.
+
+**Untrusted content**: fetched text and search snippets are wrapped in
+`<untrusted_web_content>` markers, and the tool descriptions state the
+content is data to summarize or quote, never instructions. The framing
+reduces — it does not eliminate — prompt-injection risk from web content;
+the tools are read-only and the per-owner data tools remain scoped.
+
+Retry behaviour rides the existing classes (`agent_tool_retries_total`
+labels unchanged): correctable → `tool_arg_invalid`, transient →
+`tool_execution_transient`.
+
+Wire-shape regression guard: `frontend/tests/e2e/chat-web-tools.spec.ts`
+replays a fixture that
+`tests/test_executor.py::test_web_tools_wire_fixture_matches_producer`
+generates from the real executor and pins byte-for-byte.
+
+Note: the compose `internal` network is a closed *bridge* but not
+`internal: true` — the agent container has egress by default, so enabling
+web tools in a deployed stack is an egress decision, not just a flag.
+
 ## Stale-run sweeper: reaping zombie runs
 
 A crashed or killed agent process leaves its `agent.runs` row stuck in

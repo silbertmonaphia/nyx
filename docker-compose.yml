@@ -470,6 +470,13 @@ services:
       - PYTHON_AGENT_LANGFUSE_HOST=http://langfuse-web:3000
       - PYTHON_AGENT_LANGFUSE_PUBLIC_KEY=${LANGFUSE_INIT_PROJECT_PUBLIC_KEY:-}
       - PYTHON_AGENT_LANGFUSE_SECRET_KEY=${LANGFUSE_INIT_PROJECT_SECRET_KEY:-}
+      # Web tools (openspec/changes/agent-web-tools): the
+      # PYTHON_AGENT_WEB_* flags + PYTHON_AGENT_BRAVE_API_KEY come from
+      # backend/.env — listed nowhere here so the env_file values aren't
+      # masked by compose's environment-precedence. Note the agent
+      # container has egress on these bridge networks (they are closed
+      # bridges, not `internal: true`), so enabling the tools in a
+      # deployed stack is an explicit egress decision.
       # Run-state persistence — langGraph `AsyncPostgresSaver` (creates
       # `langgraph.*` checkpoint tables on first run via its built-in
       # `setup()`) + thin `agent.runs` metadata table.

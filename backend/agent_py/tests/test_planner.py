@@ -212,7 +212,7 @@ def scripted_settings(monkeypatch):
     monkeypatch.setenv("PYTHON_AGENT_PLANNER_RETRY_MAX", "1")
     monkeypatch.setenv("PYTHON_AGENT_PLANNER_STRUCTURED_ENABLED", "true")
     monkeypatch.setenv("PYTHON_AGENT_PLAN_MAX_STEPS", "5")
-    return Settings()
+    return Settings(_env_file=None)  # hermetic: never read the developer's .env
 
 
 def _counter_value(label: str) -> float:
@@ -376,7 +376,7 @@ def test_retry_cap_zero_is_one_attempt(monkeypatch):
     monkeypatch.setenv("PYTHON_AGENT_LLM_MODEL", "test-model")
     monkeypatch.setenv("PYTHON_AGENT_PLANNER_RETRY_MAX", "0")
     monkeypatch.setenv("PYTHON_AGENT_PLANNER_STRUCTURED_ENABLED", "true")
-    settings = Settings()
+    settings = Settings(_env_file=None)  # hermetic: never read the developer's .env
 
     real_error = ValidationError.from_exception_data(
         title="Plan",
@@ -441,7 +441,7 @@ def test_retry_max_two_permits_two_retries(monkeypatch):
     monkeypatch.setenv("PYTHON_AGENT_PLANNER_RETRY_MAX", "2")
     monkeypatch.setenv("PYTHON_AGENT_PLANNER_STRUCTURED_ENABLED", "true")
     monkeypatch.setenv("PYTHON_AGENT_PLAN_MAX_STEPS", "5")
-    settings = Settings()
+    settings = Settings(_env_file=None)  # hermetic: never read the developer's .env
 
     canned = Plan(steps=[PlanStep(id="s1", kind=StepKind.llm, prompt="p")])
     client = _ScriptedStructuredClient(
@@ -771,7 +771,7 @@ def test_legacy_terminal_plan_invalid_ticks_exhausted(monkeypatch):
     monkeypatch.setenv("PYTHON_AGENT_LLM_API_KEY", "test-key")
     monkeypatch.setenv("PYTHON_AGENT_LLM_MODEL", "test-model")
     monkeypatch.setenv("PYTHON_AGENT_PLANNER_STRUCTURED_ENABLED", "false")
-    settings = Settings()
+    settings = Settings(_env_file=None)  # hermetic: never read the developer's .env
 
     from langchain_core.messages import AIMessage
 
@@ -861,7 +861,7 @@ def test_structured_disabled_routes_through_legacy(monkeypatch):
     monkeypatch.setenv("PYTHON_AGENT_LLM_API_KEY", "test-key")
     monkeypatch.setenv("PYTHON_AGENT_LLM_MODEL", "test-model")
     monkeypatch.setenv("PYTHON_AGENT_PLANNER_STRUCTURED_ENABLED", "false")
-    settings = Settings()
+    settings = Settings(_env_file=None)  # hermetic: never read the developer's .env
 
     # The structured path calls `_build_structured_client` — patch it to
     # fail loudly so any accidental invocation surfaces in the test.
@@ -952,3 +952,50 @@ def await_call(coro):
     import asyncio
 
     return asyncio.run(coro)
+
+# --- web-tools prompt block (openspec/changes/agent-web-tools, task 6.1) ---
+
+
+def _web_settings(**overrides) -> Settings:
+    base = {"_env_file": None, "llm_base_url": "http://stub", "metrics_port": 0}
+    base.update(overrides)
+    return Settings(**base)
+
+
+def _planner_state():
+    return new_state(user_id=1, run_id="r", messages=[], model="m")
+
+
+def test_planner_prompt_byte_identical_when_web_tools_off():
+    """Spec scenario "Default configuration changes nothing": with both
+    flags off the composed system prompt is byte-identical to the
+    pre-web-tools constant."""
+    from agent.planner import PLANNER_SYSTEM_PROMPT, _initial_messages
+
+    settings = _web_settings(web_fetch_enabled=False, web_search_enabled=False)
+    msgs = _initial_messages(_planner_state(), settings)
+    assert msgs[0].content == PLANNER_SYSTEM_PROMPT
+
+
+def test_planner_prompt_lists_enabled_web_tools():
+    """Spec scenario "Enabling advertises the tools to the planner"."""
+    from agent.planner import PLANNER_SYSTEM_PROMPT, _initial_messages
+
+    settings = _web_settings(
+        web_fetch_enabled=True,
+        web_search_enabled=True,
+        brave_api_key="k",
+    )
+    prompt = _initial_messages(_planner_state(), settings)[0].content
+    assert prompt.startswith(PLANNER_SYSTEM_PROMPT)
+    assert "web_fetch" in prompt
+    assert "web_search" in prompt
+
+
+def test_planner_prompt_lists_only_enabled_tool():
+    from agent.planner import _initial_messages
+
+    settings = _web_settings(web_fetch_enabled=True, web_search_enabled=False)
+    prompt = _initial_messages(_planner_state(), settings)[0].content
+    assert "web_fetch" in prompt
+    assert "web_search" not in prompt

@@ -54,6 +54,7 @@ from .types import (
     StepKind,
     TerminatorEvent,
 )
+from .web_tools import planner_block
 
 log = logging.getLogger("nyx.agent.planner")
 
@@ -220,9 +221,16 @@ def _build_structured_client(settings: Settings):
     )
 
 
-def _initial_messages(state: AgentState) -> list:
+def _initial_messages(state: AgentState, settings: Settings) -> list:
+    """The planner's opening messages.
+
+    The system prompt is the static base plus the conditional web-tools
+    block (openspec/changes/agent-web-tools D9) — the block is "" when
+    both web-tool flags are off, keeping the prompt byte-identical to its
+    pre-web-tools form.
+    """
     return [
-        SystemMessage(content=PLANNER_SYSTEM_PROMPT),
+        SystemMessage(content=PLANNER_SYSTEM_PROMPT + planner_block(settings)),
         HumanMessage(content=_messages_to_prompt(state.get("messages", []))),
     ]
 
@@ -295,7 +303,7 @@ async def _emit_structured_plan(
         log.warning("planner client construction failed: %r", exc)
         return _PlanError("planner_failed", "Plan generation failed", "provider call failed")
 
-    messages = _initial_messages(state)
+    messages = _initial_messages(state, settings)
     had_validation_failure = False
 
     for attempt in range(settings.planner_retry_max + 1):
@@ -435,7 +443,7 @@ async def _emit_legacy_plan(
     with jaeger_span(tracer, "agent.planner.legacy") as span:
         span.set_attribute("structured", False)
         try:
-            resp = await client.ainvoke(_initial_messages(state))
+            resp = await client.ainvoke(_initial_messages(state, settings))
         except Exception as exc:  # noqa: BLE001 — surface as a typed error event
             log.warning("planner provider call failed (legacy path): %r", exc)
             return _PlanError(

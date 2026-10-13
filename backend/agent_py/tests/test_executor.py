@@ -39,8 +39,11 @@ from agent.types import (
     Event,
     NoteEvent,
     Plan,
+    PlanEvent,
     PlanStep,
+    RunIDEvent,
     StepEndEvent,
+    TerminatorEvent,
     ToolResultEvent,
 )
 
@@ -1114,3 +1117,164 @@ async def test_banner_fires_when_retry_budget_split_across_dispatches(
     ]
     assert failures, "expected failure frames"
     assert all(f.payload["retry_count"] < 2 for f in failures)
+
+
+# --- cross-runtime wire fixtures: agent-native web tools (agent-web-tools 7.1)
+# Full-stream fixture replayed by frontend/tests/e2e/chat-web-tools.spec.ts.
+# The producer test REGENERATES the stream from the real executor node and
+# demands byte equality — any frame-shape drift fails here and, through the
+# shared bytes, in the Playwright spec.
+
+import itertools  # noqa: E402
+import pathlib  # noqa: E402
+
+WEB_TOOLS_FIXTURE = (
+    pathlib.Path(__file__).resolve().parents[3]
+    / "frontend"
+    / "tests"
+    / "e2e"
+    / "fixtures"
+    / "web-tools-search-fetch.sse"
+)
+
+FIXTURE_RUN_ID = "00000000-0000-4000-8000-000000000007"
+
+
+class _FixtureLlm:
+    """Deterministic answering LLM for the fixture stream."""
+
+    def __init__(self, *args, **kwargs):
+        pass
+
+    async def ainvoke(self, messages):
+        return AIMessage(
+            content="The Nyx agent decomposes a request into ordered steps and can search the web."
+        )
+
+
+class _WebScriptedTools:
+    def __init__(self, responses):
+        self.responses = list(responses)
+
+    async def list_tools(self):
+        return []
+
+    async def call(self, name, arguments):
+        return self.responses.pop(0)
+
+
+def _web_tools_plan() -> Plan:
+    return Plan(
+        steps=[
+            PlanStep(
+                id="step_1",
+                kind="tool",
+                tool="web_search",
+                args={"query": "nyx agent"},
+            ),
+            PlanStep(
+                id="step_2",
+                kind="tool",
+                tool="web_fetch",
+                args={"url": "https://docs.nyx.test/agent"},
+            ),
+            PlanStep(
+                id="step_3",
+                kind="llm",
+                prompt="Answer using the gathered web data.",
+            ),
+        ]
+    )
+
+
+def _web_tool_results() -> list[dict]:
+    """Results shaped exactly like agent.web_tools returns them (via the
+    real framer, so a framing change regenerates the fixture too)."""
+    from agent.web_tools import frame_untrusted
+
+    search_url = "https://docs.nyx.test/agent"
+    return [
+        {
+            "query": "nyx agent",
+            "results": [
+                {
+                    "title": frame_untrusted("Nyx agent docs", search_url),
+                    "url": search_url,
+                    "description": frame_untrusted(
+                        "Plan-and-execute orchestrator.", search_url
+                    ),
+                }
+            ],
+        },
+        {
+            "url": search_url,
+            "status": 200,
+            "content_type": "text/html",
+            "text": frame_untrusted(
+                "The Nyx agent runs a planner, then an executor.", search_url
+            ),
+        },
+    ]
+
+
+async def _build_web_tools_stream(tracer) -> bytes:
+    """Regenerate the fixture's full SSE stream via the real producer.
+
+    uuid4 and ChatOpenAI are pinned for the duration so the stream is
+    deterministic; both are restored on exit.
+    """
+    counter = itertools.count(1)
+    original_uuid4 = executor_module.uuid.uuid4
+    original_chat = executor_module.ChatOpenAI
+    executor_module.uuid.uuid4 = lambda: f"00000000-0000-4000-8000-{next(counter):012d}"
+    executor_module.ChatOpenAI = _FixtureLlm
+    try:
+        plan = _web_tools_plan()
+        state = _state(plan.steps, {})
+        await executor_module.executor_node(
+            state,
+            settings=_settings(),
+            tracer=tracer,
+            budget=_StubBudget(),
+            rag=None,  # type: ignore[arg-type]
+            tools=_WebScriptedTools(_web_tool_results()),
+        )
+    finally:
+        executor_module.uuid.uuid4 = original_uuid4
+        executor_module.ChatOpenAI = original_chat
+
+    frames = [
+        _sse_encode(
+            Event(kind="run_id", payload=RunIDEvent(run_id=FIXTURE_RUN_ID).model_dump())
+        ),
+        _sse_encode(
+            Event(
+                kind="note",
+                payload=NoteEvent(
+                    text="fresh_run", kind="fresh_run", run_id=FIXTURE_RUN_ID
+                ).model_dump(),
+            )
+        ),
+        _sse_encode(Event(kind="plan", payload=PlanEvent(steps=plan.steps).model_dump())),
+        *(_sse_encode(ev) for ev in state["events_so_far"]),
+        _sse_encode(Event(kind="done", payload=DoneEvent().model_dump())),
+        _sse_encode(
+            Event(kind="terminator", payload=TerminatorEvent(reason=None).model_dump())
+        ),
+    ]
+    return b"".join(frames) + b"data: [DONE]\n\n"
+
+
+@pytest.mark.asyncio
+async def test_web_tools_wire_fixture_matches_producer(tracer):
+    """The committed .sse fixture must equal what the producer emits today.
+
+    To regenerate after an intentional frame change (and then re-run the
+    Playwright spec): run this helper from backend/agent_py with the venv
+    python and write its output to WEB_TOOLS_FIXTURE.
+    """
+    generated = await _build_web_tools_stream(tracer)
+    assert WEB_TOOLS_FIXTURE.exists(), f"missing fixture: {WEB_TOOLS_FIXTURE}"
+    assert generated == WEB_TOOLS_FIXTURE.read_bytes(), (
+        "SSE wire drift: regenerate the fixture and re-run chat-web-tools.spec.ts"
+    )

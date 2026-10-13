@@ -245,3 +245,88 @@ def test_langfuse_enabled_with_credentials_accepted():
     assert s.langfuse_enabled is True
     # SecretStr must not leak the raw value via repr/logging.
     assert "sk-lf-nyx-dev-agent" not in repr(s)
+
+
+# --- web tools (openspec/changes/agent-web-tools) -------------------------
+
+_WEB_ENV_KEYS = (
+    "WEB_FETCH_ENABLED",
+    "WEB_SEARCH_ENABLED",
+    "BRAVE_API_KEY",
+    "BRAVE_BASE_URL",
+    "WEB_SEARCH_MAX_RESULTS",
+    "WEB_FETCH_MAX_BYTES",
+    "WEB_FETCH_TIMEOUT_SECONDS",
+    "WEB_FETCH_MAX_CHARS",
+    "WEB_FETCH_MAX_REDIRECTS",
+    "WEB_FETCH_ALLOW_PRIVATE",
+)
+
+
+def test_web_tools_default_off(monkeypatch):
+    """Spec scenario "Defaults disable both tools": with nothing set, the
+    service starts and no web tool is registered — the merged tool list
+    must equal the MCP registry list (agent-web-tools delta)."""
+    for key in _WEB_ENV_KEYS:
+        monkeypatch.delenv(f"PYTHON_AGENT_{key}", raising=False)
+    s = Settings(_env_file=None, llm_base_url="http://vllm:8000/v1")
+    assert s.web_fetch_enabled is False
+    assert s.web_search_enabled is False
+    assert s.web_search_max_results == 5
+    assert s.web_fetch_max_bytes == 2 * 1024 * 1024
+    assert s.web_fetch_timeout_seconds == 10
+    assert s.web_fetch_max_chars == 20000
+    assert s.web_fetch_max_redirects == 5
+    assert s.web_fetch_allow_private is False
+    assert s.brave_base_url == "https://api.search.brave.com/res/v1/web/search"
+    # SecretStr must not leak the raw value via repr/logging.
+    assert s.brave_api_key.get_secret_value() == ""
+
+
+def test_web_search_enabled_without_key_refused(monkeypatch):
+    """Spec scenario "Search enabled without key refuses startup"."""
+    for key in _WEB_ENV_KEYS:
+        monkeypatch.delenv(f"PYTHON_AGENT_{key}", raising=False)
+    with pytest.raises(ValueError) as excinfo:
+        Settings(
+            _env_file=None,
+            llm_base_url="http://vllm:8000/v1",
+            web_search_enabled=True,
+        )
+    assert "PYTHON_AGENT_BRAVE_API_KEY" in str(excinfo.value)
+
+
+def test_web_search_enabled_with_key_accepted(monkeypatch):
+    for key in _WEB_ENV_KEYS:
+        monkeypatch.delenv(f"PYTHON_AGENT_{key}", raising=False)
+    s = Settings(
+        _env_file=None,
+        llm_base_url="http://vllm:8000/v1",
+        web_search_enabled=True,
+        brave_api_key="brave-test-key",
+    )
+    assert s.web_search_enabled is True
+    assert "brave-test-key" not in repr(s)
+
+
+@pytest.mark.parametrize(
+    "field",
+    [
+        "web_search_max_results",
+        "web_fetch_max_bytes",
+        "web_fetch_timeout_seconds",
+        "web_fetch_max_chars",
+        "web_fetch_max_redirects",
+    ],
+)
+def test_web_tools_negative_numeric_refused(monkeypatch, field):
+    """Spec scenario "Negative numeric setting refuses startup"."""
+    for key in _WEB_ENV_KEYS:
+        monkeypatch.delenv(f"PYTHON_AGENT_{key}", raising=False)
+    with pytest.raises(ValueError) as excinfo:
+        Settings(
+            _env_file=None,
+            llm_base_url="http://vllm:8000/v1",
+            **{field: -1},
+        )
+    assert f"PYTHON_AGENT_{field.upper()}" in str(excinfo.value)

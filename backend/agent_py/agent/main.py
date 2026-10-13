@@ -43,6 +43,7 @@ from .retention import RetentionCron
 from .run_metadata import RunMetadata, RunMetadataUnavailable, build_pool
 from .sweeper import StaleRunSweeper
 from .state import new_state
+from .tool_dispatch import LocalToolRegistry, ToolDispatcher
 from .tools_client import ToolsClient
 from .types import (
     ChatRequest,
@@ -50,6 +51,7 @@ from .types import (
     NoteEvent,
     RunIDEvent,
 )
+from .web_tools import build_local_tools
 
 log = logging.getLogger("nyx.agent")
 
@@ -84,6 +86,19 @@ async def lifespan(app: FastAPI):
     app.state.budget = BudgetGuard(redis=redis, cap=settings.budget_per_user_per_hour)
     app.state.tracer = tracer
     app.state.settings = settings
+
+    # Agent-native web tools (openspec/changes/agent-web-tools): the local
+    # registry is built once from settings; per-request `ToolDispatcher`s
+    # pair it with the request's bearer-scoped MCP client. Both flags
+    # default off — an empty registry means the merged tool list equals
+    # the MCP registry list and the planner prompt is unchanged.
+    app.state.local_tools = LocalToolRegistry(build_local_tools(settings))
+    if settings.web_fetch_allow_private:
+        log.warning(
+            "PYTHON_AGENT_WEB_FETCH_ALLOW_PRIVATE=true — the web_fetch SSRF "
+            "guard is RELAXED (private addresses and non-80/443 ports are "
+            "reachable). Dev/e2e only; never enable in a deployed environment."
+        )
 
     # Run-state persistence: only initialise when `database_url` is set
     # (allows local dev without Postgres). Migrations run automatically on
@@ -490,8 +505,14 @@ async def _stream_agent_run(
     )
 
     # CRITICAL-3: thread the user's bearer token into the RAG + tool clients.
+    # The dispatcher composes the agent-native tools (web tools, when
+    # enabled) with the request's MCP client — local names win on collision
+    # (openspec/changes/agent-web-tools, design D1/D3).
     rag = RagClient(base_url=settings.rag_bridge_url, bearer_token=bearer_token)
-    tools = ToolsClient(base_url=settings.mcp_url, bearer_token=bearer_token)
+    tools = ToolDispatcher(
+        mcp=ToolsClient(base_url=settings.mcp_url, bearer_token=bearer_token),
+        local=getattr(app.state, "local_tools", None) or LocalToolRegistry(),
+    )
 
     # Build the graph with the checkpointer if persistence is enabled.
     # Re-build per-request because the saver needs `thread_id` per-run.

@@ -129,6 +129,10 @@ Recommendation: the second. Each step has a stable `id` so SSE frames can be cor
 
 - [ ] **Not planned.** Per the project's "portability + minimalism" stance, add only when a concrete user-visible need appears.
 
+### 2.3 Web tools (agent-native search + fetch) — **landed in `openspec/changes/agent-web-tools/`**
+
+- [x] **`web_fetch` + `web_search`** — agent-native tools dispatched through the executor's existing retry funnel (SSRF-guarded fetch with dial pinning; Brave-backed search). Default off via `PYTHON_AGENT_WEB_FETCH_ENABLED` / `PYTHON_AGENT_WEB_SEARCH_ENABLED` (search needs `PYTHON_AGENT_BRAVE_API_KEY`). Deliberately NOT in the Go MCP registry — egress stays inside the Python orchestrator (see the change's `design.md` » Spec overlap for the `agent-tool-registry` boundary note).
+
 ---
 
 ## Risks (drives verification gates)
@@ -165,6 +169,7 @@ Long runs inflate the model's context window. **Compression (older-step summaris
 | 3 | `agent-task-routing` | intent → plan template plan | when recurring plan shapes emerge |
 | 4 | `agent-tool-dispatch-retry` | retry on malformed tool args / transient tool execution + partial-failure banner | after slice 1 has failure data |
 | 5 | `agent-cross-session-memory` | `chat_sessions` / `chat_messages` + retention + summary + prefs | after privacy review |
+| 6 | `agent-web-tools` | agent-native `web_fetch` (SSRF-guarded) + `web_search` (Brave) via the existing tool funnel | shipped (default off) |
 
 Tick the `[ ]` items above as each slice lands. Archive-after rule: both `agent-loop` (Go infra) and `agent-langgraph` (Python orchestrator) close together once the Python service is wired in prod.
 ---

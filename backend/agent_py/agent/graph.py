@@ -30,7 +30,7 @@ from .observability import agent_runs_total
 from .planner import plan_node
 from .rag_client import RagClient
 from .state import AgentState
-from .tools_client import ToolsClient
+from .tool_dispatch import ToolDispatcher
 from .types import DoneEvent, DoneUsage, ErrorEvent, Event, TerminatorEvent
 
 
@@ -38,7 +38,7 @@ def _executor_step_factory(
     settings: Settings,
     budget: BudgetGuard,
     rag: RagClient,
-    tools: ToolsClient,
+    tools: ToolDispatcher,
     tracer: Any,
 ):
     """Closure that returns the LangGraph-compatible async node for the executor."""
@@ -62,7 +62,7 @@ def build_graph(
     settings: Settings,
     budget: BudgetGuard,
     rag: RagClient,
-    tools: ToolsClient,
+    tools: ToolDispatcher,
     checkpointer: Any | None = None,
     tracer: Any | None = None,
 ):
@@ -104,7 +104,7 @@ async def run_agent(
     tracer,  # noqa: ARG001 — kept for signature parity with the prior implementation
     budget: BudgetGuard,
     rag: RagClient,
-    tools: ToolsClient,
+    tools: ToolDispatcher,
 ) -> AgentState:
     """Run the compiled graph over the given initial state.
 
@@ -154,7 +154,7 @@ async def run_agent_stream(
     tracer,
     budget: BudgetGuard,
     rag: RagClient,
-    tools: ToolsClient,
+    tools: ToolDispatcher,
     graph=None,
     graph_config: dict | None = None,
     resumed: bool = False,
