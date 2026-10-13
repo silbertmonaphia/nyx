@@ -1,0 +1,264 @@
+"""Coverage for `RunMetadata` edge cases not pinned by `test_smoke_run_state.py`.
+
+`test_smoke_run_state.py` covers the happy path: create_run → get_run →
+mark_completed, scoped by user_id. This file pins the three
+behaviours the smoke does NOT exercise:
+
+  1. `retention_delete_terminal` — hard-deletes only terminal rows
+     (completed/failed) older than the retention window; running rows
+     and recent terminal rows are preserved.
+  2. `list_runs_for_user` — paginates and never leaks across users.
+  3. Pool exhaustion — when the asyncpg pool can't satisfy acquire()
+     within `acquire_timeout`, the call raises `RunMetadataUnavailable`.
+
+Gated on `TEST_ASYNC_PG_DSN` (self-skips without a live Postgres).
+"""
+from __future__ import annotations
+
+import asyncio
+import os
+import uuid as _uuid
+from datetime import datetime, timedelta, timezone
+
+import asyncpg
+import pytest
+
+_DSN = os.environ.get("TEST_ASYNC_PG_DSN")
+
+pytestmark = pytest.mark.skipif(
+    not _DSN,
+    reason="TEST_ASYNC_PG_DSN not set; needs a live Postgres (see Makefile / CI)",
+)
+
+
+async def _drop_schemas() -> None:
+    conn = await asyncpg.connect(dsn=_DSN)
+    try:
+        await conn.execute("DROP SCHEMA IF EXISTS langgraph CASCADE")
+        await conn.execute("DROP SCHEMA IF EXISTS agent CASCADE")
+    finally:
+        await conn.close()
+
+
+async def _build_pool() -> asyncpg.Pool:
+    """Build a pool sized for the test. asyncpg 0.32+ needs `await pool` to init."""
+    pool = asyncpg.create_pool(dsn=_DSN, min_size=1, max_size=10)
+    return await pool
+
+
+@pytest.fixture
+async def app_with_metadata(monkeypatch):
+    """Drive the real lifespan so RunMetadata is on app.state and the
+    `agent.runs` table exists."""
+    _StubLlm_call_count = 0  # noqa: F841 — placeholder; fixture only
+    await _drop_schemas()
+
+    import agent.config as config_module
+
+    settings = config_module.Settings(
+        database_url=_DSN,
+        llm_base_url="http://localhost:9999/v1",
+        metrics_port=0,
+        retention_enabled=False,
+    )
+    monkeypatch.setattr(config_module, "_settings", settings)
+    monkeypatch.setattr(config_module, "get_settings", lambda: settings)
+
+    from agent.main import create_app, lifespan
+
+    app = create_app()
+    async with lifespan(app):
+        yield app
+
+
+# ---- retention_delete_terminal -----------------------------------------
+
+
+async def test_retention_deletes_only_old_terminal_rows(app_with_metadata):
+    """Four rows in `agent.runs`:
+      - completed 60d ago → DELETED
+      - completed  1d ago → kept
+      - failed    60d ago → DELETED
+      - running   60d ago → kept (status='running' is excluded)
+    After `retention_delete_terminal(30)`, only the 60-day terminal
+    rows are gone.
+    """
+    rm = app_with_metadata.state.run_metadata
+    # Reach the underlying pool to insert rows with controlled timestamps.
+    pool = rm._pool
+    now = datetime.now(timezone.utc)
+    old = now - timedelta(days=60)
+    recent = now - timedelta(days=1)
+
+    async with pool.acquire() as conn:
+        # Cleanup any leftover from prior runs.
+        await conn.execute("DELETE FROM runs")
+        await conn.execute(
+            "INSERT INTO runs (id, user_id, status, started_at, ended_at, total_tokens) "
+            "VALUES ($1, 1, 'completed', $2, $2, 100)",
+            _uuid.uuid4(),
+            old,
+        )
+        await conn.execute(
+            "INSERT INTO runs (id, user_id, status, started_at, ended_at, total_tokens) "
+            "VALUES ($1, 1, 'completed', $2, $2, 200)",
+            _uuid.uuid4(),
+            recent,
+        )
+        await conn.execute(
+            "INSERT INTO runs (id, user_id, status, started_at, ended_at, error_code) "
+            "VALUES ($1, 1, 'failed', $2, $2, 'plan_too_large')",
+            _uuid.uuid4(),
+            old,
+        )
+        await conn.execute(
+            "INSERT INTO runs (id, user_id, status, started_at) "
+            "VALUES ($1, 1, 'running', $2)",
+            _uuid.uuid4(),
+            old,
+        )
+
+    deleted = await rm.retention_delete_terminal(30)
+    assert deleted == 2, f"expected 2 deletions, got {deleted}"
+
+    # After retention: the two 60-day terminal rows are gone; the
+    # recent-completed and old-running rows survive.
+    async with pool.acquire() as conn:
+        survivors = [
+            (r["status"], r["ended_at"])
+            for r in await conn.fetch(
+                "SELECT status, ended_at FROM runs ORDER BY started_at"
+            )
+        ]
+    assert len(survivors) == 2, (
+        f"expected 2 survivors; got {survivors}; "
+        "60-day completed/failed should be gone, recent + running must remain"
+    )
+    statuses = {s for s, _ in survivors}
+    assert statuses == {"completed", "running"}, (
+        f"unexpected survivor statuses: {statuses}"
+    )
+
+
+# ---- list_runs_for_user pagination + scoping ---------------------------
+
+
+async def test_list_paginates_and_scopes_to_user(app_with_metadata):
+    """Insert 25 runs for user 1 and 3 for user 2. Page through user 1's
+    history 10 at a time, assert each page is exactly user 1 and
+    ordered by started_at DESC.
+    """
+    rm = app_with_metadata.state.run_metadata
+    pool = rm._pool
+
+    async with pool.acquire() as conn:
+        await conn.execute("DELETE FROM runs")
+        # 25 runs for user 1, spaced 1 hour apart so started_at order is unique.
+        base = datetime.now(timezone.utc) - timedelta(hours=25)
+        for i in range(25):
+            await conn.execute(
+                "INSERT INTO runs (id, user_id, status, started_at, total_tokens) "
+                "VALUES ($1, 1, 'completed', $2, 100)",
+                _uuid.uuid4(),
+                base + timedelta(hours=i),
+            )
+        # 3 runs for user 2 — must never appear in user 1's list.
+        for i in range(3):
+            await conn.execute(
+                "INSERT INTO runs (id, user_id, status, started_at, total_tokens) "
+                "VALUES ($1, 2, 'completed', $2, 100)",
+                _uuid.uuid4(),
+                base + timedelta(hours=i),
+            )
+
+    page1 = await rm.list_runs_for_user(1, limit=10, offset=0)
+    page2 = await rm.list_runs_for_user(1, limit=10, offset=10)
+    page3 = await rm.list_runs_for_user(1, limit=10, offset=20)
+
+    assert len(page1) == 10
+    assert len(page2) == 10
+    assert len(page3) == 5  # 25 - 20
+
+    # All rows belong to user 1 (no cross-user leakage).
+    for r in page1 + page2 + page3:
+        assert r.user_id == 1, f"row {r.id} leaked from user {r.user_id}"
+
+    # Order is started_at DESC across pages — the first row of page 2
+    # must come right after the last row of page 1.
+    all_rows = page1 + page2 + page3
+    for prev, nxt in zip(all_rows, all_rows[1:]):
+        assert prev.started_at >= nxt.started_at, (
+            f"order broken: {prev.started_at} < {nxt.started_at}"
+        )
+
+    # User 2's runs must never appear in user 1's pages.
+    async with pool.acquire() as conn:
+        user2_count = await conn.fetchval(
+            "SELECT count(*) FROM runs WHERE user_id = 2"
+        )
+    assert user2_count == 3, (
+        f"expected 3 user-2 rows in DB, got {user2_count}"
+    )
+    # Total of user 1's pages = 25, all distinct.
+    ids = {r.id for r in all_rows}
+    assert len(ids) == 25
+
+
+# ---- pool exhaustion ----------------------------------------------------
+
+
+async def test_pool_exhaustion_raises_run_metadata_unavailable():
+    """Build a pool with max_size=1 and acquire_timeout=0.1s. Hold
+    the single connection; issue a second `create_run` from the same
+    `RunMetadata` instance. The second acquire must time out and
+    raise `RunMetadataUnavailable` (after the retry budget is spent).
+    """
+    from agent.run_metadata import RunMetadata, RunMetadataUnavailable
+
+    pool = await _build_pool()
+    try:
+        # Drive the lifespan's migrations so `agent.runs` exists.
+        await _drop_schemas()
+        from agent.config import Settings
+
+        settings = Settings(
+            database_url=_DSN,
+            llm_base_url="http://localhost:9999/v1",
+            metrics_port=0,
+            retention_enabled=False,
+        )
+        import agent.config as config_module
+
+        config_module._settings = settings
+
+        from agent.main import lifespan, create_app
+
+        app = create_app()
+        async with lifespan(app):
+            # Build a fresh pool with max_size=1, but use the same DSN.
+            small_pool = asyncpg.create_pool(
+                dsn=_DSN, min_size=1, max_size=1
+            )
+            small_pool = await small_pool
+            try:
+                rm = RunMetadata(
+                    small_pool, max_retries=1, acquire_timeout=0.1
+                )
+
+                # Hold the only connection.
+                holder = await small_pool.acquire()
+
+                async def _release_after_delay():
+                    await asyncio.sleep(0.3)  # > acquire_timeout
+                    await small_pool.release(holder)
+
+                release_task = asyncio.create_task(_release_after_delay())
+                try:
+                    with pytest.raises(RunMetadataUnavailable):
+                        await rm.create_run(user_id=42)
+                finally:
+                    await release_task
+            finally:
+                await small_pool.close()
+    finally:
+        await pool.close()

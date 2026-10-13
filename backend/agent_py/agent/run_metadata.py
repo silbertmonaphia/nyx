@@ -70,13 +70,32 @@ class RunMetadata:
         self._acquire_timeout = acquire_timeout
 
     async def _with_retry(self, op_name: str, fn):
-        """Run `fn(conn)` with retry/backoff for transient asyncpg errors."""
+        """Run `fn(conn)` with retry/backoff for transient asyncpg errors.
+
+        Pool-acquire timeout (asyncio.TimeoutError from
+        `pool.acquire(timeout=...)`) is a separate failure mode — the
+        pool is exhausted and retrying within the same request won't
+        help — so it raises `RunMetadataUnavailable` immediately per
+        the spec ("Pool acquire timeout SHALL be 5s; exceeding it
+        SHALL raise `RunMetadataUnavailable`").
+        """
         attempt = 0
         backoff_ms = 100
         while True:
             try:
                 async with self._pool.acquire(timeout=self._acquire_timeout) as conn:
                     return await fn(conn)
+            except asyncio.TimeoutError as exc:
+                log.warning(
+                    "run_metadata %s: pool acquire timeout after %.1fs (%r)",
+                    op_name,
+                    self._acquire_timeout,
+                    exc,
+                )
+                raise RunMetadataUnavailable(
+                    f"{op_name} failed: pool acquire timeout "
+                    f"({self._acquire_timeout}s)"
+                ) from exc
             except asyncpg.PostgresConnectionError as exc:
                 attempt += 1
                 if attempt > self._max_retries:
