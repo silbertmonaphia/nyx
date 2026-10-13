@@ -16,6 +16,13 @@ context: |
   an already-shipped change "active" in openspec/changes/ for weeks and makes
   archive-time "incomplete task" warnings meaningless.
 
+  Archive ownership: the implementer archives the *implementation* change
+  once its tasks are complete. A *rollout* change is archived by the
+  PM/operator only — the implementer runs the gates, records the evidence,
+  and leaves the rollout change active with its archive task unchecked
+  (2026-10-13: a rollout sibling was archived from the dev session and had
+  to be restored, commit 3ad0a0e).
+
   Classification test — "Can the implementer complete this task in the dev/CI
   environment right now, with no external clock and no deployed environment?"
   Yes → implementation task (stays in the implementation change).
