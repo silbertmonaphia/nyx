@@ -112,10 +112,12 @@ sudo docker compose up --build -d
 
 ```bash
 # Database
-PGPASSWORD=postgres psql -h localhost -p 5433 -U postgres -d nyx
+make dev-pgsql-inspect
+# manual equivalent: PGPASSWORD=postgres psql -h localhost -p 5433 -U postgres -d nyx
 
 # Redis (if REDIS_ENABLED=true)
-sudo docker compose exec redis redis-cli KEYS 'feeds:*'
+make dev-redis-inspect
+# manual equivalent: sudo docker compose exec redis redis-cli KEYS 'feeds:*'
 ```
 
 ## Local Development
@@ -123,8 +125,9 @@ sudo docker compose exec redis redis-cli KEYS 'feeds:*'
 The repo ships with a root `Makefile` that orchestrates the two halves against the docker-compose infra. From the repo root:
 
 ```bash
-make up     # docker compose up -d db redis jaeger (idempotent)
-make dev    # backend (go run) + frontend (vite) together, Ctrl+C cleans up
+make up         # docker compose up -d db redis jaeger (idempotent)
+make dev-infra  # same infra in the foreground; Ctrl+C stops it
+make dev        # backend (go run) + frontend (vite) together, Ctrl+C cleans up
 make stop   # stop the dev processes
 make status # show infra + dev processes
 make down   # stop the infra containers

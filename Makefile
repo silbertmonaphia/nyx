@@ -6,12 +6,15 @@
 # it instead (output also tees to /tmp/nyx-*.log). The two vllm targets
 # serve the chat / embedding models on the HOST for a faster dev loop
 # than the compose `vllm` / `embed` profiles (needs a local vLLM
-# install + GPU; do not run alongside the compose profiles). Run from
-# the repo root; requires `go`, `npm`, `python3`, and the `docker
-# compose` plugin on PATH. Backend invocations assume `make up`
-# has been run.
+# install + GPU; do not run alongside the compose profiles).
+# `dev-infra` runs the infra containers (db + redis + jaeger) in the
+# foreground — Ctrl+C stops them; `up` is the detached, idempotent
+# variant. `dev-pgsql-inspect` / `dev-redis-inspect` open psql /
+# redis-cli shells against the running infra. Run from the repo root;
+# requires `go`, `npm`, `python3`, and the `docker compose` plugin on
+# PATH. Backend invocations assume `make up` has been run.
 
-.PHONY: dev dev-backend dev-frontend dev-agent dev-vllm-main dev-vllm-embed up down up-vllm down-vllm logs status stop help
+.PHONY: dev dev-backend dev-frontend dev-agent dev-vllm-main dev-vllm-embed dev-infra dev-pgsql-inspect dev-redis-inspect up down up-vllm down-vllm logs status stop help
 
 COMPOSE := docker compose
 
@@ -70,6 +73,14 @@ dev-vllm-main:
 dev-vllm-embed:
 	@./scripts/dev.sh vllm-embed $(DETACH_FLAG)
 
+#: Bring the infra containers (db + redis + jaeger) up in the foreground; Ctrl+C stops them. Run `make up` to detach instead.
+dev-infra:
+	$(COMPOSE) up db redis jaeger
+
+#: Bring the infra containers (db + redis + jaeger) up detached; idempotent, safe to re-run. Prerequisite for the `dev-*` targets.
+up:
+	$(COMPOSE) up -d db redis jaeger
+
 #: Start the vLLM chat + embed containers (full local LLM stack). Requires `make up` already running.
 up-vllm:
 	$(COMPOSE) --profile vllm --profile embed up -d
@@ -85,3 +96,11 @@ down:
 #: Tail infra logs from db / redis / jaeger.
 logs:
 	$(COMPOSE) logs -f --tail=100
+
+#: Open a psql shell against the dev Postgres — `psql -h 127.0.0.1 -p 5433 -U postgres -d nyx`; prompts for the POSTGRES_PASSWORD from .env.
+dev-pgsql-inspect:
+	psql -h 127.0.0.1 -p 5433 -U postgres -d nyx
+
+#: Open a redis-cli shell against the dev Redis — `redis-cli -h 127.0.0.1 -p 6380`.
+dev-redis-inspect:
+	redis-cli -h 127.0.0.1 -p 6380
