@@ -530,3 +530,78 @@ async def test_agent_run_non_integer_user_id_header_returns_400(app_and_state):
         )
     assert resp.status_code == 400
     assert "must be an integer" in resp.text
+
+
+@pytest.mark.asyncio
+async def test_lifespan_shutdown_survives_pool_close_failure(monkeypatch):
+    """Regression (review ticket): the pool-close error handler logged an
+    unbound `exc`, so a raising `pool.close()` produced a NameError that
+    aborted the remaining lifespan-shutdown steps (observability flush +
+    redis close) — exactly when cleanup had already failed once."""
+    from agent import main as main_module
+
+    class _FakeConn:
+        async def execute(self, *_args, **_kwargs):
+            return None
+
+    class _RaisingPool:
+        class _Ctx:
+            async def __aenter__(self):
+                return _FakeConn()
+
+            async def __aexit__(self, *_exc):
+                return None
+
+        def acquire(self, timeout=None):
+            return self._Ctx()
+
+        async def close(self):
+            raise RuntimeError("pool explosion")
+
+    class _FakeCheckpointer:
+        def __init__(self):
+            self.conn = object()
+
+        async def setup(self):
+            return None
+
+        async def __aexit__(self, *_exc):
+            return None
+
+    async def _fake_build_pool(*_args, **_kwargs):
+        return _RaisingPool()
+
+    async def _fake_build_checkpointer(_url):
+        return _FakeCheckpointer()
+
+    async def _fake_set_search_path(_conn, _schema):
+        return None
+
+    monkeypatch.setattr(main_module, "build_pool", _fake_build_pool)
+    monkeypatch.setattr(main_module, "_build_checkpointer", _fake_build_checkpointer)
+    monkeypatch.setattr(main_module, "_set_search_path_async", _fake_set_search_path)
+
+    shutdown_ran = {"observability": False}
+    monkeypatch.setattr(
+        main_module,
+        "shutdown_observability",
+        lambda: shutdown_ran.__setitem__("observability", True),
+    )
+
+    settings = Settings(
+        _env_file=None,
+        llm_base_url="http://stub",
+        metrics_port=0,
+        database_url="postgresql://u:p@localhost:5432/db",
+        migrations_disabled=True,
+        retention_enabled=False,
+    )
+    monkeypatch.setattr(main_module, "get_settings", lambda: settings)
+
+    app = main_module.create_app(settings)
+    async with main_module.lifespan(app):
+        pass
+
+    # Reaching here proves the NameError is gone; the flag proves shutdown
+    # continued past the raised pool-close instead of aborting.
+    assert shutdown_ran["observability"] is True

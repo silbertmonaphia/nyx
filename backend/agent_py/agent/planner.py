@@ -245,7 +245,12 @@ async def _emit_structured_plan(
         # json_schema support, or an invalid base_url. Historical
         # behaviour contract: typed `planner_failed` error, never an
         # exception escaping the node.
-        return _PlanError("planner_failed", "Plan generation failed", repr(exc)[:500])
+        # The raw repr stays in the LOG (and OTel), never on the wire:
+        # provider errors can echo credential fragments (e.g. "Incorrect
+        # API key provided: sk-…"), and `_emit_error` forwards `reason`
+        # into the terminator frame that old clients render.
+        log.warning("planner client construction failed: %r", exc)
+        return _PlanError("planner_failed", "Plan generation failed", "provider call failed")
 
     messages = _initial_messages(state)
     had_validation_failure = False
@@ -287,8 +292,9 @@ async def _emit_structured_plan(
                 # escaping the graph node. Retrying these is pointless.
                 span.set_attribute("ok", False)
                 span.set_attribute("error", repr(exc)[:200])
+                log.warning("planner provider call failed: %r", exc)
                 return _PlanError(
-                    "planner_failed", "Plan generation failed", repr(exc)[:500]
+                    "planner_failed", "Plan generation failed", "provider call failed"
                 )
 
             if not isinstance(plan_obj, Plan):
@@ -388,8 +394,9 @@ async def _emit_legacy_plan(
         try:
             resp = await client.ainvoke(_initial_messages(state))
         except Exception as exc:  # noqa: BLE001 — surface as a typed error event
+            log.warning("planner provider call failed (legacy path): %r", exc)
             return _PlanError(
-                "planner_failed", "Plan generation failed", repr(exc)
+                "planner_failed", "Plan generation failed", "provider call failed"
             )
 
         raw = _extract_text(resp)

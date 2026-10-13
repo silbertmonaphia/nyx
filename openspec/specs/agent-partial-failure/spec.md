@@ -4,6 +4,8 @@
 
 Tells the user when an agent run finished with a step that did not match the plan, so the final answer is not silently presented as complete. The trigger is system-recognised failure only — RAG returning `[]` (legitimate "no results") and model hallucination are not in scope; those are separate product problems.
 
+Scope note (recorded 2026-10-14): for plan-level errors the orchestrator emits the note, but the SPA's typed-error path drops the contentless assistant row before a banner can attach — for those runs the error toast is the user signal, and the banner renders only for runs where an answer exists (recovered / partial). This is the accepted reading of the UI requirement below, whose scope is "the assistant message's final-answer region".
+
 ## Requirements
 
 ### Requirement: Partial-failure signal emitted when the run diverged from the plan

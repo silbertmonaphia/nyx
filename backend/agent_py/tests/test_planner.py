@@ -697,7 +697,11 @@ def test_construction_fault_returns_planner_failed(monkeypatch, scripted_setting
 
     assert isinstance(plan_or_error, _PlanError)
     assert plan_or_error.code == "planner_failed"
-    assert "construction exploded" in plan_or_error.reason
+    # Wire-safety: `reason` feeds the terminator frame (old clients render
+    # it), so provider reprs — which can echo credential fragments — must
+    # NOT appear there; the raw text goes to the log/span instead.
+    assert plan_or_error.reason == "provider call failed"
+    assert "construction exploded" not in plan_or_error.reason
 
 
 def test_non_plan_return_is_retryable_and_recovers(monkeypatch, scripted_settings):

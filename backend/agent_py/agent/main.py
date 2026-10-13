@@ -161,7 +161,7 @@ async def lifespan(app: FastAPI):
             # one pool per restart in dev.
             try:
                 await pool.close()
-            except Exception:  # noqa: BLE001
+            except Exception as exc:  # noqa: BLE001
                 log.warning("failed to close asyncpg pool cleanly: %r", exc)
         shutdown_observability()
         await redis.aclose()
