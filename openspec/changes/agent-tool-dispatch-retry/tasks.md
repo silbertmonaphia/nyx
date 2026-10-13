@@ -53,11 +53,11 @@
 
 ## 9. OpenSpec rollout sibling
 
-- [ ] 9.1 (already done in this session) Created `openspec/changes/agent-tool-dispatch-retry-rollout/` with `skip_specs: true`. Modeled on `openspec/changes/agent-planner-structured-rollout/tasks.md`. Verify by `openspec list --json` showing both changes and `openspec status --change agent-tool-dispatch-retry-rollout` showing tasks-only.
+- [x] 9.1 (already done in this session) Created `openspec/changes/agent-tool-dispatch-retry-rollout/` with `skip_specs: true`. Modeled on `openspec/changes/agent-planner-structured-rollout/tasks.md`. Verify by `openspec list --json` showing both changes and `openspec status --change agent-tool-dispatch-retry-rollout` showing tasks-only.
 
 ## 10. Open question resolution (from design.md)
 
-- [ ] 10.1 **Resolved 2026-10-13** — per-step, per-tool budget applies across the entire `kind="react"` step (not per ReAct iteration). `design.md` Open Questions updated. Add `test_react_step_shares_budget_across_iterations` to `backend/agent_py/tests/test_executor.py`: ReAct iter 1 exhausts the tool-arg retry budget, iter 2's tool call fails immediately with the final `tool_result{ok: false}` and no further retry attempts. Verify by the test passing under both `tool_retry_max=2` and `tool_retry_max=0` (the latter trivially fails every retry).
+- [x] 10.1 **Resolved 2026-10-13** — per-step, per-tool budget applies across the entire `kind="react"` step (not per ReAct iteration). `design.md` Open Questions updated. Add `test_react_step_shares_budget_across_iterations` to `backend/agent_py/tests/test_executor.py`: ReAct iter 1 exhausts the tool-arg retry budget, iter 2's tool call fails immediately with the final `tool_result{ok: false}` and no further retry attempts. Verify by the test passing under both `tool_retry_max=2` and `tool_retry_max=0` (the latter trivially fails every retry). (Test added in §3 / §4 batch — worktree B.)
 
 ## 11. Partial-failure signal (backend)
 
