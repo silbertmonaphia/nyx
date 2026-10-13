@@ -7,6 +7,9 @@ data: {"text":"fresh_run","provider":null,"kind":"fresh_run","last_step_id":null
 event: error
 data: {"error":"Plan is invalid","code":"plan_invalid","request_id":null}
 
+event: note
+data: {"text":"Run diverged from the plan","provider":null,"kind":"partial_failure","last_step_id":null,"run_id":null,"failed_steps":[]}
+
 event: done
 data: {"usage":{"prompt_tokens":0,"completion_tokens":0,"total_tokens":0}}
 

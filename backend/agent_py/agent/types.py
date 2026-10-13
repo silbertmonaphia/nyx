@@ -150,6 +150,25 @@ class ErrorEvent(BaseModel):
     request_id: str | None = None
 
 
+# Error codes that mean the run diverged from the plan before/without any
+# step completing — the CLOSED trigger set for the partial-failure note
+# (openspec/changes/agent-tool-dispatch-retry » agent-partial-failure).
+# Deliberately absent: `run_metadata_unavailable` (non-fatal per
+# agent-run-state), `planner_failed` (a provider/construction fault — the
+# run never had a plan to diverge from; round 2, NEW-2), `empty_answer`,
+# `agent_unavailable`. Shared by `planner._emit_error` and
+# `executor._has_plan_level_error` so the two sides cannot drift.
+PLAN_LEVEL_ERROR_CODES = frozenset(
+    {
+        "plan_too_large",
+        "plan_invalid",
+        "react_iterations_exceeded",
+        "budget_exceeded",
+        "budget_unavailable",
+    }
+)
+
+
 class RunIDEvent(BaseModel):
     """First frame of a fresh run — server mints a `run_id` and echoes it back.
 

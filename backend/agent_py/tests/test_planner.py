@@ -514,6 +514,25 @@ def test_plan_node_emits_error_and_done_on_retry_exhaustion(
     assert out.get("plan") is None
 
 
+def test_emit_error_note_gated_on_plan_level_codes():
+    """Round 2, NEW-2: the partial-failure note rides only the spec's CLOSED
+    trigger set. `planner_failed` (a provider/construction fault — the run
+    never had a plan to diverge from) must NOT emit it."""
+    from agent.planner import _emit_error
+
+    state = new_state(
+        user_id=1, run_id="r1", model="m", messages=[{"role": "user", "content": "hi"}]
+    )
+    out = _emit_error(state, code="plan_too_large", detail="too many steps")
+    assert [e.kind for e in out["events_so_far"]] == ["error", "note", "done", "terminator"]
+
+    state2 = new_state(
+        user_id=1, run_id="r2", model="m", messages=[{"role": "user", "content": "hi"}]
+    )
+    out2 = _emit_error(state2, code="planner_failed", detail="provider down")
+    assert [e.kind for e in out2["events_so_far"]] == ["error", "done", "terminator"]
+
+
 def test_retry_increments_ok_counter(monkeypatch, scripted_settings):
     """`retry="ok"` increments when a transient failure recovers on the next attempt."""
     before = _counter_value("ok")

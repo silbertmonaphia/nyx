@@ -49,7 +49,7 @@ When an agent run terminates with any **system-recognised** divergence from the 
 
 The set of SSE frames that constitute a "system-recognised failure" SHALL be exactly the following, in this priority order:
 1. Any `error{code: "plan_too_large"}` / `plan_invalid` / `react_iterations_exceeded` / `budget_exceeded` / `budget_unavailable` frame
-2. Any `tool_result{ok: false}` whose step has a fully-consumed per-(step, tool) retry allowance (the terminal failure after retries — traced via the persisted budget so an allowance split across ReAct iterations is caught; intermediate failures below the allowance are excluded)
+2. Any `tool_result{ok: false}` for a (step, tool) whose dispatch ended in a terminal failure after retries (recorded when the dispatch gives up — covers single-dispatch exhaustion, allowances split across ReAct iterations, and non-retryable rejections; a dispatch that recovered on a later attempt is excluded even when it consumed the full allowance)
 3. Any `step_end` whose step's terminal status is `failed`
 
 The orchestrator SHALL NOT classify a run as partial-failure on any other signal (RAG empty, model refusal, output-shape mismatch, latency). The `failed_steps` list SHALL contain every `step_id` whose `step_end` carried `status="failed"`, plus any step whose final `tool_result` was `ok: false` after retries.

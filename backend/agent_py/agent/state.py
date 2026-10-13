@@ -31,6 +31,13 @@ class AgentState(TypedDict, total=False):
     # one step share their tool's budget (design.md §Open Questions,
     # resolved 2026-10-13: per-step, per-tool across the entire react step).
     tool_retry_used: dict[str, dict[str, int]]
+    # step_id → tool names whose dispatch ended in a TERMINAL failure
+    # (exhaustion, non-retryable, or the model declined to correct).
+    # Distinct from `tool_retry_used`: consuming the full allowance and
+    # then RECOVERING on the last allowed attempt is not a terminal
+    # failure and must not flag the step (test-review round 2, NEW-1).
+    # Feeds the partial-failure banner trigger in `_collect_failed_steps`.
+    tool_terminal_failures: dict[str, list[str]]
 
     # --- Event stream (replayed to the SSE emitter per node completion) ---
     # NOTE: when a checkpointer is wired (production), ALL channels —
@@ -63,6 +70,7 @@ def new_state(
         step_outputs={},
         cumulative_tokens=0,
         tool_retry_used={},
+        tool_terminal_failures={},
         events_so_far=[],
         terminal_status="ok",
         terminal_reason=None,

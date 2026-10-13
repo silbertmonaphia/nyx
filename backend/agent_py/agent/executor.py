@@ -42,6 +42,7 @@ from .tools_client import (
     ToolUnavailableError,
 )
 from .types import (
+    PLAN_LEVEL_ERROR_CODES,
     DeltaEvent,
     DoneEvent,
     ErrorEvent,
@@ -62,20 +63,6 @@ log = logging.getLogger("nyx.agent.executor")
 # Sentinel marker echoed into the tool-arg re-prompt; matches the planner's
 # `PREVIOUS_ATTEMPT_FAILED` block so the model sees a consistent convention.
 PREVIOUS_ATTEMPT_FAILED_HEADER = "PREVIOUS_ATTEMPT_FAILED"
-
-# Error codes that mean "the run diverged from the plan" before/without any
-# step completing. `run_metadata_unavailable` is deliberately absent — it is
-# non-fatal per agent-run-state; so are `empty_answer` and `agent_unavailable`
-# (not part of the partial-failure trigger list in the spec).
-_PLAN_LEVEL_ERROR_CODES = frozenset(
-    {
-        "plan_too_large",
-        "plan_invalid",
-        "react_iterations_exceeded",
-        "budget_exceeded",
-        "budget_unavailable",
-    }
-)
 
 
 async def executor_node(
@@ -557,6 +544,18 @@ async def _dispatch_tool_with_retries(
     current_args = args
     retries_made = 0
     last_error_text = ""
+    # Id of the call currently being dispatched. For the plain path the
+    # first synthetic call gets a fresh id inside the re-prompt; after a
+    # correction it is the model's own tool-call id, so each rejection's
+    # ToolMessage answers the assistant turn that actually emitted it.
+    current_call_id = model_tool_call_id
+    # Prior re-prompt exchanges (rejection + feedback + the model's
+    # corrected response, plus any synthetic assistant turn). Carried into
+    # later re-prompts so retry >= 2 sees a fully paired message history
+    # (test-review round 2, NEW-3): without this the first rejection sat
+    # unanswered and two consecutive assistant tool-call turns reached
+    # strict OpenAI-compatible providers, which 400 on that shape.
+    reprompt_carry: list = []
 
     while True:
         call_id = str(uuid.uuid4())
@@ -584,6 +583,7 @@ async def _dispatch_tool_with_retries(
             can_retry = failure_class != "non_retryable" and retries_made < allowance
             if not can_retry:
                 used_by_tool[tool_name] = used + retries_made
+                _record_terminal_tool_failure(state, step_id, tool_name)
                 return False, None, last_error_text
 
             retries_made += 1
@@ -606,7 +606,8 @@ async def _dispatch_tool_with_retries(
                 args=current_args,
                 error_text=last_error_text,
                 base_messages=base_messages,
-                model_tool_call_id=model_tool_call_id if retries_made == 1 else None,
+                model_tool_call_id=current_call_id,
+                carry=reprompt_carry,
                 settings=settings,
                 tracer=tracer,
                 budget=budget,
@@ -614,6 +615,7 @@ async def _dispatch_tool_with_retries(
             )
             if corrected is None:
                 used_by_tool[tool_name] = used + retries_made
+                _record_terminal_tool_failure(state, step_id, tool_name)
                 return (
                     False,
                     None,
@@ -622,7 +624,8 @@ async def _dispatch_tool_with_retries(
                         f"(last rejection: {last_error_text})"
                     ),
                 )
-            current_name, current_args = corrected
+            current_name, current_args, current_call_id, exchange = corrected
+            reprompt_carry.extend(exchange)
             continue
         else:
             agent_tool_calls_total.labels(current_name, "true").inc()
@@ -642,21 +645,27 @@ async def _reprompt_for_corrected_call(
     error_text: str,
     base_messages: list | None,
     model_tool_call_id: str | None,
+    carry: list,
     settings: Settings,
     tracer: trace.Tracer,
     budget: BudgetGuard,
     tools: ToolsClient,
-) -> tuple[str, dict] | None:
+) -> tuple[str, dict, str, list] | None:
     """Re-invoke the model to correct a rejected tool call.
 
     Message-list shape (spec: `agent-tool-retry` » re-prompt structure):
     prior context, the assistant message that emitted the bad call, the
     matching tool result carrying the validator's error, and a final user
-    message quoting the error + the tool's argument schema.
+    message quoting the error + the tool's argument schema. `carry` holds
+    the earlier re-prompt exchanges so each retry sees a fully paired
+    history (no unanswered assistant turns).
 
-    Returns the corrected `(name, args)`, or None when the model declines to
-    emit any tool call. Raises the budget sentinels when the guard refuses
-    the model call (a re-prompt *is* a model call — it must be gated like one).
+    Returns `(corrected_name, corrected_args, corrected_call_id, exchange)`
+    where `exchange` is the message block appended on top of base + carry —
+    the caller extends `carry` with it so the NEXT retry stays paired. None
+    when the model declines to emit any tool call. Raises the budget
+    sentinels when the guard refuses the model call (a re-prompt *is* a
+    model call — it must be gated like one).
     """
     decision = await budget.check_and_increment(state["user_id"], DEFAULT_ESTIMATED_TOKENS, tracer)
     if decision.decision == "exceeded":
@@ -693,14 +702,14 @@ async def _reprompt_for_corrected_call(
         if step_prompt:
             prompt_msgs.append(SystemMessage(content=step_prompt))
         prompt_msgs.extend(_state_messages_to_lc(state.get("messages", [])))
+    prompt_msgs.extend(carry)
+    exchange: list = []
     # Append the synthetic assistant tool-call message ONLY when no message
     # in the list already carries this call id (test-review round 1, F2):
-    # in the ReAct path the live messages end with the model's own assistant
-    # turn for this call, and appending a second copy produces two
-    # consecutive assistant tool-call turns — which strict OpenAI-compatible
-    # providers reject. For retries ≥ 2 in ReAct the corrected call is NOT
-    # in the list, so the synthetic message (fresh id, matching ToolMessage
-    # below) is appended and the pairing stays intact.
+    # in the ReAct path the live messages (or a carried exchange) already
+    # contain the assistant turn for this call, and appending a second copy
+    # produces two consecutive assistant tool-call turns — which strict
+    # OpenAI-compatible providers reject.
     def _carries_bad_call(msg) -> bool:
         for tc in getattr(msg, "tool_calls", None) or []:
             call_id = tc.get("id") if isinstance(tc, dict) else getattr(tc, "id", None)
@@ -709,22 +718,23 @@ async def _reprompt_for_corrected_call(
         return False
 
     if not any(_carries_bad_call(m) for m in prompt_msgs):
-        prompt_msgs.append(
-            AIMessage(content="", tool_calls=[{"id": tc_id, "name": tool_name, "args": args}])
+        synthetic = AIMessage(
+            content="", tool_calls=[{"id": tc_id, "name": tool_name, "args": args}]
         )
-    prompt_msgs.append(
-        ToolMessage(content=f"Tool call rejected: {error_text}", tool_call_id=tc_id)
-    )
-    prompt_msgs.append(
-        HumanMessage(
-            content=(
-                f"{PREVIOUS_ATTEMPT_FAILED_HEADER}: {error_text}\n\n"
-                f"The `{tool_name}` tool expects arguments matching this schema:\n"
-                f"{_tool_schema_text(schemas, tool_name)}\n\n"
-                f"Emit a corrected tool call for `{tool_name}`."
-            )
+        prompt_msgs.append(synthetic)
+        exchange.append(synthetic)
+    rejection = ToolMessage(content=f"Tool call rejected: {error_text}", tool_call_id=tc_id)
+    feedback = HumanMessage(
+        content=(
+            f"{PREVIOUS_ATTEMPT_FAILED_HEADER}: {error_text}\n\n"
+            f"The `{tool_name}` tool expects arguments matching this schema:\n"
+            f"{_tool_schema_text(schemas, tool_name)}\n\n"
+            f"Emit a corrected tool call for `{tool_name}`."
         )
     )
+    prompt_msgs.append(rejection)
+    prompt_msgs.append(feedback)
+    exchange.extend([rejection, feedback])
 
     try:
         resp = await client.ainvoke(prompt_msgs)
@@ -740,7 +750,12 @@ async def _reprompt_for_corrected_call(
     if not tool_calls:
         return None
     tc = tool_calls[0]
-    return _tool_name(tc), _parse_args(_tool_arg(tc))
+    # The model's own response carries the corrected call's id (real
+    # providers always set it); keep it so the next rejection's ToolMessage
+    # answers this exact turn. Fall back to a fresh id for id-less stubs.
+    corrected_id = _tool_id(tc) or str(uuid.uuid4())
+    exchange.append(resp)
+    return _tool_name(tc), _parse_args(_tool_arg(tc)), corrected_id, exchange
 
 
 def _classify_tool_failure(exc: Exception) -> str:
@@ -798,6 +813,21 @@ def _tool_schema_text(schemas: list, tool_name: str) -> str:
     return "{}"
 
 
+def _record_terminal_tool_failure(state: AgentState, step_id: str, tool_name: str) -> None:
+    """Mark a (step, tool) whose dispatch ended in a TERMINAL failure.
+
+    Recorded at the moment the dispatch gives up — exhaustion, a
+    non-retryable class, or the model declining to emit a corrected call.
+    Deliberately NOT derived from `tool_retry_used`: consuming the full
+    allowance and then RECOVERING on the last allowed attempt is not a
+    terminal failure and must not flag the step (test-review round 2,
+    NEW-1 — the over-broad allowance check flagged green runs).
+    """
+    by_step = state.setdefault("tool_terminal_failures", {}).setdefault(step_id, [])
+    if tool_name not in by_step:
+        by_step.append(tool_name)
+
+
 def _emit_tool_result(
     state: AgentState,
     step_id: str,
@@ -839,17 +869,15 @@ def _collect_failed_steps(state: AgentState, settings: Settings) -> list[str]:
     """
     events = state.get("events_so_far", [])
     retry_max = settings.tool_retry_max
-    # Steps whose per-(step, tool) budget is fully consumed. Needed because
-    # a budget split across ReAct iterations can exhaust through frames whose
-    # individual retry_count never equals retry_max (test-review round 1, F3):
-    # 1 retry in iteration 1 + 1 in iteration 2 emits retry_count 0/1/1, yet
-    # the tool is exhausted. Default-clause `retry_count == retry_max` still
-    # covers the single-dispatch case; this set covers the split one.
-    exhausted_steps = {
-        step_id
-        for step_id, tools_used in (state.get("tool_retry_used") or {}).items()
-        if any(used >= retry_max for used in tools_used.values())
-    }
+    # Steps with a recorded TERMINAL dispatch failure
+    # (`_record_terminal_tool_failure`). Covers the cases where no single
+    # frame carries `retry_count == retry_max`: an allowance split across
+    # ReAct iterations, the fail-fast dispatch after exhaustion, and
+    # non-retryable (auth / bare-4xx) rejections. A dispatch that recovered
+    # on its last allowed attempt records nothing here and its success
+    # frame's `ok is True` excludes it from the second clause too
+    # (test-review rounds 1+2, F3/NEW-1).
+    terminal_failures = state.get("tool_terminal_failures") or {}
     seen: dict[str, None] = {}
     for ev in events:
         payload = ev.payload or {}
@@ -859,7 +887,7 @@ def _collect_failed_steps(state: AgentState, settings: Settings) -> list[str]:
             and payload.get("ok") is False
             and (
                 payload.get("retry_count", 0) == retry_max
-                or payload.get("step_id") in exhausted_steps
+                or payload.get("step_id") in terminal_failures
             )
         )
         if is_failed_step or is_terminal_tool_failure:
@@ -871,7 +899,7 @@ def _collect_failed_steps(state: AgentState, settings: Settings) -> list[str]:
 
 def _has_plan_level_error(state: AgentState) -> bool:
     for ev in state.get("events_so_far", []):
-        if ev.kind == "error" and (ev.payload or {}).get("code") in _PLAN_LEVEL_ERROR_CODES:
+        if ev.kind == "error" and (ev.payload or {}).get("code") in PLAN_LEVEL_ERROR_CODES:
             return True
     return False
 

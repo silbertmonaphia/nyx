@@ -38,6 +38,7 @@ from .config import Settings
 from .observability import agent_planner_parse_failures_total
 from .state import AgentState
 from .types import (
+    PLAN_LEVEL_ERROR_CODES,
     DoneEvent,
     ErrorEvent,
     Event,
@@ -570,16 +571,19 @@ def _emit_error(
     # `events_so_far` positionally per node chunk, so a note inserted into
     # this already-yielded range later (e.g. from the executor node) would
     # never reach the wire. No step ran, so `failed_steps` is empty.
-    state["events_so_far"].append(
-        Event(
-            kind="note",
-            payload=NoteEvent(
-                text="Run diverged from the plan",
-                kind="partial_failure",
-                failed_steps=[],
-            ).model_dump(),
+    # Gated on the spec's CLOSED trigger set: `planner_failed` is a
+    # provider/construction fault, not a plan divergence (round 2, NEW-2).
+    if code in PLAN_LEVEL_ERROR_CODES:
+        state["events_so_far"].append(
+            Event(
+                kind="note",
+                payload=NoteEvent(
+                    text="Run diverged from the plan",
+                    kind="partial_failure",
+                    failed_steps=[],
+                ).model_dump(),
+            )
         )
-    )
     state["events_so_far"].append(Event(kind="done", payload=DoneEvent().model_dump()))
     state["events_so_far"].append(
         Event(kind="terminator", payload=TerminatorEvent(reason=reason).model_dump())

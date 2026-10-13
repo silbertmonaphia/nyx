@@ -137,12 +137,15 @@ test.describe('Chat / planner tool-step path (browser-level)', () => {
 });
 
 test.describe('Chat / planner failure frames (recorded wire bytes)', () => {
-  // Fixtures are verbatim SSE captures from the §2.2 gate run: a real agent
+  // Fixtures are SSE captures from the §2.2 gate run: a real agent
   // process (structured planner enabled) pointed at probe/stub_provider.py,
   // which ignores `response_format` — planner call #1 malformed, the retry
   // request carries PREVIOUS_ATTEMPT_FAILED.
   //   - planner-retry-recovered.sse: call #2 valid → run completes.
   //   - planner-retry-exhausted.sse: every call malformed → typed error.
+  //     Annotated post-capture (agent-tool-dispatch-retry, review round 2):
+  //     a `note{kind:"partial_failure"}` frame now sits between error and
+  //     done, matching the current producer (planner `_emit_error`).
   // Replaying them through the frontend's real SSE parser + render path
   // covers "user-visible chat completes via the retry path, or fails with
   // a typed error — never a crashed stream" (rollout gate §2.2).

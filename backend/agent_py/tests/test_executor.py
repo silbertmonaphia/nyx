@@ -816,6 +816,84 @@ def test_partial_failure_note_wire_fixture():
 
 
 @pytest.mark.asyncio
+async def test_no_banner_when_recovered_on_last_allowed_retry(tracer):
+    """Round 2, NEW-1 regression: consuming the FULL allowance and then
+    recovering on the last allowed attempt is not a terminal failure. The
+    over-broad 'allowance fully consumed' check flagged this green run; the
+    step must carry no partial-failure note."""
+    steps = _tool_steps("tool_1")
+    state = _state(steps, {})
+    # transient: two failures (both retried) then success — retry_count 0/1/2.
+    tools = _ScriptedTools(
+        [
+            ToolUnavailableError("MCP 503: overloaded"),
+            ToolUnavailableError("MCP 503: overloaded"),
+            {"items": []},
+        ]
+    )
+
+    await executor_module.executor_node(
+        state,
+        settings=_settings(),
+        tracer=tracer,
+        budget=_StubBudget(),
+        rag=None,  # type: ignore[arg-type]
+        tools=tools,
+    )
+
+    assert [e for e in state["events_so_far"] if e.kind == "note"] == []
+    final = [e for e in state["events_so_far"] if e.kind == "tool_result"][-1]
+    assert final.payload["ok"] is True
+    assert final.payload["retry_count"] == 2  # full allowance consumed…
+    assert state.get("tool_terminal_failures") in (None, {})  # …but recovered
+    step_ends = [e for e in state["events_so_far"] if e.kind == "step_end"]
+    assert [e.payload["status"] for e in step_ends] == ["ok"]
+
+
+@pytest.mark.asyncio
+async def test_second_retry_reprompt_carries_prior_exchange(tracer, monkeypatch):
+    """Round 2, NEW-3 regression: the retry-2 re-prompt must carry the first
+    rejection's exchange so every assistant tool-call turn in the message
+    list is answered — without the carry, `assistant(tc_1)` sat unanswered
+    followed by `assistant(tc_2)`, a shape strict providers 400 on."""
+    step = PlanStep(id="react_1", kind="react", prompt="p", max_iterations=2)
+    state = _state([step], {})
+    tools = _ScriptedTools(
+        [
+            ToolError("list_feeds: bad args"),
+            ToolError("list_feeds: still bad"),
+            {"items": []},  # third attempt (second retry) succeeds
+        ]
+    )
+    _use_llm(
+        monkeypatch,
+        [
+            _tool_call(args={"limit": 1}, tc_id="tc_1"),
+            _tool_call(args={"limit": 2}, tc_id="tc_2"),
+            _tool_call(args={"limit": 3}, tc_id="tc_3"),
+            AIMessage(content="done"),
+        ],
+    )
+
+    with tracer.start_as_current_span("x") as span:
+        await _run_react(state, step, _settings(), tracer, _StubBudget(), tools, span)
+
+    # captured[0]=iter0 live call, [1]=retry-1 re-prompt, [2]=retry-2 re-prompt.
+    reprompt2 = _ScriptedLlm.captured[2]
+    assistant_ids = [
+        tc["id"]
+        for m in reprompt2
+        if isinstance(m, AIMessage)
+        for tc in (getattr(m, "tool_calls", None) or [])
+    ]
+    tool_ids = [m.tool_call_id for m in reprompt2 if isinstance(m, ToolMessage)]
+    # Every assistant call (the live tc_1 + the carried corrected tc_2) is
+    # answered exactly once — no unanswered turns, no duplicates.
+    assert assistant_ids == ["tc_1", "tc_2"]
+    assert tool_ids == ["tc_1", "tc_2"]
+
+
+@pytest.mark.asyncio
 async def test_react_reprompt_does_not_duplicate_assistant_call(tracer, monkeypatch):
     """F2 regression (test-review round 1): in the ReAct path the live
     messages already end with the assistant turn that emitted the bad call —
