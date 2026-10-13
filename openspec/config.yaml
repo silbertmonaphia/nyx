@@ -1,20 +1,55 @@
 schema: spec-driven
 
-# Project context (optional)
-# This is shown to AI when creating artifacts.
-# Add your tech stack, conventions, style guides, domain knowledge, etc.
-# Example:
-#   context: |
-#     Tech stack: TypeScript, React, Node.js
-#     We use conventional commits
-#     Domain: e-commerce platform
+# Project context — read by OpenSpec workflows when creating or amending
+# artifacts (see the propose/apply skills' "Load project context" step).
+context: |
+  Rollout-split convention (Nyx). An OpenSpec change is two-phase:
 
-# Per-artifact rules (optional)
-# Add custom rules for specific artifacts.
-# Example:
-#   rules:
-#     proposal:
-#       - Keep proposals under 500 words
-#       - Always include a "Non-goals" section
-#     tasks:
-#       - Break tasks into chunks of max 2 hours
+    1. Implementation — code, tests, docs, CI. Completable in the dev/CI
+       environment by the implementer, right now.
+    2. Rollout — production env flips, multi-day CI-green wait windows,
+       staging rollback drills, manual smokes against deployed stacks, canary
+       runs. Gated on environments and clocks the implementer does not
+       control.
+
+  The two phases have different owners and different clocks. Mixing them keeps
+  an already-shipped change "active" in openspec/changes/ for weeks and makes
+  archive-time "incomplete task" warnings meaningless.
+
+  Classification test — "Can the implementer complete this task in the dev/CI
+  environment right now, with no external clock and no deployed environment?"
+  Yes → implementation task (stays in the implementation change).
+  No  → rollout gate (goes in the sibling rollout change).
+
+  Historical precedent: agent-loop, agent-langgraph, and agent-run-state were
+  code-complete but could not archive until their rollout gates were split
+  into openspec/changes/agent-production-rollout; the three implementation
+  changes archived 2026-10-13 (see openspec/changes/archive/2026-10-13-*).
+  agent-production-rollout is the model for a rollout change's shape:
+  skip_specs, no deltas, tasks cite the deploy doc and runbook.
+
+# Per-artifact rules — surfaced by `openspec instructions <artifact>` and
+# applied as constraints when drafting that artifact.
+rules:
+  tasks:
+    - "Apply the rollout-split classification test to every drafted task.
+      Rollout gates MUST NOT appear in the implementation change's tasks.md.
+      Rollout-shaped phrasing includes: production/staging env flips,
+      'green in CI for >= 1 week' windows, rollback drills, canary runs,
+      manual smoke tests against a deployed (non-dev) stack, and deploy-notes
+      updates that depend on a production deploy."
+    - "If rollout gates are foreseen: create a sibling change named
+      '<change-name>-rollout' (via 'openspec new change'), add
+      'skip_specs: true' to its .openspec.yaml (rollout has no spec-level
+      behavior — zero spec deltas), and draft the gates there. Its tasks.md
+      references the implementation change by name and cites (links, not
+      duplicates) the deploy doc / runbook the gates depend on, mirroring
+      openspec/changes/agent-production-rollout as the model."
+    - "If no rollout gates are foreseen, create no sibling change and do not
+      invent gates. Pure refactors, test-only, and docs-only changes have
+      none by construction."
+  proposal:
+    - "If rollout gates are foreseen, name the sibling rollout change in the
+      Impact section ('Rollout gates tracked in
+      openspec/changes/<change-name>-rollout/') so the two changes are
+      discoverable from each other."
