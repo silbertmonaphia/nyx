@@ -139,6 +139,36 @@ deletes the terminal row, so a crashed run's state survives the same
 retention window as any other run (see
 `openspec/changes/agent-stale-run-sweeper/` for the full rationale).
 
+## LLM tracing: Langfuse (opt-in)
+
+Structured, per-run LLM traces — planner and executor prompts, model
+replies, provider-reported token usage, plan steps, and tool calls —
+exported to a self-hosted [Langfuse](https://langfuse.com) instance.
+This is the prompt/response-level counterpart to the OTel spans in
+Jaeger (which stay metadata-only). Tracing is **best-effort**: an
+unreachable or slow Langfuse never affects a run's SSE stream.
+
+```
+make up-langfuse      # langfuse-web/worker + clickhouse/minio/redis/postgres
+# UI: http://localhost:3000  (org/project/keys bootstrapped from LANGFUSE_INIT_*)
+make down-langfuse    # stop the stack only (volumes preserved)
+```
+
+| Env var                            | Default                  | Purpose                                                                 |
+|------------------------------------|--------------------------|-------------------------------------------------------------------------|
+| `PYTHON_AGENT_LANGFUSE_ENABLED`    | `false`                  | Opt-in switch. `true` without a key pair refuses startup.               |
+| `PYTHON_AGENT_LANGFUSE_HOST`       | `http://localhost:3000`  | UI/API base URL. Compose sets `http://langfuse-web:3000` for the container. |
+| `PYTHON_AGENT_LANGFUSE_PUBLIC_KEY` | —                        | Must match the root `.env`'s `LANGFUSE_INIT_PROJECT_PUBLIC_KEY`.        |
+| `PYTHON_AGENT_LANGFUSE_SECRET_KEY` | —                        | Must match the root `.env`'s `LANGFUSE_INIT_PROJECT_SECRET_KEY`.        |
+
+Traces are keyed by run: `run_id` (= langGraph `thread_id`) is the
+session id and the verified `X-Nyx-User-Id` is the trace user, so a run
+is replayable end-to-end from the UI and filterable per user.
+Credential-shaped strings in tool arguments/results are masked before
+export. See `openspec/changes/agent-langfuse-tracing/` for the design
+(including why the Langfuse client uses its own isolated OTel provider:
+the global provider belongs to the Jaeger export pipeline).
+
 ## Architecture
 
 ```

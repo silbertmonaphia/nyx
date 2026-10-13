@@ -16,6 +16,7 @@ from agent.config import Settings
         ("mcp_url", "http://localhost:8080/mcp"),
         ("rag_bridge_url", "http://localhost:8080/internal/rag/retrieve"),
         ("redis_url", "redis://localhost:6380"),
+        ("langfuse_host", "http://localhost:3000"),
     ],
 )
 def test_host_facing_defaults_are_host_reachable(monkeypatch, field, expected):
@@ -178,3 +179,69 @@ def test_settings_accepts_openai_subdomain_with_key():
         llm_api_key="anything",
     )
     assert s.llm_api_key == "anything"
+
+
+def test_langfuse_defaults(monkeypatch):
+    """Spec scenario "Langfuse defaults applied when unset": tracing is
+    off, the host default is host-reachable, and no credentials are
+    required while disabled (agent-langfuse-tracing)."""
+    for key in (
+        "LANGFUSE_ENABLED",
+        "LANGFUSE_HOST",
+        "LANGFUSE_PUBLIC_KEY",
+        "LANGFUSE_SECRET_KEY",
+    ):
+        monkeypatch.delenv(f"PYTHON_AGENT_{key}", raising=False)
+    s = Settings(_env_file=None, llm_base_url="http://vllm:8000/v1")
+    assert s.langfuse_enabled is False
+    assert s.langfuse_host == "http://localhost:3000"
+    assert s.langfuse_public_key == ""
+    assert s.langfuse_secret_key.get_secret_value() == ""
+
+
+@pytest.mark.parametrize(
+    "kwargs,missing_var",
+    [
+        pytest.param(
+            {"langfuse_public_key": "", "langfuse_secret_key": "sk-lf-x"},
+            "PYTHON_AGENT_LANGFUSE_PUBLIC_KEY",
+            id="public-key-missing",
+        ),
+        pytest.param(
+            {"langfuse_public_key": "pk-lf-x", "langfuse_secret_key": ""},
+            "PYTHON_AGENT_LANGFUSE_SECRET_KEY",
+            id="secret-key-missing",
+        ),
+        pytest.param(
+            {"langfuse_public_key": "", "langfuse_secret_key": ""},
+            "PYTHON_AGENT_LANGFUSE_PUBLIC_KEY",
+            id="both-missing",
+        ),
+    ],
+)
+def test_langfuse_enabled_without_credentials_refused(kwargs, missing_var):
+    """Spec scenario "Langfuse enabled without credentials refuses
+    startup": enabling tracing with an empty key pair is an operator
+    mistake — refuse at boot naming the missing env var."""
+    with pytest.raises(ValueError) as excinfo:
+        Settings(
+            _env_file=None,
+            llm_base_url="http://vllm:8000/v1",
+            langfuse_enabled=True,
+            **kwargs,
+        )
+    assert missing_var in str(excinfo.value)
+
+
+def test_langfuse_enabled_with_credentials_accepted():
+    """A full key pair (the documented bring-up path) boots cleanly."""
+    s = Settings(
+        _env_file=None,
+        llm_base_url="http://vllm:8000/v1",
+        langfuse_enabled=True,
+        langfuse_public_key="pk-lf-nyx-dev-agent",
+        langfuse_secret_key="sk-lf-nyx-dev-agent",
+    )
+    assert s.langfuse_enabled is True
+    # SecretStr must not leak the raw value via repr/logging.
+    assert "sk-lf-nyx-dev-agent" not in repr(s)

@@ -19,6 +19,7 @@ from datetime import datetime, timezone
 from opentelemetry import trace
 from redis.asyncio import Redis
 
+from .observability import jaeger_span
 from .types import BudgetDecision
 
 log = logging.getLogger("nyx.agent.budget")
@@ -56,7 +57,7 @@ class BudgetGuard:
         tracer: trace.Tracer,
     ) -> BudgetDecision:
         key = utc_hour_key(user_id)
-        with tracer.start_as_current_span("agent.budget") as span:
+        with jaeger_span(tracer, "agent.budget") as span:
             span.set_attribute("user_id", user_id)
             try:
                 # INCRBY returns the new value. If the key didn't exist, Redis creates it

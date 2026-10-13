@@ -34,6 +34,13 @@ dependencies = [
     # dep of opentelemetry-exporter-otlp-proto-http; declared here because
     # we import it directly.
     "requests>=2.32",
+    # LLM-level tracing export (agent-langfuse-tracing). The Python SDK's
+    # version line is independent of the self-hosted platform's (compose
+    # runs langfuse 4.58.0; PyPI's `langfuse` package is currently 4.17.x).
+    # Bounded below 5 because observability.py depends on 4.x SDK semantics:
+    # the singleton client via `get_client()` and the
+    # `langfuse.langchain.CallbackHandler` import path.
+    "langfuse>=4.17,<5",
 ]
 
 [project.optional-dependencies]

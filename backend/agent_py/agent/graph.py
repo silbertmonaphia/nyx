@@ -39,12 +39,10 @@ def _executor_step_factory(
     budget: BudgetGuard,
     rag: RagClient,
     tools: ToolsClient,
+    tracer: Any,
 ):
     """Closure that returns the LangGraph-compatible async node for the executor."""
     async def _executor_step(state: AgentState) -> AgentState:
-        from opentelemetry import trace
-
-        tracer = trace.get_tracer("nyx.agent")
         return await executor_node(
             state, settings=settings, tracer=tracer, budget=budget, rag=rag, tools=tools
         )
@@ -52,12 +50,9 @@ def _executor_step_factory(
     return _executor_step
 
 
-def _planner_step_factory(settings: Settings):
+def _planner_step_factory(settings: Settings, tracer: Any):
     """Closure that returns the LangGraph-compatible async node for the planner."""
     async def _planner_step(state: AgentState) -> AgentState:
-        from opentelemetry import trace
-
-        tracer = trace.get_tracer("nyx.agent")
         return await plan_node(state, settings, tracer)
 
     return _planner_step
@@ -69,6 +64,7 @@ def build_graph(
     rag: RagClient,
     tools: ToolsClient,
     checkpointer: Any | None = None,
+    tracer: Any | None = None,
 ):
     """Build (and return) the compiled StateGraph ready for `astream(initial_state)`.
 
@@ -76,10 +72,23 @@ def build_graph(
     per-step persistence is automatic; resume is supported via
     `graph.get_state({"configurable":{"thread_id": run_id}})`. In tests
     `checkpointer` is left as None and the graph runs purely in memory.
+
+    `tracer` is the OTel tracer the nodes emit their spans on. It should be
+    the same tracer instance the service was started with (`app.state.tracer`
+    in main.py) — the nodes previously resolved `trace.get_tracer(...)` from
+    the GLOBAL provider, which silently diverged from the service's tracer
+    (found while building the enabled-vs-disabled Jaeger tree regression
+    test: a second app in the same process exports its node spans to the
+    first app's provider). Falls back to the global lookup when omitted, for
+    callers that don't care.
     """
+    if tracer is None:
+        from opentelemetry import trace
+
+        tracer = trace.get_tracer("nyx.agent")
     builder = StateGraph(AgentState)
-    builder.add_node("planner", _planner_step_factory(settings))
-    builder.add_node("executor", _executor_step_factory(settings, budget, rag, tools))
+    builder.add_node("planner", _planner_step_factory(settings, tracer))
+    builder.add_node("executor", _executor_step_factory(settings, budget, rag, tools, tracer))
     builder.add_edge(START, "planner")
     builder.add_edge("planner", "executor")
     builder.add_edge("executor", END)
@@ -108,7 +117,7 @@ async def run_agent(
         span.set_attribute("run_id", state["run_id"])
         span.set_attribute("user_id", state["user_id"])
 
-        graph = build_graph(settings, budget, rag, tools)
+        graph = build_graph(settings, budget, rag, tools, tracer=tracer)
         # `ainvoke` returns the final state. Use the streaming variant below
         # in `run_agent_stream` for incremental frames.
         final = await graph.ainvoke(state)
@@ -161,7 +170,7 @@ async def run_agent_stream(
     initial `plan` re-emission if the plan is already in the resumed state.
     """
     if graph is None:
-        graph = build_graph(settings, budget, rag, tools)
+        graph = build_graph(settings, budget, rag, tools, tracer=tracer)
 
     last_len = len(state.get("events_so_far", []))
 

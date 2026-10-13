@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import os
 
-from pydantic import model_validator
+from pydantic import SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -146,6 +146,21 @@ class Settings(BaseSettings):
     # Kill switch / rollback path: when false, no rows are reaped.
     # Heartbeats keep writing (inert liveness metadata).
     sweep_enabled: bool = True
+
+    # --- Langfuse LLM tracing (openspec/changes/agent-langfuse-tracing) ---
+    # Opt-in export of LLM-level traces (prompts, replies, usage, tool
+    # calls) to a self-hosted Langfuse instance. Default OFF: when
+    # false, no client is constructed and no payload leaves the process.
+    # Refuses to start when enabled without credentials (validator below).
+    langfuse_enabled: bool = False
+    # Host-dev default: `make up-langfuse` publishes the UI/API on
+    # 127.0.0.1:3000 there — same reasoning as mcp_url/otel_endpoint
+    # above (compose-only hostnames don't resolve on the host).
+    # docker-compose.yml overrides this with the in-network hostname
+    # (`http://langfuse-web:3000`) for the agent container.
+    langfuse_host: str = "http://localhost:3000"
+    langfuse_public_key: str = ""
+    langfuse_secret_key: SecretStr = SecretStr("")
 
     # NOTE: there is intentionally NO JWT verification config here. The Python
     # service trusts the network boundary (compose bridge / k8s NetworkPolicy
@@ -291,6 +306,32 @@ class Settings(BaseSettings):
                 "PYTHON_AGENT_HEARTBEAT_INTERVAL_SECONDS "
                 f"({self.heartbeat_interval_seconds}s); got "
                 f"{self.stale_run_timeout_seconds}s"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _require_langfuse_credentials(self) -> Settings:
+        """Refuse to start when tracing is enabled without credentials.
+
+        Per `openspec/changes/agent-langfuse-tracing` (Configurable via
+        environment delta): `PYTHON_AGENT_LANGFUSE_ENABLED=true` with an
+        empty public or secret key is an operator mistake — the client
+        would authenticate-fail on every export, silently dropping all
+        traces. Fail fast at startup instead (same posture as the
+        planner/tool retry caps). `langfuse_host` needs no check: it has
+        a working default for both host and compose topologies.
+        """
+        if not self.langfuse_enabled:
+            return self
+        missing = []
+        if not self.langfuse_public_key:
+            missing.append("PYTHON_AGENT_LANGFUSE_PUBLIC_KEY")
+        if not self.langfuse_secret_key.get_secret_value():
+            missing.append("PYTHON_AGENT_LANGFUSE_SECRET_KEY")
+        if missing:
+            raise ValueError(
+                " and ".join(missing)
+                + " required when PYTHON_AGENT_LANGFUSE_ENABLED=true"
             )
         return self
 

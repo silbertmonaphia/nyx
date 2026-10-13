@@ -1,0 +1,6 @@
+schema: spec-driven
+created: 2026-10-14
+goal: Track the production rollout gates for self-hosted Langfuse tracing (stack
+  deploy, retention/backup policy, env flips, rollback drill) so the
+  implementation change archives independently
+skip_specs: true

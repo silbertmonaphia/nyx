@@ -111,6 +111,264 @@ services:
     # the in-network hostname).
     networks: [default, internal]
 
+  # ─── Self-hosted Langfuse (opt-in profile) ─────────────────────────────
+  # LLM-level tracing for the Python agent — prompts, replies, token
+  # usage, and step/tool structure per run. See OpenSpec change
+  # `agent-langfuse-tracing`. Opt-in via `--profile langfuse` /
+  # `make up-langfuse`: the six containers below cost ~6 GB RAM (web
+  # alone needs >1g to boot) and are only useful while working on the
+  # agent, so they stay OUT of the default `make up` set (same rationale
+  # as the vllm profile).
+  #
+  # Adapted from the upstream compose at
+  # https://github.com/langfuse/langfuse/blob/v4.58.0/docker-compose.yml
+  # with three deliberate divergences:
+  #   1. Service names are prefixed (`langfuse-db`, `langfuse-redis`,
+  #      ...) — upstream's bare `postgres` / `redis` names would
+  #      collide with this project's `db` / `redis` services in the
+  #      same compose project.
+  #   2. Port policy: ONLY the UI/API port is published, and loopback
+  #      only. Upstream additionally publishes every stateful
+  #      component on loopback for debugging; nothing outside this
+  #      compose project needs them, so they stay unpublished here
+  #      (same deny-by-default posture as SECURITY.md H12).
+  #   3. TELEMETRY_ENABLED=false — upstream phones home by default.
+  #   4. Images come from Docker Hub (`langfuse/langfuse*`) instead of
+  #      `docker.langfuse.com`: on this dev network the vendor registry's
+  #      layer downloads redirect through registry-1.docker.io and time
+  #      out, while the Hub images pull fine through the configured
+  #      registry mirrors. Digests verified identical across both
+  #      registries at 4.58.0 (`docker buildx imagetools inspect`).
+  #
+  # First boot bootstraps the org, project, and API key pair from the
+  # LANGFUSE_INIT_* variables (dev values in `.env.example`) so the keys
+  # are deterministic and match `backend/agent_py/.env.example` — no UI
+  # clicks needed. Bump procedure: change both `:4.58.0` image tags (and
+  # re-check the digest match above) and re-diff this block against the
+  # upstream compose at the new tag.
+
+  # Background worker: consumes the ingestion queue (Redis), writes
+  # batches into ClickHouse, runs evaluations. Carries the shared env
+  # anchor; the web service below merges it and adds its own keys.
+  langfuse-worker:
+    image: langfuse/langfuse-worker:4.58.0
+    profiles: ["langfuse"]
+    mem_limit: 1g
+    cpus: "1.00"
+    restart: always
+    environment: &langfuse-env
+      # Secrets come from the root `.env` (see `.env.example`).
+      DATABASE_URL: postgresql://langfuse:${LANGFUSE_POSTGRES_PASSWORD}@langfuse-db:5432/langfuse
+      SALT: ${LANGFUSE_SALT}
+      ENCRYPTION_KEY: ${LANGFUSE_ENCRYPTION_KEY}
+      TELEMETRY_ENABLED: "false"
+      CLICKHOUSE_MIGRATION_URL: clickhouse://langfuse-clickhouse:9000
+      CLICKHOUSE_URL: http://langfuse-clickhouse:8123
+      CLICKHOUSE_USER: clickhouse
+      CLICKHOUSE_PASSWORD: ${LANGFUSE_CLICKHOUSE_PASSWORD}
+      # Single-node deployment — no Zookeeper/Keeper required.
+      CLICKHOUSE_CLUSTER_ENABLED: "false"
+      # Raw events land in MinIO first; Redis is only a work queue.
+      # Media uploads target the same internal MinIO — the browser-side
+      # media endpoint is intentionally left unset (dev profile
+      # publishes one port only), so trace attachments are visible in
+      # the API/UI payloads but not as rendered media.
+      LANGFUSE_S3_EVENT_UPLOAD_BUCKET: langfuse
+      LANGFUSE_S3_EVENT_UPLOAD_REGION: auto
+      LANGFUSE_S3_EVENT_UPLOAD_ACCESS_KEY_ID: minio
+      LANGFUSE_S3_EVENT_UPLOAD_SECRET_ACCESS_KEY: ${LANGFUSE_MINIO_PASSWORD}
+      LANGFUSE_S3_EVENT_UPLOAD_ENDPOINT: http://langfuse-minio:9000
+      LANGFUSE_S3_EVENT_UPLOAD_FORCE_PATH_STYLE: "true"
+      LANGFUSE_S3_EVENT_UPLOAD_PREFIX: events/
+      LANGFUSE_S3_MEDIA_UPLOAD_BUCKET: langfuse
+      LANGFUSE_S3_MEDIA_UPLOAD_REGION: auto
+      LANGFUSE_S3_MEDIA_UPLOAD_ACCESS_KEY_ID: minio
+      LANGFUSE_S3_MEDIA_UPLOAD_SECRET_ACCESS_KEY: ${LANGFUSE_MINIO_PASSWORD}
+      LANGFUSE_S3_MEDIA_UPLOAD_ENDPOINT: http://langfuse-minio:9000
+      LANGFUSE_S3_MEDIA_UPLOAD_FORCE_PATH_STYLE: "true"
+      LANGFUSE_S3_MEDIA_UPLOAD_PREFIX: media/
+      REDIS_HOST: langfuse-redis
+      REDIS_PORT: "6379"
+      REDIS_AUTH: ${LANGFUSE_REDIS_AUTH}
+    depends_on: &langfuse-deps
+      langfuse-db:
+        condition: service_healthy
+      langfuse-redis:
+        condition: service_healthy
+      langfuse-clickhouse:
+        condition: service_healthy
+      langfuse-minio:
+        condition: service_healthy
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    tmpfs:
+      - /tmp
+    networks: [default]
+
+  # Web UI + ingestion API + OTel/ingestion endpoints. The only langfuse
+  # service on the `internal` network so the compose `agent` service can
+  # ingest traces; the stateful services below stay off it.
+  langfuse-web:
+    image: langfuse/langfuse:4.58.0
+    profiles: ["langfuse"]
+    # 2g + an explicit V8 heap: the Next.js 16 + Prisma boot (migrations,
+    # init scripts) OOM-kills the process under a 1g cap — verified during
+    # bring-up, container crash-looped with "FATAL ERROR: Reached heap
+    # limit". The heap flag keeps V8 under the cgroup limit with headroom
+    # for non-heap RSS.
+    mem_limit: 2g
+    cpus: "1.00"
+    restart: always
+    ports:
+      # The ONLY published langfuse port — UI + ingestion API, reachable
+      # from the host browser at http://localhost:3000. Loopback-bound:
+      # same posture as db / redis / vllm (SECURITY.md H12).
+      - "127.0.0.1:3000:3000"
+    environment:
+      <<: *langfuse-env
+      NODE_OPTIONS: --max-old-space-size=1536
+      NEXTAUTH_URL: http://localhost:3000
+      NEXTAUTH_SECRET: ${LANGFUSE_NEXTAUTH_SECRET}
+      # First-boot bootstrap: creates the org + project + API key pair
+      # deterministically. Re-running with existing volumes is a no-op.
+      LANGFUSE_INIT_ORG_ID: nyx-dev
+      LANGFUSE_INIT_ORG_NAME: Nyx Dev
+      LANGFUSE_INIT_PROJECT_ID: nyx-agent
+      LANGFUSE_INIT_PROJECT_NAME: Nyx Agent
+      LANGFUSE_INIT_PROJECT_PUBLIC_KEY: ${LANGFUSE_INIT_PROJECT_PUBLIC_KEY}
+      LANGFUSE_INIT_PROJECT_SECRET_KEY: ${LANGFUSE_INIT_PROJECT_SECRET_KEY}
+      LANGFUSE_INIT_USER_EMAIL: dev@nyx.local
+      LANGFUSE_INIT_USER_NAME: dev
+      LANGFUSE_INIT_USER_PASSWORD: ${LANGFUSE_INIT_USER_PASSWORD}
+    depends_on: *langfuse-deps
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    tmpfs:
+      - /tmp
+    networks: [default, internal]
+
+  # Metadata store (projects, users, prompts, config). Dedicated
+  # instance — NOT the app's `db` — so langfuse upgrades can't perturb
+  # the application schema and vice versa.
+  langfuse-db:
+    image: postgres:17
+    profiles: ["langfuse"]
+    mem_limit: 512m
+    cpus: "0.50"
+    restart: always
+    environment:
+      - POSTGRES_USER=langfuse
+      - POSTGRES_PASSWORD=${LANGFUSE_POSTGRES_PASSWORD}
+      - POSTGRES_DB=langfuse
+      - TZ=UTC
+      - PGTZ=UTC
+    volumes:
+      - langfuse_db_data:/var/lib/postgresql/data
+    # Same cap profile as the app `db` service — postgres needs
+    # CHOWN/SETUID/SETGID/DAC_OVERRIDE/FOWNER and nothing else.
+    cap_drop: [ALL]
+    cap_add: [CHOWN, SETUID, SETGID, DAC_OVERRIDE, FOWNER]
+    security_opt: ["no-new-privileges:true"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    networks: [default]
+
+  # Trace analytics store (OLAP). Single node — CLICKHOUSE_CLUSTER_ENABLED
+  # is false, so no Keeper/Zookeeper dependency.
+  langfuse-clickhouse:
+    image: clickhouse/clickhouse-server:25.12
+    profiles: ["langfuse"]
+    mem_limit: 2g
+    cpus: "2.00"
+    restart: always
+    environment:
+      - CLICKHOUSE_USER=clickhouse
+      - CLICKHOUSE_PASSWORD=${LANGFUSE_CLICKHOUSE_PASSWORD}
+      - CLICKHOUSE_DB=default
+    volumes:
+      - langfuse_clickhouse_data:/var/lib/clickhouse
+    # The official entrypoint starts as root, fixes volume ownership,
+    # then drops to the `clickhouse` user via setuid — same cap profile
+    # as postgres.
+    cap_drop: [ALL]
+    cap_add: [CHOWN, SETUID, SETGID, DAC_OVERRIDE, FOWNER]
+    security_opt: ["no-new-privileges:true"]
+    healthcheck:
+      test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider http://localhost:8123/ping || exit 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 1s
+    networks: [default]
+
+  # Object storage (S3-compatible) for raw ingestion events + media.
+  # Chainguard build — no console, S3 API only, which is all langfuse
+  # uses. Pinned by digest because chainguard publishes no version tags
+  # for this image; bump deliberately (re-resolve with
+  # `docker buildx imagetools inspect cgr.dev/chainguard/minio:latest`).
+  # `user: 101:101` + the sh entrypoint mirror upstream: the process is
+  # non-root and pre-creates the bucket directory inside the volume.
+  langfuse-minio:
+    image: cgr.dev/chainguard/minio@sha256:dc455cdd4db6e390b1b26514f15ff37681a777bf8dab41aac445a0259f751e56
+    profiles: ["langfuse"]
+    mem_limit: 512m
+    cpus: "0.50"
+    restart: always
+    user: "101:101"
+    entrypoint: sh
+    command:
+      - "-c"
+      - "mkdir -p /data/langfuse && minio server --address \":9000\" --console-address \":9001\" /data"
+    environment:
+      - MINIO_ROOT_USER=minio
+      - MINIO_ROOT_PASSWORD=${LANGFUSE_MINIO_PASSWORD}
+      # `mc` (used by the healthcheck) writes its config under $HOME; the
+      # explicit `user: 101:101` leaves HOME as `/`, unwritable — healthcheck
+      # then fails "mkdir /.mc: permission denied" forever. /tmp is a tmpfs
+      # mount on this service, so the alias config is scratch anyway.
+      - HOME=/tmp
+    volumes:
+      - langfuse_minio_data:/data
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    tmpfs:
+      - /tmp
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 1s
+      timeout: 5s
+      retries: 5
+      start_period: 1s
+    networks: [default]
+
+  # Queue/cache for ingestion (BullMQ). Dedicated instance — never the
+  # app's `redis` — with auth and noeviction (evicting queue keys under
+  # memory pressure would silently drop traces). A named volume keeps
+  # the queue across restarts.
+  langfuse-redis:
+    image: redis:7-alpine
+    profiles: ["langfuse"]
+    mem_limit: 256m
+    cpus: "0.50"
+    restart: always
+    command: ["redis-server", "--requirepass", "${LANGFUSE_REDIS_AUTH}", "--maxmemory-policy", "noeviction"]
+    environment:
+      - REDIS_AUTH=${LANGFUSE_REDIS_AUTH}
+    volumes:
+      - langfuse_redis_data:/data
+    cap_drop: [ALL]
+    cap_add: [CHOWN, SETUID, SETGID]
+    security_opt: ["no-new-privileges:true"]
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli -a \"$$REDIS_AUTH\" ping 2>/dev/null | grep -q PONG"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    networks: [default]
+
   backend:
     # Opt-in profile. Default `docker compose up` boots only the
     # infra services (db / redis / jaeger); backend + frontend run
@@ -202,6 +460,16 @@ services:
       - PYTHON_AGENT_RAG_BRIDGE_URL=http://backend:8080/internal/rag/retrieve
       - PYTHON_AGENT_REDIS_URL=redis://redis:6379
       - PYTHON_AGENT_OTEL_ENDPOINT=http://jaeger:4318
+      # Langfuse tracing (--profile langfuse). Keys are interpolated
+      # from the root .env's LANGFUSE_INIT_* pair — the same values the
+      # langfuse-web first-boot bootstrap creates — so the agent can
+      # never drift from the instance it reports to. Enable by setting
+      # PYTHON_AGENT_LANGFUSE_ENABLED in backend/.env; it is NOT listed
+      # here so the env_file value isn't masked by compose's
+      # environment-precedence.
+      - PYTHON_AGENT_LANGFUSE_HOST=http://langfuse-web:3000
+      - PYTHON_AGENT_LANGFUSE_PUBLIC_KEY=${LANGFUSE_INIT_PROJECT_PUBLIC_KEY:-}
+      - PYTHON_AGENT_LANGFUSE_SECRET_KEY=${LANGFUSE_INIT_PROJECT_SECRET_KEY:-}
       # Run-state persistence — langGraph `AsyncPostgresSaver` (creates
       # `langgraph.*` checkpoint tables on first run via its built-in
       # `setup()`) + thin `agent.runs` metadata table.
@@ -603,7 +871,9 @@ services:
 #     network.
 #   internal — closed bridge joining backend + agent + the infra
 #     services agent depends on (redis for the budget guard, jaeger
-#     for OTel export). Only services that explicitly join this network
+#     for OTel export, langfuse-web for LLM trace ingestion when the
+#     langfuse profile is up). Only services that explicitly join this
+#     network
 #     can reach the agent's port 9000. Adding a new service that needs
 #     to call the agent requires joining this network deliberately,
 #     so a future bug elsewhere can't quietly widen the trust surface.
@@ -621,3 +891,10 @@ networks:
 volumes:
   db_data:
   vllm_cache:
+  # Langfuse profile state (see the langfuse-* services above). Survive
+  # `make down-langfuse` / `docker compose down`; wipe with
+  # `docker compose --profile langfuse down -v` to reset the instance.
+  langfuse_db_data:
+  langfuse_clickhouse_data:
+  langfuse_minio_data:
+  langfuse_redis_data:

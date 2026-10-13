@@ -31,6 +31,9 @@ from .observability import (
     agent_tokens_total,
     agent_tool_calls_total,
     agent_tool_retries_total,
+    jaeger_span,
+    trace_observation,
+    update_observation,
 )
 from .rag_client import RagAuthError, RagClient, RagUnavailableError
 from .state import AgentState
@@ -101,7 +104,29 @@ async def executor_node(
         # new is emitted for it here.
         if step.id in (state.get("step_outputs") or {}):
             continue
-        with tracer.start_as_current_span(f"agent.step.{step.kind.value}") as span:
+        with (
+            # Langfuse twin of the OTel step span (agent-langfuse-tracing
+            # 3.4): no-op when tracing is disabled or the client fails to
+            # open the observation. Entered BEFORE the Jaeger span —
+            # see the ordering note in planner.plan_node.
+            trace_observation(
+                f"agent.step.{step.kind.value}",
+                input={
+                    "step_id": step.id,
+                    "kind": step.kind.value,
+                    "name": step.tool,
+                    "args": step.args,
+                    "prompt": step.prompt,
+                    "query": step.query,
+                },
+                metadata={
+                    "step_id": step.id,
+                    "kind": step.kind.value,
+                    "tool": step.tool,
+                },
+            ) as lf_step,
+            jaeger_span(tracer, f"agent.step.{step.kind.value}") as span,
+        ):
             span.set_attribute("step_id", step.id)
             span.set_attribute("kind", step.kind.value)
             span.set_attribute("iteration", 0)
@@ -166,6 +191,11 @@ async def executor_node(
                 )
             )
             agent_steps_total.labels(step.kind.value, "ok" if ok else "failed").inc()
+            update_observation(
+                lf_step,
+                output={"status": "ok" if ok else "failed", "reason": reason or None},
+                level="ERROR" if not ok else "DEFAULT",
+            )
 
     # Every step has run: surface a partial-failure note before the final
     # answer's deltas when the run diverged from the plan (spec:
@@ -294,7 +324,7 @@ async def _run_react(
     messages.extend(_state_messages_to_lc(state.get("messages", [])))
 
     for i in range(max_iters):
-        with tracer.start_as_current_span("agent.step.react") as iter_span:
+        with jaeger_span(tracer, "agent.step.react") as iter_span:
             iter_span.set_attribute("step_id", step.id)
             iter_span.set_attribute("kind", "react")
             iter_span.set_attribute("iteration", i)
@@ -575,9 +605,31 @@ async def _dispatch_tool_with_retries(
                 ).model_dump(),
             )
         )
-        try:
-            result = await tools.call(current_name, current_args)
-        except Exception as exc:  # noqa: BLE001 — classified here, never re-raised raw
+        # Langfuse tool-call observation (agent-langfuse-tracing 3.4): one
+        # span per dispatch attempt, carrying the masked args + outcome +
+        # duration. The `with` wraps ONLY the call; classification below
+        # stays outside it so an exception still reaches this frame's
+        # handler with the observation already closed as ERROR.
+        attempt_error: Exception | None = None
+        with trace_observation(
+            "agent.tool_call",
+            input={"tool": current_name, "args": current_args},
+            metadata={
+                "tool": current_name,
+                "step_id": step_id,
+                "attempt": retries_made + 1,
+            },
+        ) as lf_tool:
+            try:
+                result = await tools.call(current_name, current_args)
+            except Exception as exc:  # noqa: BLE001 — classified below, never re-raised raw
+                attempt_error = exc
+                update_observation(lf_tool, output={"status": "failed"}, level="ERROR")
+            else:
+                update_observation(lf_tool, output={"status": "ok"})
+
+        if attempt_error is not None:
+            exc = attempt_error
             failure_class = _classify_tool_failure(exc)
             last_error_text = _safe_tool_error_text(exc)
             agent_tool_calls_total.labels(current_name, "false").inc()

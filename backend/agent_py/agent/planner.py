@@ -35,7 +35,12 @@ from opentelemetry import trace
 from pydantic import SecretStr, ValidationError
 
 from .config import Settings
-from .observability import agent_planner_parse_failures_total
+from .observability import (
+    agent_planner_parse_failures_total,
+    jaeger_span,
+    trace_observation,
+    update_observation,
+)
 from .state import AgentState
 from .types import (
     PLAN_LEVEL_ERROR_CODES,
@@ -97,7 +102,33 @@ async def plan_node(
     `settings.planner_structured_enabled`. The wire-format output is the
     same either way — the client observes a single `plan` SSE frame.
     """
-    with tracer.start_as_current_span("agent.step.plan") as span:
+    with (
+        # Langfuse twin of the plan span (agent-langfuse-tracing 3.4).
+        # Entered BEFORE the Jaeger span (parent-before-child); the Jaeger
+        # span parents explicitly via jaeger_span so ambient-context noise
+        # can't re-root the Jaeger tree.
+        trace_observation(
+            "agent.step.plan",
+            # Same dual-shape accessor as `_messages_to_prompt` below:
+            # production state carries ChatMessage models, unit tests
+            # inject plain dicts.
+            input={
+                "messages": [
+                    (
+                        {"role": m.role, "content": m.content}
+                        if hasattr(m, "role")
+                        else {"role": m.get("role"), "content": m.get("content")}
+                    )
+                    for m in state.get("messages", [])
+                ]
+            },
+            metadata={
+                "kind": "plan",
+                "structured": settings.planner_structured_enabled,
+            },
+        ) as lf_plan,
+        jaeger_span(tracer, "agent.step.plan") as span,
+    ):
         span.set_attribute("step_id", "plan")
         span.set_attribute("kind", "plan")
         span.set_attribute("iteration", 0)
@@ -109,6 +140,11 @@ async def plan_node(
             plan_or_error = await _emit_legacy_plan(state, settings, tracer)
 
         if isinstance(plan_or_error, _PlanError):
+            update_observation(
+                lf_plan,
+                output={"status": "failed", "code": plan_or_error.code},
+                level="ERROR",
+            )
             return _emit_error(
                 state,
                 code=plan_or_error.code,
@@ -121,6 +157,13 @@ async def plan_node(
             Event(
                 kind="plan", payload=PlanEvent(steps=plan_or_error.steps).model_dump()
             )
+        )
+        update_observation(
+            lf_plan,
+            output={
+                "status": "ok",
+                "steps": [s.model_dump() for s in plan_or_error.steps],
+            },
         )
         return state
 
@@ -259,7 +302,7 @@ async def _emit_structured_plan(
         span_name = (
             "agent.planner.structured" if attempt == 0 else "agent.planner.retry"
         )
-        with tracer.start_as_current_span(span_name) as span:
+        with jaeger_span(tracer, span_name) as span:
             span.set_attribute("attempt", attempt)
             try:
                 plan_obj = await client.ainvoke(messages)
@@ -389,7 +432,7 @@ async def _emit_legacy_plan(
         # sees a mismatch that does not exist at runtime.
         max_tokens=512,  # type: ignore[call-arg]
     )
-    with tracer.start_as_current_span("agent.planner.legacy") as span:
+    with jaeger_span(tracer, "agent.planner.legacy") as span:
         span.set_attribute("structured", False)
         try:
             resp = await client.ainvoke(_initial_messages(state))

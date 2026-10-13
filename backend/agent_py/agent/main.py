@@ -30,7 +30,13 @@ from redis.asyncio import Redis
 from .budget import BudgetGuard
 from .config import Settings, get_settings
 from .graph import build_graph, run_agent_stream
-from .observability import setup_observability, shutdown_observability
+from .observability import (
+    get_langfuse_handler,
+    setup_langfuse,
+    setup_observability,
+    shutdown_langfuse,
+    shutdown_observability,
+)
 from .rag_client import RagClient
 from .ratelimit import IpRateLimiter, RateLimitMiddleware
 from .retention import RetentionCron
@@ -55,6 +61,11 @@ async def lifespan(app: FastAPI):
     settings = get_settings()
 
     tracer = setup_observability(settings)
+
+    # Opt-in LLM tracing (openspec/changes/agent-langfuse-tracing). Runs after
+    # `setup_observability` on purpose: the global OTel provider is claimed by
+    # the Jaeger pipeline first; langfuse builds its own isolated provider.
+    setup_langfuse(settings)
 
     # Spin up a dedicated Prometheus exporter on `metrics_port` (default 9001).
     # `prometheus_client.start_http_server` runs its own daemon thread; we don't
@@ -175,6 +186,7 @@ async def lifespan(app: FastAPI):
                 await pool.close()
             except Exception as exc:  # noqa: BLE001
                 log.warning("failed to close asyncpg pool cleanly: %r", exc)
+        shutdown_langfuse()
         shutdown_observability()
         await redis.aclose()
 
@@ -489,11 +501,34 @@ async def _stream_agent_run(
         rag=rag,
         tools=tools,
         checkpointer=checkpointer,
+        # The nodes must emit spans on the service's own tracer — not a
+        # fresh global lookup, which would diverge in multi-app processes
+        # (see build_graph's docstring).
+        tracer=app.state.tracer,
     )
 
     graph_config: dict | None = None
     if checkpointer is not None:
         graph_config = {"configurable": {"thread_id": run_id}}
+
+    # Opt-in LLM tracing (openspec/changes/agent-langfuse-tracing): the
+    # callback handler rides the same config langGraph propagates into node
+    # runnables, so every ChatOpenAI call site (planner structured/legacy,
+    # executor llm/react, tool re-prompt) is captured without touching them.
+    # Identity (spec "Traces carry run and user identity"): the run_id —
+    # which doubles as the langGraph thread_id — is the Langfuse session,
+    # and the Go-verified X-Nyx-User-Id is the Langfuse user, so a run is
+    # replayable and filterable per user.
+    langfuse_handler = get_langfuse_handler()
+    if langfuse_handler is not None:
+        graph_config = graph_config or {}
+        graph_config.setdefault("callbacks", []).append(langfuse_handler)
+        trace_metadata = graph_config.setdefault("metadata", {})
+        # The handler reads these metadata keys (str values only);
+        # `langfuse_session_id` lands as the trace's session id, not the
+        # thread's. See CallbackHandler._build_trace_attributes.
+        trace_metadata["langfuse_session_id"] = str(run_id)
+        trace_metadata["langfuse_user_id"] = str(user_id)
 
     # Liveness heartbeat: while this stream owns the run, refresh
     # `last_heartbeat_at` so the stale-run sweeper can tell a live run
