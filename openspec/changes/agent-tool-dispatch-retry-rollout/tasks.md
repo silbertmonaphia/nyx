@@ -10,7 +10,7 @@
 
 ## 2. Browser e2e
 
-- [ ] 2.1 Playwright run — full stack up. `cd frontend && npm run test:e2e -- tests/e2e/chat-agent-retry.spec.ts`. Verify green; if red, record the failure verbatim here (model nondeterminism is a finding, not a reason to loosen silently).
+- [x] 2.1 Playwright run — **green 3/3** (2026-10-13, implementation commit `c6caa9e`, agent restarted on the fixed code by the operator): the live-stack test plus both recorded-wire-byte replays passed in Chromium (`retry-recovered` → badge, no banner; `retry-exhausted` → banner with `data-failed-steps="step_1"`). No failures to record.
 - [ ] 2.2 Pluggable-stub e2e — from implementation change §6.1. The spec is wired for a controllable provider stub. Drive a chat that emits a malformed tool call on first attempt and a valid one on retry. Assert the `tool_result` row carries the retry metadata, every row reaches a terminal status, no `error` frame, and the final answer is non-empty. If the live stack cannot provide a controllable stub, record that the unit-level coverage (implementation change §3.3, §3.4, §4.2, §4.3) is the accepted substitute and why.
 
 ## 3. Production gates
