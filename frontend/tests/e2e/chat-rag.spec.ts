@@ -22,14 +22,22 @@ import { test, expect, type Page, type Locator } from '@playwright/test';
  * dev server; the others are preconditions.
  */
 
-// Unique username per test run so parallel specs don't collide
-// on the registration endpoint.
-const TEST_USER = {
-  username: `e2e_chat_${Date.now()}_${Math.floor(Math.random() * 10000)}`,
-  password: 'testpass123',
-};
+// Fresh user per test. `registerAndOpenChat` runs in `beforeEach` and
+// registers through the UI every time, so the name must be unique within
+// this file too: a module-level constant collides with itself in any
+// worker that executes a second test from the same file → 409 "User
+// already exists" → the success toast never appears and the test fails
+// in its beforeEach (observed 2026-10-13, the root of the suite's
+// registration flake).
+function makeTestUser() {
+  return {
+    username: `e2e_chat_${Date.now()}_${Math.floor(Math.random() * 100000)}`,
+    password: 'testpass123',
+  };
+}
 
 async function registerAndOpenChat(page: Page): Promise<void> {
+  const TEST_USER = makeTestUser();
   await page.goto('/');
   await page.getByRole('button', { name: /Login \/ Register/i }).click();
   await page.getByRole('button', { name: /Register/i }).last().click();

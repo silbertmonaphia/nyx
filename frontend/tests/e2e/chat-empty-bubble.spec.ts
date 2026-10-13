@@ -17,12 +17,17 @@ import { test, expect, type Page, type Route } from '@playwright/test';
  * others are preconditions.
  */
 
-const TEST_USER = {
-  username: `e2e_empty_${Date.now()}_${Math.floor(Math.random() * 10000)}`,
-  password: 'testpass123',
-};
+// Fresh user per test — see chat-rag.spec.ts `makeTestUser` for why a
+// module-level constant re-registered in beforeEach collides (409).
+function makeTestUser() {
+  return {
+    username: `e2e_empty_${Date.now()}_${Math.floor(Math.random() * 100000)}`,
+    password: 'testpass123',
+  };
+}
 
 async function registerAndOpenChat(page: Page): Promise<void> {
+  const TEST_USER = makeTestUser();
   await page.goto('/');
   await page.getByRole('button', { name: /Login \/ Register/i }).click();
   await page.getByRole('button', { name: /Register/i }).last().click();
