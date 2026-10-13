@@ -1,5 +1,6 @@
 doc/
 minimax_*.png
+tmp_learn_agent.md
 
 # Node.js
 node_modules/
