@@ -1,0 +1,26 @@
+event: run_id
+data: {"run_id":"916a5b12-bf09-419b-9511-bbbcf55928d7"}
+
+event: note
+data: {"text":"fresh_run","provider":null,"kind":"fresh_run","last_step_id":null,"run_id":"916a5b12-bf09-419b-9511-bbbcf55928d7"}
+
+event: plan
+data: {"steps":[{"id":"stub_step","kind":"llm","tool":null,"args":null,"prompt":"Answer from the stub.","query":null,"max_iterations":null}]}
+
+event: step_start
+data: {"step_id":"stub_step","kind":"llm"}
+
+event: delta
+data: {"delta":"Stubbed answer."}
+
+event: step_end
+data: {"step_id":"stub_step","status":"ok","reason":null}
+
+event: done
+data: {"usage":{"prompt_tokens":0,"completion_tokens":1000,"total_tokens":1000}}
+
+event: terminator
+data: {"reason":null}
+
+data: [DONE]
+

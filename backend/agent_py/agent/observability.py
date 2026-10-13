@@ -9,10 +9,10 @@ from __future__ import annotations
 
 import requests
 from opentelemetry import trace
+from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
 from opentelemetry.sdk.resources import Resource
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import BatchSpanProcessor
-from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
 from prometheus_client import Counter
 
 from .config import Settings
@@ -44,6 +44,13 @@ agent_tokens_total = Counter(
     "agent_tokens_total",
     "Tokens consumed, labelled by role (planner|executor|rag|react) and model id.",
     labelnames=("role", "model"),
+)
+
+agent_planner_parse_failures_total = Counter(
+    "agent_planner_parse_failures_total",
+    "Planner Pydantic validation failures, labelled by retry outcome "
+    "(ok = recovered on retry; exhausted = terminated with plan_invalid).",
+    labelnames=("retry",),
 )
 
 _provider: TracerProvider | None = None

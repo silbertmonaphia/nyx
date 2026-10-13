@@ -11,7 +11,12 @@ dependencies = [
     "fastapi>=0.115",
     "uvicorn[standard]>=0.32",
     "langgraph>=0.2",
-    "langchain-openai>=0.2",
+    # The planner's structured-output path (`response_format` json_schema
+    # bind + Pydantic-validated content parsing, see
+    # openspec/changes/agent-planner-structured) is developed and verified
+    # against the 1.x line; the floor is conservative rather than
+    # exhaustively bisected.
+    "langchain-openai>=0.3",
     "langgraph-checkpoint-postgres>=3.0",
     "pydantic>=2.9",
     "pydantic-settings>=2.6",
@@ -38,6 +43,10 @@ dev = [
     "fakeredis>=2.26",
     "vcrpy>=6.0",
     "testcontainers[postgres]>=4.8",
+    # Lint / type tooling (task 9.3, agent-planner-structured).
+    # Run: `.venv/bin/ruff check .` and `.venv/bin/mypy agent`.
+    "ruff>=0.6",
+    "mypy>=1.11",
 ]
 
 [tool.setuptools.packages.find]

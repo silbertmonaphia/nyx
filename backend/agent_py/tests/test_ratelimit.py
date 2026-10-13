@@ -9,8 +9,23 @@ from httpx import ASGITransport, AsyncClient
 
 from agent.config import Settings
 from agent.main import create_app
-from agent.ratelimit import IpRateLimiter, RateLimitMiddleware
+from agent.ratelimit import IpRateLimiter
 from agent.types import ChatMessage, ChatRequest
+
+
+class _StubStructuredChain:
+    """See test_run.py — chainable shim whose `ainvoke` yields the canned Plan."""
+
+    def __init__(self, plan_payload: dict):
+        self._payload = plan_payload
+
+    def __or__(self, other):
+        return self
+
+    async def ainvoke(self, messages):
+        from agent.types import Plan
+
+        return Plan.model_validate(self._payload)
 
 
 class _StubLlm:
@@ -21,6 +36,12 @@ class _StubLlm:
         from langchain_core.messages import AIMessage
 
         return AIMessage(content="ok")
+
+    def bind(self, **kwargs):
+        # The planner (structured path, default-on) binds `response_format` here.
+        return _StubStructuredChain(
+            {"steps": [{"id": "step_1", "kind": "llm", "prompt": "ok"}]}
+        )
 
 
 def _settings(burst: int = 200) -> Settings:
@@ -52,14 +73,12 @@ async def app_low_burst(monkeypatch):
     rate-limiting behavior.
     """
     import langchain_openai
+    from fakeredis import aioredis as fakeaioredis
 
     import agent.executor as executor_module
     import agent.planner as planner_module
     import agent.rag_client as rag_module
     import agent.tools_client as tools_module
-
-    from fakeredis import aioredis as fakeaioredis
-
     from agent import config as config_module
 
     settings = _settings(burst=2)
@@ -86,7 +105,7 @@ async def app_low_burst(monkeypatch):
 
     from agent import observability as obs_module
 
-    def _noop_setup(s):  # noqa: ARG001
+    def _noop_setup(s):
         from opentelemetry import trace
         from opentelemetry.sdk.trace import TracerProvider
 
@@ -128,8 +147,8 @@ def test_ip_rate_limiter_window_expires():
     assert limiter.allow("1.2.3.4")
     assert not limiter.allow("1.2.3.4")
     # Manually age the recorded request beyond the window.
-    with limiter._lock:  # noqa: SLF001 — test-only access
-        q = limiter._visitors["1.2.3.4"]  # noqa: SLF001
+    with limiter._lock:
+        q = limiter._visitors["1.2.3.4"]
         q[0] = time.monotonic() - 2.0
     assert limiter.allow("1.2.3.4"), "expired entry must free a slot"
 
@@ -152,8 +171,8 @@ def test_ip_rate_limiter_evict_idle_drops_stale_entries():
     # Manually age every visitor's last request beyond the eviction
     # threshold so evict_idle drops them all on the next call.
     stale_time = time.monotonic() - 120.0  # > 60s default max_idle_seconds
-    with limiter._lock:  # noqa: SLF001 — test-only access
-        for q in limiter._visitors.values():  # noqa: SLF001
+    with limiter._lock:
+        for q in limiter._visitors.values():
             q.append(stale_time)
     evicted = limiter.evict_idle()
     assert evicted == 100
@@ -174,8 +193,8 @@ def test_ip_rate_limiter_evict_idle_threshold():
     limiter = IpRateLimiter(requests_per_second=10.0, burst=10)
     limiter.allow("1.2.3.4")
     # Age just past a 1s threshold.
-    with limiter._lock:  # noqa: SLF001
-        limiter._visitors["1.2.3.4"].append(time.monotonic() - 1.5)  # noqa: SLF001
+    with limiter._lock:
+        limiter._visitors["1.2.3.4"].append(time.monotonic() - 1.5)
     # 60s default keeps it; 1s threshold drops it.
     assert limiter.evict_idle(max_idle_seconds=60.0) == 0
     assert limiter.active_ips() == 1

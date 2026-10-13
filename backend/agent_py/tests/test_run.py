@@ -7,6 +7,7 @@ with a stubbed LLM response. Verifies SSE frame sequence on the wire.
 from __future__ import annotations
 
 import json
+from typing import Any, ClassVar
 
 import httpx
 import langchain_openai
@@ -18,31 +19,62 @@ from agent.main import create_app
 from agent.types import ChatMessage, ChatRequest
 
 
+class _StubStructuredChain:
+    """Shim for the planner's bound chain
+    (`base.bind(response_format=...) | JsonOutputParser() | RunnableLambda(...)`).
+
+    `__or__` chaining is ignored; `ainvoke` returns the canned plan
+    validated into `Plan` — what the real chain's parser + validator
+    produce.
+    """
+
+    def __init__(self, plan_payload: dict):
+        self._payload = plan_payload
+
+    def __or__(self, other):
+        return self
+
+    async def ainvoke(self, messages):
+        from agent.types import Plan
+
+        return Plan.model_validate(self._payload)
+
+
 class _StubLlm:
     """Drop-in replacement for langchain_openai.ChatOpenAI used in the planner.
 
-    The first `ainvoke` call returns a canned plan; subsequent ones return a final text.
-    Returns a minimal `BaseMessage`-shaped object.
+    The planner reaches the LLM via `bind(response_format=...)` (structured
+    path); the executor still uses plain `ainvoke`. Both consume the same
+    canned plan so the call numbering matches the pre-structured flow.
     """
+    _PLAN: ClassVar[dict[str, Any]] = {
+        "steps": [
+            {"id": "step_1", "kind": "tool", "tool": "list_feeds", "args": {}},
+            {"id": "step_2", "kind": "llm", "prompt": "summarise"},
+        ]
+    }
+    # Class-level: the planner and the executor each construct their own
+    # instance, so the counter must span both — call 1 is the plan (planner
+    # `bind`), call 2+ is the answering text (executor `ainvoke`).
+    call_count = 0
+
     def __init__(self, *args, **kwargs):
-        self.call_count = 0
+        pass
 
     async def ainvoke(self, messages):
         from langchain_core.messages import AIMessage
 
-        self.call_count += 1
-        if self.call_count == 1:
-            return AIMessage(
-                content=json.dumps(
-                    {
-                        "steps": [
-                            {"id": "step_1", "kind": "tool", "tool": "list_feeds", "args": {}},
-                            {"id": "step_2", "kind": "llm", "prompt": "summarise"},
-                        ]
-                    }
-                )
-            )
+        type(self).call_count += 1
+        if type(self).call_count == 1:
+            return AIMessage(content=json.dumps(self._PLAN))
         return AIMessage(content="summary: no feeds")
+
+    def bind(self, **kwargs):
+        # Planner path (`_build_structured_client` binds `response_format`
+        # and chains parsers): consume the call-1 slot, as the legacy flow
+        # did.
+        type(self).call_count += 1
+        return _StubStructuredChain(self._PLAN)
 
 
 class _LoopForeverLlm:
@@ -53,6 +85,17 @@ class _LoopForeverLlm:
     (matching the planner's `client = ChatOpenAI(...)` instantiation).
     """
     call_count = 0  # class-level; each instance shares count for the run
+    _PLAN: ClassVar[dict[str, Any]] = {
+        "steps": [
+            {
+                "id": "react_1",
+                "kind": "react",
+                "tool": "list_feeds",
+                "args": {},
+                "max_iterations": 2,
+            }
+        ]
+    }
 
     def __init__(self, *args, **kwargs):
         pass
@@ -63,21 +106,7 @@ class _LoopForeverLlm:
         type(self).call_count += 1
         n = type(self).call_count
         if n == 1:
-            return AIMessage(
-                content=json.dumps(
-                    {
-                        "steps": [
-                            {
-                                "id": "react_1",
-                                "kind": "react",
-                                "tool": "list_feeds",
-                                "args": {},
-                                "max_iterations": 2,
-                            }
-                        ]
-                    }
-                )
-            )
+            return AIMessage(content=json.dumps(self._PLAN))
         # Subsequent calls: emit a tool call (LangChain bind_tools shape).
         return AIMessage(
             content="",
@@ -89,6 +118,12 @@ class _LoopForeverLlm:
                 }
             ],
         )
+
+    def bind(self, **kwargs):
+        # Planner path: consume the class-level call-1 slot so the
+        # executor's react loop still starts at n == 2.
+        type(self).call_count += 1
+        return _StubStructuredChain(self._PLAN)
 
 
 class _EmptyAnswerPlanLlm:
@@ -102,6 +137,7 @@ class _EmptyAnswerPlanLlm:
     """
 
     call_count = 0
+    _PLAN: ClassVar[dict[str, Any]] = {"steps": [{"id": "rag_1", "kind": "rag", "query": "feeds"}]}
 
     def __init__(self, *args, **kwargs):
         pass
@@ -111,12 +147,14 @@ class _EmptyAnswerPlanLlm:
 
         type(self).call_count += 1
         if type(self).call_count == 1:
-            return AIMessage(
-                content=json.dumps(
-                    {"steps": [{"id": "rag_1", "kind": "rag", "query": "feeds"}]}
-                )
-            )
+            return AIMessage(content=json.dumps(self._PLAN))
         return AIMessage(content="")
+
+    def bind(self, **kwargs):
+        # Planner path: consume the class-level call-1 slot so the
+        # executor's answering step still receives "" (call 2).
+        type(self).call_count += 1
+        return _StubStructuredChain(self._PLAN)
 
 
 @pytest.fixture
@@ -158,8 +196,8 @@ async def app_and_state(settings, monkeypatch):
     # planner's `client = ChatOpenAI(...)` call uses our stub. Patching the
     # `langchain_openai.ChatOpenAI` module attribute doesn't reach the planner's
     # already-bound local reference.
-    import agent.planner as planner_module
     import agent.executor as executor_module
+    import agent.planner as planner_module
     import agent.rag_client as rag_module
     import agent.tools_client as tools_module
 
@@ -190,6 +228,7 @@ async def app_and_state(settings, monkeypatch):
     tools_module.ToolsClient = lambda *a, **kw: _StubTools()
 
     # Test sets the LLM stub via the `lm` attribute on the fixture.
+    _StubLlm.call_count = 0  # class-level counter: reset between tests
     app_and_state.lm = _StubLlm()
     planner_module.ChatOpenAI = _StubLlm
     executor_module.ChatOpenAI = _StubLlm
@@ -199,7 +238,7 @@ async def app_and_state(settings, monkeypatch):
     from agent import observability as obs_module
     orig_setup = obs_module.setup_observability
 
-    def _noop_setup(settings):  # noqa: ARG001
+    def _noop_setup(settings):
         from opentelemetry import trace
         from opentelemetry.sdk.trace import TracerProvider
 
@@ -228,8 +267,8 @@ async def app_and_state(settings, monkeypatch):
 
 def _set_lm(app_and_state, lm_cls):
     """Bind a fresh LLM *class* for the next test request."""
-    import agent.planner as planner_module
     import agent.executor as executor_module
+    import agent.planner as planner_module
 
     planner_module.ChatOpenAI = lm_cls
     executor_module.ChatOpenAI = lm_cls

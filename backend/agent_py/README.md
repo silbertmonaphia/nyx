@@ -12,7 +12,64 @@ contract is byte-for-byte identical to what the Go chat handler emits today.
   `tool_result`, `step_end`, `delta`, `done`, `note`, `error`, `terminator`).
 - `GET /healthz` — 200 with `{"status":"ok"}` when Redis is reachable; 503 otherwise.
 - `GET /metrics` — Prometheus counters (`agent_runs_total`, `agent_steps_total`,
-  `agent_tool_calls_total`, `agent_tokens_total`).
+  `agent_tool_calls_total`, `agent_tokens_total`, `agent_planner_parse_failures_total`).
+
+## Planner: structured output with bounded retry
+
+The planner obtains `Plan` via provider structured output rather than
+parsing free-text model output: it binds the OpenAI `response_format`
+json_schema explicitly (`strict: false`) and parses the content JSON
+through Pydantic.
+
+```python
+base = ChatOpenAI(...)
+base.bind(response_format={
+    "type": "json_schema",
+    "json_schema": {
+        "name": "Plan",
+        "schema": Plan.model_json_schema(),
+        "strict": False,
+    },
+}) | JsonOutputParser() | RunnableLambda(Plan.model_validate)
+```
+
+Why not `with_structured_output(Plan, method="json_schema", strict=False)`?
+Verified against langchain-openai 1.7.0: that helper silently forces
+`strict: true` for Pydantic-class schemas (the `strict` flag is dropped at
+bind time), and strict mode cannot represent `PlanStep.args`' free-form
+object — arguments would resolve to `{}` or the request be rejected. The
+explicit bind keeps `strict: false`, preserving arbitrary tool args.
+Pydantic validation + the retry loop cover the residual conformance gap.
+The wire-format `plan` frame is byte-for-byte identical to the legacy
+free-text path's output.
+
+A bounded retry loop catches residual `pydantic.ValidationError` /
+`langchain_core.exceptions.OutputParserException` cases (truncation,
+schema drift across provider versions, planning prompts that nudge the
+model toward a different schema):
+
+| Env var                                   | Default | Purpose                                                                       |
+|-------------------------------------------|---------|-------------------------------------------------------------------------------|
+| `PYTHON_AGENT_PLANNER_STRUCTURED_ENABLED` | `true`  | Use the structured binding (primary path). `false` falls back to free-text.   |
+| `PYTHON_AGENT_PLANNER_RETRY_MAX`          | `1`     | Re-prompts after a validation failure, capped at this value. 0 = no retry.     |
+
+The fallback path (`PYTHON_AGENT_PLANNER_STRUCTURED_ENABLED=false`) keeps
+the original fence-strip + `json.loads` parser unchanged — no retry budget
+— so operators can compare run-rates between the two paths during rollout.
+It is an escape hatch for providers whose parser doesn't honour
+`response_format`, not a retry path.
+
+The counter `agent_planner_parse_failures_total{retry}` exposes recovery
+behaviour:
+
+- `retry="ok"` — recovery succeeded on a later attempt within the budget.
+- `retry="exhausted"` — retry budget exhausted; run terminated with
+  `error{code:"plan_invalid"}`.
+
+See `openspec/changes/agent-planner-structured/` for the full rationale
+(why `json.loads` on free text fails at every model tier; how retries
+inject the validator's last error; cross-provider parity with vLLM
+`hermes` parser).
 
 ## Architecture
 

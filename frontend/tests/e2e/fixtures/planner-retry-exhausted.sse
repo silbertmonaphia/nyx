@@ -1,0 +1,17 @@
+event: run_id
+data: {"run_id":"52d8c862-3a30-4e66-bc18-c44ee070ab6a"}
+
+event: note
+data: {"text":"fresh_run","provider":null,"kind":"fresh_run","last_step_id":null,"run_id":"52d8c862-3a30-4e66-bc18-c44ee070ab6a"}
+
+event: error
+data: {"error":"Plan is invalid","code":"plan_invalid","request_id":null}
+
+event: done
+data: {"usage":{"prompt_tokens":0,"completion_tokens":0,"total_tokens":0}}
+
+event: terminator
+data: {"reason":"Invalid json output: not json at all"}
+
+data: [DONE]
+

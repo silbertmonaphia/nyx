@@ -9,6 +9,8 @@ context_block because `step_outputs` was write-only.
 
 from __future__ import annotations
 
+from typing import ClassVar
+
 import pytest
 from langchain_core.messages import AIMessage
 from opentelemetry import trace
@@ -23,7 +25,7 @@ from agent.types import ChatMessage, Plan, PlanStep
 class _CapturingLlm:
     """Drop-in ChatOpenAI stub that records the message lists it receives."""
 
-    captured: list = []
+    captured: ClassVar[list] = []
 
     def __init__(self, *args, **kwargs):
         pass
@@ -132,6 +134,27 @@ async def test_tool_result_is_included_in_llm_context(tracer):
     msgs = _CapturingLlm.captured[0]
     assert '"items"' in msgs[1].content
     assert "list_feeds" in msgs[1].content
+
+
+@pytest.mark.asyncio
+async def test_executor_rejects_non_plan_state(tracer):
+    """Oracle for the planner→executor type contract: the planner always
+    emits a typed `Plan` (structured output); a dict here means the planner
+    regressed to its legacy dict-only path — the executor must fail loudly
+    instead of parsing garbage."""
+
+    state = _state([], {})
+    state["plan"] = {"steps": []}  # type: ignore[assignment]
+
+    with pytest.raises(AssertionError, match="expected Plan"):
+        await executor_module.executor_node(
+            state,
+            settings=_settings(),
+            tracer=tracer,
+            budget=_StubBudget(),
+            rag=None,  # type: ignore[arg-type] — unused: assert fires first
+            tools=None,  # type: ignore[arg-type]
+        )
 
 
 @pytest.mark.asyncio

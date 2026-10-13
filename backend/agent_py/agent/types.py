@@ -11,7 +11,6 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
-
 # --- Steps / Plans --------------------------------------------------------
 
 
@@ -34,6 +33,13 @@ class PlanStep(BaseModel):
     id: str
     kind: StepKind
     tool: str | None = None
+    # `args` MUST stay a plain free-form object (`dict[str, Any] | None`).
+    # The planner binds `Plan` as the provider's `response_format`
+    # `json_schema`; extra schema branches (e.g. a `BaseModel` alternative,
+    # which renders as an always-satisfiable empty-object branch) let
+    # guided decoders silently resolve `args` to `{}` — dropping tool
+    # arguments. Per-step arg schemas can land later by changing this
+    # annotation alone; the planner is schema-driven.
     args: dict[str, Any] | None = None
     prompt: str | None = None
     query: str | None = None

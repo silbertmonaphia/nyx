@@ -40,6 +40,27 @@ def test_host_facing_defaults_are_host_reachable(monkeypatch, field, expected):
     )
 
 
+def test_planner_robustness_defaults(monkeypatch):
+    """Spec scenario "Default values applied when env unset": the structured
+    planner is on with a single retry budgeted (agent-planner-structured)."""
+    for key in ("PLANNER_RETRY_MAX", "PLANNER_STRUCTURED_ENABLED"):
+        monkeypatch.delenv(f"PYTHON_AGENT_{key}", raising=False)
+    s = Settings(_env_file=None, llm_base_url="http://vllm:8000/v1")
+    assert s.planner_retry_max == 1
+    assert s.planner_structured_enabled is True
+
+
+def test_negative_planner_retry_max_refused():
+    """Spec scenario "Negative planner-retry max refuses startup"."""
+    with pytest.raises(ValueError) as excinfo:
+        Settings(
+            _env_file=None,
+            llm_base_url="http://vllm:8000/v1",
+            planner_retry_max=-1,
+        )
+    assert "PYTHON_AGENT_PLANNER_RETRY_MAX" in str(excinfo.value)
+
+
 def test_settings_accepts_local_vllm_without_key():
     """Local vLLM (and OpenRouter) don't need an API key — empty key
     is fine when the base URL doesn't target api.openai.com."""

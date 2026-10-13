@@ -24,7 +24,7 @@ from .config import Settings
 from .observability import agent_steps_total, agent_tokens_total, agent_tool_calls_total
 from .rag_client import RagAuthError, RagClient, RagUnavailableError
 from .state import AgentState
-from .tools_client import ToolAuthError, ToolError, ToolUnavailableError, ToolsClient
+from .tools_client import ToolAuthError, ToolError, ToolsClient, ToolUnavailableError
 from .types import (
     DeltaEvent,
     DoneEvent,
@@ -55,6 +55,12 @@ async def executor_node(
         state["terminal_status"] = "failed"
         state["terminal_reason"] = "no_plan"
         return state
+    # Defensive: the planner always emits a typed `Plan` instance after the
+    # structured-output migration (openspec/changes/agent-planner-structured).
+    # A dict here would be the only way for this assertion to fire — and
+    # that would mean the planner regressed to its legacy dict-only path
+    # without the executor-side machinery being updated to match.
+    assert isinstance(plan, Plan), f"executor expected Plan, got {type(plan).__name__}"
 
     for step in plan.steps:
         with tracer.start_as_current_span(f"agent.step.{step.kind.value}") as span:
@@ -127,7 +133,7 @@ async def _run_rag(state: AgentState, step, rag: RagClient, span: trace.Span) ->
         result = await rag.retrieve(query)
     except RagAuthError as exc:
         raise _step_runtime_error("RAG auth", repr(exc)) from exc
-    except RagUnavailableError as exc:
+    except RagUnavailableError:
         # Per spec: empty context is acceptable; not a hard failure.
         state["step_outputs"][step.id] = {"context_block": "", "citations": []}
         span.set_attribute("rag_unavailable", True)
@@ -199,7 +205,7 @@ async def _run_llm(state: AgentState, step, settings: Settings, tracer: trace.Tr
 
     try:
         resp = await client.ainvoke(msgs)
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         raise _step_runtime_error("llm", repr(exc)) from exc
 
     text = _extract_text(resp)
@@ -259,7 +265,7 @@ async def _run_react(
 
             try:
                 resp = await client.ainvoke(messages)
-            except Exception as exc:  # noqa: BLE001
+            except Exception as exc:
                 raise _step_runtime_error("react", repr(exc)) from exc
 
             tool_calls = _extract_tool_calls(resp)

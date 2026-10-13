@@ -33,6 +33,23 @@ class Settings(BaseSettings):
     plan_max_steps: int = 10
     step_react_max_iterations: int = 5
 
+    # --- Planner robustness (openspec/changes/agent-planner-structured) ---
+    # Maximum retries on a Pydantic validation failure from the structured
+    # planner binding. 0 = no retry (single attempt). Negative values are
+    # rejected at startup. Default 1: one re-prompt with the validator's
+    # error message appended under a `PREVIOUS_ATTEMPT_FAILED` block before
+    # terminating with `error{code:"plan_invalid"}`.
+    planner_retry_max: int = 1
+    # Whether the planner obtains `Plan` via provider structured output on
+    # the primary path: an explicit `response_format` json_schema bind
+    # (`strict: false`) with the content JSON validated through Pydantic
+    # (see `planner._build_structured_client`). When false, the legacy
+    # free-text path (`json.loads` + fence-stripping) is used. The flag
+    # exists so vLLM deployments on a parser that doesn't honour
+    # `response_format` can opt out without code change; the gate is
+    # symmetric to `llm_fallback_*`.
+    planner_structured_enabled: bool = True
+
     # --- Backend bridges ---
     # Host-dev defaults: `make dev-agent` runs the agent on the host and
     # `make dev-backend` serves on :8080 there. docker-compose.yml sets the
@@ -95,7 +112,24 @@ class Settings(BaseSettings):
     # docker-compose.yml for the trust model.
 
     @model_validator(mode="after")
-    def _require_openai_key(self) -> "Settings":
+    def _validate_planner_retry(self) -> Settings:
+        """Refuse to start when the planner retry cap is negative.
+
+        Per `openspec/changes/agent-planner-structured` (Configurable via
+        environment delta): `PYTHON_AGENT_PLANNER_RETRY_MAX` must be ≥ 0.
+        0 means one attempt with no retry (the retry loop's outer bound is
+        `planner_retry_max`); any negative value is an operator mistake
+        and breaks the closed `[0, retry_max]` semantics.
+        """
+        if self.planner_retry_max < 0:
+            raise ValueError(
+                "PYTHON_AGENT_PLANNER_RETRY_MAX must be >= 0; "
+                f"got {self.planner_retry_max}"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _require_openai_key(self) -> Settings:
         """Refuse to start when the LLM target is OpenAI proper but no
         API key is configured. Local vLLM / OpenRouter don't require a
         key (vLLM may run with --api-key empty; OpenRouter uses a
@@ -117,7 +151,7 @@ class Settings(BaseSettings):
         return self
 
     @model_validator(mode="after")
-    def _normalize_database_url(self) -> "Settings":
+    def _normalize_database_url(self) -> Settings:
         """Ensure `PYTHON_AGENT_DATABASE_URL` carries `options=-c search_path=langgraph,agent`.
 
         Consumers of this DSN:

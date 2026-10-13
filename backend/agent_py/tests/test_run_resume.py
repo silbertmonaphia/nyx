@@ -10,13 +10,14 @@ already-completed steps.
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import uuid
+from typing import Any, ClassVar
 
 import asyncpg
 import pytest
-import langchain_openai
 
 _DSN = os.environ.get("TEST_ASYNC_PG_DSN")
 
@@ -24,6 +25,21 @@ pytestmark = pytest.mark.skipif(
     not _DSN,
     reason="TEST_ASYNC_PG_DSN not set; needs a live Postgres (see Makefile / CI)",
 )
+
+
+class _StubStructuredChain:
+    """See test_run.py — chainable shim whose `ainvoke` yields the canned Plan."""
+
+    def __init__(self, plan_payload: dict):
+        self._payload = plan_payload
+
+    def __or__(self, other):
+        return self
+
+    async def ainvoke(self, messages):
+        from agent.types import Plan
+
+        return Plan.model_validate(self._payload)
 
 
 class _StubLlm:
@@ -41,10 +57,22 @@ class _StubLlm:
     """
 
     call_count = 0  # class-level; shared across instances
-    llm_gate: "asyncio.Event | None" = None  # set by the test to release phase 2
+    llm_gate: asyncio.Event | None = None  # set by the test to release phase 2
+    _PLAN: ClassVar[dict[str, Any]] = {
+        "steps": [
+            {"id": "step_1", "kind": "tool", "tool": "list_feeds", "args": {}},
+            {"id": "step_2", "kind": "llm", "prompt": "summarise"},
+        ]
+    }
 
     def __init__(self, *args, **kwargs):
         pass
+
+    def bind(self, **kwargs):
+        # Planner path (structured default-on): consume the call-1 slot,
+        # as the legacy flow did, so the executor's first call is n == 2.
+        type(self).call_count += 1
+        return _StubStructuredChain(self._PLAN)
 
     async def ainvoke(self, messages):
         from langchain_core.messages import AIMessage
@@ -53,25 +81,7 @@ class _StubLlm:
         n = type(self).call_count
         if n == 1:
             # Phase 1 planner: return a 2-step plan
-            return AIMessage(
-                content=json.dumps(
-                    {
-                        "steps": [
-                            {
-                                "id": "step_1",
-                                "kind": "tool",
-                                "tool": "list_feeds",
-                                "args": {},
-                            },
-                            {
-                                "id": "step_2",
-                                "kind": "llm",
-                                "prompt": "summarise",
-                            },
-                        ]
-                    }
-                )
-            )
+            return AIMessage(content=json.dumps(self._PLAN))
         if n == 2:
             # Phase 1 executor llm step: wait on a gate; the test cancels
             # the graph task to simulate a mid-execution abort.
@@ -128,11 +138,11 @@ async def _drop_schemas() -> None:
 
 def _patch_common(monkeypatch):
     """Patch the LLM / RAG / tools / observability shared by both phases."""
-    import agent.planner as planner_module
     import agent.executor as executor_module
+    import agent.observability as obs_module
+    import agent.planner as planner_module
     import agent.rag_client as rag_module
     import agent.tools_client as tools_module
-    import agent.observability as obs_module
 
     # Reset the shared counter so each test gets a fresh sequence.
     _StubLlm.call_count = 0
@@ -142,7 +152,7 @@ def _patch_common(monkeypatch):
     monkeypatch.setattr(rag_module, "RagClient", lambda *a, **kw: _StubRag())
     monkeypatch.setattr(tools_module, "ToolsClient", lambda *a, **kw: _StubTools())
 
-    def _noop_setup(settings):  # noqa: ARG001
+    def _noop_setup(settings):
         from opentelemetry import trace
         from opentelemetry.sdk.trace import TracerProvider
 
