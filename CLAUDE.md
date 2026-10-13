@@ -34,7 +34,8 @@ Local dev orchestrator (`Makefile` at repo root):
 - `make up` — `docker compose up -d db redis jaeger` (idempotent)
 - `make dev` — run backend (`go run ./cmd/api`) + frontend (`npm run dev`) + python agent (`backend/agent_py/.venv/bin/python -m agent.main`, when `AGENT_ENABLED=true`) together with shared Ctrl+C cleanup; logs to `/tmp/nyx-backend.log`, `/tmp/nyx-frontend.log`, `/tmp/nyx-agent.log`. Single-target variants: `make dev-backend`, `make dev-frontend`, `make dev-agent` (foreground by default; pass `DETACH=1` to background).
 - `make dev-agent` — foreground Python agent only.
-- `make stop` — kill the dev backend / frontend / agent started by `make dev` (or any of the singles).
+- `make dev-vllm-main` / `make dev-vllm-embed` — run the vLLM chat model (`Qwen/Qwen3-4B-Instruct-2507-FP8`, :8000, hermes tool parser, ~6970 MiB VRAM) and embedding model (`Qwen/Qwen3-Embedding-0.6B`, :8001, ~3224 MiB VRAM) on the **host** — a faster dev loop than the compose `vllm`/`embed` profiles. Needs a local vLLM install (`vllm` or `llm` on PATH) + GPU; foreground by default, `DETACH=1` to background (logs `/tmp/nyx-vllm-{main,embed}.log`, cleaned by `make stop`, visible in `make status`). Don't run alongside the compose profiles — the ports collide (`make down-vllm` first).
+- `make stop` — kill the dev backend / frontend / agent / host-vLLM processes started by `make dev` (or any of the singles).
 - `make status` — show infra + dev processes.
 - `make down` — stop the infra containers.
 - `make logs` — tail infra logs.

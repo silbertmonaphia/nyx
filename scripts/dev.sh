@@ -3,7 +3,7 @@
 # and/or the frontend (Vite) against the local docker-compose infra
 # (db / redis / jaeger).
 #
-# Usage: ./scripts/dev.sh [backend|frontend|agent|both|all] [--detach]
+# Usage: ./scripts/dev.sh [backend|frontend|agent|vllm-main|vllm-embed|both|all] [--detach]
 #
 # Default is foreground — the started process attaches to your
 # terminal so output streams live and Ctrl+C kills it cleanly. Pass
@@ -26,6 +26,15 @@
 # DNS name) and the Python-side bridge URLs (RAG/MCP default to
 # the in-network hostname `backend:8080`) to their localhost
 # equivalents so everything talks over the loopback.
+#
+# The `vllm-main` / `vllm-embed` modes run the chat and embedding
+# models on the HOST instead of in compose — much faster iteration
+# and easier debugging than the `vllm` / `embed` profiles. They
+# need a local vLLM install (`vllm` or `llm` on PATH) and a GPU.
+# Chat: Qwen3-4B-Instruct-2507-FP8 on :8000 (~6970 MiB VRAM,
+# hermes tool-call parser). Embed: Qwen3-Embedding-0.6B on :8001
+# (~3224 MiB VRAM). Do not run them alongside the compose
+# profiles — the ports would collide (`make down-vllm` first).
 
 set -uo pipefail
 
@@ -36,9 +45,13 @@ LOG_DIR="${TMPDIR:-/tmp}"
 BACKEND_LOG="$LOG_DIR/nyx-backend.log"
 FRONTEND_LOG="$LOG_DIR/nyx-frontend.log"
 AGENT_LOG="$LOG_DIR/nyx-agent.log"
+VLLM_MAIN_LOG="$LOG_DIR/nyx-vllm-main.log"
+VLLM_EMBED_LOG="$LOG_DIR/nyx-vllm-embed.log"
 BACKEND_PID="$LOG_DIR/nyx-backend.pid"
 FRONTEND_PID="$LOG_DIR/nyx-frontend.pid"
 AGENT_PID="$LOG_DIR/nyx-agent.pid"
+VLLM_MAIN_PID="$LOG_DIR/nyx-vllm-main.pid"
+VLLM_EMBED_PID="$LOG_DIR/nyx-vllm-embed.pid"
 
 mode="${1:-both}"
 detach=false
@@ -47,32 +60,33 @@ case "$#" in
   1) ;;
   2) case "${2}" in
        --detach) detach=true ;;
-       *) echo "usage: $0 [backend|frontend|agent|both|all] [--detach]" >&2; exit 2 ;;
+       *) echo "usage: $0 [backend|frontend|agent|vllm-main|vllm-embed|both|all] [--detach]" >&2; exit 2 ;;
      esac ;;
-  *) echo "usage: $0 [backend|frontend|agent|both|all] [--detach]" >&2; exit 2 ;;
+  *) echo "usage: $0 [backend|frontend|agent|vllm-main|vllm-embed|both|all] [--detach]" >&2; exit 2 ;;
 esac
 
 case "$mode" in
-  backend|frontend|agent|both|all) ;;
-  *) echo "usage: $0 [backend|frontend|agent|both|all] [--detach]" >&2; exit 2 ;;
+  backend|frontend|agent|vllm-main|vllm-embed|both|all) ;;
+  *) echo "usage: $0 [backend|frontend|agent|vllm-main|vllm-embed|both|all] [--detach]" >&2; exit 2 ;;
 esac
 
-if [[ "$mode" == "both" || "$mode" == "all" ]] && "$detach" != "true"; then
+if [[ "$mode" == "both" || "$mode" == "all" ]] && [[ "$detach" != "true" ]]; then
   echo "'$mode' requires --detach — multiple foreground processes can't share one terminal" >&2
   echo "  run './scripts/dev.sh $mode --detach' or pick one of backend / frontend / agent" >&2
   exit 2
 fi
 
-# `all` is `both` + agent.
-if [[ "$mode" == "all" ]]; then
-  needs_backend=true
-  needs_frontend=true
-  needs_agent=true
-else
-  needs_backend()  { [[ "$mode" == backend  || "$mode" == both ]]; }
-  needs_frontend() { [[ "$mode" == frontend || "$mode" == both ]]; }
-  needs_agent()    { [[ "$mode" == agent ]]; }
-fi
+# `all` is `both` + agent. These MUST be functions in every mode —
+# an earlier revision set plain variables for `all` (e.g.
+# `needs_backend=true`), but the usage sites call them as commands
+# (`if needs_backend; then`), which bash can never resolve to a
+# variable. Result: `make dev` silently started nothing. Keep them
+# as functions for all modes.
+needs_backend()     { [[ "$mode" == backend  || "$mode" == both || "$mode" == all ]]; }
+needs_frontend()    { [[ "$mode" == frontend || "$mode" == both || "$mode" == all ]]; }
+needs_agent()       { [[ "$mode" == agent    || "$mode" == all ]]; }
+needs_vllm_main()   { [[ "$mode" == vllm-main ]]; }
+needs_vllm_embed()  { [[ "$mode" == vllm-embed ]]; }
 
 # --- backend preflight -------------------------------------------------
 if needs_backend; then
@@ -186,6 +200,23 @@ if needs_agent || $agent_enabled_in_env; then
   fi
 fi
 
+# --- vllm preflight (host-run chat / embedding models) --------------------
+vllm_bin=""
+if needs_vllm_main || needs_vllm_embed; then
+  # `vllm` is vLLM's canonical CLI; some installs only expose `llm`
+  # (and vice versa). Prefer `vllm`, fall back, fail loudly otherwise.
+  for candidate in vllm llm; do
+    if command -v "$candidate" >/dev/null 2>&1; then
+      vllm_bin="$candidate"
+      break
+    fi
+  done
+  if [[ -z "$vllm_bin" ]]; then
+    echo "neither 'vllm' nor 'llm' on PATH — install vLLM ('pip install vllm') or use the compose profiles: 'make up-vllm'" >&2
+    exit 1
+  fi
+fi
+
 # --- start -------------------------------------------------------------
 if $detach; then
   # Detached mode: each child runs as a backgrounded pipeline so the
@@ -193,10 +224,13 @@ if $detach; then
   # per-process log file; PIDs land in /tmp/nyx-*.pid for `make stop`.
   cleanup() {
     local code=$?
-    [[ -f "$BACKEND_PID"  ]] && kill "$(cat "$BACKEND_PID")"  2>/dev/null || true
-    [[ -f "$FRONTEND_PID" ]] && kill "$(cat "$FRONTEND_PID")" 2>/dev/null || true
-    [[ -f "$AGENT_PID"    ]] && kill "$(cat "$AGENT_PID")"    2>/dev/null || true
-    rm -f "$BACKEND_PID" "$FRONTEND_PID" "$AGENT_PID"
+    [[ -f "$BACKEND_PID"    ]] && kill "$(cat "$BACKEND_PID")"    2>/dev/null || true
+    [[ -f "$FRONTEND_PID"   ]] && kill "$(cat "$FRONTEND_PID")"   2>/dev/null || true
+    [[ -f "$AGENT_PID"      ]] && kill "$(cat "$AGENT_PID")"      2>/dev/null || true
+    [[ -f "$VLLM_MAIN_PID"  ]] && kill "$(cat "$VLLM_MAIN_PID")"  2>/dev/null || true
+    [[ -f "$VLLM_EMBED_PID" ]] && kill "$(cat "$VLLM_EMBED_PID")" 2>/dev/null || true
+    rm -f "$BACKEND_PID" "$FRONTEND_PID" "$AGENT_PID" \
+          "$VLLM_MAIN_PID" "$VLLM_EMBED_PID"
     exit "$code"
   }
   trap cleanup INT TERM EXIT
@@ -226,35 +260,70 @@ if $detach; then
       2>&1 | tee "$AGENT_LOG" &
   fi
 
-  cat <<EOF
+  if needs_vllm_main; then
+    echo ">> vllm-main → $VLLM_MAIN_LOG  (first run downloads the model)"
+    ( echo $BASHPID > "$VLLM_MAIN_PID" && exec "$vllm_bin" serve Qwen/Qwen3-4B-Instruct-2507-FP8 \
+        --host 0.0.0.0 --port 8000 --tensor-parallel-size 1 \
+        --gpu-memory-utilization 0.9 --max-model-len 4096 \
+        --enable-auto-tool-choice --tool-call-parser hermes ) \
+      2>&1 | tee "$VLLM_MAIN_LOG" &
+  fi
 
-    backend  : http://localhost:8080/api
-    frontend : http://localhost:5173
-    agent    : http://localhost:9000  (proxy :9001 for /metrics)
+  if needs_vllm_embed; then
+    echo ">> vllm-embed → $VLLM_EMBED_LOG  (first run downloads the model)"
+    ( echo $BASHPID > "$VLLM_EMBED_PID" && exec "$vllm_bin" serve Qwen/Qwen3-Embedding-0.6B \
+        --port 8001 --enforce-eager --gpu-memory-utilization 0.1 --max-model-len 256 ) \
+      2>&1 | tee "$VLLM_EMBED_LOG" &
+  fi
 
-    tail backend : tail -f $BACKEND_LOG
-    tail frontend: tail -f $FRONTEND_LOG
-    tail agent   : tail -f $AGENT_LOG
+  echo
+  if needs_backend; then
+    echo "    backend   : http://localhost:8080/api"
+    echo "    tail backend  : tail -f $BACKEND_LOG"
+  fi
+  if needs_frontend; then
+    echo "    frontend  : http://localhost:5173"
+    echo "    tail frontend : tail -f $FRONTEND_LOG"
+  fi
+  if needs_agent; then
+    echo "    agent     : http://localhost:9000  (proxy :9001 for /metrics)"
+    echo "    tail agent    : tail -f $AGENT_LOG"
+  fi
+  if needs_vllm_main; then
+    echo "    vllm-main : http://localhost:8000/v1  (chat, OpenAI-compatible)"
+    echo "    tail vllm-main  : tail -f $VLLM_MAIN_LOG"
+  fi
+  if needs_vllm_embed; then
+    echo "    vllm-embed: http://localhost:8001/v1  (embeddings)"
+    echo "    tail vllm-embed : tail -f $VLLM_EMBED_LOG"
+  fi
+  echo
+  echo "Ctrl+C to stop."
 
-Ctrl+C to stop$( [[ "$mode" == "both" ]] && echo " both" ).
-EOF
-
-  # Wait for whichever children were started. Capture each exit code so
-  # the script can report which one died. Errors stream live to this
+  # Wait for whichever children were started (explicit file checks —
+  # an `[[ -f ]] && wait || code=$?` chain would mis-record a missing
+  # pid file as a nonzero child exit). Capture each exit code so the
+  # script can report which one died. Errors stream live to this
   # terminal AND to the per-process log file via tee.
-  backend_exit=0
-  frontend_exit=0
-  agent_exit=0
-  [[ -f "$BACKEND_PID"  ]] && wait "$(cat "$BACKEND_PID")"  2>/dev/null || backend_exit=$?
-  [[ -f "$FRONTEND_PID" ]] && wait "$(cat "$FRONTEND_PID")" 2>/dev/null || frontend_exit=$?
-
-  if (( backend_exit != 0 )); then
-    echo "backend exited with status $backend_exit" >&2
-  fi
-  if (( frontend_exit != 0 )); then
-    echo "frontend exited with status $frontend_exit" >&2
-  fi
-  exit $(( backend_exit != 0 ? backend_exit : frontend_exit ))
+  exit_code=0
+  for entry in \
+    "backend:$BACKEND_PID" "frontend:$FRONTEND_PID" "agent:$AGENT_PID" \
+    "vllm-main:$VLLM_MAIN_PID" "vllm-embed:$VLLM_EMBED_PID"; do
+    name="${entry%%:*}"
+    file="${entry#*:}"
+    [[ -f "$file" ]] || continue
+    wait "$(cat "$file")" 2>/dev/null
+    code=$?
+    # 127 = pid not a child of this shell (stale pid file from another
+    # session) — not a child failure, don't report it.
+    if (( code != 0 && code != 127 )); then
+      echo "$name exited with status $code" >&2
+      if (( exit_code == 0 )); then
+        exit_code=$code
+      fi
+    fi
+  done
+  exit "$exit_code"
 else
   # Foreground mode: replace the script with the single child process
   # so it inherits the terminal's tty + job-control directly. Ctrl+C
@@ -275,5 +344,19 @@ else
     echo ">> agent    starting in foreground (Ctrl+C to stop)"
     cd backend/agent_py || exit 1
     exec .venv/bin/python -m agent.main
+  fi
+
+  if needs_vllm_main; then
+    echo ">> vllm-main starting in foreground (Ctrl+C to stop; first run downloads the model)"
+    exec "$vllm_bin" serve Qwen/Qwen3-4B-Instruct-2507-FP8 \
+      --host 0.0.0.0 --port 8000 --tensor-parallel-size 1 \
+      --gpu-memory-utilization 0.9 --max-model-len 4096 \
+      --enable-auto-tool-choice --tool-call-parser hermes
+  fi
+
+  if needs_vllm_embed; then
+    echo ">> vllm-embed starting in foreground (Ctrl+C to stop; first run downloads the model)"
+    exec "$vllm_bin" serve Qwen/Qwen3-Embedding-0.6B \
+      --port 8001 --enforce-eager --gpu-memory-utilization 0.1 --max-model-len 256
   fi
 fi
