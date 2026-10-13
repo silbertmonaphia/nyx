@@ -4,32 +4,32 @@
 
 Adds Postgres-backed persistence for Plan-and-Execute agent runs so that a backend or Python-service restart mid-run does not lose already-spent tokens or in-flight progress. Runs survive process restarts and resume from the last completed step when the client echoes the `run_id`. Per-user scoping is enforced at the SQL layer as defence in depth even though the upstream `X-Nyx-User-Id` header is set from a verified JWT.
 
-State persistence is delegated to **langGraph's `AsyncPostgresSaver`** (built-in `thread_id` / `checkpoint_id` semantics, mid-iteration `react` resume, alembic-managed checkpoint tables). A **thin `agent.runs` metadata table** owned by us covers the user-facing queries langGraph's checkpoint blob doesn't expose (`list_runs_for_user`, retention cron over `ended_at`, `total_tokens` / `error_code` aggregates). The two layers live in disjoint Postgres schemas: `langgraph.*` for langGraph's checkpoint tables, `agent.*` for our metadata. Both are separate from the Go backend's `public` schema. Schema versioning is owned by alembic (SQLAlchemy Core only — no ORM models). Data access for the metadata layer uses raw `asyncpg`. The Go chat proxy, RAG bridge, MCP, tool registry, and provider seam are not changed.
+State persistence is delegated to **langGraph's `AsyncPostgresSaver`** (built-in `thread_id` / `checkpoint_id` semantics, mid-iteration `react` resume). langGraph ships a hardcoded MIGRATIONS list (no alembic) and applies it via `await AsyncPostgresSaver.setup()` at app startup. A **thin `agent.runs` metadata table** owned by us covers the user-facing queries langGraph's checkpoint blob doesn't expose (`list_runs_for_user`, retention cron over `ended_at`, `total_tokens` / `error_code` aggregates). The two layers live in disjoint Postgres schemas: `langgraph.*` for langGraph's checkpoint tables, `agent.*` for our metadata. Both are separate from the Go backend's `public` schema. Schema versioning for the `agent` schema is owned by alembic (SQLAlchemy Core only — no ORM models). Data access for the metadata layer uses raw `asyncpg`. The Go chat proxy, RAG bridge, MCP, tool registry, and provider seam are not changed.
 
 ## ADDED Requirements
 
 ### Requirement: Three Postgres schemas with disjoint ownership
 
-The store SHALL persist across three Postgres schemas: `public` (Go-owned, unchanged), `langgraph.*` (langGraph framework-owned, holds langGraph's `checkpoint_*` tables), and `agent.*` (Python agent-owned, holds `agent.runs` and future metadata tables). The Postgres DSN SHALL include `options=-c search_path=langgraph,agent,public` so unqualified table names in the Python service resolve in priority order (langGraph first, ours second, Go's `public` as fallback). Go-side queries SHALL NOT be modified to set `search_path`; Go continues to operate against `public`.
+The store SHALL persist across three Postgres schemas: `public` (Go-owned, unchanged), `langgraph.*` (langGraph framework-owned, holds langGraph's `checkpoint_*` tables), and `agent.*` (Python agent-owned, holds `agent.runs` and `agent.alembic_version`). The Postgres DSN SHALL include `options=-c search_path=langgraph,agent` so unqualified table names in the Python service resolve in priority order (langGraph first, ours second). `public` is NOT in the search_path because the Python service never reads Go's tables. Go-side queries SHALL NOT be modified to set `search_path`; Go continues to operate against `public`.
 
 #### Scenario: langGraph checkpoint tables live under `langgraph.*`, not `agent.*` or `public.*`
 
-- **WHEN** alembic upgrade head runs (which invokes langGraph's built-in checkpoint migration pointed at the `langgraph` schema)
-- **THEN** langGraph's checkpoint tables exist in `langgraph.*`; `agent.*` is created but does not contain langGraph's tables; `public.*` is untouched
+- **WHEN** the agent service starts and `await AsyncPostgresSaver.setup()` runs after the `0001` alembic revision has created the `langgraph` schema
+- **THEN** langGraph's checkpoint tables exist in `langgraph.*`; `agent.*` is created by `0002` and does not contain langGraph's tables; `public.*` is untouched
 
 #### Scenario: Our metadata table lives under `agent.*`, separate from langGraph's
 
-- **WHEN** alembic upgrade head completes (which invokes our `0002_runs_metadata.py`)
+- **WHEN** alembic upgrade head completes (which applies our `0002_runs_metadata.py`)
 - **THEN** `agent.runs` exists; `langgraph.checkpoint_*` is untouched; both schemas coexist with disjoint ownership
 
 #### Scenario: DSN without `search_path` is rejected at startup
 
-- **WHEN** `PYTHON_AGENT_DATABASE_URL` is configured without `options=-c search_path=langgraph,agent,public`
+- **WHEN** `PYTHON_AGENT_DATABASE_URL` is configured without `options=-c search_path=langgraph,agent`
 - **THEN** the agent service refuses to start with a clear error naming the missing DSN option
 
 ### Requirement: State graph is compiled with `AsyncPostgresSaver`
 
-The compiled `StateGraph` SHALL carry `checkpointer=AsyncPostgresSaver.from_conn_string(database_url, schema_name="langgraph")` (or the equivalent langGraph-supported mechanism per the spike). langGraph SHALL land its checkpoint tables in the `langgraph.*` schema. The DSN SHALL include `options=-c search_path=langgraph,agent,public` so unqualified lookups resolve correctly. The graph's `thread_id` SHALL be our `run_id` (uuid4). Per-step persistence SHALL be automatic via langGraph's saver on every node transition; the agent SHALL NOT maintain a separate `agent.steps` table or call `RunMetadata.append_step` for step boundaries.
+The compiled `StateGraph` SHALL carry `checkpointer=AsyncPostgresSaver.from_conn_string(database_url)`. langGraph's `from_conn_string` accepts no `schema_name` kwarg; schema placement is via (a) the DSN's `options=-c search_path=langgraph,agent` and (b) the pre-existing `langgraph` schema created by our `0001` alembic revision. When `await saver.setup()` runs at app startup, langGraph's hardcoded MIGRATIONS list executes `CREATE TABLE IF NOT EXISTS checkpoint_*` against the connection, resolving to `langgraph.checkpoint_*` per the search_path. The graph's `thread_id` SHALL be our `run_id` (uuid4). Per-step persistence SHALL be automatic via langGraph's saver on every node transition; the agent SHALL NOT maintain a separate `agent.steps` table or call `RunMetadata.append_step` for step boundaries.
 
 #### Scenario: Compiled graph carries the saver
 
@@ -43,17 +43,17 @@ The compiled `StateGraph` SHALL carry `checkpointer=AsyncPostgresSaver.from_conn
 
 ### Requirement: Alembic owns schema versioning in the agent schema
 
-Schema migrations SHALL be managed by alembic with SQLAlchemy **Core only** (no ORM models, no `declarative_base`). `alembic_version` SHALL live in the `agent` schema via `version_table_schema='agent'`. Migration scripts SHALL use `op.execute(...)` and `op.create_table(..., schema="agent")` bodies. Migration `0001_langgraph_checkpoint` SHALL programmatically invoke langGraph's built-in alembic migration (`alembic.command.upgrade(...)`) pointed at the `langgraph` schema. Migration `0002_runs_metadata` SHALL create our metadata table in `agent.*`. langGraph's own `checkpoint_migrations` version table lives in `langgraph.*` (managed by langGraph's alembic chain, not ours). The Go backend's golang-migrate chain (`backend/migrations/`) SHALL NOT be extended with agent or langGraph tables.
+Schema migrations SHALL be managed by alembic with SQLAlchemy **Core only** (no ORM models, no `declarative_base`). `alembic_version` SHALL live in the `agent` schema via `version_table_schema='agent'`. Migration scripts SHALL use `op.execute(...)` and `op.create_table(..., schema="agent")` bodies. Migration `0001_langgraph_checkpoint` SHALL create the `langgraph` schema (idempotent `CREATE SCHEMA IF NOT EXISTS langgraph`); langGraph's checkpoint tables are created later by `await AsyncPostgresSaver.setup()` at app startup and are NOT versioned by alembic. Migration `0002_runs_metadata` SHALL create our metadata table in `agent.*`. The Go backend's golang-migrate chain (`backend/migrations/`) SHALL NOT be extended with agent or langGraph tables.
 
-#### Scenario: Alembic upgrade applies both langGraph checkpoint tables and our metadata table
+#### Scenario: Alembic upgrade applies our metadata table; langGraph's tables appear after `setup()`
 
-- **WHEN** `alembic upgrade head` is run against an empty database
-- **THEN** `langgraph.checkpoint_*` (langGraph's tables, with `langgraph.checkpoint_migrations`), `agent.runs`, and `agent.alembic_version` exist; `alembic check` reports `No new upgrade operations detected`
+- **WHEN** `alembic upgrade head` is run against an empty database followed by app startup (`await AsyncPostgresSaver.setup()`)
+- **THEN** `langgraph.checkpoint_*` (langGraph's tables, no version table), `agent.runs`, and `agent.alembic_version` exist; `alembic check` reports `No new upgrade operations detected`
 
-#### Scenario: Alembic downgrade removes everything in reverse order
+#### Scenario: Alembic downgrade removes our schema; full reset requires manual drop of `langgraph`
 
 - **WHEN** `alembic downgrade base` is run after a successful upgrade
-- **THEN** `agent.runs`, `agent.alembic_version`, and `langgraph.checkpoint_*` no longer exist and `DROP SCHEMA agent CASCADE; DROP SCHEMA langgraph CASCADE` has executed
+- **THEN** `agent.runs` and `agent.alembic_version` no longer exist; the `langgraph` schema is NOT removed by alembic (langGraph owns those tables) — a full reset requires an explicit `DROP SCHEMA langgraph CASCADE`
 
 ### Requirement: `RunMetadata.create_run` mints a `run_id` and persists a metadata row
 

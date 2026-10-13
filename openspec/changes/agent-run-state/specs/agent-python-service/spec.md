@@ -79,7 +79,7 @@ The existing `error` frame SHALL be allowed to carry a new `code` value: `run_me
 
 ### Requirement: New env keys for run-state persistence and retention
 
-The service SHALL read `PYTHON_AGENT_DATABASE_URL` (required when `AGENT_ENABLED=true`), `PYTHON_AGENT_RETENTION_DAYS` (default 30), `PYTHON_AGENT_RETENTION_INTERVAL_SECONDS` (default 3600), and `PYTHON_AGENT_RETENTION_ENABLED` (default true). The service SHALL refuse to start when `AGENT_ENABLED=true` and `PYTHON_AGENT_DATABASE_URL` is unset, with a clear error naming the missing key. `PYTHON_AGENT_DATABASE_URL` MUST include `options=-c search_path=langgraph,agent,public`; the service SHALL refuse to start otherwise. The same DSN is consumed by langGraph's `AsyncPostgresSaver.from_conn_string(..., schema_name="langgraph")` and by the `RunMetadata` connection pool.
+The service SHALL read `PYTHON_AGENT_DATABASE_URL` (required when `AGENT_ENABLED=true`), `PYTHON_AGENT_RETENTION_DAYS` (default 30), `PYTHON_AGENT_RETENTION_INTERVAL_SECONDS` (default 3600), and `PYTHON_AGENT_RETENTION_ENABLED` (default true). The service SHALL refuse to start when `AGENT_ENABLED=true` and `PYTHON_AGENT_DATABASE_URL` is unset, with a clear error naming the missing key. `PYTHON_AGENT_DATABASE_URL` MUST include `options=-c search_path=langgraph,agent`; the service SHALL refuse to start otherwise. The same DSN is consumed by langGraph's `AsyncPostgresSaver.from_conn_string(settings.database_url)` and by the `RunMetadata` connection pool. Schema placement for langGraph's tables is via the DSN search_path and the pre-existing `langgraph` schema created by the `0001` alembic revision; langGraph's `from_conn_string` accepts no `schema_name` kwarg.
 
 #### Scenario: Missing `PYTHON_AGENT_DATABASE_URL` refuses startup
 
@@ -88,7 +88,7 @@ The service SHALL read `PYTHON_AGENT_DATABASE_URL` (required when `AGENT_ENABLED
 
 #### Scenario: DSN without `search_path` refuses startup
 
-- **WHEN** `PYTHON_AGENT_DATABASE_URL` is set but does not include `options=-c search_path=langgraph,agent,public`
+- **WHEN** `PYTHON_AGENT_DATABASE_URL` is set but does not include `options=-c search_path=langgraph,agent`
 - **THEN** the service fails to start with a clear error naming the missing DSN option
 
 #### Scenario: Retention env defaults applied when unset
