@@ -74,7 +74,7 @@
 
 | 社区方案 | 我们有什么 / 没有 |
 |---|---|
-| **Langfuse** / **LangSmith** / **Arize Phoenix** — prompt/response 落盘、conversation 回放、cost dashboard | 只有 OTel span (metadata) + Prometheus counter (token 总数)。看不到每步的 prompt 内容、reasoning、模型 reply 原文,planner 调优只能肉眼读 log |
+| **Langfuse** / **LangSmith** / **Arize Phoenix** — prompt/response 落盘、conversation 回放、cost dashboard | **已落地(agent-langfuse-tracing)**:自托管 Langfuse(默认关闭,`PYTHON_AGENT_LANGFUSE_ENABLED=true` 开启;`make up-langfuse`,UI :3000)经 LangChain callback 把每 run 的 prompt / reply / provider usage 落成 generation,tool / step 另有 span。Jaeger 侧保持 metadata-only |
 
 ### B. Provider 抽象与路由
 
@@ -128,15 +128,15 @@
 
 ## 四、按 ROI 排的落地顺序(状态截至 2026-10-14)
 
-**已落地(原列表第 4、5 项)**:
+**已落地(原列表第 1、4、5 项)**:
+- **Langfuse 自托管** (A 类) — `agent-langfuse-tracing` 切片:callback 挂在 graph_config 一处接缝即得结构化 trace(step/tool 观测另加 wrap),planner 调优从盲调变成数据驱动;配套 `-rollout` 兄弟(PM 执行)
 - `adelete_thread` 联动 retention + stale-run sweeper — 同属 `agent-stale-run-sweeper` 切片(已落地 0a9b8f5,配套 `-rollout` 兄弟;旧文档与代码不符的注释已一并修正)
 
 **仍然排队的(按 ROI)**:
-1. **Langfuse 自托管** (A 类) — 插两个 callback 就有结构化 trace,迭代 planner 从盲调变成数据驱动
-2. **Inspect AI 或 Braintrust 评测基线** (A 类延伸) — 没有 golden set 就没有回归线,改 `PYTHON_AGENT_PLANNER_RETRY_MAX` / prompt 都不知道真不真
-3. **LiteLLM seam** (B 类) — 不接的话每个新 provider 都要在 `langchain-openai` 与 vLLM `hermes` parser 之间打补丁,vLLM tool-call 一致性问题会反复咬人
-4. **GPTCache / Redis LangCache** (C 类) — 同 prompt 直出秒回,降本路径里 cost-per-token 直接砍
-5. **Prompt registry + A/B harness** (F 类) — 配 Langfuse 用,把 planner prompt 拉出代码进 YAML/versioned,可以分流实验
+1. **Inspect AI 或 Braintrust 评测基线** (A 类延伸) — 没有 golden set 就没有回归线,改 `PYTHON_AGENT_PLANNER_RETRY_MAX` / prompt 都不知道真不真
+2. **LiteLLM seam** (B 类) — 不接的话每个新 provider 都要在 `langchain-openai` 与 vLLM `hermes` parser 之间打补丁,vLLM tool-call 一致性问题会反复咬人
+3. **GPTCache / Redis LangCache** (C 类) — 同 prompt 直出秒回,降本路径里 cost-per-token 直接砍
+4. **Prompt registry + A/B harness** (F 类) — Langfuse 已落地,prompt 版本化 / 分流现在有落点(配 Langfuse 用)
 
 > 更长的视野:跨 session 记忆(D)与 guardrails(E)是高门槛低频次,P2.1 已经在排期;code-execution 沙箱(G)按需开启。
 

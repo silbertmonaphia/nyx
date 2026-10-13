@@ -28,14 +28,14 @@ Plan-and-Execute 嵌套 ReAct? → 是:`react` step kind 嵌套 model→tool→m
 → planner 结构化输出 + 有界 retry、tool dispatch 分类退避 retry、partial-failure banner 已落地;
 stale-run sweeper 已落地(0a9b8f5);剩余(ReAct 模型调用无 transient retry、cycle detection)见 `AgentFaultTolerance.md` #19
 
-3、可观测性 Observability 🟡
+3、可观测性 Observability ✅
 - 埋点记录 Trace ID
 - 每个 Agent 的 Input/Output
 - Token 消耗
 - 工具调用耗时
 p.s. 可用 OpenTelemetry / Langfuse API
 → OTel spans(trace 与 SPA 经 W3C traceparent 串联)+ Prometheus counters 已有;
-Langfuse 式 prompt/response 级 trace 未做(见 `AgentStack.zh.md` §三-A)
+Langfuse 式 prompt/response 级 trace 已落地(agent-langfuse-tracing):每 run 的 prompt / reply / provider usage / tool span 落自托管 Langfuse(见 `AgentStack.zh.md` §三-A)
 
 ## P2 高级自治: 记忆与自我反思
 1、记忆系统 Cross-Session Memory ⬜
