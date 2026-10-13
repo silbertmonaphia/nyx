@@ -14,7 +14,7 @@
 # requires `go`, `npm`, `python3`, and the `docker compose` plugin on
 # PATH. Backend invocations assume `make up` has been run.
 
-.PHONY: dev dev-backend dev-frontend dev-agent dev-vllm-main dev-vllm-embed dev-infra dev-pgsql-inspect dev-redis-inspect dev-gpu-inspect up down up-vllm down-vllm logs status stop help
+.PHONY: dev dev-backend dev-frontend dev-agent dev-vllm-main dev-vllm-embed dev-infra dev-pgsql-inspect dev-redis-inspect dev-gpu-inspect dev-gpu-watch up down up-vllm down-vllm logs status stop help
 
 COMPOSE := docker compose
 
@@ -108,3 +108,7 @@ dev-redis-inspect:
 #: Show GPU state via nvidia-smi — memory, utilization, and per-process usage (useful to confirm the host vLLM targets freed VRAM).
 dev-gpu-inspect:
 	@PATH="$$PATH:/usr/lib/wsl/lib" nvidia-smi
+
+#: Watch GPU telemetry live — `nvidia-smi dmon` at 1s refresh (power, temp, sm%/VRAM-bandwidth%, clocks, VRAM used). COUNT=<n> takes n samples then exits; DELAY=<s> overrides the interval; Ctrl+C stops.
+dev-gpu-watch:
+	@PATH="$$PATH:/usr/lib/wsl/lib" nvidia-smi dmon -s pucvmet $(if $(DELAY),-d $(DELAY)) $(if $(COUNT),-c $(COUNT))
