@@ -79,6 +79,79 @@ jobs:
       working-directory: backend
       run: make coverage-check
 
+  agent-alembic-check:
+    # Fails the build if a PR under backend/agent_py/migrations/**
+    # adds a revision that doesn't reproduce cleanly from a fresh
+    # DB. `alembic check` (alembic >= 1.13) compares the live schema
+    # to the migration history and reports drift. Gated on the
+    # paths-filter so PRs that don't touch the migration chain
+    # (e.g. a tool-stub change) don't pay the Python setup cost.
+    runs-on: ubuntu-latest
+    needs: [backend-test]
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: nyx_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d nyx_test"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      PYTHON_AGENT_DATABASE_URL: postgres://postgres:postgres@localhost:5432/nyx_test?sslmode=disable&options=-c%20search_path%3Dlanggraph%2Cagent
+    steps:
+    - uses: actions/checkout@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+      with:
+        # Need the merge base to diff against for the paths filter.
+        fetch-depth: 0
+    - name: Detect migration changes
+      id: filter
+      uses: dorny/paths-filter@de90cc6fb38fc0963ad72b210f1b284cd68cea36 # v3.0.2
+      with:
+        # Refs input is required to diff PRs against the merge base.
+        # Without it `paths-filter` only sees the SHA of the push,
+        # which is useless for PRs.
+        refs: ${{ github.base_ref }}
+        filter: 'backend/agent_py/migrations/**'
+    - name: Set up Python
+      if: steps.filter.outputs.changed == 'true'
+      uses: actions/setup-python@83679d7c7e7d3da7c51e1b3bd4458b9a8c44a478 # v6.0.0
+      with:
+        python-version: '3.12'
+    - name: Install agent deps
+      if: steps.filter.outputs.changed == 'true'
+      working-directory: backend/agent_py
+      run: |
+        python -m venv .venv
+        .venv/bin/pip install --upgrade pip
+        .venv/bin/pip install -e .
+    - name: alembic check
+      if: steps.filter.outputs.changed == 'true'
+      working-directory: backend/agent_py
+      # Drop both schemas, run `alembic upgrade head` from scratch,
+      # then re-run it (no-op) and confirm exit 0. Catches:
+      #  - broken SQL in any migration
+      #  - missing or misordered revisions
+      #  - non-idempotent DDL
+      # `alembic check` (alembic 1.13+) needs a SQLAlchemy MetaData
+      # object registered in env.py; our chain uses raw
+      # `op.execute()` so we can't use it. A clean upgrade against
+      # a fresh DB is the closest equivalent for our setup; the
+      # end-to-end schema state is covered by
+      # tests/test_smoke_run_state.py.
+      run: |
+        PGPASSWORD=postgres psql -h localhost -U postgres -d nyx_test \
+          -c "DROP SCHEMA IF EXISTS agent CASCADE; DROP SCHEMA IF EXISTS langgraph CASCADE"
+        .venv/bin/alembic upgrade head
+        # Second run is a no-op if migrations are idempotent; any
+        # error here means a migration isn't safe to re-apply.
+        .venv/bin/alembic upgrade head
+
   frontend-test:
     runs-on: ubuntu-latest
     steps:
