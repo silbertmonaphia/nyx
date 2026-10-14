@@ -29,8 +29,8 @@
 
 ## 5. Go — approval route
 
-- [ ] 5.1 `POST /api/chat/approvals` in `internal/chat`: standard JWT middleware, forward body to `PYTHON_AGENT_URL/agent/approvals` with `X-Nyx-User-Id`, upstream status/body passthrough, fail closed when disabled/unreachable, per-user rate limit, token never logged — verify handler tests for forwarded headers, passthrough, 401 without JWT, agent-down error, and the no-token-in-logs assertion.
-- [ ] 5.2 Wire the route in `cmd/api/main.go` alongside the chat routes — verify `cd backend && go build ./... && go test ./internal/chat/...` pass.
+- [x] 5.1 `POST /api/chat/approvals` in `internal/chat`: standard JWT middleware, forward body to `PYTHON_AGENT_URL/agent/approvals` with `X-Nyx-User-Id`, upstream status/body passthrough, fail closed when disabled/unreachable, per-user rate limit, token never logged — verify handler tests for forwarded headers, passthrough, 401 without JWT, agent-down error, and the no-token-in-logs assertion.
+- [x] 5.2 Wire the route in `cmd/api/main.go` alongside the chat routes — verify `cd backend && go build ./... && go test ./internal/chat/...` pass.
 
 ## 6. Frontend — confirmation affordance
 

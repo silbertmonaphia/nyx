@@ -465,7 +465,23 @@ func mountChatRoute(router chi.Router, cfg *config.Config, db *pgxpool.Pool, fee
 	chatLimiter := chat.NewUserRateLimiter(5.0/60.0, 3)
 	stopGC := chatLimiter.RunGC(time.Minute, time.Hour)
 	chat.RegisterChatRoute(router, chatHandler, tokens, chatLimiter)
-	return stopGC, ragSvc, ragIndexer
+
+	// Approval-decision hop for the agent's confirmation gate
+	// (openspec/changes/agent-feed-tools §5). Dedicated limiter
+	// instance: 30 decisions/min, burst 10 — decisions are cheap
+	// short-lived JSON hops (MCP sizing), and a dedicated bucket keeps
+	// a held chat stream from 429ing the user's own approval (which
+	// would surface as an approval timeout, not an authorization
+	// failure). Registered like the chat routes: standard Bearer
+	// middleware first; 503 inside the handler when AGENT_ENABLED=false.
+	chatApprovalsLimiter := chat.NewUserRateLimiter(30.0/60.0, 10)
+	stopApprovalsGC := chatApprovalsLimiter.RunGC(time.Minute, time.Hour)
+	chat.RegisterApprovalsRoute(router, chatHandler, tokens, chatApprovalsLimiter)
+
+	return func() {
+		stopGC()
+		stopApprovalsGC()
+	}, ragSvc, ragIndexer
 }
 
 // mountRAGFacade builds the RAG stack (embedder / indexer /
