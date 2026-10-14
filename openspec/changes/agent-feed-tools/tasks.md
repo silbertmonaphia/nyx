@@ -42,5 +42,5 @@
 
 - [x] 7.1 Playwright spec `frontend/tests/e2e/chat-feed-approval.spec.ts` with canned SSE fixtures routed into `/api/chat`: approve flow shows the card → posts the decision → renders the continued stream; deny flow shows no mutation; `list_feeds` renders with no card — verify `cd frontend && npm run test:e2e` passes.
 - [ ] 7.2 Live dev-stack smoke (header-documented in the spec): `make up` + `make dev` with MCP enabled, ask the chat to create a feed, approve in the browser, confirm the feed appears on the feeds page; record the observed result in this change — verify the recorded steps match the shipped UI.
-- [ ] 7.3 Update `FUTURE_AGENT.md` to mark the feed-tool planner awareness + approval gate as landed (with the flag prerequisites) — verify the entry matches the implemented behavior.
+- [x] 7.3 Update `FUTURE_AGENT.md` to mark the feed-tool planner awareness + approval gate as landed (with the flag prerequisites) — verify the entry matches the implemented behavior.
 - [ ] 7.4 Full-suite gate: `cd backend && go test ./...`, `golangci-lint run --timeout=5m`, agent pytest suite, and the frontend suites — verify all green (note in this change if the environment forces `SKIP_CONTAINERS=true`).

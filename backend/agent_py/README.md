@@ -49,11 +49,17 @@ flowchart TB
   Langfuse LLM tracing.
 - **Optional web tools, off by default** — agent-native `web_search` (Tavily, keyless tier
   works with no account) and SSRF-guarded `web_fetch` with untrusted-content framing.
+- **Feed tools with confirmation** — the planner sees the live MCP registry (feed CRUD);
+  non-read-only calls pause the run on an in-chat approve/deny card (`confirm_request`).
 
 ## Endpoints
 
 - `POST /agent/run` — `{messages, agent?, model?, run_id?}` in, SSE out (`plan`, `step_start`,
-  `tool_call`, `tool_result`, `step_end`, `delta`, `done`, `note`, `error`, `terminator`).
+  `tool_call`, `tool_result`, `step_end`, `delta`, `done`, `note`, `error`, `terminator`,
+  `confirm_request`).
+- `POST /agent/approvals` — `{run_id, approval_id, decision}`; records an approve/deny for a
+  paused mutating-call confirmation (see the `confirm_request` frame). Owner-scoped via
+  `X-Nyx-User-Id`.
 - `GET /healthz` — `200 {"status":"ok"}` when Redis is reachable; 503 otherwise.
 - `GET /metrics` — Prometheus counters on :9001.
 
@@ -102,6 +108,7 @@ Common flags:
 | `PYTHON_AGENT_WEB_FETCH_ENABLED` / `WEB_SEARCH_ENABLED` | `false` | Agent-native web tools; search runs keyless without `TAVILY_API_KEY` |
 | `PYTHON_AGENT_SWEEP_ENABLED` | `true` | Stale-run reaper kill switch |
 | `PYTHON_AGENT_LANGFUSE_ENABLED` | `false` | LLM-level traces to a Langfuse instance |
+| `PYTHON_AGENT_APPROVAL_TTL_SECONDS` | `300` | Wall-clock window a mutating-call confirmation stays open before it closes as denied |
 
 Every knob, default, and rationale → [`README_ALL.md`](README_ALL.md).
 

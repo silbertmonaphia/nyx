@@ -135,6 +135,10 @@ Recommendation: the second. Each step has a stable `id` so SSE frames can be cor
 
 - [x] **`web_fetch` + `web_search`** — agent-native tools dispatched through the executor's existing retry funnel (SSRF-guarded fetch with dial pinning; Brave-backed search). Default off via `PYTHON_AGENT_WEB_FETCH_ENABLED` / `PYTHON_AGENT_WEB_SEARCH_ENABLED` (search needs `PYTHON_AGENT_BRAVE_API_KEY`). Deliberately NOT in the Go MCP registry — egress stays inside the Python orchestrator (see the change's `design.md` » Spec overlap for the `agent-tool-registry` boundary note).
 
+### 2.4 Feed tools in the planner + confirmation gate — **landed in `openspec/changes/agent-feed-tools/`**
+
+- [x] **MCP feed tools become agent-visible** — the Python agent normalizes the Go MCP registry's `tools/list` schemas at the dispatcher boundary (`inputSchema` → the bound function's `parameters`; annotations on a side map), advertises the live registry surface to the planner in a "Registry tools available" block (omitted — prompt byte-identical — when the list fails or is empty), and gates every non-read-only registry call behind an in-chat approve/deny card: the run pauses inside the same SSE stream (`confirm_request` frame) until the decision lands in a Redis-brokered store (`POST /api/chat/approvals` → `POST /agent/approvals`), so a decision recorded on any replica resolves the waiting run. Deny / TTL expiry / broker outage all close as model-visible denials — never auto-approve. Rides the existing `MCP_ENABLED` gate (no new agent flag); `PYTHON_AGENT_APPROVAL_TTL_SECONDS` (default 300) tunes the window.
+
 ---
 
 ## Risks (drives verification gates)
