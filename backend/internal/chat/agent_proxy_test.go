@@ -74,7 +74,7 @@ const cannedSSE = "event: plan\n" +
 
 func TestAgentProxy_Run_ForwardsRequestBody(t *testing.T) {
 	srv, captured := newUpstreamServer(t, http.StatusOK, cannedSSE, "text/event-stream; charset=utf-8")
-	proxy, err := NewAgentProxy(srv.URL, nil, 0)
+	proxy, err := NewAgentProxy(srv.URL, nil)
 	require.NoError(t, err)
 
 	resp, err := proxy.Run(context.Background(), ChatRequest{
@@ -106,7 +106,7 @@ func TestAgentProxy_Run_ForwardsRequestBody(t *testing.T) {
 // upstream bytes verbatim.
 func TestAgentProxy_Run_ReturnsBodyBytesForHandlerToForward(t *testing.T) {
 	srv, _ := newUpstreamServer(t, http.StatusOK, cannedSSE, "text/event-stream; charset=utf-8")
-	proxy, err := NewAgentProxy(srv.URL, nil, 0)
+	proxy, err := NewAgentProxy(srv.URL, nil)
 	require.NoError(t, err)
 
 	resp, err := proxy.Run(context.Background(), ChatRequest{
@@ -136,7 +136,7 @@ func TestAgentProxy_Run_ConnectionRefused_ReturnsErrAgentUnavailable(t *testing.
 	url := srv.URL
 	srv.Close() // listener gone — dial will fail
 
-	proxy, err := NewAgentProxy(url, nil, 0)
+	proxy, err := NewAgentProxy(url, nil)
 	require.NoError(t, err)
 
 	resp, err := proxy.Run(context.Background(), ChatRequest{}, 42, "Bearer t")
@@ -157,7 +157,7 @@ func TestAgentProxy_Run_5xx_ReturnsErrAgentUnavailable(t *testing.T) {
 	for _, status := range []int{500, 502, 503, 504} {
 		t.Run(http.StatusText(status), func(t *testing.T) {
 			srv, _ := newUpstreamServer(t, status, "internal error", "text/plain")
-			proxy, err := NewAgentProxy(srv.URL, nil, 0)
+			proxy, err := NewAgentProxy(srv.URL, nil)
 			require.NoError(t, err)
 
 			resp, err := proxy.Run(context.Background(), ChatRequest{}, 42, "Bearer t")
@@ -184,7 +184,7 @@ func TestAgentProxy_Run_4xx_ReturnsResponseForByteForByteForward(t *testing.T) {
 		t.Run(http.StatusText(status), func(t *testing.T) {
 			body := `{"error":"unauthorized"}`
 			srv, _ := newUpstreamServer(t, status, body, "application/json")
-			proxy, err := NewAgentProxy(srv.URL, nil, 0)
+			proxy, err := NewAgentProxy(srv.URL, nil)
 			require.NoError(t, err)
 
 			resp, err := proxy.Run(context.Background(), ChatRequest{}, 42, "Bearer t")
@@ -206,7 +206,7 @@ func TestAgentProxy_Run_4xx_ReturnsResponseForByteForByteForward(t *testing.T) {
 // the SSE body intact.
 func TestAgentProxy_Run_2xx_ReturnsResponse(t *testing.T) {
 	srv, _ := newUpstreamServer(t, http.StatusOK, cannedSSE, "text/event-stream")
-	proxy, err := NewAgentProxy(srv.URL, nil, 0)
+	proxy, err := NewAgentProxy(srv.URL, nil)
 	require.NoError(t, err)
 
 	resp, err := proxy.Run(context.Background(), ChatRequest{}, 42, "Bearer t")
@@ -232,7 +232,7 @@ func TestAgentProxy_Run_CtxCanceled_NetworkError(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	proxy, err := NewAgentProxy(srv.URL, &http.Client{Timeout: 50 * time.Millisecond}, 0)
+	proxy, err := NewAgentProxy(srv.URL, &http.Client{Timeout: 50 * time.Millisecond})
 	require.NoError(t, err)
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -254,8 +254,30 @@ func TestAgentProxy_Run_CtxCanceled_NetworkError(t *testing.T) {
 // constructor refuses rather than silently building a proxy that
 // would always fail with ErrAgentUnavailable.
 func TestNewAgentProxy_RejectsEmptyBaseURL(t *testing.T) {
-	_, err := NewAgentProxy("", nil, 0)
+	_, err := NewAgentProxy("", nil)
 	require.Error(t, err)
+}
+
+// TestNewAgentProxy_DefaultClientCarriesNoStreamTimeout pins the
+// anti-footgun contract from the 2026-10-14 60s-cut incident: the
+// proxy's client must NOT carry an http.Client.Timeout (Client.Timeout
+// bounds the entire exchange INCLUDING the streamed body, so it
+// severs any live run that outlives it — mid-approval, with no
+// terminal frames). The default client instead carries a
+// ResponseHeaderTimeout so a wedged upstream fails fast without
+// touching a live stream.
+func TestNewAgentProxy_DefaultClientCarriesNoStreamTimeout(t *testing.T) {
+	proxy, err := NewAgentProxy("http://agent.test", nil)
+	require.NoError(t, err)
+	require.NotNil(t, proxy.httpClient)
+
+	assert.Zero(t, proxy.httpClient.Timeout,
+		"http.Client.Timeout must stay unset on the SSE proxy client")
+
+	tr, ok := proxy.httpClient.Transport.(*http.Transport)
+	require.True(t, ok, "default client must sit on an *http.Transport (clone)")
+	assert.Equal(t, 30*time.Second, tr.ResponseHeaderTimeout,
+		"default client must fail fast on a wedged upstream's headers")
 }
 
 // TestNewAgentProxy_TrimsTrailingSlash pins the URL normalisation:
@@ -264,7 +286,7 @@ func TestNewAgentProxy_RejectsEmptyBaseURL(t *testing.T) {
 // doubled "//" path on the outbound URL.
 func TestNewAgentProxy_TrimsTrailingSlash(t *testing.T) {
 	srv, captured := newUpstreamServer(t, http.StatusOK, cannedSSE, "text/event-stream")
-	proxy, err := NewAgentProxy(srv.URL+"/", nil, 0) // trailing slash
+	proxy, err := NewAgentProxy(srv.URL+"/", nil) // trailing slash
 	require.NoError(t, err)
 
 	resp, err := proxy.Run(context.Background(), ChatRequest{}, 42, "Bearer t")

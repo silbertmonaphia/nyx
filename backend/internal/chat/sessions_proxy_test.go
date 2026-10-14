@@ -2,7 +2,9 @@ package chat
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -10,6 +12,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -100,7 +103,7 @@ func (u *sessionUpstream) snapshot() (capturedSessionRequest, int) {
 // the whole setup a session test needs.
 func mustAgentProxy(t *testing.T, baseURL string) *AgentProxy {
 	t.Helper()
-	proxy, err := NewAgentProxy(baseURL, nil, 0)
+	proxy, err := NewAgentProxy(baseURL, nil)
 	require.NoError(t, err)
 	return proxy
 }
@@ -291,6 +294,53 @@ func TestSessionsRoutes_AgentDisabled_Returns503(t *testing.T) {
 				"details is the static safe literal explaining the agent is disabled")
 			assert.NotEmpty(t, env.RequestID, "the envelope carries the request id for log correlation")
 		})
+	}
+}
+
+// TestSessionsProxy_ForwardBoundedBySessionsTimeout pins the
+// non-streaming hops' time bound. Production reuses the AgentProxy's
+// SSE client, which carries NO http.Client.Timeout (the 2026-10-14
+// incident fix) — without Forward's own context deadline a stalled
+// agent body would hold session/approvals requests, their connection,
+// and their limiter slots indefinitely. The cap is shrunk so the test
+// does not pay 30s of wall clock.
+func TestSessionsProxy_ForwardBoundedBySessionsTimeout(t *testing.T) {
+	orig := defaultSessionsTimeout
+	defaultSessionsTimeout = 50 * time.Millisecond
+	t.Cleanup(func() { defaultSessionsTimeout = orig })
+
+	upstreamCanceled := make(chan struct{})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		<-r.Context().Done() // accept, then never respond
+		close(upstreamCanceled)
+	}))
+	t.Cleanup(srv.Close)
+
+	// Mirror production wiring: the shared client has no Timeout.
+	proxy, err := NewSessionsProxy(srv.URL, &http.Client{})
+	require.NoError(t, err)
+
+	start := time.Now()
+	resp, err := proxy.Forward(context.Background(), sessionProxyRequest{
+		method: http.MethodGet,
+		path:   sessionsBasePath,
+		userID: 1,
+	})
+	if resp != nil {
+		_ = resp.Body.Close()
+	}
+	elapsed := time.Since(start)
+
+	require.Error(t, err, "a stalled upstream must not satisfy the call")
+	assert.Less(t, elapsed, 5*time.Second,
+		"Forward's context deadline must bound the call, not a client Timeout that no longer exists")
+	assert.True(t, errors.Is(err, context.DeadlineExceeded),
+		"the bound is a deadline (seen through the proxy's %w wrap); got %v", err)
+
+	select {
+	case <-upstreamCanceled:
+	case <-time.After(2 * time.Second):
+		t.Fatal("upstream request was not canceled when the cap fired")
 	}
 }
 
@@ -485,7 +535,7 @@ func TestNewSessionsProxy_TrimsTrailingSlash(t *testing.T) {
 func TestSessionsRoutes_DerivedFromAgentProxy(t *testing.T) {
 	var seen atomic.Int32
 	srv, _ := newSessionUpstream(t, http.StatusOK, `{"sessions":[]}`)
-	proxy, err := NewAgentProxy(srv.URL, &http.Client{Transport: roundTripRecorder{seen: &seen}}, 0)
+	proxy, err := NewAgentProxy(srv.URL, &http.Client{Transport: roundTripRecorder{seen: &seen}})
 	require.NoError(t, err)
 
 	harness, tokens := newSessionsHarness(t, proxy, nil)

@@ -142,6 +142,17 @@ func (s *Service) Proxy() *AgentProxy {
 	return s.proxy
 }
 
+// MaxStreamDuration returns the wall-clock cap on a single chat
+// stream (LLM_MAX_STREAM_DURATION). The legacy path applies it
+// inside Chat; the agent path applies it in the handler as the
+// deadline on the upstream request context — the proxy's HTTP
+// client must never carry an http.Client.Timeout (it would cut the
+// streamed body at the same bound but WITHOUT the terminal frames
+// and without the client-disconnect semantics).
+func (s *Service) MaxStreamDuration() time.Duration {
+	return s.maxStreamDur
+}
+
 // Run is preserved as a thin shim for the legacy agent test
 // surface (and any future internal caller). It returns
 // ErrAgentNotEnabled because the Go-side planner/executor was

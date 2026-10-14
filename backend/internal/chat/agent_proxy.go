@@ -61,6 +61,13 @@ type AgentProxy struct {
 	httpClient *http.Client
 }
 
+// defaultResponseHeaderTimeout bounds how long the transport waits
+// for the agent's response HEADERS on the default client. The agent
+// writes its SSE headers in well under a second (the first frame is
+// the run id, emitted before any model call), so this only fires on
+// a wedged upstream — it never touches the streamed body itself.
+const defaultResponseHeaderTimeout = 30 * time.Second
+
 // NewAgentProxy builds a proxy that posts to baseURL + runPath.
 // baseURL is required (an empty PYTHON_AGENT_URL at boot time
 // means the operator has not configured the agent path; the
@@ -68,25 +75,34 @@ type AgentProxy struct {
 // only called when the operator explicitly opted in).
 //
 // httpClient is supplied by the caller so test code can plug in
-// a controlled transport. Production wiring uses a wrapped
-// transport with OpenTelemetry http instrumentation; tests pass
-// http.DefaultTransport or an httptest.Server's URL via a custom
-// RoundTripper.
+// a controlled transport; nil builds a default one. Production
+// wiring passes nil.
 //
-// timeout caps the per-request socket deadline (default 60s —
-// long enough for a multi-step run to complete but short enough
-// that a wedged upstream doesn't leak a goroutine forever). The
-// handler wraps the call in a request-scoped context that
-// cancels on client disconnect; this timeout is the upper bound.
-func NewAgentProxy(baseURL string, httpClient *http.Client, timeout time.Duration) (*AgentProxy, error) {
+// The client MUST NOT carry an http.Client.Timeout. Client.Timeout
+// covers the ENTIRE exchange — response headers AND reading the
+// body — and the agent answers with a long-lived SSE stream, so a
+// set Timeout truncates every run that outlives it mid-stream with
+// no terminal frame (the 2026-10-14 incident: the 60s production
+// client severed a run waiting on an approval at t+61.8s,
+// observed on the wire as keep-alive frames followed by a dead
+// connection). The bound on a stream is the CALLER'S request
+// context — the handler derives it from LLM_MAX_STREAM_DURATION —
+// which also keeps the cancel-on-client-disconnect semantics; the
+// default client adds only a ResponseHeaderTimeout so a wedged
+// upstream fails fast instead of holding the request open for the
+// full stream cap.
+func NewAgentProxy(baseURL string, httpClient *http.Client) (*AgentProxy, error) {
 	if baseURL == "" {
 		return nil, errors.New("chat: PYTHON_AGENT_URL is empty")
 	}
 	if httpClient == nil {
-		if timeout <= 0 {
-			timeout = 60 * time.Second
+		transport := http.DefaultTransport
+		if t, ok := transport.(*http.Transport); ok {
+			clone := t.Clone()
+			clone.ResponseHeaderTimeout = defaultResponseHeaderTimeout
+			transport = clone
 		}
-		httpClient = &http.Client{Timeout: timeout}
+		httpClient = &http.Client{Transport: transport}
 	}
 	return &AgentProxy{
 		baseURL:    strings.TrimRight(baseURL, "/"),

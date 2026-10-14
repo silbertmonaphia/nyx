@@ -329,7 +329,7 @@ async def _run_react(
     else:
         client = base_client
 
-    messages = [SystemMessage(content=step.prompt or "")]
+    messages = [SystemMessage(content=_react_instruction(step))]
     context = _render_prior_data(state, step.id)
     if context:
         messages.append(SystemMessage(content=context))
@@ -404,6 +404,40 @@ async def _run_react(
 
 
 # --- helpers -------------------------------------------------------------
+
+
+# Fallback objective for a react step whose planner omitted `prompt`
+# (the 2026-10-14 "ReAct step exceeded iteration cap" incident: the
+# planner emitted `{"kind": "react", "tool": "list_feeds",
+# "max_iterations": 3}` — the shape the prompt advertised — with no
+# prompt. The loop bound ALL tools against an EMPTY system message, so
+# the model had no objective and no stop rule: it re-called list_feeds
+# every iteration until the cap failed the step and surfaced the
+# confusing error to the user). The stop rule is the load-bearing half:
+# without an explicit "answer without more tool calls" instruction a
+# small model keeps calling tools it already has results for.
+_REACT_FALLBACK_INSTRUCTION = (
+    "Complete this plan step for the user's most recent request. "
+    "Call tools while you still need data. When you have what you need, "
+    "reply with the final text for this step WITHOUT calling any more "
+    "tools, and do not repeat a tool call whose result you already have."
+)
+
+
+def _react_instruction(step) -> str:
+    """The react loop's system instruction: the planner's `prompt`, or a
+    synthesized objective + stop rule when the planner omitted it (the
+    planner schema does not require a prompt on react steps, so real
+    plans routinely omit it — see `_REACT_FALLBACK_INSTRUCTION`). The
+    step's declared `tool` rides along as a hint: the planner set it
+    intending that tool, and nothing downstream used it before.
+    """
+    if step.prompt:
+        return step.prompt
+    instruction = _REACT_FALLBACK_INSTRUCTION
+    if step.tool:
+        instruction += f" The plan assigned this step to the `{step.tool}` tool."
+    return instruction
 
 
 class _BudgetExceededError(Exception):

@@ -64,7 +64,7 @@ PLANNER_SYSTEM_PROMPT = """You are a planner that decomposes a user's chat reque
 - rag:    vector retrieval over the user's feed corpus; { query: <str> }
 - tool:   call a registered tool by name; { tool: <name>, args: <object> }
 - llm:    a single LLM completion; { prompt: <str> }
-- react:  a nested model-tool-model loop, capped by max_iterations; { tool: <name>, args: <object>, max_iterations: <int> }
+- react:  a nested model-tool loop that ends when the model writes its result text, capped by max_iterations; { prompt: <objective>, max_iterations: <int> }
 
 Return ONLY a JSON object matching this schema:
 {{"steps": [{{"id": "<step_id>", "kind": "rag|tool|llm|react", "tool": "<name>", "args": {{...}}, "prompt": "<text>", "query": "<text>", "max_iterations": <int>}}, ...]}}
@@ -73,6 +73,7 @@ Rules:
 - step `id` MUST be unique within the plan and stable across the run
 - plan for only the MOST RECENT user message; earlier messages are context, never re-answer them
 - `rag` and `tool` steps gather data and emit NO user-visible text; the plan MUST end with an `llm` step that writes the final answer using the data gathered by earlier steps
+- a `react` step MUST carry a `prompt` stating its objective — it is the loop's system instruction, and the text the loop writes is user-visible
 - the plan MUST contain at least one step; for greetings, small talk, or anything needing no retrieval or tools, emit exactly one `llm` step that answers the user
 - prefer the minimum number of steps; don't insert filler
 - use `rag` only when the request is clearly about the user's own data

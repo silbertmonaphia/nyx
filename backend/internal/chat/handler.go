@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 
 	"github.com/go-chi/chi/v5"
 
@@ -345,8 +346,31 @@ func (h *Handler) streamProxy(w http.ResponseWriter, r *http.Request, req ChatRe
 	// The Go proxy MUST NOT mint a service-to-service token, MUST
 	// NOT re-validate, MUST NOT log the value.
 	bearer := r.Header.Get("Authorization")
-	resp, err := h.service.Proxy().Run(r.Context(), req, userID, bearer)
+
+	// Wall-clock bound on the upstream stream — the same
+	// LLM_MAX_STREAM_DURATION cap the legacy path applies inside
+	// Service.Chat. The deadline rides the request-derived context,
+	// so a client disconnect still cancels immediately; it exists
+	// so a live-but-stuck upstream cannot hold the request open
+	// forever. Deliberately NOT an http.Client.Timeout on the
+	// proxy's client: that would cut the body at the same bound
+	// but without the terminal frames below (2026-10-14 incident).
+	ctx, cancel := context.WithTimeout(r.Context(), h.service.MaxStreamDuration())
+	defer cancel()
+
+	resp, err := h.service.Proxy().Run(ctx, req, userID, bearer)
 	if err != nil {
+		if errors.Is(ctx.Err(), context.DeadlineExceeded) && r.Context().Err() == nil {
+			// The cap expired before the upstream produced its
+			// headers; AgentProxy collapses that transport error
+			// into ErrAgentUnavailable, which would mislabel a
+			// Go-side timeout as an agent outage. Same user story
+			// as a mid-stream cut: the stream exceeded its time
+			// limit.
+			api.ClassifyAndLog(r.Context(), ctx.Err(), "Agent request exceeded the stream duration cap")
+			emitStreamTimeout(fw, r.Context())
+			return
+		}
 		// Fail closed per the spec requirement "Python service
 		// unavailable fails closed": emit error + done + terminator
 		// and return. The HTTP status is already 200 (SSE envelope
@@ -361,7 +385,25 @@ func (h *Handler) streamProxy(w http.ResponseWriter, r *http.Request, req ChatRe
 	// Copy the upstream response body byte-for-byte. Each read
 	// is flushed so the SPA sees SSE chunks in real time rather
 	// than after the upstream closes its TCP connection.
-	if err := copyAndFlush(fw, resp.Body); err != nil {
+	if sawTerminal, err := copyAndFlush(fw, resp.Body); err != nil {
+		if sawTerminal {
+			// The upstream already forwarded its own terminal
+			// frames; the read error after them (typically our
+			// deadline landing inside the agent's post-terminator
+			// finalize) is not user-visible — the SPA stopped
+			// reading at `done`. Appending anything here would
+			// double-terminate the wire.
+			return
+		}
+		if errors.Is(err, context.DeadlineExceeded) && r.Context().Err() == nil {
+			// OUR stream-duration cap cut a still-live upstream:
+			// the Python side never emitted its own terminator, so
+			// close the wire contract here instead of leaving the
+			// client on a silently dead connection.
+			api.ClassifyAndLog(r.Context(), err, "Agent SSE stream exceeded the stream duration cap")
+			emitStreamTimeout(fw, r.Context())
+			return
+		}
 		// Log the read/write failure but DO NOT translate to
 		// an SSE frame — the Python stream may already have
 		// emitted its own terminator; appending another typed
@@ -396,27 +438,82 @@ func emitAgentUnavailable(fw *flushingWriter, ctx context.Context) {
 	_ = fw.Flush()
 }
 
+// emitStreamTimeout writes the terminal SSE frames when the Go-side
+// stream-duration cap (LLM_MAX_STREAM_DURATION) cuts an upstream
+// stream that was still live. The Python agent never got to emit its
+// own terminator — the request context that bounds the upstream
+// closed first — so without these frames the client is left on a
+// silently dead connection with no done, no error, and no terminator
+// (the 2026-10-14 60s-cut incident, where the proxy client's own
+// Timeout severed the stream). This is a deliberate exception to the
+// chat-agent-proxy byte-for-byte forwarding requirement: the agent
+// spec (`openspec/specs/agent-python-service/spec.md`) allows the
+// error frame to carry new codes, and the SPA parser passes any code
+// string through generically.
+func emitStreamTimeout(fw *flushingWriter, ctx context.Context) {
+	_ = writeSSEEvent(fw, "error", map[string]string{
+		"error":      "Agent stream exceeded the time limit",
+		"code":       "stream_timeout",
+		"request_id": reqctx.RequestIDFromContext(ctx),
+	})
+	_ = fw.Flush()
+	_ = writeSSEEvent(fw, "done", map[string]any{})
+	_ = fw.Flush()
+	_ = writeSSEEvent(fw, "terminator", map[string]string{
+		"reason": "stream_timeout",
+	})
+	_ = fw.Flush()
+}
+
+// terminalFrameMarkers are the wire prefixes that signal the upstream
+// began closing the stream cleanly. They are searched in the bytes
+// copyAndFlush forwards so the deadline branch knows the upstream's
+// own terminal frames already reached the client (see
+// `sawTerminalFrame`).
+var terminalFrameMarkers = []string{"event: done", "event: terminator", "data: [DONE]"}
+
 // copyAndFlush reads from src in 4 KiB chunks and writes each chunk
 // to dst, flushing after every write so the SSE bytes reach the
 // client immediately rather than buffering in chi's
-// WrapResponseWriter. Returns the first non-EOF error.
-func copyAndFlush(dst *flushingWriter, src io.Reader) error {
+// WrapResponseWriter. Returns the first non-EOF error, plus whether
+// the bytes forwarded so far contained a terminal SSE frame — the
+// Python agent keeps the body open after its terminator while it
+// persists the run's rows, so a deadline that lands in that window
+// must NOT append a second terminal trio (see the deadline branch in
+// streamProxy). Markers can straddle a chunk boundary, so the tail
+// of each chunk carries into the next scan.
+func copyAndFlush(dst *flushingWriter, src io.Reader) (sawTerminal bool, err error) {
 	buf := make([]byte, 4096)
+	// carrier keeps the last few bytes of the previous chunk so a
+	// marker split across reads is still matched (longest marker is
+	// len("event: terminator") = 17; 32 bytes is comfortably above).
+	var carrier []byte
 	for {
 		n, rerr := src.Read(buf)
 		if n > 0 {
-			if _, werr := dst.Write(buf[:n]); werr != nil {
-				return werr
+			chunk := buf[:n]
+			if !sawTerminal {
+				scan := string(append(append([]byte{}, carrier...), chunk...))
+				for _, marker := range terminalFrameMarkers {
+					if strings.Contains(scan, marker) {
+						sawTerminal = true
+						break
+					}
+				}
+				carrier = chunk[max(0, len(chunk)-32):]
+			}
+			if _, werr := dst.Write(chunk); werr != nil {
+				return sawTerminal, werr
 			}
 			if ferr := dst.Flush(); ferr != nil {
-				return ferr
+				return sawTerminal, ferr
 			}
 		}
 		if rerr != nil {
 			if rerr == io.EOF {
-				return nil
+				return sawTerminal, nil
 			}
-			return rerr
+			return sawTerminal, rerr
 		}
 	}
 }

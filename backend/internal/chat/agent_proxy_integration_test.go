@@ -107,7 +107,7 @@ func newProxyHarness(t *testing.T, proxy *AgentProxy) (http.Handler, auth.TokenS
 func TestAgentProxy_Integration_HandlerForwardsPythonBytesByteForByte(t *testing.T) {
 	srv, lastAuth, lastUserID := cannedPythonSSEUpstream(t, cannedPythonSSEBytes)
 
-	proxy, err := NewAgentProxy(srv.URL, nil, 0)
+	proxy, err := NewAgentProxy(srv.URL, nil)
 	require.NoError(t, err)
 
 	harness, tokens := newProxyHarness(t, proxy)
@@ -165,7 +165,7 @@ func TestAgentProxy_Integration_FailClosedOnConnectionRefused(t *testing.T) {
 	deadURL := deadSrv.URL
 	deadSrv.Close()
 
-	proxy, err := NewAgentProxy(deadURL, nil, 0)
+	proxy, err := NewAgentProxy(deadURL, nil)
 	require.NoError(t, err)
 
 	harness, tokens := newProxyHarness(t, proxy)
@@ -238,7 +238,7 @@ func TestAgentProxy_Integration_FailClosedOnPython5xx(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	proxy, err := NewAgentProxy(srv.URL, nil, 0)
+	proxy, err := NewAgentProxy(srv.URL, nil)
 	require.NoError(t, err)
 
 	harness, tokens := newProxyHarness(t, proxy)
@@ -291,7 +291,7 @@ func TestAgentProxy_Integration_MultiFrameUpstreamStreamed(t *testing.T) {
 
 	srv, _, _ := cannedPythonSSEUpstream(t, body)
 
-	proxy, err := NewAgentProxy(srv.URL, nil, 0)
+	proxy, err := NewAgentProxy(srv.URL, nil)
 	require.NoError(t, err)
 	harness, tokens := newProxyHarness(t, proxy)
 	server := httptest.NewServer(harness)
@@ -321,6 +321,163 @@ func TestAgentProxy_Integration_MultiFrameUpstreamStreamed(t *testing.T) {
 		}
 	}
 	assert.Equal(t, 5, deltaCount, "5 delta frames in the upstream must reach the client")
+}
+
+// TestAgentProxy_Integration_StreamCapCutEmitsTypedTerminalFrames
+// regression-pins the 2026-10-14 60s-cut incident: a live upstream
+// stream must be bounded by LLM_MAX_STREAM_DURATION (the handler's
+// request-context deadline), and when that cap cuts a still-live
+// stream the client must see typed terminal frames — error
+// {code:"stream_timeout"} + done + terminator — instead of a
+// silently dead connection.
+//
+// Red-first posture: before the fix the stream was bounded by the
+// proxy client's 60s http.Client.Timeout (which cannot emit
+// frames), so the body read below stayed open far past the 5s
+// assertion. A wedged upstream (headers sent, then silence) is the
+// minimal trigger.
+func TestAgentProxy_Integration_StreamCapCutEmitsTypedTerminalFrames(t *testing.T) {
+	upstreamCanceled := make(chan struct{})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream; charset=utf-8")
+		w.WriteHeader(http.StatusOK)
+		// One frame reaches the client, then the stream goes
+		// silent-but-live until the handler's cap cuts it.
+		_, _ = io.WriteString(w, "event: delta\ndata: {\"delta\":\"hel\"}\n\n")
+		if f, ok := w.(http.Flusher); ok {
+			f.Flush()
+		}
+		<-r.Context().Done()
+		close(upstreamCanceled)
+	}))
+	defer srv.Close()
+
+	proxy, err := NewAgentProxy(srv.URL, nil)
+	require.NoError(t, err)
+
+	// 200ms stream cap: the handler must cut the silent stream
+	// promptly and close the wire contract with typed frames.
+	cfg := &config.Config{
+		LLMMaxHistoryMessages: 5,
+		LLMMaxMessageChars:    50,
+		LLMMaxTokens:          100,
+		LLMMaxStreamDuration:  "200ms",
+	}
+	tracer := noop.NewTracerProvider().Tracer("test")
+	svc := NewServiceWithProxy(&llmProviderUnused{}, cfg, tracer, proxy)
+	harness, tokens := buildRouter(t, svc, nil)
+	server := httptest.NewServer(harness)
+	defer server.Close()
+
+	req, err := http.NewRequest(http.MethodPost, server.URL+"/api/chat",
+		bytes.NewReader(chatRequest(Message{Role: RoleUser, Content: "hi"})))
+	require.NoError(t, err)
+	req.Header.Set("Authorization", "Bearer "+bearerToken(t, tokens))
+	req.Header.Set("Content-Type", "application/json")
+
+	start := time.Now()
+	resp, err := server.Client().Do(req)
+	require.NoError(t, err)
+	defer func() { _ = resp.Body.Close() }()
+
+	body, err := io.ReadAll(resp.Body)
+	require.NoError(t, err)
+	elapsed := time.Since(start)
+
+	assert.Less(t, elapsed, 5*time.Second,
+		"the cap must cut the stream promptly, not at a client-side default timeout")
+	got := string(body)
+	assert.Contains(t, got, `event: delta`,
+		"frames forwarded before the cut must reach the client verbatim")
+	assert.Contains(t, got, `"code":"stream_timeout"`,
+		"the cut must be surfaced as a typed error frame")
+	assert.Contains(t, got, "event: done")
+	assert.Contains(t, got, "event: terminator")
+
+	frames := readSSEFrames(t, strings.NewReader(got))
+	var sawError, sawDone, sawTerminator bool
+	for _, f := range frames {
+		switch f.event {
+		case eventNameError:
+			sawError = true
+			assert.Contains(t, f.data, `"error":"Agent stream exceeded the time limit"`,
+				"the error detail is the static, safe-to-ship message")
+		case eventNameDone:
+			sawDone = true
+		case eventNameTerminator:
+			sawTerminator = true
+			assert.Contains(t, f.data, `"reason":"stream_timeout"`)
+		}
+	}
+	assert.True(t, sawError && sawDone && sawTerminator,
+		"error + done + terminator must all be present; got: %s", got)
+
+	select {
+	case <-upstreamCanceled:
+	case <-time.After(2 * time.Second):
+		t.Fatal("upstream request was not canceled when the cap cut the stream")
+	}
+}
+
+// TestAgentProxy_Integration_StreamCapAfterUpstreamTerminalEmitsNothing
+// pins the deadline branch's guard against double-terminating the
+// wire: the Python agent keeps the response body open AFTER its own
+// terminal frames while it persists the run's rows, so a cap that
+// fires inside that window must append nothing — the upstream bytes
+// are the whole response, and the SPA stopped reading at `done`
+// anyway.
+func TestAgentProxy_Integration_StreamCapAfterUpstreamTerminalEmitsNothing(t *testing.T) {
+	upstream := "event: delta\n" +
+		`data: {"delta":"hi"}` + "\n\n" +
+		"event: done\n" +
+		"data: {}\n\n" +
+		"event: " + eventNameTerminator + "\n" +
+		`data: {"reason":""}` + "\n\n"
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream; charset=utf-8")
+		w.WriteHeader(http.StatusOK)
+		_, _ = io.WriteString(w, upstream)
+		if f, ok := w.(http.Flusher); ok {
+			f.Flush()
+		}
+		// Hold the body open (the agent's post-terminator finalize
+		// window) until the handler's cap cuts it.
+		<-r.Context().Done()
+	}))
+	defer srv.Close()
+
+	proxy, err := NewAgentProxy(srv.URL, nil)
+	require.NoError(t, err)
+
+	cfg := &config.Config{
+		LLMMaxHistoryMessages: 5,
+		LLMMaxMessageChars:    50,
+		LLMMaxTokens:          100,
+		LLMMaxStreamDuration:  "200ms",
+	}
+	tracer := noop.NewTracerProvider().Tracer("test")
+	svc := NewServiceWithProxy(&llmProviderUnused{}, cfg, tracer, proxy)
+	harness, tokens := buildRouter(t, svc, nil)
+	server := httptest.NewServer(harness)
+	defer server.Close()
+
+	req, err := http.NewRequest(http.MethodPost, server.URL+"/api/chat",
+		bytes.NewReader(chatRequest(Message{Role: RoleUser, Content: "hi"})))
+	require.NoError(t, err)
+	req.Header.Set("Authorization", "Bearer "+bearerToken(t, tokens))
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := server.Client().Do(req)
+	require.NoError(t, err)
+	defer func() { _ = resp.Body.Close() }()
+
+	body, err := io.ReadAll(resp.Body)
+	require.NoError(t, err)
+	assert.Equal(t, upstream, string(body),
+		"nothing may be appended after the upstream's own terminal frames")
+	assert.NotContains(t, string(body), "stream_timeout",
+		"a run that closed its own stream is not a timeout")
 }
 
 // llmProviderUnused is a stand-in llm.Provider used because

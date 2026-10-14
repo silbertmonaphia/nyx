@@ -48,12 +48,19 @@ import (
 // the mapping is one-for-one with no renaming.
 const sessionsBasePath = "/agent/sessions"
 
-// defaultSessionsTimeout caps a session call when the caller does not
-// supply a client. The list/replay/create/resume/delete endpoints are
-// plain queries — 30s is generous. The handler always reuses the
-// AgentProxy's http.Client (60s) in production; this default only
-// applies to callers that pass nil (tests, future wiring).
-const defaultSessionsTimeout = 30 * time.Second
+// defaultSessionsTimeout caps every session/approvals call. The
+// list/replay/create/resume/delete endpoints are plain queries — 30s
+// is generous. The cap is applied as the request-context deadline in
+// Forward (NOT http.Client.Timeout): production reuses the
+// AgentProxy's SSE client, which deliberately carries no Timeout
+// after the 2026-10-14 60s-cut incident, and a client-level Timeout
+// would have to be re-shared with the streaming hop. The nil-client
+// branch in NewSessionsProxy uses the same constant as its client
+// Timeout for callers that pass nil (tests, future wiring).
+//
+// A var — not a const — so tests can shrink the cap instead of
+// waiting 30s of wall clock; production code never writes it.
+var defaultSessionsTimeout = 30 * time.Second
 
 // Static response literals. Every one of these is safe to ship: they
 // describe the failure in user-facing terms and carry no error text,
@@ -145,7 +152,17 @@ type sessionProxyRequest struct {
 // canceled request context). Any HTTP status the agent returns —
 // including 4xx and 5xx — is a successful proxy call; the caller
 // forwards it verbatim.
+//
+// The call is bounded by `defaultSessionsTimeout` on top of the
+// caller's context: the shared client in production carries no
+// http.Client.Timeout (it is the SSE client; see agent_proxy.go), so
+// without this deadline a stalled upstream would hold these
+// non-streaming requests — and their connection + limiter slots —
+// indefinitely.
 func (p *SessionsProxy) Forward(ctx context.Context, req sessionProxyRequest) (*http.Response, error) {
+	ctx, cancel := context.WithTimeout(ctx, defaultSessionsTimeout)
+	defer cancel()
+
 	target, err := url.Parse(p.baseURL + req.path)
 	if err != nil {
 		return nil, fmt.Errorf("chat: build agent session URL: %w", err)

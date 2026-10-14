@@ -209,6 +209,64 @@ async def test_react_step_receives_prior_rag_context(tracer):
     assert "FEEDDATA" in msgs[1].content
 
 
+@pytest.mark.asyncio
+async def test_react_step_without_prompt_gets_objective_and_stop_rule(tracer):
+    """A react step whose planner omitted `prompt` (the shape the planner
+    prompt historically advertised — `{tool, args, max_iterations}`) MUST
+    NOT run against an empty system message.
+
+    Motivating incident (2026-10-14): "summarize my recent 3 months of
+    feeds, then post the summary as a new feed" planned exactly such a
+    react step; with no objective and no stop rule the model re-called
+    tools every iteration until the cap failed the step with
+    "ReAct step exceeded iteration cap". The synthesized instruction
+    supplies the objective AND the stop rule; the step's declared tool
+    rides along as a hint.
+    """
+    step = PlanStep(id="react_1", kind="react", tool="list_feeds", max_iterations=3)
+    state = _state([step], {})
+
+    with tracer.start_as_current_span("x") as span:
+        await _run_react(
+            state, step, _settings(), tracer, _StubBudget(), _StubTools(), span
+        )
+
+    msgs = _CapturingLlm.captured[0]
+    system = msgs[0].content
+    assert system, "a react step must never reach the model with an empty system message"
+    assert "final text" in system, "the objective must name the expected outcome"
+    assert "WITHOUT calling any more tools" in system, (
+        "the stop rule is load-bearing: without it a small model loops tool "
+        "calls until the iteration cap"
+    )
+    assert "`list_feeds`" in system, "the step's declared tool is carried as a hint"
+    # The text-only model reply ends the loop and becomes the step output.
+    assert state["step_outputs"]["react_1"] == "stub answer"
+
+
+@pytest.mark.asyncio
+async def test_react_step_with_prompt_uses_it_verbatim(tracer):
+    """A planner-supplied `prompt` is the loop's system instruction, byte
+    for byte — no prefix/suffix is added (the tool hint only backfills a
+    missing prompt)."""
+    step = PlanStep(
+        id="react_1",
+        kind="react",
+        tool="list_feeds",
+        prompt="Answer using the data.",
+        max_iterations=1,
+    )
+    state = _state([step], {})
+
+    with tracer.start_as_current_span("x") as span:
+        await _run_react(
+            state, step, _settings(), tracer, _StubBudget(), _StubTools(), span
+        )
+
+    msgs = _CapturingLlm.captured[0]
+    assert msgs[0].content == "Answer using the data."
+
+
 # --- tool-dispatch retry (openspec/changes/agent-tool-dispatch-retry) -----
 
 

@@ -440,15 +440,20 @@ func mountChatRoute(router chi.Router, cfg *config.Config, db *pgxpool.Pool, fee
 	// runs unchanged (byte-for-byte identical to pre-agent-langgraph).
 	//
 	// Default http.Client transport — production can wrap this with
-	// otelhttp.NewTransport to add OTel spans on the outbound dial;
-	// the 60s timeout is the upper bound; the handler wraps Run in
-	// the request-scoped ctx so client disconnect cancels the call.
+	// otelhttp.NewTransport to add OTel spans on the outbound dial.
+	// The client carries NO Timeout: the agent answers with a
+	// long-lived SSE stream, and http.Client.Timeout bounds the
+	// whole exchange including the streamed body (it severed every
+	// run past 60s — 2026-10-14 incident). The bound is the
+	// request-scoped ctx the handler derives from
+	// LLM_MAX_STREAM_DURATION, which also cancels on client
+	// disconnect.
 	var chatService *chat.Service
 	if cfg.AgentEnabled {
 		if cfg.PythonAgentURL == "" {
 			log.Fatal().Msg("AGENT_ENABLED=true but PYTHON_AGENT_URL is empty — refusing to start (fail closed)")
 		}
-		proxy, perr := chat.NewAgentProxy(cfg.PythonAgentURL, &http.Client{Timeout: 60 * time.Second}, 60*time.Second)
+		proxy, perr := chat.NewAgentProxy(cfg.PythonAgentURL, nil)
 		if perr != nil {
 			log.Fatal().Err(perr).Msg("failed to construct AgentProxy")
 		}
