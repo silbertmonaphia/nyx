@@ -22,8 +22,9 @@
 # (Playwright's webServer block reuses the operator's vite on :5173 and
 # is harmless; the baseURL override is what routes the browser to :5273.)
 #
-# Logs: /tmp/nyx-e2e-{backend,agent,frontend}.log
-# PIDs: /tmp/nyx-e2e-{backend,agent,frontend}.pid
+# Logs/PIDs: /tmp/nyx-e2e-<name>${E2E_STACK_SUFFIX}.{log,pid} — set
+# E2E_STACK_SUFFIX (e.g. -ab) to run several side stacks concurrently
+# without clobbering each other's files; empty keeps the original names.
 
 set -euo pipefail
 
@@ -33,6 +34,10 @@ GO_PORT="${E2E_GO_PORT:-8180}"
 AGENT_PORT="${E2E_AGENT_PORT:-9100}"
 AGENT_METRICS_PORT="${E2E_AGENT_METRICS_PORT:-9101}"
 VITE_PORT="${E2E_VITE_PORT:-5273}"
+SUFFIX="${E2E_STACK_SUFFIX:-}"
+
+pidfile() { echo "/tmp/nyx-e2e-${1}${SUFFIX}.pid"; }
+logfile() { echo "/tmp/nyx-e2e-${1}${SUFFIX}.log"; }
 
 DB_URL_SIDE='postgres://postgres:postgres@127.0.0.1:5433/nyx?sslmode=disable'
 AGENT_DATABASE_URL='postgresql://postgres:postgres@localhost:5433/nyx?options=-c%20search_path%3Dlanggraph%2Cagent'
@@ -56,8 +61,8 @@ start_agent() {
     PYTHON_AGENT_MCP_URL="http://localhost:${GO_PORT}/mcp" \
     PYTHON_AGENT_RAG_BRIDGE_URL="http://localhost:${GO_PORT}/internal/rag/retrieve" \
     PYTHON_AGENT_OTEL_ENDPOINT='http://localhost:4318' \
-      ./.venv/bin/python -m agent.main > /tmp/nyx-e2e-agent.log 2>&1 &
-    echo $! > /tmp/nyx-e2e-agent.pid
+      ./.venv/bin/python -m agent.main > "$(logfile agent)" 2>&1 &
+    echo $! > "$(pidfile agent)"
   )
 }
 
@@ -76,8 +81,8 @@ start_backend() {
     MCP_ENABLED='true' \
     PYTHON_AGENT_URL="http://127.0.0.1:${AGENT_PORT}" \
     CORS_ALLOWED_ORIGINS="http://localhost:${VITE_PORT},http://127.0.0.1:${VITE_PORT}" \
-      go run ./cmd/api > /tmp/nyx-e2e-backend.log 2>&1 &
-    echo $! > /tmp/nyx-e2e-backend.pid
+      go run ./cmd/api > "$(logfile backend)" 2>&1 &
+    echo $! > "$(pidfile backend)"
   )
 }
 
@@ -87,8 +92,8 @@ start_frontend() {
     cd "$ROOT/frontend"
     setsid env \
     VITE_API_URL="http://localhost:${GO_PORT}/api" \
-      npx vite --port "$VITE_PORT" --strictPort > /tmp/nyx-e2e-frontend.log 2>&1 &
-    echo $! > /tmp/nyx-e2e-frontend.pid
+      npx vite --port "$VITE_PORT" --strictPort > "$(logfile frontend)" 2>&1 &
+    echo $! > "$(pidfile frontend)"
   )
 }
 
@@ -139,7 +144,7 @@ cmd_up() {
 
 cmd_stop() {
   for name in agent backend frontend; do
-    pidf="/tmp/nyx-e2e-${name}.pid"
+    pidf="$(pidfile "$name")"
     if [[ -f "$pidf" ]]; then
       pid="$(cat "$pidf")"
       # setsid made each service its own process-group leader, so a
@@ -160,7 +165,7 @@ cmd_status() {
     echo
   done
   for name in agent backend frontend; do
-    pidf="/tmp/nyx-e2e-${name}.pid"
+    pidf="$(pidfile "$name")"
     [[ -f "$pidf" ]] && echo "  $name pid $(cat "$pidf")"
   done
 }
