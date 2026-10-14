@@ -16,8 +16,8 @@
 ## 3. Python — dynamic planner catalog
 
 - [x] 3.1 Expose the registry-only tool view on the dispatcher (merged list minus agent-native tools) — verify a unit test shows local web tools are excluded and registry entries included.
-- [ ] 3.2 Build the planner "Registry tools available" block from that view at plan time; omit the block when the registry call fails or returns empty — verify unit tests: block lists the fixture tools with names; prompt equals the pre-change text when the list raises or is empty.
-- [ ] 3.3 Thread the dispatcher into the planner node (graph factory change mirroring the executor factory) — verify planner + graph wiring tests pass with the new parameter.
+- [x] 3.2 Build the planner "Registry tools available" block from that view at plan time; omit the block when the registry call fails or returns empty — verify unit tests: block lists the fixture tools with names; prompt equals the pre-change text when the list raises or is empty.
+- [x] 3.3 Thread the dispatcher into the planner node (graph factory change mirroring the executor factory) — verify planner + graph wiring tests pass with the new parameter.
 
 ## 4. Python — confirmation gate and decision broker
 

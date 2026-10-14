@@ -42,6 +42,7 @@ from .observability import (
     update_observation,
 )
 from .state import AgentState
+from .tool_dispatch import ToolDispatcher, registry_planner_block
 from .types import (
     PLAN_LEVEL_ERROR_CODES,
     DoneEvent,
@@ -99,6 +100,7 @@ async def plan_node(
     settings: Settings,
     tracer: trace.Tracer,
     prefs_text: str = "",
+    tools: ToolDispatcher | None = None,
 ) -> AgentState:
     """Invoke the planner LLM; mutate state.plan and state.events_so_far.
 
@@ -111,7 +113,21 @@ async def plan_node(
     prompt. It is `""` when the user has no prefs, the kill switch is
     off, or the load failed — the composed prompt is then byte-identical
     to its pre-injection form.
+
+    `tools` is the run's dispatcher; when present, the live registry
+    catalog block (openspec/changes/agent-feed-tools D4) is appended after
+    the prefs block, best-effort — a failed or empty registry call leaves
+    the prompt byte-identical to its pre-change form (spec: "Registry
+    outage leaves planning unchanged").
     """
+    # Registry catalog (agent-feed-tools D4), fetched once per plan; the
+    # dispatcher memoizes the underlying tools/list for the whole run.
+    registry_block = ""
+    if tools is not None:
+        try:
+            registry_block = registry_planner_block(await tools.registry_tools())
+        except Exception as exc:  # noqa: BLE001 — catalog is best-effort
+            log.warning("planner: registry catalog fetch failed: %r", exc)
     with (
         # Langfuse twin of the plan span (agent-langfuse-tracing 3.4).
         # Entered BEFORE the Jaeger span (parent-before-child); the Jaeger
@@ -146,10 +162,12 @@ async def plan_node(
 
         if settings.planner_structured_enabled:
             plan_or_error = await _emit_structured_plan(
-                state, settings, tracer, prefs_text
+                state, settings, tracer, prefs_text, registry_block=registry_block
             )
         else:
-            plan_or_error = await _emit_legacy_plan(state, settings, tracer, prefs_text)
+            plan_or_error = await _emit_legacy_plan(
+                state, settings, tracer, prefs_text, registry_block=registry_block
+            )
 
         if isinstance(plan_or_error, _PlanError):
             update_observation(
@@ -233,7 +251,10 @@ def _build_structured_client(settings: Settings):
 
 
 def _initial_messages(
-    state: AgentState, settings: Settings, prefs_text: str = ""
+    state: AgentState,
+    settings: Settings,
+    prefs_text: str = "",
+    registry_block: str = "",
 ) -> list:
     """The planner's opening messages.
 
@@ -243,15 +264,25 @@ def _initial_messages(
     pre-web-tools form.
 
     The per-user preferences block (openspec/changes/agent-user-preferences
-    D5) appends LAST, after `planner_block`: the static base stays first
+    D5) appends after `planner_block` — the static base stays first
     (providers cache the static prefix better), and `prefs_text` is `""`
     whenever the user has no prefs, so the composition is then
     byte-identical to its pre-injection form (regression-pinned in
     `tests/test_prefs_injection.py`).
+
+    The registry catalog block (openspec/changes/agent-feed-tools D4)
+    appends last; it is `""` when the registry list is empty or its fetch
+    failed, so the prompt is then byte-identical to its pre-change form
+    (pinned in `tests/test_planner_catalog_wiring.py`).
     """
     return [
         SystemMessage(
-            content=PLANNER_SYSTEM_PROMPT + planner_block(settings) + (prefs_text or "")
+            content=(
+                PLANNER_SYSTEM_PROMPT
+                + planner_block(settings)
+                + (prefs_text or "")
+                + (registry_block or "")
+            )
         ),
         HumanMessage(content=_messages_to_prompt(state.get("messages", []))),
     ]
@@ -304,6 +335,7 @@ async def _emit_structured_plan(
     settings: Settings,
     tracer: trace.Tracer,
     prefs_text: str = "",
+    registry_block: str = "",
 ) -> Plan | _PlanError:
     """Bound the structured-output retry loop. Returns `Plan` or `_PlanError`.
 
@@ -332,7 +364,7 @@ async def _emit_structured_plan(
         log.warning("planner client construction failed: %r", exc)
         return _PlanError("planner_failed", "Plan generation failed", "provider call failed")
 
-    messages = _initial_messages(state, settings, prefs_text)
+    messages = _initial_messages(state, settings, prefs_text, registry_block)
     had_validation_failure = False
 
     for attempt in range(settings.planner_retry_max + 1):
@@ -455,6 +487,7 @@ async def _emit_legacy_plan(
     settings: Settings,
     tracer: trace.Tracer,
     prefs_text: str = "",
+    registry_block: str = "",
 ) -> Plan | _PlanError:
     """Legacy free-text path: fence-strip + `json.loads` + post-parse enrichment.
 
@@ -476,7 +509,7 @@ async def _emit_legacy_plan(
         span.set_attribute("structured", False)
         try:
             resp = await client.ainvoke(
-                _initial_messages(state, settings, prefs_text)
+                _initial_messages(state, settings, prefs_text, registry_block)
             )
         except Exception as exc:  # noqa: BLE001 — surface as a typed error event
             log.warning("planner provider call failed (legacy path): %r", exc)
