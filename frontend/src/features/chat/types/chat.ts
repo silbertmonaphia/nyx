@@ -18,6 +18,11 @@ export const chatRequestSchema = z.object({
   // Omitted on the wire when false so today's non-RAG requests
   // look identical to before this field landed.
   rag: z.boolean().optional(),
+  // run_id echoes the active chat session id (agent-chat-history-ui)
+  // so the agent resumes that conversation instead of minting a new
+  // one. Omitted when the tab has no active session yet — the first
+  // server frame then carries the minted id and the store adopts it.
+  run_id: z.string().optional(),
 });
 
 export type Role = z.infer<typeof roleSchema>;
@@ -185,5 +190,57 @@ export class ChatStreamError extends Error {
   ) {
     super(event.kind === "http" ? `HTTP ${event.status}: ${event.message}` : event.error);
     this.name = "ChatStreamError";
+  }
+}
+
+// ---- Chat session history (openspec/changes/agent-chat-history-ui) ----
+//
+// Wire shapes for the session REST surface the Go chat proxy fronts
+// (`GET|POST|DELETE /api/chat/sessions[...]`). Field names mirror the
+// `agent.chat_sessions` / `agent.chat_messages` columns the Python
+// agent reads back; no SSE frame changes ride along with this slice.
+
+/** One sidebar row — `GET /api/chat/sessions` entry. */
+export interface SessionSummary {
+  id: string;
+  user_id: number;
+  /** Server-stored title; `""` until a summariser fills it in. */
+  title: string;
+  started_at: string;
+  last_active_at: string;
+  ended_at: string | null;
+  message_count: number;
+}
+
+/** One replayed message — `GET /api/chat/sessions/{id}/messages` entry. */
+export interface SessionMessage {
+  id: number;
+  // Slice 1 records `user` and `assistant`; `tool` / `system` are
+  // allowed by the schema, so the replay mapper keeps this open and
+  // renders anything non-`user` as an assistant row.
+  role: string;
+  content: string;
+  // The wire envelope's tool invocations, byte-faithful from the SSE
+  // stream (`{step_id, call_id, name, args}`). `null` when the
+  // message carries none.
+  tool_calls: unknown[] | null;
+  tokens: number;
+  created_at: string;
+}
+
+/**
+ * Thrown by the JSON session endpoints in `chatService` on a non-2xx
+ * response. The status rides on the error so the store can tell a 404
+ * (session deleted / reaped — clear the active session quietly, no
+ * toast, no console error) from a transient failure (keep the state
+ * and retry later).
+ */
+export class ChatApiError extends Error {
+  constructor(
+    public readonly status: number,
+    message: string,
+  ) {
+    super(message);
+    this.name = "ChatApiError";
   }
 }

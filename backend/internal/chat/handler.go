@@ -18,48 +18,84 @@ import (
 )
 
 // Handler exposes the chat endpoint. The struct is kept small — it
-// only carries the Service — so tests can construct it without
-// spinning up the full main.go wiring. RegisterChatRoute is the
-// single mount point; see backend/HUMA.md for why this route is on
-// chi and not huma.
+// only carries the Service and the derived session proxy — so tests
+// can construct it without spinning up the full main.go wiring.
+// RegisterChatRoute is the single mount point; see backend/HUMA.md
+// for why this route is on chi and not huma.
+//
+// sessions is derived from the service's AgentProxy at construction
+// time and is nil in legacy mode (AGENT_ENABLED=false). Nil is the
+// gate the session REST routes answer 503 on; see sessions_proxy.go.
 type Handler struct {
-	service *Service
+	service  *Service
+	sessions *SessionsProxy
 }
 
 // NewHandler wraps a Service for HTTP. The service is what does the
 // actual work; the handler's only job is to translate the wire
 // format (JSON in, SSE out).
+//
+// The session REST proxy is derived from the same AgentProxy the
+// service streams through (same base URL, same transport), so the
+// two agent hops can never be half-configured. A service without a
+// proxy (AGENT_ENABLED=false) leaves h.sessions nil.
 func NewHandler(s *Service) *Handler {
-	return &Handler{service: s}
+	return &Handler{
+		service:  s,
+		sessions: newSessionsProxyFromService(s),
+	}
 }
 
-// RegisterChatRoute installs POST /api/chat on the supplied chi
-// router. The route runs inside the project's standard middleware
-// chain (RequestID → Recoverer → Logging → CORS → RateLimit →
-// maxBodyBytes) because chi's router.Use applies to every
-// subsequently-mounted handler, and RegisterChatRoute is called
-// after the global middleware in main.go.
+// RegisterChatRoute installs the chat surface on the supplied chi
+// router: the streaming POST plus the five session REST routes
+// (sessions_proxy.go). The routes run inside the project's standard
+// middleware chain (RequestID → Recoverer → Logging → CORS →
+// RateLimit → maxBodyBytes) because chi's router.Use applies to
+// every subsequently-mounted handler, and RegisterChatRoute is
+// called after the global middleware in main.go.
 //
-// Middleware on this route specifically:
+// Middleware on these routes specifically:
 //   - NewAuth: bearer JWT validation; stamps user ID on the context.
+//     Runs FIRST for every route in the group, so an unauthenticated
+//     session call is 401ed before the proxy is ever reached.
 //   - userLimiter: per-user 5-streams/min bucket (FUTURE.md §6).
 //     May be nil to disable the limiter (useful for tests).
 //
-// The route is intentionally NOT registered with huma — the
-// response is a stream of unknown length and JSON schema, and
-// huma's body marshaller would force the whole response into a
-// single in-memory buffer. See backend/HUMA.md for the full
-// rationale.
+// The limiter is scoped to POST /api/chat (the expensive route: it
+// holds a connection open and bills upstream tokens) rather than the
+// whole group. The session routes are cheap JSON reads, and the SPA
+// opens a session view with up to four calls in a burst (list →
+// messages → resume → the user's first stream) — charging those
+// against a 5/min refill with a burst of 3 would 429 the user's
+// first message. The router-level per-IP limiter still covers them.
+//
+// The routes are intentionally NOT registered with huma — the chat
+// response is a stream of unknown length and JSON schema, and huma's
+// body marshaller would force the whole response into a single
+// in-memory buffer (the session routes share the mount point for
+// auth parity, and forward JSON they do not own). See
+// backend/HUMA.md for the full rationale.
 func RegisterChatRoute(router chi.Router, h *Handler, tokens auth.TokenService, userLimiter *UserRateLimiter) {
 	if h == nil {
 		panic("chat.RegisterChatRoute: handler is required")
 	}
 	router.Route("/api/chat", func(r chi.Router) {
 		r.Use(middleware.NewAuth(tokens))
+
+		streamRoute := r
 		if userLimiter != nil {
-			r.Use(userLimiter.Middleware)
+			streamRoute = r.With(userLimiter.Middleware)
 		}
-		r.Post("/", h.stream)
+		streamRoute.Post("/", h.stream)
+
+		// Session REST surface (plain JSON, no SSE). Authenticated by
+		// the group's NewAuth; forwarded to PYTHON_AGENT_URL under
+		// /agent/sessions...; 503 when the agent is disabled.
+		r.Get("/sessions", h.sessionsList)
+		r.Post("/sessions", h.sessionsCreate)
+		r.Get("/sessions/{session_id}/messages", h.sessionsMessages)
+		r.Post("/sessions/{session_id}/resume", h.sessionsResume)
+		r.Delete("/sessions/{session_id}", h.sessionsDelete)
 	})
 }
 
@@ -99,7 +135,12 @@ func (h *Handler) stream(w http.ResponseWriter, r *http.Request) {
 	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, MaxBodyBytes))
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(&req); err != nil {
-		api.WriteError(w, r, http.StatusBadRequest, "Invalid chat request", err.Error())
+		// Static detail on purpose (review L1, 2026-10-14): the decoder
+		// error can embed type/field names from client-supplied JSON, and
+		// details are a shipped surface — never copy err.Error() onto the
+		// wire. The underlying error is logged with the request id.
+		api.ClassifyAndLog(r.Context(), err, "invalid chat request body")
+		api.WriteError(w, r, http.StatusBadRequest, "Invalid chat request", "body is not valid JSON for this endpoint")
 		return
 	}
 	if err := dec.Decode(new(struct{})); err != io.EOF {
@@ -114,8 +155,11 @@ func (h *Handler) stream(w http.ResponseWriter, r *http.Request) {
 	// headers so a bad request gets the standard 400 JSON envelope
 	// rather than a mid-stream event:error frame (which the SPA
 	// would have to special-case because it's already in SSE-mode).
+	// Static detail for the same reason as the decode branch above —
+	// validator messages can echo field names from client input.
 	if err := h.service.Validate(&req); err != nil {
-		api.WriteError(w, r, http.StatusBadRequest, "Invalid chat input", err.Error())
+		api.ClassifyAndLog(r.Context(), err, "invalid chat input")
+		api.WriteError(w, r, http.StatusBadRequest, "Invalid chat input", "message failed validation")
 		return
 	}
 

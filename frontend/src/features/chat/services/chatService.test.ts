@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { chatService } from './chatService';
-import { ChatStreamError } from '../types/chat';
+import { ChatApiError, ChatStreamError } from '../types/chat';
 import { tokenStore, refreshTokensAndReplay } from '~/services/api';
 import * as telemetry from '~/services/telemetry';
 
@@ -715,5 +715,321 @@ describe('chatService.streamMessage', () => {
       error: 'tool_call_failed',
       retryCount: undefined,
     });
+  });
+
+  // --- session id echo (agent-chat-history-ui) ----------------------
+
+  it('omits run_id from the request body when no session is active', async () => {
+    fetchMock.mockResolvedValueOnce(sseResponse(['data: [DONE]\n\n']));
+
+    for await (const e of chatService.streamMessage(
+      [{ role: 'user', content: 'hi' }],
+      new AbortController().signal,
+    )) {
+      void e;
+    }
+
+    const body = JSON.parse(fetchMock.mock.calls[0][1].body as string);
+    expect(body).toEqual({ messages: [{ role: 'user', content: 'hi' }] });
+    expect('run_id' in body).toBe(false);
+  });
+
+  it('echoes the active session id as run_id in the request body', async () => {
+    fetchMock.mockResolvedValueOnce(sseResponse(['data: [DONE]\n\n']));
+
+    for await (const e of chatService.streamMessage(
+      [{ role: 'user', content: 'hi' }],
+      new AbortController().signal,
+      { runId: 'sess-123' },
+    )) {
+      void e;
+    }
+
+    const body = JSON.parse(fetchMock.mock.calls[0][1].body as string);
+    expect(body).toEqual({
+      messages: [{ role: 'user', content: 'hi' }],
+      run_id: 'sess-123',
+    });
+  });
+
+  it('surfaces the first-frame run_id through onRunId without yielding it', async () => {
+    fetchMock.mockResolvedValueOnce(
+      sseResponse([
+        'event: run_id\ndata: {"run_id":"srv-minted-1"}\n\n' +
+          'event: delta\ndata: {"delta":"hi"}\n\n' +
+          'data: [DONE]\n\n',
+      ]),
+    );
+    const onRunId = vi.fn();
+
+    const events: unknown[] = [];
+    for await (const e of chatService.streamMessage(
+      [{ role: 'user', content: 'hi' }],
+      new AbortController().signal,
+      { onRunId },
+    )) {
+      events.push(e);
+    }
+
+    expect(onRunId).toHaveBeenCalledTimes(1);
+    expect(onRunId).toHaveBeenCalledWith('srv-minted-1');
+    // The frame is state, not content: the event union is unchanged.
+    expect(events).toEqual([
+      { kind: 'delta', delta: 'hi' },
+      { kind: 'terminator' },
+    ]);
+  });
+
+  it('drops a malformed run_id frame without stopping the stream', async () => {
+    fetchMock.mockResolvedValueOnce(
+      sseResponse([
+        'event: run_id\ndata: not-json\n\n' +
+          'event: run_id\ndata: {"run_id":42}\n\n' +
+          'event: delta\ndata: {"delta":"alive"}\n\n' +
+          'data: [DONE]\n\n',
+      ]),
+    );
+    const onRunId = vi.fn();
+
+    const events: unknown[] = [];
+    for await (const e of chatService.streamMessage(
+      [{ role: 'user', content: 'hi' }],
+      new AbortController().signal,
+      { onRunId },
+    )) {
+      events.push(e);
+    }
+
+    expect(onRunId).not.toHaveBeenCalled();
+    expect(events).toEqual([
+      { kind: 'delta', delta: 'alive' },
+      { kind: 'terminator' },
+    ]);
+  });
+});
+
+// ---- Session REST surface (openspec/changes/agent-chat-history-ui) ----
+// Raw-fetch JSON endpoints behind the Go chat proxy: list / replay /
+// create / resume / delete. Errors must carry the response status so
+// the store can distinguish 404 (session gone) from a transient
+// failure.
+
+describe('chatService session endpoints', () => {
+  beforeEach(() => {
+    fetchMock.mockReset();
+    mockedRefresh.mockReset();
+    tokenStore.clear();
+  });
+
+  it('lists sessions, mapping the wire rows and cursor', async () => {
+    fetchMock.mockResolvedValueOnce(
+      jsonResponse(200, {
+        sessions: [
+          {
+            id: 's2',
+            user_id: 7,
+            title: 'Second',
+            started_at: '2026-10-14T10:00:00Z',
+            last_active_at: '2026-10-14T11:00:00Z',
+            ended_at: '2026-10-14T11:05:00Z',
+            message_count: 4,
+          },
+          {
+            id: 's1',
+            user_id: 7,
+            title: '',
+            started_at: '2026-10-14T09:00:00Z',
+            last_active_at: '2026-10-14T09:30:00Z',
+            ended_at: null,
+            message_count: 2,
+          },
+          // No id — dropped rather than rendered as a broken row.
+          { title: 'malformed' },
+        ],
+        next_cursor: 'cursor-abc',
+      }),
+    );
+
+    const page = await chatService.listSessions();
+
+    // First page carries no params — the server default page size
+    // (`PYTHON_AGENT_SESSIONS_PAGE_SIZE`) stays authoritative.
+    expect(fetchMock.mock.calls[0][0]).toMatch(/\/chat\/sessions$/);
+    expect(page.sessions.map((s) => s.id)).toEqual(['s2', 's1']);
+    expect(page.sessions[1]).toEqual({
+      id: 's1',
+      user_id: 7,
+      title: '',
+      started_at: '2026-10-14T09:00:00Z',
+      last_active_at: '2026-10-14T09:30:00Z',
+      ended_at: null,
+      message_count: 2,
+    });
+    expect(page.nextCursor).toBe('cursor-abc');
+  });
+
+  it('passes limit + before as query params and normalises a missing cursor', async () => {
+    fetchMock.mockResolvedValueOnce(jsonResponse(200, { sessions: [] }));
+
+    const page = await chatService.listSessions({ limit: 25, before: 'cur/1+x' });
+
+    const url = fetchMock.mock.calls[0][0] as string;
+    expect(url).toContain('limit=25');
+    // The cursor is opaque but URL-unsafe characters must be encoded.
+    expect(url).toContain('before=cur%2F1%2Bx');
+    expect(page.nextCursor).toBeNull();
+    expect(page.sessions).toEqual([]);
+  });
+
+  it('throws ChatApiError carrying the status on a non-2xx list', async () => {
+    fetchMock.mockResolvedValueOnce(jsonResponse(500, { error: 'boom' }));
+
+    const err = await chatService
+      .listSessions()
+      .then(() => null)
+      .catch((e: unknown) => e);
+
+    expect(err).toBeInstanceOf(ChatApiError);
+    expect((err as ChatApiError).status).toBe(500);
+    // The backend's message is never echoed into the client error.
+    expect((err as ChatApiError).message).not.toContain('boom');
+  });
+
+  it('replays a session’s messages in wire order, keeping tool_calls opaque', async () => {
+    fetchMock.mockResolvedValueOnce(
+      jsonResponse(200, {
+        messages: [
+          {
+            id: 1,
+            role: 'user',
+            content: 'hello',
+            tool_calls: null,
+            tokens: 0,
+            created_at: '2026-10-14T10:00:00Z',
+          },
+          {
+            id: 2,
+            role: 'assistant',
+            content: 'hi',
+            tool_calls: [
+              { step_id: 's1', call_id: 'c1', name: 'list_feeds', args: {} },
+            ],
+            tokens: 12,
+            created_at: '2026-10-14T10:00:01Z',
+          },
+          // Dropped: no content.
+          { id: 3, role: 'assistant', tool_calls: null },
+        ],
+      }),
+    );
+
+    const messages = await chatService.getMessages('sess-1');
+
+    expect(fetchMock.mock.calls[0][0]).toMatch(/\/chat\/sessions\/sess-1\/messages$/);
+    expect(messages.map((m) => m.id)).toEqual([1, 2]);
+    expect(messages[1].tool_calls).toEqual([
+      { step_id: 's1', call_id: 'c1', name: 'list_feeds', args: {} },
+    ]);
+    expect(messages[0].tool_calls).toBeNull();
+  });
+
+  it('encodes the session id in the replay URL', async () => {
+    fetchMock.mockResolvedValueOnce(jsonResponse(200, { messages: [] }));
+
+    await chatService.getMessages('a/b c');
+
+    expect(fetchMock.mock.calls[0][0]).toContain(
+      '/chat/sessions/a%2Fb%20c/messages',
+    );
+  });
+
+  it('surfaces a 404 replay as ChatApiError(404)', async () => {
+    fetchMock.mockResolvedValueOnce(jsonResponse(404, { error: 'not found' }));
+
+    const err = await chatService
+      .getMessages('gone')
+      .then(() => null)
+      .catch((e: unknown) => e);
+
+    expect(err).toBeInstanceOf(ChatApiError);
+    expect((err as ChatApiError).status).toBe(404);
+  });
+
+  it('creates a session and returns its id', async () => {
+    fetchMock.mockResolvedValueOnce(
+      jsonResponse(201, {
+        session_id: 'srv-1',
+        started_at: '2026-10-14T12:00:00Z',
+      }),
+    );
+
+    const created = await chatService.createSession();
+
+    const init = fetchMock.mock.calls[0][1] as RequestInit;
+    expect(fetchMock.mock.calls[0][0]).toMatch(/\/chat\/sessions$/);
+    expect(init.method).toBe('POST');
+    expect(created).toEqual({
+      session_id: 'srv-1',
+      started_at: '2026-10-14T12:00:00Z',
+    });
+  });
+
+  it('throws when create answers without a session id', async () => {
+    fetchMock.mockResolvedValueOnce(jsonResponse(200, { started_at: 'x' }));
+
+    const err = await chatService
+      .createSession()
+      .then(() => null)
+      .catch((e: unknown) => e);
+
+    expect(err).toBeInstanceOf(ChatApiError);
+  });
+
+  it('resumes a session and resolves on an empty 200', async () => {
+    fetchMock.mockResolvedValueOnce(new Response('', { status: 200 }));
+
+    await expect(chatService.resumeSession('sess-1')).resolves.toBeUndefined();
+    expect(fetchMock.mock.calls[0][0]).toContain('/chat/sessions/sess-1/resume');
+    expect((fetchMock.mock.calls[0][1] as RequestInit).method).toBe('POST');
+  });
+
+  it('deletes a session and tolerates a 204 with no body', async () => {
+    fetchMock.mockResolvedValueOnce(new Response(null, { status: 204 }));
+
+    await expect(chatService.deleteSession('sess-1')).resolves.toBeUndefined();
+    expect(fetchMock.mock.calls[0][0]).toMatch(/\/chat\/sessions\/sess-1$/);
+    expect((fetchMock.mock.calls[0][1] as RequestInit).method).toBe('DELETE');
+  });
+
+  it('runs the shared single-flight refresh once and replays a 401', async () => {
+    tokenStore.setTokens('expired.access', 'good.refresh');
+    mockedRefresh.mockResolvedValueOnce(true);
+    fetchMock
+      .mockResolvedValueOnce(jsonResponse(401, { error: 'expired' }))
+      .mockResolvedValueOnce(jsonResponse(200, { sessions: [], next_cursor: null }));
+
+    await chatService.listSessions();
+
+    expect(mockedRefresh).toHaveBeenCalledTimes(1);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    const secondHeaders = (fetchMock.mock.calls[1][1] as RequestInit)
+      .headers as Record<string, string>;
+    expect(secondHeaders.Authorization).toBe('Bearer expired.access');
+    expect(secondHeaders.Accept).toBe('application/json');
+
+    tokenStore.clear();
+  });
+
+  it('does not attempt a refresh without an access token', async () => {
+    fetchMock.mockResolvedValueOnce(jsonResponse(401, { error: 'unauthorized' }));
+
+    const err = await chatService
+      .listSessions()
+      .then(() => null)
+      .catch((e: unknown) => e);
+
+    expect(err).toBeInstanceOf(ChatApiError);
+    expect((err as ChatApiError).status).toBe(401);
+    expect(mockedRefresh).not.toHaveBeenCalled();
   });
 });

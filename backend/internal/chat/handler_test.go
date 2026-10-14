@@ -476,6 +476,120 @@ func TestHandler_EmitsNoteFrame_OnRouterFailover(t *testing.T) {
 	assert.Equal(t, []string{"continuation-from-secondary"}, gotDeltas)
 }
 
+// TestHandler_RunID_RoundTripsToAgent pins the spec requirement
+// "Request body forwards the optional run_id": a supplied run_id is
+// decoded (DisallowUnknownFields rejects unknown keys, so the field
+// had to exist for this to be accepted at all) and reaches the
+// proxied /agent/run body unchanged.
+func TestHandler_RunID_RoundTripsToAgent(t *testing.T) {
+	srv, captured := newUpstreamServer(t, http.StatusOK, cannedSSE, "text/event-stream; charset=utf-8")
+	harness, tokens := newProxyHarness(t, mustAgentProxy(t, srv.URL))
+	server := httptest.NewServer(harness)
+	defer server.Close()
+
+	const runID = "3f2504e0-4f89-41d3-9a0c-0305e82c3301"
+	body := []byte(`{"messages":[{"role":"user","content":"hi"}],"run_id":"` + runID + `"}`)
+
+	req, err := http.NewRequest(http.MethodPost, server.URL+"/api/chat", bytes.NewReader(body))
+	require.NoError(t, err)
+	req.Header.Set("Authorization", "Bearer "+bearerToken(t, tokens))
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := server.Client().Do(req)
+	require.NoError(t, err)
+	defer func() { _ = resp.Body.Close() }()
+
+	require.Equal(t, http.StatusOK, resp.StatusCode,
+		"run_id must be accepted, not rejected as an unknown field")
+
+	assert.Contains(t, captured.body, `"run_id":"`+runID+`"`,
+		"the supplied run_id reaches the agent body unchanged")
+}
+
+// TestHandler_OmittedRunID_IsAbsentFromProxiedBody pins the second
+// spec scenario: with the `omitempty` tag, a request that never
+// mentioned run_id produces a body with no run_id key at all —
+// byte-identical to the pre-change body for the same request.
+func TestHandler_OmittedRunID_IsAbsentFromProxiedBody(t *testing.T) {
+	srv, captured := newUpstreamServer(t, http.StatusOK, cannedSSE, "text/event-stream; charset=utf-8")
+	harness, tokens := newProxyHarness(t, mustAgentProxy(t, srv.URL))
+	server := httptest.NewServer(harness)
+	defer server.Close()
+
+	req, err := http.NewRequest(http.MethodPost, server.URL+"/api/chat",
+		bytes.NewReader(chatRequest(Message{Role: RoleUser, Content: "hi"})))
+	require.NoError(t, err)
+	req.Header.Set("Authorization", "Bearer "+bearerToken(t, tokens))
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := server.Client().Do(req)
+	require.NoError(t, err)
+	defer func() { _ = resp.Body.Close() }()
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+
+	var decoded map[string]json.RawMessage
+	require.NoError(t, json.Unmarshal([]byte(captured.body), &decoded))
+	_, present := decoded["run_id"]
+	assert.False(t, present,
+		"omitempty: an omitted run_id MUST NOT appear in the proxied body")
+}
+
+// TestHandler_MalformedRunID_ForwardedNotRejectedLocally pins the
+// third spec scenario: the Go layer MUST NOT validate run ids. A
+// non-uuid4 is forwarded, and the client sees the agent's own 400
+// detail (the SSE envelope is already open in agent mode, so the
+// status stays 200 — a pre-existing property of this path).
+func TestHandler_MalformedRunID_ForwardedNotRejectedLocally(t *testing.T) {
+	const pythonBody = `{"detail":"run_id must be a uuid4"}`
+	srv, captured := newUpstreamServer(t, http.StatusBadRequest, pythonBody, "application/json")
+	harness, tokens := newProxyHarness(t, mustAgentProxy(t, srv.URL))
+	server := httptest.NewServer(harness)
+	defer server.Close()
+
+	body := []byte(`{"messages":[{"role":"user","content":"hi"}],"run_id":"not-a-uuid"}`)
+	req, err := http.NewRequest(http.MethodPost, server.URL+"/api/chat", bytes.NewReader(body))
+	require.NoError(t, err)
+	req.Header.Set("Authorization", "Bearer "+bearerToken(t, tokens))
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := server.Client().Do(req)
+	require.NoError(t, err)
+	defer func() { _ = resp.Body.Close() }()
+
+	got, err := io.ReadAll(resp.Body)
+	require.NoError(t, err)
+
+	assert.Equal(t, pythonBody, string(got),
+		"the agent's validation answer is what the client sees — Go adds no local 400")
+	assert.Contains(t, captured.body, `"run_id":"not-a-uuid"`,
+		"the malformed value is forwarded verbatim, not rewritten or dropped")
+}
+
+// TestHandler_RunID_EmptyStringIsForwarded pins the pointer-vs-string
+// distinction: run_id:"" is a client-supplied value, so it is
+// forwarded (Python rejects it) rather than being collapsed into
+// "absent" by omitempty on a bare string.
+func TestHandler_RunID_EmptyStringIsForwarded(t *testing.T) {
+	srv, captured := newUpstreamServer(t, http.StatusOK, cannedSSE, "text/event-stream; charset=utf-8")
+	harness, tokens := newProxyHarness(t, mustAgentProxy(t, srv.URL))
+	server := httptest.NewServer(harness)
+	defer server.Close()
+
+	body := []byte(`{"messages":[{"role":"user","content":"hi"}],"run_id":""}`)
+	req, err := http.NewRequest(http.MethodPost, server.URL+"/api/chat", bytes.NewReader(body))
+	require.NoError(t, err)
+	req.Header.Set("Authorization", "Bearer "+bearerToken(t, tokens))
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := server.Client().Do(req)
+	require.NoError(t, err)
+	defer func() { _ = resp.Body.Close() }()
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+
+	assert.Contains(t, captured.body, `"run_id":""`,
+		"an explicitly empty run_id is forwarded; only an absent field is dropped")
+}
+
 // TestFlushingWriter_FlushDefersToResponseController pins the
 // streaming contract: Flush() must reach the underlying
 // http.Flusher (via http.NewResponseController) so SSE chunks

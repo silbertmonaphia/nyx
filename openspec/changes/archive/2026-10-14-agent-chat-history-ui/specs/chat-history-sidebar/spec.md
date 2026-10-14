@@ -8,7 +8,7 @@ Lets users see and replay their past chat sessions via a ChatGPT-style sidebar i
 
 ### Requirement: Sidebar lists sessions in reverse chronological order
 
-The SPA SHALL render a sidebar listing the user's chat sessions, ordered by `last_active_at DESC` (most recent at the top). Each row SHALL display: the session `title` (or a placeholder derived from the first user message when title is empty), a relative timestamp (`5 min ago`, `3 days ago`), and a click target that loads the session's messages into the main chat panel.
+The SPA SHALL render a sidebar listing the user's chat sessions, ordered by `last_active_at DESC` (most recent at the top). Each row SHALL display: the session `title` (or the static placeholder `New chat` when the title is empty — the list response carries no message snippet, so a derived label would cost a per-row messages fetch), a relative timestamp (`5 min ago`, `3 days ago`), and a click target that loads the session's messages into the main chat panel.
 
 #### Scenario: Sidebar shows the user's sessions
 
@@ -55,7 +55,7 @@ When the user clicks a session row in the sidebar, the SPA SHALL set the active 
 
 ### Requirement: Plus-New-chat button
 
-The SPA SHALL render a `+ New chat` button in the chat header (next to the existing chat controls). When clicked, the SPA SHALL POST `/agent/sessions` (via the Go proxy chain), receive the new session id, set it as the active session id, clear the live stream, and reset the chat panel to an empty state. Subsequent user messages are recorded under the new session.
+The SPA SHALL render a `+ New chat` button in the chat header (next to the existing chat controls). When clicked, the SPA SHALL POST `/agent/sessions` (via the Go proxy chain), receive the new session id, set it as the active session id, clear the live stream, and reset the chat panel to an empty state. Subsequent user messages are recorded under the new session. The rail SHALL NOT be refetched on create — the new session's row appears on the next list fetch (reload or the next lazy-load trigger), keeping the interaction single-round-trip.
 
 #### Scenario: New chat clears the panel
 

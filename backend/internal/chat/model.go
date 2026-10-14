@@ -11,9 +11,13 @@
 // because RegisterChatRoute mounts it on the same router after the
 // huma adapter wraps it. See backend/HUMA.md for the rationale.
 //
-// Persistence is intentionally absent in v1: clients send the full
-// conversation history with every request and the server keeps no
-// state. Adding persistence is a deliberate follow-up (FUTURE.md §6).
+// Persistence is absent from THIS package: clients send the full
+// conversation history with every request and the Go layer keeps no
+// state. Chat history is owned by the Python agent (chat_sessions /
+// chat_messages); the optional ChatRequest.RunID below is how a
+// client names the session it wants to resume, and the session REST
+// routes in sessions_proxy.go are how the SPA reads that history
+// back. See FUTURE.md §6.
 package chat
 
 // Role constants. The wire shape accepts "user" and "assistant"
@@ -56,6 +60,20 @@ type ChatRequest struct {
 	// DisallowUnknownFields on the handler decoder rejects typos
 	// like "ragged" with 400.
 	RAG bool `json:"rag,omitempty"`
+	// RunID, when supplied, is the session the client wants the
+	// agent to resume. The handler forwards it unchanged in the
+	// proxied /agent/run body; the Python service owns validation (a
+	// non-uuid4 comes back as its own 400 naming the field). Omitted
+	// on the wire when nil so a fresh-run request is byte-identical
+	// to the pre-session body. The Go layer MUST NOT mint, rewrite,
+	// or validate run ids — the SPA (via the sidebar) and the Python
+	// service are the only parties that decide session identity.
+	//
+	// The pointer type is what makes "absent" distinguishable from
+	// "empty string": a client that sends run_id:"" is forwarded
+	// as-is (Python rejects it), rather than being silently dropped
+	// like a bare string with omitempty would.
+	RunID *string `json:"run_id,omitempty"`
 }
 
 // Message is one turn. Role is restricted to RoleUser / RoleAssistant

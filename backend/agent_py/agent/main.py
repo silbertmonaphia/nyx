@@ -10,6 +10,10 @@ Routes:
     by Go in compose / k8s deployments (see FUTURE_AGENT.md + docker-compose.yml).
   - GET  /healthz     — 200 with `{"status":"ok"}` when Redis is reachable; 503 otherwise.
   - GET  /metrics     — Prometheus counters.
+  - GET/POST/DELETE /agent/sessions* — chat-session REST surface (list, replay,
+    create, resume, soft-delete), registered from `agent.api.chat_sessions`.
+    Same trust model as /agent/run: owner-scoped via `X-Nyx-User-Id`; the
+    ChatStore wired by the lifespan (`app.state.chat_store`) serves the reads.
 """
 
 from __future__ import annotations
@@ -27,6 +31,7 @@ from fastapi.responses import StreamingResponse
 from prometheus_client import generate_latest, CONTENT_TYPE_LATEST
 from redis.asyncio import Redis
 
+from .api.chat_sessions import router as chat_sessions_router
 from .budget import BudgetGuard
 from .chat_store import ChatStore, ChatStoreUnavailable
 from .config import Settings, get_settings
@@ -57,6 +62,12 @@ from .web_tools import build_local_tools
 log = logging.getLogger("nyx.agent")
 
 _UUID4_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$")
+
+# Strong refs to detached terminal-persistence tasks (see the finally
+# block in `_stream_agent_run`): asyncio tasks are weakly referenced, and
+# a client-disconnect cancellation detaches the task while it is still
+# writing — without this set it could be GC'd mid-write.
+_FINALIZE_TASKS: set[asyncio.Task[None]] = set()
 
 
 @asynccontextmanager
@@ -429,6 +440,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             },
         )
 
+    # Chat-session REST surface (openspec/changes/agent-chat-history-ui):
+    # GET/POST/DELETE under /agent/sessions. Handlers read the ChatStore
+    # the lifespan put on `app.state.chat_store` (503 when unset — no DB
+    # configured); the Go proxy owns the public /api/chat/sessions shape.
+    app.include_router(chat_sessions_router)
+
     return app
 
 
@@ -464,16 +481,54 @@ async def _stream_agent_run(
     chat_store: ChatStore | None = getattr(app.state, "chat_store", None)
     checkpointer = getattr(app.state, "checkpointer", None)
 
-    # Mint or resume run_id.
+    # Mint, resume, or continue the session (openspec/changes/agent-chat-history-ui).
+    #
+    # Three distinct meanings for an echoed id, in priority order:
+    #   1. Live run (agent.runs non-terminal)  → crash-recovery resume
+    #      (unchanged semantics; `resumed=True`).
+    #   2. Live chat SESSION (chat_sessions row, non-deleted) → session
+    #      continuation: the SPA echoed the session id, an explicit intent
+    #      to append this turn to it (clicking a history row or typing in
+    #      an open panel both count). The graph runs FRESH (new plan); the
+    #      run-state layer is bypassed for this execution because
+    #      agent.runs owns per-RUN rows and a terminal row must not be
+    #      mutated (or a phantom "running" row minted).
+    #   3. Neither → fresh session: mint a new run id (which doubles as
+    #      the session id). The SPA's `+ New chat` is the only other
+    #      session-boundary signal; there is no idle-time chopping — an
+    #      echoed id is a deliberate action and must keep its thread.
+    #
+    # Sessions outlive runs since Slice 2: every turn of a conversation is
+    # a new run but the same session, and a session created via
+    # `POST /agent/sessions` has no `agent.runs` row at all until its
+    # first turn — the chat_sessions check is what keeps the id.
     run_id = chat_req.run_id
     resumed = False
+    session_continuation = False
+    persist_run_state = True
     if run_metadata is not None and run_id is not None:
         existing = await run_metadata.get_run(run_id, user_id)
         if existing is not None and existing.status not in ("completed", "failed"):
             resumed = True
         else:
-            # Wrong user, not found, or terminal — fall through to fresh path.
-            run_id = None
+            # Not a live run — check whether the id is a live session.
+            session = None
+            if chat_store is not None:
+                try:
+                    session = await chat_store.get_session(run_id, user_id)
+                except ChatStoreUnavailable as exc:
+                    log.warning(
+                        "chat_store.get_session failed during resume decision "
+                        "(treating as fresh): run_id=%s err=%r",
+                        run_id,
+                        exc,
+                    )
+            if session is not None:
+                session_continuation = True
+                persist_run_state = False
+            else:
+                # Wrong user, unknown id, or soft-deleted session — fresh.
+                run_id = None
 
     if run_id is None:
         if run_metadata is not None:
@@ -499,27 +554,34 @@ async def _stream_agent_run(
             await chat_store.create_session(user_id, run_id)
             # Refresh `last_active_at` regardless of fresh/resumed.
             await chat_store.touch_session(run_id, user_id)
-            # Record every inbound user message — only on fresh runs.
-            # On resumed runs, the user messages already exist (they
-            # were recorded at the original request entry); re-recording
-            # would duplicate them.
+            # Record the inbound user message(s):
+            #   - resumed: skip entirely — recorded at the original request
+            #     entry; re-recording would duplicate.
+            #   - session continuation: only the LAST user message. The SPA
+            #     sends the full conversation history every turn, and the
+            #     earlier ones are already stored in this session.
+            #   - fresh session: every user message (the panel is empty, so
+            #     in practice this is the one new message; a curl client
+            #     importing a transcript still gets them all).
             if not resumed:
-                for msg in chat_req.messages:
-                    if msg.role == "user":
-                        try:
-                            await chat_store.record_message(
-                                run_id,
-                                user_id,
-                                role="user",
-                                content=msg.content,
-                            )
-                        except ChatStoreUnavailable as exc:
-                            log.warning(
-                                "chat_store.record_message(user) failed "
-                                "(non-fatal): run_id=%s err=%r",
-                                run_id,
-                                exc,
-                            )
+                user_msgs = [m for m in chat_req.messages if m.role == "user"]
+                if session_continuation:
+                    user_msgs = user_msgs[-1:]
+                for msg in user_msgs:
+                    try:
+                        await chat_store.record_message(
+                            run_id,
+                            user_id,
+                            role="user",
+                            content=msg.content,
+                        )
+                    except ChatStoreUnavailable as exc:
+                        log.warning(
+                            "chat_store.record_message(user) failed "
+                            "(non-fatal): run_id=%s err=%r",
+                            run_id,
+                            exc,
+                        )
         except ChatStoreUnavailable as exc:
             log.warning(
                 "chat_store session init failed (non-fatal): run_id=%s err=%r",
@@ -622,7 +684,11 @@ async def _stream_agent_run(
     # awaits before this point are the two client-visible opening frames,
     # and a disconnect there exits the generator before the task exists.
     heartbeat_task: asyncio.Task[None] | None = None
-    if run_metadata is not None:
+    if run_metadata is not None and persist_run_state:
+        # Session continuations skip the heartbeat: `agent.runs` has no
+        # live row for this execution (terminal or absent), so touches
+        # would be no-ops against a completed row or phantoms for a
+        # session-only id (openspec/changes/agent-chat-history-ui).
         heartbeat_task = asyncio.create_task(
             _heartbeat_loop(
                 run_metadata, run_id, settings.heartbeat_interval_seconds
@@ -685,70 +751,86 @@ async def _stream_agent_run(
             except asyncio.CancelledError:
                 pass
 
-        # Persist terminal metadata if enabled. Non-fatal: emit a typed
-        # error event only if the user-facing run is still in flight and
-        # the metadata failure is the cause.
-        if run_metadata is not None:
-            try:
-                if error_code is not None and error_code != "agent_unavailable":
-                    await run_metadata.mark_failed(run_id, error_code)
-                elif error_code is None and saw_done:
-                    await run_metadata.mark_completed(run_id, total_tokens)
-                # error_code == "agent_unavailable", or a stream closed before
-                # `done` (client disconnect / server cancellation) → leave the
-                # row `running`: the run is still resumable inside the window,
-                # and the stale-run sweeper reaps it if nobody comes back
-                # (test-review C1, 2026-10-14: this branch used to mark
-                # mid-run disconnects `completed`, which the sweeper and the
-                # retention GC then trusted).
-            except RunMetadataUnavailable as exc:
-                log.warning(
-                    "metadata terminal write failed (non-fatal): run_id=%s err=%r",
-                    run_id,
-                    exc,
-                )
-
-        # Chat-history: record the assistant message once the run reaches a
-        # terminal state (design.md D6 — synchronous write on the hot path
-        # before the stream closes; D7 — failures degrade to warn-log).
-        # Only record when the run reached `done`; partial-failure runs
-        # (e.g. `error{code:"plan_too_large"}` before any assistant output)
-        # leave no assistant row, which is the correct slice of state for
-        # replay (the user sees a clear failure, not a half-answer).
-        if (
-            chat_store is not None
-            and saw_done
-            and (assistant_text_parts or assistant_tool_calls)
-        ):
-            try:
-                await chat_store.record_message(
-                    run_id,
-                    user_id,
-                    role="assistant",
-                    content="".join(assistant_text_parts),
-                    tool_calls=assistant_tool_calls or None,
-                    tokens=total_tokens,
-                )
-                # Stamp the session's ended_at so Slice 2's sidebar can
-                # render a "finished" state instead of "live".
-                await chat_store.end_session(run_id, user_id)
-            except ChatStoreUnavailable as exc:
-                log.warning(
-                    "chat_store assistant record failed (non-fatal): "
-                    "run_id=%s err=%r",
-                    run_id,
-                    exc,
-                )
-                yield _sse_encode(
-                    Event(
-                        kind="error",
-                        payload={
-                            "error": "run metadata persistence failed",
-                            "code": "run_metadata_unavailable",
-                            "request_id": request_id,
-                        },
+        # Terminal persistence must SURVIVE a client disconnect. The SPA
+        # parser closes the stream on the `terminator` frame, Go tears the
+        # upstream request down, and this generator gets cancelled at its
+        # next await — which lands in here. Before this shield, a
+        # fully-streamed answer could lose BOTH its assistant row and its
+        # terminal run transition (observed live 2026-10-14: chat_messages
+        # kept only the user row and agent.runs stayed 'running' for a
+        # completed reply). Run the writes in a detached task and await it
+        # through `asyncio.shield`: cancellation here leaves the task
+        # running to completion in the background.
+        async def _persist_terminal() -> None:
+            # Session continuations skip the metadata block: agent.runs
+            # owns per-RUN rows, and this execution has none to transition
+            # (a terminal row must not be mutated back, and a phantom row
+            # must not be minted for a session-only id —
+            # openspec/changes/agent-chat-history-ui).
+            if run_metadata is not None and persist_run_state:
+                try:
+                    if error_code is not None and error_code != "agent_unavailable":
+                        await run_metadata.mark_failed(run_id, error_code)
+                    elif error_code is None and saw_done:
+                        await run_metadata.mark_completed(run_id, total_tokens)
+                    # error_code == "agent_unavailable", or a stream closed
+                    # before `done` (client disconnect mid-run) → leave the
+                    # row `running`: the run is still resumable inside the
+                    # window, and the stale-run sweeper reaps it if nobody
+                    # comes back (test-review C1, 2026-10-14).
+                except RunMetadataUnavailable as exc:
+                    log.warning(
+                        "metadata terminal write failed (non-fatal): "
+                        "run_id=%s err=%r",
+                        run_id,
+                        exc,
                     )
-                )
+
+            # Chat-history: record the assistant message once the run
+            # reaches a terminal state (design.md D6/D7). Only when the run
+            # reached `done`; partial-failure runs leave no assistant row —
+            # replay should show the failure, not a half-answer.
+            if (
+                chat_store is not None
+                and saw_done
+                and (assistant_text_parts or assistant_tool_calls)
+            ):
+                try:
+                    await chat_store.record_message(
+                        run_id,
+                        user_id,
+                        role="assistant",
+                        content="".join(assistant_text_parts),
+                        tool_calls=assistant_tool_calls or None,
+                        tokens=total_tokens,
+                    )
+                    # Stamp the session's ended_at so the sidebar can
+                    # render a "finished" state instead of "live".
+                    await chat_store.end_session(run_id, user_id)
+                except ChatStoreUnavailable as exc:
+                    log.warning(
+                        "chat_store assistant record failed (non-fatal): "
+                        "run_id=%s err=%r",
+                        run_id,
+                        exc,
+                    )
+
+        finalize_task = asyncio.create_task(
+            _persist_terminal(), name=f"agent-finalize-{run_id}"
+        )
+        # Module-level strong ref so the task is never GC'd before it
+        # finishes (asyncio only holds weak refs).
+        _FINALIZE_TASKS.add(finalize_task)
+        finalize_task.add_done_callback(_FINALIZE_TASKS.discard)
+        try:
+            await asyncio.shield(finalize_task)
+        except asyncio.CancelledError:
+            log.info(
+                "client disconnected during terminal persistence; the "
+                "shielded write continues in the background (run_id=%s)",
+                run_id,
+            )
+            raise
 
     # Frontend parser triggers its own terminator on `data: [DONE]`. Old clients
     # that listen on `event: terminator` still work because we emit that event too.

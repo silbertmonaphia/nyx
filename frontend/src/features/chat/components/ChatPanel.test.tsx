@@ -4,21 +4,77 @@ import userEvent from '@testing-library/user-event';
 import { ChatPanel } from './ChatPanel';
 import { useChatStore } from '../store/chatStore';
 import { chatService } from '../services/chatService';
+import type { SessionMessage, SessionSummary } from '../types/chat';
 
 vi.mock('../services/chatService');
 
 const mockedService = chatService as unknown as {
   streamMessage: ReturnType<typeof vi.fn>;
+  listSessions: ReturnType<typeof vi.fn>;
+  getMessages: ReturnType<typeof vi.fn>;
+  resumeSession: ReturnType<typeof vi.fn>;
+  createSession: ReturnType<typeof vi.fn>;
+  deleteSession: ReturnType<typeof vi.fn>;
 };
 
+function makeSession(id: string, overrides: Partial<SessionSummary> = {}): SessionSummary {
+  return {
+    id,
+    user_id: 1,
+    title: '',
+    started_at: '2026-10-14T00:00:00Z',
+    last_active_at: '2026-10-14T00:00:00Z',
+    ended_at: null,
+    message_count: 2,
+    ...overrides,
+  };
+}
+
+function makeRow(
+  id: number,
+  role: 'user' | 'assistant',
+  content: string,
+  toolCalls: SessionMessage['tool_calls'] = null,
+): SessionMessage {
+  return {
+    id,
+    role,
+    content,
+    tool_calls: toolCalls,
+    tokens: 0,
+    created_at: '2026-10-14T00:00:00Z',
+  };
+}
+
 function resetStore() {
-  useChatStore.setState({ messages: [], isStreaming: false, error: null });
+  useChatStore.setState({
+    messages: [],
+    isStreaming: false,
+    error: null,
+    currentSessionId: null,
+    sessionList: [],
+    sessionListNextCursor: null,
+    isFetchingMore: false,
+  });
+  sessionStorage.clear();
 }
 
 describe('ChatPanel', () => {
   beforeEach(() => {
     resetStore();
     mockedService.streamMessage.mockReset();
+    // The panel hosts the history rail, which fetches its first page on
+    // mount — give the session endpoints benign defaults so unrelated
+    // tests aren't racing a rejected mock.
+    mockedService.listSessions
+      .mockReset()
+      .mockResolvedValue({ sessions: [], nextCursor: null });
+    mockedService.getMessages.mockReset().mockResolvedValue([]);
+    mockedService.resumeSession.mockReset().mockResolvedValue(undefined);
+    mockedService.createSession
+      .mockReset()
+      .mockResolvedValue({ session_id: 's-new' });
+    mockedService.deleteSession.mockReset().mockResolvedValue(undefined);
   });
 
   it('sends a message and renders the assistant bubble with concatenated content', async () => {
@@ -462,5 +518,193 @@ describe('ChatPanel partial-failure banner', () => {
     render(<ChatPanel open={true} onOpenChange={vi.fn()} />);
 
     expect(screen.queryByTestId('chat-agent-step-retry')).toBeNull();
+  });
+});
+
+// ---- Chat history rail (openspec/changes/agent-chat-history-ui) ----
+// The panel hosts <ChatSidebar>: a static left column at `md:` and up,
+// an overlay drawer below it. Session rows replay stored messages into
+// the same `messages` array the live stream writes to.
+
+describe('ChatPanel chat history', () => {
+  beforeEach(() => {
+    resetStore();
+    mockedService.streamMessage.mockReset();
+    mockedService.listSessions
+      .mockReset()
+      .mockResolvedValue({ sessions: [], nextCursor: null });
+    mockedService.getMessages.mockReset().mockResolvedValue([]);
+    mockedService.resumeSession.mockReset().mockResolvedValue(undefined);
+    mockedService.createSession
+      .mockReset()
+      .mockResolvedValue({ session_id: 's-new' });
+    mockedService.deleteSession.mockReset().mockResolvedValue(undefined);
+  });
+
+  it('mounts the rail and the new-chat action', () => {
+    render(<ChatPanel open={true} onOpenChange={vi.fn()} />);
+
+    expect(screen.getByTestId('chat-sidebar')).toBeInTheDocument();
+    expect(screen.getByTestId('chat-sidebar-toggle')).toBeInTheDocument();
+    expect(screen.getByTestId('chat-new-session')).toBeInTheDocument();
+  });
+
+  it('starts a new session without dropping the history list', async () => {
+    useChatStore.setState({
+      sessionList: [makeSession('s1', { title: 'Earlier' })],
+      currentSessionId: 's1',
+      messages: [{ role: 'user', content: 'old turn' }],
+    });
+    sessionStorage.setItem('nyx.chat.currentSessionId', 's1');
+
+    render(<ChatPanel open={true} onOpenChange={vi.fn()} />);
+    await userEvent.click(screen.getByTestId('chat-new-session'));
+
+    await waitFor(() => {
+      expect(mockedService.createSession).toHaveBeenCalledTimes(1);
+    });
+    await waitFor(() => {
+      expect(useChatStore.getState().currentSessionId).toBe('s-new');
+    });
+    // Panel cleared, list untouched (spec Scenario "New chat clears the
+    // panel": the rail keeps its rows).
+    expect(useChatStore.getState().messages).toEqual([]);
+    expect(screen.queryByTestId('chat-message-user')).toBeNull();
+    expect(useChatStore.getState().sessionList).toHaveLength(1);
+    expect(screen.getByText('Earlier')).toBeInTheDocument();
+  });
+
+  it('blanks the panel for the new chat before the POST resolves', async () => {
+    let resolveCreate: ((v: { session_id: string }) => void) | null = null;
+    mockedService.createSession.mockImplementationOnce(
+      () =>
+        new Promise<{ session_id: string }>((resolve) => {
+          resolveCreate = resolve;
+        }),
+    );
+    useChatStore.setState({
+      currentSessionId: 's1',
+      messages: [{ role: 'assistant', content: 'old answer' }],
+    });
+
+    render(<ChatPanel open={true} onOpenChange={vi.fn()} />);
+    await userEvent.click(screen.getByTestId('chat-new-session'));
+
+    // Cleared synchronously — the UI guarantee does not depend on the
+    // network.
+    await waitFor(() => {
+      expect(useChatStore.getState().messages).toEqual([]);
+    });
+    expect(useChatStore.getState().currentSessionId).toBeNull();
+
+    resolveCreate?.({ session_id: 's-new' });
+    await waitFor(() => {
+      expect(useChatStore.getState().currentSessionId).toBe('s-new');
+    });
+  });
+
+  it('collapses the drawer when a session is picked below md', async () => {
+    useChatStore.setState({ sessionList: [makeSession('s1', { title: 'A chat' })] });
+
+    render(<ChatPanel open={true} onOpenChange={vi.fn()} />);
+
+    // Hidden below md, static from md up — classes only, no JS media
+    // query. jsdom can't evaluate Tailwind, so assert the class list.
+    const rail = screen.getByTestId('chat-sidebar');
+    expect(rail.className).toContain('hidden');
+    expect(rail.className).toContain('md:flex');
+
+    await userEvent.click(screen.getByTestId('chat-sidebar-toggle'));
+    expect(screen.getByTestId('chat-sidebar-toggle')).toHaveAttribute(
+      'aria-expanded',
+      'true',
+    );
+    expect(screen.getByTestId('chat-sidebar').className).toContain('absolute');
+
+    await userEvent.click(screen.getByTestId('chat-session-row'));
+    await waitFor(() => {
+      expect(screen.getByTestId('chat-sidebar').className).toContain('hidden');
+    });
+    expect(screen.getByTestId('chat-sidebar-toggle')).toHaveAttribute(
+      'aria-expanded',
+      'false',
+    );
+  });
+
+  it('replays a stored session as bubbles with its agent steps', async () => {
+    useChatStore.setState({
+      sessionList: [makeSession('s1', { title: 'Feeds run' })],
+    });
+    mockedService.getMessages.mockResolvedValueOnce([
+      makeRow(1, 'user', 'which feeds do I have?'),
+      makeRow(2, 'assistant', 'Three of them.', [
+        { step_id: 'step_1', call_id: 'c1', name: 'list_feeds', args: { limit: 5 } },
+      ]),
+    ]);
+
+    render(<ChatPanel open={true} onOpenChange={vi.fn()} />);
+    await userEvent.click(screen.getByTestId('chat-session-row'));
+
+    expect(await screen.findByTestId('chat-message-user')).toHaveTextContent(
+      'which feeds do I have?',
+    );
+    expect(screen.getByTestId('chat-message-assistant')).toHaveTextContent(
+      'Three of them.',
+    );
+    // Stored tool_calls replay through the same "agent steps"
+    // disclosure the live stream feeds.
+    expect(screen.getByTestId('chat-agent-steps')).toBeInTheDocument();
+    expect(screen.getByTestId('chat-agent-step-tool')).toHaveTextContent(
+      'list_feeds',
+    );
+  });
+
+  it('streams a new turn below the replayed history on the active run id', async () => {
+    useChatStore.setState({
+      sessionList: [makeSession('s1', { title: 'Feeds run' })],
+    });
+    mockedService.getMessages.mockResolvedValueOnce([
+      makeRow(1, 'user', 'earlier question'),
+      makeRow(2, 'assistant', 'earlier answer'),
+    ]);
+    mockedService.streamMessage.mockImplementationOnce(async function* () {
+      yield { kind: 'delta', delta: 'follow-up answer' };
+      yield { kind: 'terminator' };
+    });
+
+    render(<ChatPanel open={true} onOpenChange={vi.fn()} />);
+    await userEvent.click(screen.getByTestId('chat-session-row'));
+    await screen.findByTestId('chat-message-assistant');
+
+    await userEvent.type(screen.getByTestId('chat-input'), 'and now?');
+    await userEvent.click(screen.getByTestId('chat-send'));
+
+    await waitFor(() => {
+      expect(screen.getAllByTestId('chat-message-assistant')).toHaveLength(2);
+    });
+    // The resumed history goes out with the request so the agent keeps
+    // its context, and the active session is echoed as `run_id`.
+    const [sent, , opts] = mockedService.streamMessage.mock.calls[0];
+    expect(sent).toEqual([
+      { role: 'user', content: 'earlier question' },
+      { role: 'assistant', content: 'earlier answer' },
+      { role: 'user', content: 'and now?' },
+    ]);
+    expect(opts.runId).toBe('s1');
+  });
+
+  it('restores the tab session from sessionStorage on open', async () => {
+    sessionStorage.setItem('nyx.chat.currentSessionId', 's9');
+    mockedService.getMessages.mockResolvedValueOnce([
+      makeRow(1, 'user', 'restored turn'),
+    ]);
+
+    render(<ChatPanel open={true} onOpenChange={vi.fn()} />);
+
+    expect(await screen.findByTestId('chat-message-user')).toHaveTextContent(
+      'restored turn',
+    );
+    expect(mockedService.resumeSession).toHaveBeenCalledWith('s9');
+    expect(useChatStore.getState().currentSessionId).toBe('s9');
   });
 });

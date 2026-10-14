@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { act, waitFor } from '@testing-library/react';
 import { chatService } from '../services/chatService';
 import { useChatStore } from './chatStore';
-import type { ChatEvent } from '../types/chat';
+import { ChatApiError, type ChatEvent, type SessionMessage } from '../types/chat';
 
 // Auto-mock the service so we can yield hand-crafted streams per
 // test. Mirrors the pattern in useFeeds.test.ts.
@@ -10,7 +10,15 @@ vi.mock('../services/chatService');
 
 const mockedService = chatService as unknown as {
   streamMessage: ReturnType<typeof vi.fn>;
+  listSessions: ReturnType<typeof vi.fn>;
+  getMessages: ReturnType<typeof vi.fn>;
+  createSession: ReturnType<typeof vi.fn>;
+  resumeSession: ReturnType<typeof vi.fn>;
+  deleteSession: ReturnType<typeof vi.fn>;
 };
+
+// sessionStorage key the store persists the active session id under.
+const CURRENT_SESSION_KEY = 'nyx.chat.currentSessionId';
 
 function resetStore() {
   useChatStore.setState({
@@ -18,9 +26,55 @@ function resetStore() {
     isStreaming: false,
     error: null,
     useFeeds: false,
+    currentSessionId: null,
+    sessionList: [],
+    sessionListNextCursor: null,
+    isFetchingMore: false,
   });
-  // Clear any persisted toggle from a previous test in the suite.
+  // Clear any persisted toggle / session id from a previous test.
   localStorage.clear();
+  sessionStorage.clear();
+}
+
+/**
+ * Reset the auto-mocked service and give the session endpoints benign
+ * defaults. Tests override per-case with `mockResolvedValueOnce`.
+ */
+function resetService() {
+  mockedService.streamMessage.mockReset();
+  mockedService.listSessions
+    .mockReset()
+    .mockResolvedValue({ sessions: [], nextCursor: null });
+  mockedService.getMessages.mockReset().mockResolvedValue([]);
+  mockedService.createSession
+    .mockReset()
+    .mockResolvedValue({ session_id: 'srv-new', started_at: '2026-10-14T00:00:00Z' });
+  mockedService.resumeSession.mockReset().mockResolvedValue(undefined);
+  mockedService.deleteSession.mockReset().mockResolvedValue(undefined);
+}
+
+function makeSession(id: string, lastActiveAt = '2026-10-14T00:00:00Z') {
+  return {
+    id,
+    user_id: 1,
+    title: '',
+    started_at: '2026-10-14T00:00:00Z',
+    last_active_at: lastActiveAt,
+    ended_at: null,
+    message_count: 2,
+  };
+}
+
+function makeMessageRow(overrides: Partial<SessionMessage> = {}): SessionMessage {
+  return {
+    id: 1,
+    role: 'user',
+    content: 'hello',
+    tool_calls: null,
+    tokens: 0,
+    created_at: '2026-10-14T00:00:00Z',
+    ...overrides,
+  };
 }
 
 /**
@@ -74,7 +128,7 @@ function releaseStream() {
 describe('useChatStore', () => {
   beforeEach(() => {
     resetStore();
-    mockedService.streamMessage.mockReset();
+    resetService();
   });
 
   describe('send', () => {
@@ -570,7 +624,9 @@ describe('useChatStore', () => {
         expect(mockedService.streamMessage).toHaveBeenCalled();
       });
       const call = mockedService.streamMessage.mock.calls[0];
-      expect(call[2]).toEqual({ rag: true });
+      // `objectContaining`: since agent-chat-history-ui the opts also
+      // carry the session hooks (`runId`, `onRunId`).
+      expect(call[2]).toEqual(expect.objectContaining({ rag: true }));
 
       await act(async () => {
         releaseStream();
@@ -604,7 +660,185 @@ describe('useChatStore', () => {
         expect(mockedService.streamMessage).toHaveBeenCalled();
       });
       const call = mockedService.streamMessage.mock.calls[0];
-      expect(call[2]).toEqual({ rag: false });
+      expect(call[2]).toEqual(expect.objectContaining({ rag: false }));
+      // No active session in this suite's reset state → no run_id echo.
+      expect(call[2].runId).toBeNull();
+
+      await act(async () => {
+        releaseStream();
+      });
+    });
+
+    it('echoes the active session id as runId', async () => {
+      useChatStore.setState({ currentSessionId: 'sess-active' });
+      mockedService.streamMessage.mockImplementationOnce(
+        (_messages: unknown, signal: AbortSignal) =>
+          makeStream(
+            [
+              {
+                kind: 'done',
+                usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
+              },
+            ],
+            signal,
+          ),
+      );
+
+      act(() => {
+        void useChatStore.getState().send('hi');
+      });
+
+      await waitFor(() => {
+        expect(mockedService.streamMessage).toHaveBeenCalled();
+      });
+      expect(mockedService.streamMessage.mock.calls[0][2].runId).toBe(
+        'sess-active',
+      );
+
+      await act(async () => {
+        releaseStream();
+      });
+    });
+
+    it('adopts the run_id frame as the active session and persists it', async () => {
+      // The server mints the id on the stream's first frame; the store
+      // captures it so a reload can find the conversation — and pulls
+      // page 1 so the new session appears in the rail immediately.
+      mockedService.listSessions.mockResolvedValueOnce({
+        sessions: [
+          {
+            id: 'srv-run-1',
+            user_id: 1,
+            title: '',
+            started_at: '2026-10-14T00:00:00Z',
+            last_active_at: '2026-10-14T00:00:00Z',
+            ended_at: null,
+            message_count: 1,
+          },
+        ],
+        nextCursor: null,
+      });
+      mockedService.streamMessage.mockImplementationOnce(
+        (
+          _messages: unknown,
+          signal: AbortSignal,
+          opts: { onRunId?: (id: string) => void },
+        ) => {
+          opts.onRunId?.('srv-run-1');
+          return makeStream([{ kind: 'delta', delta: 'hi' }], signal);
+        },
+      );
+
+      act(() => {
+        void useChatStore.getState().send('hi');
+      });
+
+      await waitFor(() => {
+        expect(useChatStore.getState().currentSessionId).toBe('srv-run-1');
+      });
+      expect(sessionStorage.getItem(CURRENT_SESSION_KEY)).toBe('srv-run-1');
+
+      // The rail refresh lands the adopted session as the newest row.
+      await waitFor(() => {
+        expect(mockedService.listSessions).toHaveBeenCalled();
+      });
+      await waitFor(() => {
+        expect(useChatStore.getState().sessionList[0]?.id).toBe('srv-run-1');
+      });
+
+      await act(async () => {
+        releaseStream();
+      });
+    });
+
+    it('adopts a server id that differs from the one the request carried (review M2)', async () => {
+      // The server mints fresh when the echoed id was unknown /
+      // soft-deleted / hit a store hiccup — the panel must follow the
+      // session the server actually wrote to, not keep a stale id.
+      useChatStore.setState({ currentSessionId: 'sess-stale' });
+      mockedService.streamMessage.mockImplementationOnce(
+        (
+          _messages: unknown,
+          signal: AbortSignal,
+          opts: { onRunId?: (id: string) => void },
+        ) => {
+          opts.onRunId?.('srv-minted');
+          return makeStream([{ kind: 'delta', delta: 'hi' }], signal);
+        },
+      );
+
+      act(() => {
+        void useChatStore.getState().send('hi');
+      });
+
+      await waitFor(() => {
+        expect(useChatStore.getState().currentSessionId).toBe('srv-minted');
+      });
+      expect(sessionStorage.getItem(CURRENT_SESSION_KEY)).toBe('srv-minted');
+
+      await act(async () => {
+        releaseStream();
+      });
+    });
+
+    it('keeps the id when the frame echoes the id the request carried', async () => {
+      // Normal continuation: the echoed id round-trips and there is
+      // nothing to adopt.
+      useChatStore.setState({ currentSessionId: 'sess-picked' });
+      mockedService.streamMessage.mockImplementationOnce(
+        (
+          _messages: unknown,
+          signal: AbortSignal,
+          opts: { onRunId?: (id: string) => void },
+        ) => {
+          opts.onRunId?.('sess-picked');
+          return makeStream([{ kind: 'delta', delta: 'hi' }], signal);
+        },
+      );
+
+      act(() => {
+        void useChatStore.getState().send('hi');
+      });
+
+      await waitFor(() => {
+        expect(mockedService.streamMessage).toHaveBeenCalled();
+      });
+      await act(async () => {
+        releaseStream();
+      });
+
+      expect(useChatStore.getState().currentSessionId).toBe('sess-picked');
+    });
+
+    it('does not adopt when the user switched sessions mid-flight', async () => {
+      // The user's explicit pick wins over the server frame for a
+      // request sent under a different id.
+      useChatStore.setState({ currentSessionId: 'sess-sent' });
+      let fireRunId: ((id: string) => void) | undefined;
+      mockedService.streamMessage.mockImplementationOnce(
+        (
+          _messages: unknown,
+          signal: AbortSignal,
+          opts: { onRunId?: (id: string) => void },
+        ) => {
+          fireRunId = opts.onRunId;
+          return makeStream([{ kind: 'delta', delta: 'hi' }], signal);
+        },
+      );
+
+      act(() => {
+        void useChatStore.getState().send('hi');
+      });
+      await waitFor(() => {
+        expect(mockedService.streamMessage).toHaveBeenCalled();
+      });
+
+      act(() => {
+        useChatStore.setState({ currentSessionId: 'user-picked' });
+        fireRunId?.('srv-other');
+      });
+
+      expect(useChatStore.getState().currentSessionId).toBe('user-picked');
 
       await act(async () => {
         releaseStream();
@@ -847,6 +1081,402 @@ describe('useChatStore', () => {
       const keys = Object.keys(localStorage);
       const hasStepsKey = keys.some((k) => /steps|agent|chat\.history/i.test(k));
       expect(hasStepsKey).toBe(false);
+    });
+  });
+
+  // ---- Session history (openspec/changes/agent-chat-history-ui) ----
+  // The sidebar's data plane: paginated list, click-to-replay, the
+  // sessionStorage restore path, and the quiet-failure contracts.
+
+  describe('loadMore', () => {
+    it('fetches the first page and appends the next one', async () => {
+      mockedService.listSessions
+        .mockResolvedValueOnce({
+          sessions: [makeSession('s3'), makeSession('s2')],
+          nextCursor: 'cursor-1',
+        })
+        .mockResolvedValueOnce({
+          sessions: [makeSession('s1')],
+          nextCursor: null,
+        });
+
+      await act(async () => {
+        await useChatStore.getState().loadMore();
+      });
+      expect(useChatStore.getState().sessionList.map((s) => s.id)).toEqual([
+        's3',
+        's2',
+      ]);
+      expect(useChatStore.getState().sessionListNextCursor).toBe('cursor-1');
+      // First page: no cursor to hand back.
+      expect(mockedService.listSessions).toHaveBeenLastCalledWith({
+        before: null,
+      });
+
+      await act(async () => {
+        await useChatStore.getState().loadMore();
+      });
+      expect(useChatStore.getState().sessionList.map((s) => s.id)).toEqual([
+        's3',
+        's2',
+        's1',
+      ]);
+      expect(useChatStore.getState().sessionListNextCursor).toBeNull();
+      expect(mockedService.listSessions).toHaveBeenLastCalledWith({
+        before: 'cursor-1',
+      });
+    });
+
+    it('is single-flight: the second concurrent call is dropped', async () => {
+      let resolvePage!: (page: unknown) => void;
+      mockedService.listSessions.mockReturnValueOnce(
+        new Promise((resolve) => {
+          resolvePage = resolve;
+        }),
+      );
+
+      let first!: Promise<void>;
+      let second!: Promise<void>;
+      act(() => {
+        first = useChatStore.getState().loadMore();
+        second = useChatStore.getState().loadMore();
+      });
+
+      expect(mockedService.listSessions).toHaveBeenCalledTimes(1);
+
+      await act(async () => {
+        resolvePage({ sessions: [makeSession('s1')], nextCursor: null });
+        await Promise.all([first, second]);
+      });
+
+      // Exactly one page appended — no duplicated rows.
+      expect(useChatStore.getState().sessionList.map((s) => s.id)).toEqual(['s1']);
+      expect(useChatStore.getState().isFetchingMore).toBe(false);
+    });
+
+    it('does not fetch once the list is complete (next_cursor null)', async () => {
+      useChatStore.setState({
+        sessionList: [makeSession('s1')],
+        sessionListNextCursor: null,
+      });
+
+      await act(async () => {
+        await useChatStore.getState().loadMore();
+      });
+
+      expect(mockedService.listSessions).not.toHaveBeenCalled();
+    });
+
+    it('fails quietly: no throw, no state change, isFetchingMore resets', async () => {
+      mockedService.listSessions.mockRejectedValueOnce(new Error('network down'));
+
+      await act(async () => {
+        await useChatStore.getState().loadMore();
+      });
+
+      const state = useChatStore.getState();
+      expect(state.sessionList).toEqual([]);
+      expect(state.isFetchingMore).toBe(false);
+      expect(state.error).toBeNull();
+    });
+  });
+
+  describe('setCurrentSession', () => {
+    it('clears the panel, resumes the session, and replays its messages', async () => {
+      useChatStore.setState({
+        currentSessionId: 'prev',
+        messages: [{ role: 'user', content: 'stale' }],
+      });
+      mockedService.getMessages.mockResolvedValueOnce([
+        makeMessageRow({ id: 1, role: 'user', content: 'hello' }),
+        makeMessageRow({
+          id: 2,
+          role: 'assistant',
+          content: 'hi there',
+          tool_calls: [
+            { step_id: 's1', call_id: 'c1', name: 'list_feeds', args: { limit: 5 } },
+          ],
+          tokens: 9,
+        }),
+      ]);
+
+      await act(async () => {
+        await useChatStore.getState().setCurrentSession('sess-1');
+      });
+
+      expect(mockedService.resumeSession).toHaveBeenCalledWith('sess-1');
+      expect(mockedService.getMessages).toHaveBeenCalledWith('sess-1');
+      const state = useChatStore.getState();
+      expect(state.currentSessionId).toBe('sess-1');
+      expect(sessionStorage.getItem(CURRENT_SESSION_KEY)).toBe('sess-1');
+      // Stored `tool_calls` rehydrate as the same agent-step shape the
+      // live stream renders.
+      expect(state.messages).toEqual([
+        { role: 'user', content: 'hello' },
+        {
+          role: 'assistant',
+          content: 'hi there',
+          steps: [
+            {
+              id: 's1',
+              kind: 'tool',
+              status: 'ok',
+              toolName: 'list_feeds',
+              toolArgs: { limit: 5 },
+            },
+          ],
+        },
+      ]);
+    });
+
+    it('is a no-op when the session is already active', async () => {
+      useChatStore.setState({
+        currentSessionId: 'sess-1',
+        messages: [{ role: 'user', content: 'kept' }],
+      });
+
+      await act(async () => {
+        await useChatStore.getState().setCurrentSession('sess-1');
+      });
+
+      expect(mockedService.resumeSession).not.toHaveBeenCalled();
+      expect(mockedService.getMessages).not.toHaveBeenCalled();
+      expect(useChatStore.getState().messages).toEqual([
+        { role: 'user', content: 'kept' },
+      ]);
+    });
+
+    it('clears the active session quietly when the session is gone (404)', async () => {
+      const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
+      mockedService.resumeSession.mockRejectedValueOnce(
+        new ChatApiError(404, 'Chat request failed (404)'),
+      );
+
+      await act(async () => {
+        await useChatStore.getState().setCurrentSession('deleted-session');
+      });
+
+      const state = useChatStore.getState();
+      expect(state.currentSessionId).toBeNull();
+      expect(state.messages).toEqual([]);
+      expect(state.error).toBeNull();
+      expect(sessionStorage.getItem(CURRENT_SESSION_KEY)).toBeNull();
+      // Spec: no error toast and no console error for the deleted case.
+      expect(consoleError).not.toHaveBeenCalled();
+      consoleError.mockRestore();
+    });
+
+    it('clears the active session when replay 404s after a successful resume', async () => {
+      mockedService.getMessages.mockRejectedValueOnce(
+        new ChatApiError(404, 'Chat request failed (404)'),
+      );
+
+      await act(async () => {
+        await useChatStore.getState().setCurrentSession('deleted-session');
+      });
+
+      expect(useChatStore.getState().currentSessionId).toBeNull();
+      expect(useChatStore.getState().messages).toEqual([]);
+    });
+
+    it('keeps the active session when replay fails transiently', async () => {
+      mockedService.getMessages.mockRejectedValueOnce(new Error('network down'));
+
+      await act(async () => {
+        await useChatStore.getState().setCurrentSession('sess-1');
+      });
+
+      // Not a 404: the id stays (a retry may succeed), the panel is
+      // simply empty.
+      expect(useChatStore.getState().currentSessionId).toBe('sess-1');
+      expect(useChatStore.getState().messages).toEqual([]);
+    });
+  });
+
+  describe('hydrateSession', () => {
+    it('restores the persisted session id and its messages', async () => {
+      sessionStorage.setItem(CURRENT_SESSION_KEY, 'sess-restored');
+      mockedService.getMessages.mockResolvedValueOnce([
+        makeMessageRow({ id: 1, role: 'user', content: 'earlier' }),
+      ]);
+
+      await act(async () => {
+        await useChatStore.getState().hydrateSession();
+      });
+
+      expect(useChatStore.getState().currentSessionId).toBe('sess-restored');
+      expect(mockedService.getMessages).toHaveBeenCalledWith('sess-restored');
+      expect(useChatStore.getState().messages).toEqual([
+        { role: 'user', content: 'earlier' },
+      ]);
+    });
+
+    it('does nothing when no session is persisted', async () => {
+      await act(async () => {
+        await useChatStore.getState().hydrateSession();
+      });
+
+      expect(mockedService.getMessages).not.toHaveBeenCalled();
+      expect(useChatStore.getState().currentSessionId).toBeNull();
+    });
+
+    it('does not refetch when messages are already on screen', async () => {
+      sessionStorage.setItem(CURRENT_SESSION_KEY, 'sess-live');
+      useChatStore.setState({
+        currentSessionId: 'sess-live',
+        messages: [{ role: 'user', content: 'already here' }],
+      });
+
+      await act(async () => {
+        await useChatStore.getState().hydrateSession();
+      });
+
+      expect(mockedService.getMessages).not.toHaveBeenCalled();
+    });
+
+    it('clears the persisted id quietly when the session was deleted', async () => {
+      const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
+      sessionStorage.setItem(CURRENT_SESSION_KEY, 'sess-gone');
+      mockedService.getMessages.mockRejectedValueOnce(
+        new ChatApiError(404, 'Chat request failed (404)'),
+      );
+
+      await act(async () => {
+        await useChatStore.getState().hydrateSession();
+      });
+
+      const state = useChatStore.getState();
+      expect(state.currentSessionId).toBeNull();
+      expect(state.messages).toEqual([]);
+      expect(state.error).toBeNull();
+      expect(sessionStorage.getItem(CURRENT_SESSION_KEY)).toBeNull();
+      expect(consoleError).not.toHaveBeenCalled();
+      consoleError.mockRestore();
+    });
+  });
+
+  describe('startNewSession', () => {
+    it('clears the panel and makes the minted session active', async () => {
+      useChatStore.setState({
+        currentSessionId: 'prev',
+        messages: [{ role: 'user', content: 'stale' }],
+      });
+      mockedService.createSession.mockResolvedValueOnce({
+        session_id: 'srv-fresh',
+        started_at: '2026-10-14T00:00:00Z',
+      });
+
+      await act(async () => {
+        await useChatStore.getState().startNewSession();
+      });
+
+      const state = useChatStore.getState();
+      expect(state.messages).toEqual([]);
+      expect(state.currentSessionId).toBe('srv-fresh');
+      expect(sessionStorage.getItem(CURRENT_SESSION_KEY)).toBe('srv-fresh');
+      // The sidebar list is untouched — no scroll, no clear.
+      expect(state.sessionList).toEqual([]);
+    });
+
+    it('leaves the tab session-less when the create call fails', async () => {
+      useChatStore.setState({
+        currentSessionId: 'prev',
+        messages: [{ role: 'user', content: 'stale' }],
+      });
+      mockedService.createSession.mockRejectedValueOnce(new Error('network down'));
+
+      await act(async () => {
+        await useChatStore.getState().startNewSession();
+      });
+
+      const state = useChatStore.getState();
+      expect(state.currentSessionId).toBeNull();
+      expect(state.messages).toEqual([]);
+      expect(sessionStorage.getItem(CURRENT_SESSION_KEY)).toBeNull();
+    });
+
+    it('deletes the minted session as an orphan when a send raced the create', async () => {
+      // A message starting mid-POST must win: adopting the minted id
+      // here would point the panel at a session the server never wrote
+      // to (the stream adopts its own id from the run_id frame instead).
+      // Simulate the race: flip isStreaming while the POST is in flight.
+      mockedService.createSession.mockImplementationOnce(async () => {
+        useChatStore.setState({ isStreaming: true });
+        return { session_id: 'srv-orphan', started_at: '2026-10-14T00:00:00Z' };
+      });
+
+      await act(async () => {
+        await useChatStore.getState().startNewSession();
+      });
+
+      const state = useChatStore.getState();
+      expect(state.currentSessionId).toBeNull();
+      expect(sessionStorage.getItem(CURRENT_SESSION_KEY)).toBeNull();
+      expect(mockedService.deleteSession).toHaveBeenCalledWith('srv-orphan');
+    });
+  });
+
+  describe('deleteSession', () => {
+    it('removes the row from the list and leaves the panel alone', async () => {
+      useChatStore.setState({
+        sessionList: [makeSession('s1'), makeSession('s2')],
+        currentSessionId: 's2',
+        messages: [{ role: 'user', content: 'kept' }],
+      });
+
+      await act(async () => {
+        await useChatStore.getState().deleteSession('s1');
+      });
+
+      expect(mockedService.deleteSession).toHaveBeenCalledWith('s1');
+      expect(useChatStore.getState().sessionList.map((s) => s.id)).toEqual(['s2']);
+      expect(useChatStore.getState().currentSessionId).toBe('s2');
+      expect(useChatStore.getState().messages).toEqual([
+        { role: 'user', content: 'kept' },
+      ]);
+    });
+
+    it('clears the panel when the deleted session was active', async () => {
+      useChatStore.setState({
+        sessionList: [makeSession('s1')],
+        currentSessionId: 's1',
+        messages: [{ role: 'user', content: 'gone' }],
+      });
+      sessionStorage.setItem(CURRENT_SESSION_KEY, 's1');
+
+      await act(async () => {
+        await useChatStore.getState().deleteSession('s1');
+      });
+
+      const state = useChatStore.getState();
+      expect(state.sessionList).toEqual([]);
+      expect(state.currentSessionId).toBeNull();
+      expect(state.messages).toEqual([]);
+      expect(sessionStorage.getItem(CURRENT_SESSION_KEY)).toBeNull();
+    });
+
+    it('drops a stale row when the server reports it missing (404)', async () => {
+      useChatStore.setState({ sessionList: [makeSession('s1')] });
+      mockedService.deleteSession.mockRejectedValueOnce(
+        new ChatApiError(404, 'Chat request failed (404)'),
+      );
+
+      await act(async () => {
+        await useChatStore.getState().deleteSession('s1');
+      });
+
+      expect(useChatStore.getState().sessionList).toEqual([]);
+    });
+
+    it('keeps the row when the delete fails transiently', async () => {
+      useChatStore.setState({ sessionList: [makeSession('s1')] });
+      mockedService.deleteSession.mockRejectedValueOnce(new Error('network down'));
+
+      await act(async () => {
+        await useChatStore.getState().deleteSession('s1');
+      });
+
+      expect(useChatStore.getState().sessionList.map((s) => s.id)).toEqual(['s1']);
     });
   });
 });

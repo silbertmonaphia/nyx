@@ -210,7 +210,15 @@ test.describe('Chat / RAG flow (browser-level)', () => {
     await expect(page.getByTestId('chat-use-feeds')).not.toBeChecked();
   });
 
-  test('closing the dialog resets the message history', async ({ page }) => {
+  test('closing and reopening the dialog restores the active conversation', async ({
+    page,
+  }) => {
+    // agent-chat-history-ui changed this contract: closing the dialog no
+    // longer wipes the conversation. Reopening restores the active
+    // session and replays its stored turns — the product goal is that
+    // closing the window must NOT lose the chat (AgentMemoryDesign.md
+    // pain point 2). A fresh conversation starts only via the explicit
+    // `+ New chat` action (covered in chat-history-sidebar.spec.ts).
     await sendMessage(page, 'remember me');
     await waitForStreamEnd(page);
     expect(
@@ -221,13 +229,19 @@ test.describe('Chat / RAG flow (browser-level)', () => {
     await page.getByRole('button', { name: 'Open chat' }).click();
     await expect(page.getByTestId('chat-form')).toBeVisible();
 
-    // Fresh dialog session: empty-state copy must be back, no
-    // user/assistant bubbles.
-    await expect(
-      page.getByText(/No messages yet — type below to start\./),
-    ).toBeVisible();
-    await expect(page.getByTestId('chat-message-user')).toHaveCount(0);
-    await expect(page.getByTestId('chat-message-assistant')).toHaveCount(0);
+    // The replayed turn comes back over the session REST endpoints
+    // (async), so allow the fetch to land.
+    await expect(page.getByTestId('chat-message-user').last()).toHaveText(
+      'remember me',
+      { timeout: 15000 },
+    );
+    // The assistant half must replay too — a user-only replay means the
+    // turn's terminal persistence was lost (the disconnect race the
+    // finalize shield in agent/main.py closes).
+    await expect(page.getByTestId('chat-message-assistant').last()).not.toHaveText(
+      /^\s*$/,
+      { timeout: 15000 },
+    );
   });
 
   test('Enter sends, Shift+Enter inserts a newline', async ({ page }) => {

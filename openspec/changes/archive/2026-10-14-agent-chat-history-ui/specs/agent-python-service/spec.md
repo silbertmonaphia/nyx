@@ -19,14 +19,13 @@ The service SHALL refuse to start when `PYTHON_AGENT_CHAT_RETENTION_DAYS` is set
 
 The following env vars are added by the chat-history UI change:
 - `PYTHON_AGENT_SESSIONS_PAGE_SIZE` (default 10) — default page size for `GET /agent/sessions`; MUST be in `[1, 50]`
-- `PYTHON_AGENT_SESSION_IDLE_MIN` (default 30) — minutes of inactivity after which the Go chat proxy opens a fresh session instead of auto-resuming the most recent one; MUST be ≥ 1
 
-The service SHALL refuse to start when `PYTHON_AGENT_SESSIONS_PAGE_SIZE` is outside `[1, 50]`, or when `PYTHON_AGENT_SESSION_IDLE_MIN` is below 1.
+The service SHALL refuse to start when `PYTHON_AGENT_SESSIONS_PAGE_SIZE` is outside `[1, 50]`.
 
 #### Scenario: Default values applied when env unset
 
 - **WHEN** the service starts with no env vars set
-- **THEN** `PYTHON_AGENT_PLAN_MAX_STEPS=10`, `PYTHON_AGENT_STEP_REACT_MAX_ITERATIONS=5`, `PYTHON_AGENT_MCP_URL=http://backend:8080/mcp`, `PYTHON_AGENT_RAG_BRIDGE_URL=http://backend:8080/internal/rag/retrieve`, `PYTHON_AGENT_PLANNER_RETRY_MAX=1`, `PYTHON_AGENT_PLANNER_STRUCTURED_ENABLED=true`, `PYTHON_AGENT_TOOL_RETRY_MAX=2`, `PYTHON_AGENT_HEARTBEAT_INTERVAL_SECONDS=30`, `PYTHON_AGENT_STALE_RUN_TIMEOUT_SECONDS=900`, `PYTHON_AGENT_SWEEP_INTERVAL_SECONDS=300`, `PYTHON_AGENT_SWEEP_ENABLED=true`, `PYTHON_AGENT_CHAT_RETENTION_DAYS=365`, `PYTHON_AGENT_CHAT_RETENTION_GRACE_DAYS=7`, `PYTHON_AGENT_CHAT_RETENTION_ENABLED=true`, `PYTHON_AGENT_SESSIONS_PAGE_SIZE=10`, `PYTHON_AGENT_SESSION_IDLE_MIN=30` are applied and the service starts
+- **THEN** `PYTHON_AGENT_PLAN_MAX_STEPS=10`, `PYTHON_AGENT_STEP_REACT_MAX_ITERATIONS=5`, `PYTHON_AGENT_MCP_URL=http://backend:8080/mcp`, `PYTHON_AGENT_RAG_BRIDGE_URL=http://backend:8080/internal/rag/retrieve`, `PYTHON_AGENT_PLANNER_RETRY_MAX=1`, `PYTHON_AGENT_PLANNER_STRUCTURED_ENABLED=true`, `PYTHON_AGENT_TOOL_RETRY_MAX=2`, `PYTHON_AGENT_HEARTBEAT_INTERVAL_SECONDS=30`, `PYTHON_AGENT_STALE_RUN_TIMEOUT_SECONDS=900`, `PYTHON_AGENT_SWEEP_INTERVAL_SECONDS=300`, `PYTHON_AGENT_SWEEP_ENABLED=true`, `PYTHON_AGENT_CHAT_RETENTION_DAYS=365`, `PYTHON_AGENT_CHAT_RETENTION_GRACE_DAYS=7`, `PYTHON_AGENT_CHAT_RETENTION_ENABLED=true`, `PYTHON_AGENT_SESSIONS_PAGE_SIZE=10` are applied and the service starts
 
 #### Scenario: Required key missing refuses startup
 
@@ -83,7 +82,43 @@ The service SHALL refuse to start when `PYTHON_AGENT_SESSIONS_PAGE_SIZE` is outs
 - **WHEN** `PYTHON_AGENT_SESSIONS_PAGE_SIZE=0` (or 51) is set
 - **THEN** startup raises `ValueError: PYTHON_AGENT_SESSIONS_PAGE_SIZE must be in [1, 50]` and the process exits
 
-#### Scenario: Session idle below one minute refuses startup
 
-- **WHEN** `PYTHON_AGENT_SESSION_IDLE_MIN=0` is set
-- **THEN** startup raises `ValueError: PYTHON_AGENT_SESSION_IDLE_MIN must be >= 1` and the process exits
+## ADDED Requirements
+
+### Requirement: Session continuation on echoed session ids
+
+When `POST /agent/run` arrives with a `run_id` matching a live (non-deleted) `chat_sessions` row owned by the requesting user, the service SHALL treat the request as a continuation of that session: the SSE `run_id` frame SHALL echo the same id; the turn's new user message and the assistant reply SHALL be appended to that session; and the service SHALL NOT create or mutate an `agent.runs` row for this execution (a session may have no runs row at all until its first turn, and a terminal runs row must never be mutated). A non-terminal `agent.runs` row for the id takes priority — crash-recovery resume semantics are unchanged. Unknown ids, another user's ids, and soft-deleted sessions SHALL fall through to a freshly minted session. Only the LAST user message of the request is appended on a continuation (the SPA re-sends the session's full history every turn; earlier messages already exist). There is no idle-time session chopping: the client's `+ New chat` is the only session-boundary signal.
+
+#### Scenario: Continuation appends without duplication
+
+- **WHEN** turn 2 of a session arrives echoing the session id with history `[u1, a1, u2]`
+- **THEN** the SSE `run_id` frame echoes the same id; the session gains exactly one `u2` row and one new assistant row; `u1`/`a1` are not re-recorded; no second `agent.runs` row exists for the session
+
+#### Scenario: API-created session receives its first turn
+
+- **WHEN** a session was created via `POST /agent/sessions` (no `agent.runs` row) and its first chat echoes its id
+- **THEN** the turn is appended to it and no `agent.runs` row is minted for the execution
+
+#### Scenario: Old sessions keep their thread
+
+- **WHEN** a session whose last activity is 30 days old is echoed
+- **THEN** the turn is appended to it — there is no idle-time chopping
+
+#### Scenario: Unknown and cross-user ids mint fresh
+
+- **WHEN** the echoed id is unknown, owned by another user, or soft-deleted
+- **THEN** the service mints a fresh session id for the turn; the other session (if any) is left untouched
+
+### Requirement: Terminal persistence survives client disconnect
+
+The SSE generator's terminal persistence (the assistant message row, the session `ended_at` stamp, and the `agent.runs` terminal transition for non-continuation runs) SHALL complete even when the client disconnects at or after the `terminator` frame. The writes SHALL run in a task shielded from generator cancellation so a fully-streamed answer can never lose its stored assistant half or leave its run row stuck `running`.
+
+#### Scenario: Disconnect at terminator still persists the answer
+
+- **WHEN** a client closes the stream immediately after the `terminator` frame (the SPA parser's normal close point) while the terminal writes are mid-flight
+- **THEN** the assistant row lands in `chat_messages`, the session's `ended_at` is stamped, and the run row reaches `completed` — none of them depend on the client staying connected
+
+#### Scenario: Mid-run disconnect keeps the resumable semantics
+
+- **WHEN** a client disconnects before the run reaches `done`
+- **THEN** no assistant row is written and the run row stays `running` (resumable inside the stale-run window; the sweeper reaps it otherwise) — unchanged semantics

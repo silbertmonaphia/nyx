@@ -2,18 +2,29 @@ import type { ApiError } from "~/api/openapi";
 import { tokenStore, refreshTokensAndReplay } from "~/services/api";
 import { injectTraceparent } from "~/services/telemetry";
 import {
+  ChatApiError,
   ChatStreamError,
   type ChatEvent,
   type ChatRequest,
   type Message,
+  type SessionMessage,
+  type SessionSummary,
 } from "../types/chat";
+
+const API_BASE = import.meta.env.VITE_API_URL || "http://localhost:8080/api";
 
 // POST /api/chat. The wrapped `api` axios instance can't carry SSE
 // (responseType: 'stream' isn't supported and buffering would defeat
 // the point), so we hit the route with raw `fetch`, manually stamp
 // the Bearer + traceparent headers (axios interceptors don't run on
 // fetch), and parse `text/event-stream` frames inline.
-const CHAT_URL = `${import.meta.env.VITE_API_URL || "http://localhost:8080/api"}/chat`;
+const CHAT_URL = `${API_BASE}/chat`;
+
+// Session REST surface (agent-chat-history-ui). Same transport
+// posture as the SSE call — raw `fetch` — because the wrapped axios
+// instance toasts every non-2xx through the global error handler and
+// the sidebar's failure contract is a quiet empty state.
+const SESSIONS_URL = `${API_BASE}/chat/sessions`;
 
 // SSE field delimiter — the spec defines `\r\n\r\n` as the frame
 // terminator but most servers (and the browser's native EventSource)
@@ -27,10 +38,10 @@ const SSE_FRAME_DELIMITERS = ["\n\n", "\r\n\r\n"];
  * is stamped via the same `injectTraceparent` helper the axios path
  * uses so backend spans join the SPA's root.
  */
-function buildHeaders(): Record<string, string> {
+function buildHeaders(accept = "text/event-stream"): Record<string, string> {
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
-    Accept: "text/event-stream",
+    Accept: accept,
   };
   const at = tokenStore.getAccessToken();
   if (at) {
@@ -38,6 +49,96 @@ function buildHeaders(): Record<string, string> {
   }
   injectTraceparent(headers);
   return headers;
+}
+
+/**
+ * JSON round-trip for the session endpoints. Mirrors `streamMessage`'s
+ * transport (raw `fetch`, hand-stamped Bearer + traceparent, one replay
+ * after the shared single-flight refresh on 401) so both halves of the
+ * chat API behave identically behind an expired access token.
+ *
+ * Non-2xx throws `ChatApiError` carrying the status — the store tells a
+ * 404 (session gone) from a transient failure off it. The message is a
+ * static client-side string: the backend's `error` field is not safe to
+ * echo to the UI (SECURITY.md H7), and the sidebar has no toast to fill.
+ */
+async function requestJson<T>(
+  url: string,
+  init: RequestInit = {},
+): Promise<T> {
+  const send = (): Promise<Response> =>
+    fetch(url, { ...init, headers: buildHeaders("application/json") });
+
+  let response = await send();
+  if (response.status === 401 && tokenStore.getAccessToken() !== null) {
+    const ok = await refreshTokensAndReplay();
+    if (ok) {
+      response = await send();
+    }
+  }
+
+  if (!response.ok) {
+    throw new ChatApiError(
+      response.status,
+      `Chat request failed (${response.status})`,
+    );
+  }
+
+  // DELETE answers 204 (or an empty 200) — don't feed `""` to JSON.parse.
+  const text = await response.text();
+  if (!text) {
+    return undefined as T;
+  }
+  try {
+    return JSON.parse(text) as T;
+  } catch {
+    throw new ChatApiError(response.status, "Chat response was not valid JSON");
+  }
+}
+
+/**
+ * Coerce a session-list row off the wire. Returns null for rows without
+ * a usable id — a malformed entry is dropped rather than rendered as a
+ * broken sidebar row. Optional fields collapse to safe defaults so the
+ * component never has to null-check.
+ */
+function toSessionSummary(raw: unknown): SessionSummary | null {
+  if (!raw || typeof raw !== "object") return null;
+  const row = raw as Record<string, unknown>;
+  if (typeof row.id !== "string" || row.id === "") return null;
+  return {
+    id: row.id,
+    user_id: typeof row.user_id === "number" ? row.user_id : 0,
+    title: typeof row.title === "string" ? row.title : "",
+    started_at: typeof row.started_at === "string" ? row.started_at : "",
+    last_active_at:
+      typeof row.last_active_at === "string" ? row.last_active_at : "",
+    ended_at: typeof row.ended_at === "string" ? row.ended_at : null,
+    message_count:
+      typeof row.message_count === "number" ? row.message_count : 0,
+  };
+}
+
+/**
+ * Coerce a replayed message off the wire. Rows without a role or
+ * content are dropped: rendering a half-read row would misrepresent the
+ * conversation. `tool_calls` is kept opaque — the store maps it to the
+ * agent-step shape it renders.
+ */
+function toSessionMessage(raw: unknown): SessionMessage | null {
+  if (!raw || typeof raw !== "object") return null;
+  const row = raw as Record<string, unknown>;
+  if (typeof row.role !== "string" || typeof row.content !== "string") {
+    return null;
+  }
+  return {
+    id: typeof row.id === "number" ? row.id : 0,
+    role: row.role,
+    content: row.content,
+    tool_calls: Array.isArray(row.tool_calls) ? row.tool_calls : null,
+    tokens: typeof row.tokens === "number" ? row.tokens : 0,
+    created_at: typeof row.created_at === "string" ? row.created_at : "",
+  };
 }
 
 /**
@@ -53,7 +154,9 @@ function buildHeaders(): Record<string, string> {
  *    once. A replayed 401 throws (the refresh token is gone — only
  *    correct outcome is logout).
  *  - On 2xx, walks the `ReadableStream` chunk by chunk, accumulating
- *    a line buffer and dispatching one event per SSE frame.
+ *    a line buffer and dispatching one event per SSE frame. The first
+ *    frame (`event: run_id`) is routed to `opts.onRunId` instead of
+ *    the yielded union — the session id is state, not stream content.
  *  - Honors `signal`: aborting the caller aborts the underlying fetch
  *    so the body reader closes and the generator returns.
  */
@@ -61,9 +164,28 @@ export const chatService = {
   async *streamMessage(
     messages: Message[],
     signal: AbortSignal,
-    opts: { rag?: boolean } = {},
+    opts: {
+      rag?: boolean;
+      /**
+       * Active session id. Sent as `run_id` so the agent resumes that
+       * session (and does not re-record the replayed user messages)
+       * instead of minting a fresh one. Omitted when the tab has no
+       * active session yet.
+       */
+      runId?: string | null;
+      /**
+       * Called with the server-minted run id from the stream's first
+       * frame (`event: run_id`). Always surfaced; the store decides
+       * whether to adopt it as the active session (it only does so
+       * when this tab had none).
+       */
+      onRunId?: (id: string) => void;
+    } = {},
   ): AsyncGenerator<ChatEvent> {
     const body: ChatRequest = { messages, rag: opts.rag };
+    if (opts.runId) {
+      body.run_id = opts.runId;
+    }
     // `model` is intentionally omitted — the backend ignores it for
     // v1 and the brief explicitly forbids a model picker in the UI.
     let response = await fetch(CHAT_URL, {
@@ -171,7 +293,21 @@ export const chatService = {
             return;
           }
           if (!dataStr) continue;
-          if (currentEvent === "delta") {
+          if (currentEvent === "run_id") {
+            // First frame of every run. Surfaced through the callback
+            // rather than the event union so the existing consumers
+            // (whose for-await loops exhaustively match on `kind`) are
+            // untouched — this slice adds no new ChatEvent variant.
+            try {
+              const parsed = JSON.parse(dataStr) as { run_id?: unknown };
+              if (typeof parsed.run_id === "string" && parsed.run_id !== "") {
+                opts.onRunId?.(parsed.run_id);
+              }
+            } catch {
+              // Drop a malformed run_id frame — the stream continues
+              // and the tab simply doesn't adopt the session.
+            }
+          } else if (currentEvent === "delta") {
             try {
               const parsed = JSON.parse(dataStr) as { delta?: unknown };
               if (typeof parsed.delta === "string") {
@@ -442,5 +578,97 @@ export const chatService = {
         // already released — ignore
       }
     }
+  },
+
+  /**
+   * GET /api/chat/sessions — one page of the caller's sessions, ordered
+   * `last_active_at DESC`. `before` is the opaque `next_cursor` from the
+   * previous page (omit for the first page); `nextCursor === null` means
+   * the list is complete. `limit` is left to the server default when
+   * omitted so `PYTHON_AGENT_SESSIONS_PAGE_SIZE` stays the source of
+   * truth for the page size.
+   */
+  async listSessions(
+    opts: { limit?: number; before?: string | null } = {},
+  ): Promise<{ sessions: SessionSummary[]; nextCursor: string | null }> {
+    const params = new URLSearchParams();
+    if (typeof opts.limit === "number") {
+      params.set("limit", String(opts.limit));
+    }
+    if (opts.before) {
+      params.set("before", opts.before);
+    }
+    const qs = params.toString();
+    const data = await requestJson<{
+      sessions?: unknown;
+      next_cursor?: unknown;
+    }>(qs ? `${SESSIONS_URL}?${qs}` : SESSIONS_URL);
+
+    const rows = Array.isArray(data?.sessions) ? data.sessions : [];
+    return {
+      sessions: rows
+        .map(toSessionSummary)
+        .filter((s): s is SessionSummary => s !== null),
+      nextCursor: typeof data?.next_cursor === "string" && data.next_cursor !== ""
+        ? data.next_cursor
+        : null,
+    };
+  },
+
+  /**
+   * GET /api/chat/sessions/{id}/messages — the session's messages in
+   * chronological order. 404 (deleted / reaped / another user's
+   * session) throws `ChatApiError` with `status: 404`.
+   */
+  async getMessages(sessionId: string): Promise<SessionMessage[]> {
+    const data = await requestJson<{ messages?: unknown }>(
+      `${SESSIONS_URL}/${encodeURIComponent(sessionId)}/messages`,
+    );
+    const rows = Array.isArray(data?.messages) ? data.messages : [];
+    return rows
+      .map(toSessionMessage)
+      .filter((m): m is SessionMessage => m !== null);
+  },
+
+  /**
+   * POST /api/chat/sessions — mint an empty session owned by the
+   * caller. The returned id is the uuid4 the agent uses as the run id,
+   * so it round-trips through the `run_id` request field.
+   */
+  async createSession(): Promise<{ session_id: string; started_at: string }> {
+    const data = await requestJson<{
+      session_id?: unknown;
+      started_at?: unknown;
+    }>(SESSIONS_URL, { method: "POST" });
+    if (typeof data?.session_id !== "string" || data.session_id === "") {
+      throw new ChatApiError(200, "Chat session creation returned no id");
+    }
+    return {
+      session_id: data.session_id,
+      started_at: typeof data.started_at === "string" ? data.started_at : "",
+    };
+  },
+
+  /**
+   * POST /api/chat/sessions/{id}/resume — refresh `last_active_at` so
+   * the session ranks at the top of the next list page and the
+   * retention cron treats it as live. 404 → the session is gone.
+   */
+  async resumeSession(sessionId: string): Promise<void> {
+    await requestJson(
+      `${SESSIONS_URL}/${encodeURIComponent(sessionId)}/resume`,
+      { method: "POST" },
+    );
+  },
+
+  /**
+   * DELETE /api/chat/sessions/{id} — soft-delete. Any 2xx resolves; a
+   * 404 throws `ChatApiError` (the row is already invisible to the
+   * list, so the caller can drop it locally either way).
+   */
+  async deleteSession(sessionId: string): Promise<void> {
+    await requestJson(`${SESSIONS_URL}/${encodeURIComponent(sessionId)}`, {
+      method: "DELETE",
+    });
   },
 };

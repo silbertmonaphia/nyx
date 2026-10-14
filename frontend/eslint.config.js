@@ -8,11 +8,22 @@ import { defineConfig, globalIgnores } from 'eslint/config'
 export default defineConfig([
   globalIgnores([
     'dist',
+    // `vitest --coverage` output (gitignored, regenerated on demand).
+    'coverage',
     // Generated code: OpenAPI schema typings live under src/api/openapi
     // and are re-emitted on every backend spec change. They are not
     // hand-authored and not lint territory.
     'src/api/openapi/schema.d.ts',
   ]),
+  {
+    // Node-side tooling configs. They are `.cjs` but not browser code,
+    // so they need the Node globals (`__dirname`, `require`) on top of
+    // the browser set every JS file below gets.
+    files: ['**/*.cjs'],
+    languageOptions: {
+      globals: globals.node,
+    },
+  },
   {
     files: ['**/*.{js,jsx,mjs,cjs}'],
     extends: [

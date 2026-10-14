@@ -1,6 +1,13 @@
 import { create } from "zustand";
+import { logger } from "~/services/logger";
 import { chatService } from "../services/chatService";
-import type { ChatStep, Message } from "../types/chat";
+import {
+  ChatApiError,
+  type ChatStep,
+  type Message,
+  type SessionMessage,
+  type SessionSummary,
+} from "../types/chat";
 
 // Per-message `usage` payload delivered on `event: done`. Lives on
 // the assistant message itself so a follow-up render can show token
@@ -57,6 +64,63 @@ interface ChatState {
   reset: () => void;
   /** Abort the in-flight stream, if any. Idempotent. */
   cancel: () => void;
+
+  // ---- Chat history (agent-chat-history-ui) -------------------------
+
+  /**
+   * Active chat session id, or `null` when this tab isn't linked to a
+   * stored session yet. The first `event: run_id` frame of a run mints
+   * one and the store adopts it (see `send`), so a page reload can find
+   * the conversation again. Persisted to sessionStorage — per-tab, like
+   * the token store (design.md D4).
+   */
+  currentSessionId: string | null;
+  /** Sidebar rows, newest-first; pages append via `loadMore`. */
+  sessionList: SessionSummary[];
+  /** Opaque cursor for the next page; `null` when the list is complete. */
+  sessionListNextCursor: string | null;
+  /** True while a list page (first or subsequent) is in flight. */
+  isFetchingMore: boolean;
+  /**
+   * Fetch the next sidebar page (or the first one when nothing is
+   * loaded). Single-flight: a call while one is in flight is dropped
+   * (design.md D6). No-op once `sessionListNextCursor` is null.
+   * Failures are silent — the sidebar shows its empty state.
+   */
+  loadMore: () => Promise<void>;
+  /**
+   * Refetch page 1 and merge it into the rail (newest-first by id),
+   * preserving any lazy-loaded rows beyond page 1. Fired when a session
+   * is first adopted so the new conversation appears immediately.
+   * Failures are silent — the next mount/scroll retries.
+   */
+  refreshSessionList: () => Promise<void>;
+  /**
+   * Switch the active session: abort any live stream, clear the panel,
+   * persist the id, resume the session (`last_active_at`) and load its
+   * messages for replay. A no-op when the id is already active; a 404
+   * clears the active session quietly.
+   */
+  setCurrentSession: (id: string) => Promise<void>;
+  /** Drop the active session (and its panel) without touching the list. */
+  clearActiveSession: () => void;
+  /**
+   * Mint a fresh session and make it active, resetting the panel. The
+   * sidebar keeps its rows; the new session has none until the next
+   * list fetch.
+   */
+  startNewSession: () => Promise<void>;
+  /**
+   * Restore the active session after a reload / dialog reopen: read the
+   * persisted id, adopt it, and fetch its messages. No-op when there is
+   * no persisted id, when messages are already on screen, or mid-stream.
+   */
+  hydrateSession: () => Promise<void>;
+  /**
+   * Soft-delete a session and drop it from the sidebar. Deleting the
+   * active session also clears the panel.
+   */
+  deleteSession: (id: string) => Promise<void>;
 }
 
 // localStorage key for the useFeeds toggle. Persisted so a
@@ -87,6 +151,138 @@ function readPersistedUseFeeds(): boolean {
   }
 }
 
+// sessionStorage key for the active session id. Namespaced alongside
+// the other chat persistence (`nyx.chat.useFeeds`) but per-tab: closing
+// the tab forgets the conversation, a reload does not (design.md D4 —
+// same posture as the token store).
+const CURRENT_SESSION_KEY = "nyx.chat.currentSessionId";
+
+function readPersistedSessionId(): string | null {
+  if (typeof window === "undefined") return null;
+  try {
+    const id = window.sessionStorage.getItem(CURRENT_SESSION_KEY);
+    return id && id !== "" ? id : null;
+  } catch {
+    return null;
+  }
+}
+
+function persistSessionId(id: string | null): void {
+  if (typeof window === "undefined") return;
+  try {
+    if (id === null) {
+      window.sessionStorage.removeItem(CURRENT_SESSION_KEY);
+    } else {
+      window.sessionStorage.setItem(CURRENT_SESSION_KEY, id);
+    }
+  } catch {
+    // Private mode / quota — the in-memory id still drives this render;
+    // it just won't survive a reload.
+  }
+}
+
+/**
+ * Abort the in-flight stream, if any, and mark the reset so the
+ * generator's `finally` skips its "drop the half-built assistant row"
+ * slice. That slice indexes into the messages array the stream started
+ * with; after a session switch (which replaces the array) it would
+ * delete an unrelated row. Mirrors `reset()`, but only flags a reset
+ * when there is actually something to cancel — otherwise a stray
+ * `resetting = true` would be left behind for the next send.
+ */
+function abortLiveStream(): void {
+  if (!controller) return;
+  resetting = true;
+  controller.abort();
+  controller = null;
+}
+
+/** True when the failure is a 404 — the session row is gone. */
+function isSessionGone(err: unknown): boolean {
+  return err instanceof ChatApiError && err.status === 404;
+}
+
+/**
+ * Convert a stored message row into the panel's `ChatMessage` shape.
+ * Assistant rows carry their persisted `tool_calls` (the wire envelope
+ * verbatim: `{step_id, call_id, name, args}`) which rehydrate as
+ * `steps` so the replay renders the same "agent steps" disclosure the
+ * live stream produces. Rows without usable tool calls render as plain
+ * assistant text; unknown roles (the schema allows `tool` / `system`)
+ * fold into the assistant side — the replay surface is user-facing and
+ * only distinguishes "me" from "the agent". `tokens` is deliberately
+ * dropped: it's a session total, not the prompt/completion split the
+ * live usage row shows.
+ */
+function toReplayMessage(row: SessionMessage): ChatMessage {
+  if (row.role === "user") {
+    return { role: "user", content: row.content };
+  }
+  const steps: ChatStep[] = [];
+  for (const raw of row.tool_calls ?? []) {
+    if (!raw || typeof raw !== "object") continue;
+    const call = raw as Record<string, unknown>;
+    if (typeof call.step_id !== "string" || call.step_id === "") continue;
+    steps.push({
+      id: call.step_id,
+      kind: "tool",
+      status: "ok",
+      toolName: typeof call.name === "string" ? call.name : undefined,
+      toolArgs: call.args,
+    });
+  }
+  return steps.length > 0
+    ? { role: "assistant", content: row.content, steps }
+    : { role: "assistant", content: row.content };
+}
+
+// Minimal store surface the module-level session helpers need. Typed
+// structurally so zustand's own SetState signature stays the single
+// source of truth for the store factory below.
+type ChatGet = () => ChatState;
+type ChatSet = (partial: Partial<ChatState>) => void;
+
+/**
+ * Resume one session and replay its messages into the panel. Shared by
+ * `setCurrentSession` and `hydrateSession`.
+ *
+ * A 404 on either call means the row is gone (deleted here, in another
+ * tab, or reaped by retention): clear the active session without
+ * surfacing anything — no toast, no console error (spec "Reload after
+ * session deletion clears gracefully"). Any other failure is logged and
+ * leaves the panel empty; the user can pick another session.
+ */
+async function loadSessionInto(
+  get: ChatGet,
+  set: ChatSet,
+  id: string,
+): Promise<void> {
+  try {
+    // Touch `last_active_at` so the session ranks at the top of the next
+    // list fetch and retention sees it as live.
+    await chatService.resumeSession(id);
+  } catch (err) {
+    if (isSessionGone(err)) {
+      get().clearActiveSession();
+      return;
+    }
+    logger.warn("chat.session.resume_failed", { error: String(err) });
+  }
+  try {
+    const rows = await chatService.getMessages(id);
+    // A switch (or `+ New chat`) may have landed while the fetch was in
+    // flight — the later intent wins.
+    if (get().currentSessionId !== id) return;
+    set({ messages: rows.map(toReplayMessage) });
+  } catch (err) {
+    if (isSessionGone(err)) {
+      get().clearActiveSession();
+      return;
+    }
+    logger.warn("chat.session.replay_failed", { error: String(err) });
+  }
+}
+
 /**
  * Ephemeral chat history. Deliberately NOT persisted to localStorage:
  *  - The brief calls it out as out-of-scope (FUTURE_FRONTEND.md
@@ -100,6 +296,10 @@ export const useChatStore = create<ChatState>((set, get) => ({
   isStreaming: false,
   error: null,
   useFeeds: readPersistedUseFeeds(),
+  currentSessionId: readPersistedSessionId(),
+  sessionList: [],
+  sessionListNextCursor: null,
+  isFetchingMore: false,
 
   setUseFeeds: (next) => {
     if (typeof localStorage !== "undefined") {
@@ -141,12 +341,39 @@ export const useChatStore = create<ChatState>((set, get) => ({
 
     const localController = new AbortController();
     controller = localController;
+    // Capture the session this request is sent with — the adoption guard
+    // below compares against THIS value, not the live store (review M2,
+    // 2026-10-14).
+    const sentSessionId = get().currentSessionId;
     let aborted = false;
     try {
       const stream = chatService.streamMessage(
         [...baseMessages].map((m) => ({ role: m.role, content: m.content })),
         localController.signal,
-        { rag: get().useFeeds },
+        {
+          rag: get().useFeeds,
+          // Echo the active session so the agent continues it instead
+          // of minting a new one. Null on the tab's first message.
+          runId: sentSessionId,
+          // The server is the authority on which session it actually
+          // wrote to: adopt the frame id whenever it differs from the
+          // one this request carried — a first message (null → id), or
+          // a fresh mint when the echoed id was unknown / soft-deleted /
+          // hit a chat-store hiccup. If the user switched sessions while
+          // this stream was in flight, their pick wins (the switch
+          // aborts this stream anyway; this is the belt to that
+          // suspenders).
+          onRunId: (id) => {
+            if (id === sentSessionId) return; // request landed where sent
+            if (get().currentSessionId !== sentSessionId) return; // user moved on
+            set({ currentSessionId: id });
+            persistSessionId(id);
+            // The adopted id exists server-side (the frame follows the
+            // row insert), so pull page 1 and surface the new
+            // conversation in the rail without waiting for a reload.
+            void get().refreshSessionList();
+          },
+        },
       );
       while (true) {
         // Race the next event against the abort signal so a Cancel
@@ -440,6 +667,155 @@ export const useChatStore = create<ChatState>((set, get) => ({
       controller = null;
     }
     set({ isStreaming: false });
+  },
+
+  // ---- Chat history actions (agent-chat-history-ui) -----------------
+
+  loadMore: async () => {
+    const { isFetchingMore, sessionList, sessionListNextCursor } = get();
+    // Single-flight (design.md D6): an IntersectionObserver burst must
+    // not append the same page twice.
+    if (isFetchingMore) return;
+    // End of list: the sidebar has no sentinel to fire, but a manual
+    // call (or a remount racing a slow resolve) must not refetch page 1
+    // and duplicate every row.
+    if (sessionListNextCursor === null && sessionList.length > 0) return;
+
+    set({ isFetchingMore: true });
+    try {
+      const page = await chatService.listSessions({
+        before: sessionListNextCursor,
+      });
+      set((state) => ({
+        sessionList: [...state.sessionList, ...page.sessions],
+        sessionListNextCursor: page.nextCursor,
+      }));
+    } catch (err) {
+      // Quiet failure: the sidebar keeps its empty state instead of a
+      // toast (spec "no error toast on list failure"); the next mount
+      // or scroll retries.
+      logger.warn("chat.session.list_failed", { error: String(err) });
+    } finally {
+      set({ isFetchingMore: false });
+    }
+  },
+
+  refreshSessionList: async () => {
+    // Refetch page 1 and merge newest-first by id: rows the fresh page
+    // carries are replaced in place (server owns their order and
+    // counts), rows the user had lazy-loaded beyond page 1 are kept in
+    // their existing order. Called when a session is first adopted
+    // (the tab's first message minting an id) so the new conversation
+    // shows up in the rail immediately. Merging (rather than
+    // reset-and-replace) means a concurrently resolving mount/scroll
+    // fetch cannot duplicate or reorder what is already on screen.
+    try {
+      const page = await chatService.listSessions({});
+      set((state) => {
+        const freshIds = new Set(page.sessions.map((s) => s.id));
+        const tail = state.sessionList.filter((s) => !freshIds.has(s.id));
+        return {
+          sessionList: [...page.sessions, ...tail],
+          sessionListNextCursor:
+            state.sessionListNextCursor ?? page.nextCursor,
+        };
+      });
+    } catch (err) {
+      logger.warn("chat.session.refresh_failed", { error: String(err) });
+    }
+  },
+
+  setCurrentSession: async (id) => {
+    // Clicking the row of the active session is a no-op — no refetch,
+    // no panel clear (design.md D7).
+    if (get().currentSessionId === id) return;
+    // Drop the live view first: abort any in-flight stream so its
+    // half-built assistant row can't leak into the replayed history,
+    // then clear the messages before the fetch lands.
+    abortLiveStream();
+    set({ currentSessionId: id, messages: [], isStreaming: false, error: null });
+    persistSessionId(id);
+    await loadSessionInto(get, set, id);
+  },
+
+  clearActiveSession: () => {
+    abortLiveStream();
+    persistSessionId(null);
+    set({
+      currentSessionId: null,
+      messages: [],
+      isStreaming: false,
+      error: null,
+    });
+  },
+
+  startNewSession: async () => {
+    // Clear immediately so the panel flips to the welcome state whether
+    // or not the POST succeeds — spec Scenario "New chat clears the
+    // panel" is a UI guarantee, not a network one.
+    abortLiveStream();
+    persistSessionId(null);
+    set({ currentSessionId: null, messages: [], isStreaming: false, error: null });
+    try {
+      const { session_id } = await chatService.createSession();
+      // If a session got picked (or a message started streaming and will
+      // adopt its own id from the run_id frame) while this POST was in
+      // flight, the just-created session is an empty orphan — drop it so
+      // the rail stays honest, and leave the live flow alone. The
+      // `isStreaming` arm matters: adopting B here mid-send would point
+      // the panel at B while the server writes the turn to the id the
+      // stream eventually reports.
+      if (get().currentSessionId !== null || get().isStreaming) {
+        void chatService.deleteSession(session_id).catch((err: unknown) => {
+          logger.warn("chat.session.orphan_cleanup_failed", {
+            error: String(err),
+          });
+        });
+        return;
+      }
+      set({ currentSessionId: session_id });
+      persistSessionId(session_id);
+    } catch (err) {
+      // The panel is already empty; the next message mints a fresh
+      // session via the run_id frame path.
+      logger.warn("chat.session.create_failed", { error: String(err) });
+    }
+  },
+
+  hydrateSession: async () => {
+    // A reload re-imports the store, which reads sessionStorage at
+    // module init; a later (re)mount re-reads it here so a store that
+    // was reset — or never hydrated — still restores the tab's session.
+    let id = get().currentSessionId;
+    if (id === null) {
+      id = readPersistedSessionId();
+      if (id !== null) set({ currentSessionId: id });
+    }
+    if (id === null) return;
+    // Hydration is a reload / reopen concern: a conversation already on
+    // screen (or mid-stream) must not be refetched and replaced.
+    if (get().messages.length > 0 || get().isStreaming) return;
+    await loadSessionInto(get, set, id);
+  },
+
+  deleteSession: async (id) => {
+    try {
+      await chatService.deleteSession(id);
+    } catch (err) {
+      // A 404 means it is already gone (another tab, or the retention
+      // cron) — drop the stale row locally anyway. Anything else is
+      // transient: keep the row so the user can retry.
+      if (!isSessionGone(err)) {
+        logger.warn("chat.session.delete_failed", { error: String(err) });
+        return;
+      }
+    }
+    set((state) => ({
+      sessionList: state.sessionList.filter((s) => s.id !== id),
+    }));
+    if (get().currentSessionId === id) {
+      get().clearActiveSession();
+    }
   },
 }));
 

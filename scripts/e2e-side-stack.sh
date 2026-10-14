@@ -73,6 +73,7 @@ start_backend() {
     DB_URL="$DB_URL_SIDE" \
     REDIS_URL='redis://localhost:6380' \
     AGENT_ENABLED='true' \
+    MCP_ENABLED='true' \
     PYTHON_AGENT_URL="http://127.0.0.1:${AGENT_PORT}" \
     CORS_ALLOWED_ORIGINS="http://localhost:${VITE_PORT},http://127.0.0.1:${VITE_PORT}" \
       go run ./cmd/api > /tmp/nyx-e2e-backend.log 2>&1 &
@@ -85,7 +86,7 @@ start_frontend() {
   (
     cd "$ROOT/frontend"
     setsid env \
-    VITE_API_URL="http://localhost:${GO_PORT}" \
+    VITE_API_URL="http://localhost:${GO_PORT}/api" \
       npx vite --port "$VITE_PORT" --strictPort > /tmp/nyx-e2e-frontend.log 2>&1 &
     echo $! > /tmp/nyx-e2e-frontend.pid
   )
@@ -105,6 +106,15 @@ wait_health() {
 }
 
 cmd_up() {
+  # Refuse to start onto occupied ports — otherwise a half-dead previous
+  # run silently leaves a stale instance serving the port while the new
+  # one fails to bind (the new PID file then points at a dead process).
+  for port in "$GO_PORT" "$AGENT_PORT" "$AGENT_METRICS_PORT" "$VITE_PORT"; do
+    if ss -ltn "sport = :$port" 2>/dev/null | tail -n +2 | grep -q .; then
+      echo "port :$port is already in use — run '$0 stop' first (or a previous side stack is still up)" >&2
+      exit 1
+    fi
+  done
   start_agent
   start_backend
   start_frontend
@@ -120,7 +130,7 @@ cmd_up() {
   wait_health "http://localhost:${VITE_PORT}/" "vite" 60
   echo
   echo "side stack up:"
-  echo "  SPA     http://localhost:${VITE_PORT}   (VITE_API_URL=http://localhost:${GO_PORT})"
+  echo "  SPA     http://localhost:${VITE_PORT}   (VITE_API_URL=http://localhost:${GO_PORT}/api)"
   echo "  backend http://localhost:${GO_PORT}"
   echo "  agent   http://localhost:${AGENT_PORT}  (metrics :${AGENT_METRICS_PORT})"
   echo

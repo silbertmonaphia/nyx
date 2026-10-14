@@ -146,6 +146,12 @@ class Settings(BaseSettings):
     # future flip-back resumes normal retention). Rollback path.
     chat_retention_enabled: bool = True
 
+    # --- Chat-session API (openspec/changes/agent-chat-history-ui) ---
+    # Default page size for `GET /agent/sessions`. The request's `limit`
+    # query param overrides it per call; requests are hard-capped at 50
+    # (same bound the validator below enforces on this default).
+    sessions_page_size: int = 10
+
     # --- Stale-run sweeper (openspec/changes/agent-stale-run-sweeper) ---
     # Heartbeat cadence for live runs: while a run's SSE stream is in
     # flight, a background task touches `agent.runs.last_heartbeat_at`
@@ -401,6 +407,23 @@ class Settings(BaseSettings):
             raise ValueError(
                 "PYTHON_AGENT_CHAT_RETENTION_GRACE_DAYS must be >= 0; "
                 f"got {self.chat_retention_grace_days}"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _validate_chat_sessions(self) -> Settings:
+        """Refuse to start on a chat-session API misconfiguration.
+
+        Per `openspec/changes/agent-chat-history-ui` (agent-python-service
+        delta): `PYTHON_AGENT_SESSIONS_PAGE_SIZE` MUST be in `[1, 50]` —
+        it is the default page size AND the ceiling the `limit` query
+        param is validated against, so an out-of-range default could
+        never be served.
+        """
+        if not 1 <= self.sessions_page_size <= 50:
+            raise ValueError(
+                "PYTHON_AGENT_SESSIONS_PAGE_SIZE must be in [1, 50]; "
+                f"got {self.sessions_page_size}"
             )
         return self
 

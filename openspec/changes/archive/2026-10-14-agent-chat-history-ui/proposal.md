@@ -21,7 +21,7 @@ Slice 1 (`agent-chat-history-storage`, archived 2026-10-14) wrote every chat to 
   - `ChatPanel.tsx` refactor — on session switch, clear the live token stream, load the historical messages via `GET /agent/sessions/{id}/messages`, render; restore the live stream on the next user-sent message
   - `chatStore` gains `currentSessionId`, `sessionList`, `loadMore`, `setCurrentSession(id)`; persists to `sessionStorage` so a tab reload restores the current session
   - Header `+ New chat` button → `POST /agent/sessions` → switches the active session id
-- Session boundary signals: the existing "+ New chat" button or 30-min idle (`PYTHON_AGENT_SESSION_IDLE_MIN`) opens a new session; the SSE generator in `main.py` already records the current `run_id` to the active chat_sessions row on each run start (Slice 1), so no main.py changes are needed beyond a small "session-resume" hint
+- Session boundary signal: the `+ New chat` button is the ONLY boundary — an echoed session id always continues its thread (no idle-time chopping; a returning user must be able to resume an old conversation). The SSE generator in `main.py` gains the session-continuation branch: an echoed id that matches a live `chat_sessions` row is adopted as the session for this turn (fresh plan, no `agent.runs` row minted or mutated).
 - **No new SSE frames**, **no new wire fields**, **no changes to the chat-history-storage slice's data plane**
 - Pagination: cursor-based (`before=<last_active_at>_<id>`), 10 per page by default, max 50 per request; never returns soft-deleted rows
 
@@ -35,7 +35,7 @@ Slice 1 (`agent-chat-history-storage`, archived 2026-10-14) wrote every chat to 
 ### Modified Capabilities
 
 - `chat-agent-proxy`: gains the optional `run_id` passthrough on `POST /api/chat` (new `RunID` field on the wire struct) and the five authenticated session REST proxy routes under `/api/chat/sessions`.
-- `agent-python-service`: gains `PYTHON_AGENT_SESSION_IDLE_MIN` (default 30) and `PYTHON_AGENT_SESSIONS_PAGE_SIZE` (default 10) env vars; the lifespan wires the chat-sessions router to the FastAPI app.
+- `agent-python-service`: gains `PYTHON_AGENT_SESSIONS_PAGE_SIZE` (default 10); the lifespan wires the chat-sessions router to the FastAPI app; the `/agent/run` handler gains session-continuation semantics for echoed session ids.
 
 ## Impact
 

@@ -332,3 +332,39 @@ def test_web_tools_negative_numeric_refused(monkeypatch, field):
             **{field: -1},
         )
     assert f"PYTHON_AGENT_{field.upper()}" in str(excinfo.value)
+
+
+# --- chat sessions (openspec/changes/agent-chat-history-ui) ---------------
+
+
+def test_chat_sessions_defaults(monkeypatch):
+    """Spec scenario "Default values applied when env unset": page size 10;
+    both bounds of the page-size range start."""
+    monkeypatch.delenv("PYTHON_AGENT_SESSIONS_PAGE_SIZE", raising=False)
+    s = Settings(_env_file=None, llm_base_url="http://vllm:8000/v1")
+    assert s.sessions_page_size == 10
+    # The range endpoints are valid configuration, not off-by-one bugs.
+    assert (
+        Settings(
+            _env_file=None, llm_base_url="http://vllm:8000/v1", sessions_page_size=1
+        ).sessions_page_size
+        == 1
+    )
+    assert (
+        Settings(
+            _env_file=None, llm_base_url="http://vllm:8000/v1", sessions_page_size=50
+        ).sessions_page_size
+        == 50
+    )
+
+
+@pytest.mark.parametrize("value", [0, 51, -1])
+def test_sessions_page_size_out_of_range_refused(value):
+    """Spec scenario "Page size out of range refuses startup"."""
+    with pytest.raises(ValueError) as excinfo:
+        Settings(
+            _env_file=None,
+            llm_base_url="http://vllm:8000/v1",
+            sessions_page_size=value,
+        )
+    assert "PYTHON_AGENT_SESSIONS_PAGE_SIZE must be in [1, 50]" in str(excinfo.value)
