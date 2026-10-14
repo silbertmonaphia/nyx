@@ -1275,6 +1275,37 @@ describe('useChatStore', () => {
       consoleError.mockRestore();
     });
 
+    it('replays a mutating tool call without restoring an approval card', async () => {
+      useChatStore.setState({
+        currentSessionId: 'prev',
+        messages: [{ role: 'user', content: 'stale' }],
+      });
+      mockedService.getMessages.mockResolvedValueOnce([
+        makeMessageRow({
+          id: 7,
+          role: 'assistant',
+          content: 'created it',
+          tool_calls: [
+            {
+              step_id: 's1',
+              call_id: 'c1',
+              name: 'create_feed',
+              args: { title: 'Rust Blog' },
+            },
+          ],
+          tokens: 4,
+        }),
+      ]);
+
+      await act(async () => {
+        await useChatStore.getState().setCurrentSession('sess-r');
+      });
+
+      const steps = useChatStore.getState().messages[0]?.steps ?? [];
+      expect(steps).toHaveLength(1);
+      expect(steps[0]?.confirm).toBeUndefined();
+    });
+
     it('clears the active session when replay 404s after a successful resume', async () => {
       mockedService.getMessages.mockRejectedValueOnce(
         new ChatApiError(404, 'Chat request failed (404)'),
@@ -1709,6 +1740,69 @@ describe('useChatStore', () => {
       expect(confirm?.error).toBeUndefined();
     });
 
+    it('expireApproval flips a pending card to expired', () => {
+      seedPendingCard();
+
+      useChatStore.getState().expireApproval('ap-1');
+
+      expect(
+        useChatStore.getState().messages[1].steps?.[0].confirm?.decision,
+      ).toBe('expired');
+    });
+
+    it('expireApproval never overwrites a recorded outcome', async () => {
+      seedPendingCard();
+
+      await act(async () => {
+        await useChatStore.getState().submitApproval('run-1', 'ap-1', 'approve');
+      });
+      useChatStore.getState().expireApproval('ap-1');
+
+      expect(
+        useChatStore.getState().messages[1].steps?.[0].confirm?.decision,
+      ).toBe('approved');
+    });
+
+    it('a decision recorded after a local expiry wins', async () => {
+      seedPendingCard();
+
+      useChatStore.getState().expireApproval('ap-1');
+      expect(
+        useChatStore.getState().messages[1].steps?.[0].confirm?.decision,
+      ).toBe('expired');
+
+      await act(async () => {
+        await useChatStore.getState().submitApproval('run-1', 'ap-1', 'approve');
+      });
+
+      expect(
+        useChatStore.getState().messages[1].steps?.[0].confirm?.decision,
+      ).toBe('approved');
+    });
+
+    it('expireApproval on an unknown approval id is a no-op', () => {
+      seedPendingCard();
+      const before = useChatStore.getState().messages;
+
+      useChatStore.getState().expireApproval('missing');
+
+      expect(useChatStore.getState().messages).toBe(before);
+    });
+
+    it('a retry hint never lands on an already-expired card', async () => {
+      seedPendingCard();
+      mockedService.submitApproval.mockRejectedValueOnce(new Error('boom'));
+      useChatStore.getState().expireApproval('ap-1');
+
+      await act(async () => {
+        await useChatStore.getState().submitApproval('run-1', 'ap-1', 'approve');
+      });
+
+      const confirm = useChatStore.getState().messages[1].steps?.[0].confirm;
+      expect(confirm?.decision).toBe('expired');
+      expect(confirm?.error).toBeUndefined();
+    });
+
     it('records the denial tool_result on the step (existing result path)', async () => {
       // After a deny, the agent answers the paused call with an
       // `ok:false` tool_result carrying the denial text; the store
@@ -2003,6 +2097,24 @@ describe('useChatStore', () => {
         streamA.push({ kind: 'delta', delta: 'A-late' });
         await Promise.resolve();
       });
+      await act(async () => {
+        streamA.push({
+          kind: 'confirm_request',
+          run_id: 'run-a',
+          step_id: 'step_2',
+          tool: 'create_feed',
+          args: { title: 'A-feed' },
+          approval_id: 'ap-a',
+          expires_at: Date.now() / 1000 + 300,
+        });
+        await Promise.resolve();
+      });
+      expect(
+        useChatStore
+          .getState()
+          .messages.flatMap((m) => m.steps ?? [])
+          .filter((s) => s.confirm),
+      ).toHaveLength(0);
       await waitFor(() => {
         expect(useChatStore.getState().messages[1]?.content).toBe('B-answer');
       });

@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { act, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { ConfirmationCard } from './ConfirmationCard';
 import type { ChatStepConfirm } from '../types/chat';
@@ -12,7 +12,7 @@ function makeConfirm(
     approvalId: 'ap-1',
     tool: 'create_feed',
     args: { title: 'Rust Blog', url: 'https://blog.rust-lang.org/feed.xml' },
-    expiresAt: 1791979500.0,
+    expiresAt: Date.now() / 1000 + 300,
     decision: 'pending',
     ...overrides,
   };
@@ -24,7 +24,13 @@ function makeConfirm(
 
 describe('ConfirmationCard', () => {
   it('renders the tool name and args while pending', () => {
-    render(<ConfirmationCard confirm={makeConfirm()} onDecide={vi.fn()} />);
+    render(
+      <ConfirmationCard
+        confirm={makeConfirm()}
+        onDecide={vi.fn()}
+        onExpire={vi.fn()}
+      />,
+    );
 
     const card = screen.getByTestId('chat-confirm-card');
     expect(card).toHaveAttribute('data-decision', 'pending');
@@ -41,7 +47,13 @@ describe('ConfirmationCard', () => {
 
   it('calls onDecide("approve") when Approve is clicked', async () => {
     const onDecide = vi.fn().mockResolvedValue(undefined);
-    render(<ConfirmationCard confirm={makeConfirm()} onDecide={onDecide} />);
+    render(
+      <ConfirmationCard
+        confirm={makeConfirm()}
+        onDecide={onDecide}
+        onExpire={vi.fn()}
+      />,
+    );
 
     await userEvent.click(screen.getByTestId('chat-confirm-approve'));
 
@@ -51,7 +63,13 @@ describe('ConfirmationCard', () => {
 
   it('calls onDecide("deny") when Deny is clicked', async () => {
     const onDecide = vi.fn().mockResolvedValue(undefined);
-    render(<ConfirmationCard confirm={makeConfirm()} onDecide={onDecide} />);
+    render(
+      <ConfirmationCard
+        confirm={makeConfirm()}
+        onDecide={onDecide}
+        onExpire={vi.fn()}
+      />,
+    );
 
     await userEvent.click(screen.getByTestId('chat-confirm-deny'));
 
@@ -67,7 +85,13 @@ describe('ConfirmationCard', () => {
           release = resolve;
         }),
     );
-    render(<ConfirmationCard confirm={makeConfirm()} onDecide={onDecide} />);
+    render(
+      <ConfirmationCard
+        confirm={makeConfirm()}
+        onDecide={onDecide}
+        onExpire={vi.fn()}
+      />,
+    );
 
     await userEvent.click(screen.getByTestId('chat-confirm-approve'));
 
@@ -87,6 +111,7 @@ describe('ConfirmationCard', () => {
       <ConfirmationCard
         confirm={makeConfirm({ decision: 'approved' })}
         onDecide={vi.fn()}
+        onExpire={vi.fn()}
       />,
     );
 
@@ -106,6 +131,7 @@ describe('ConfirmationCard', () => {
       <ConfirmationCard
         confirm={makeConfirm({ decision: 'denied' })}
         onDecide={vi.fn()}
+        onExpire={vi.fn()}
       />,
     );
 
@@ -127,6 +153,7 @@ describe('ConfirmationCard', () => {
       <ConfirmationCard
         confirm={makeConfirm({ decision: 'expired' })}
         onDecide={vi.fn()}
+        onExpire={vi.fn()}
       />,
     );
 
@@ -148,6 +175,7 @@ describe('ConfirmationCard', () => {
           error: 'Could not send your decision. Please try again.',
         })}
         onDecide={vi.fn()}
+        onExpire={vi.fn()}
       />,
     );
 
@@ -168,9 +196,119 @@ describe('ConfirmationCard', () => {
       <ConfirmationCard
         confirm={makeConfirm({ args: undefined })}
         onDecide={vi.fn()}
+        onExpire={vi.fn()}
       />,
     );
 
     expect(screen.getByTestId('chat-confirm-args')).toHaveTextContent('{}');
+  });
+
+  describe('expiry countdown', () => {
+    const T0 = new Date('2026-10-15T00:00:00Z').getTime();
+    const expiresIn = (seconds: number) => T0 / 1000 + seconds;
+
+    function withFakeClock(run: () => void) {
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date(T0));
+      try {
+        run();
+      } finally {
+        vi.useRealTimers();
+      }
+    }
+
+    it('shows the remaining time for a fresh card', () => {
+      withFakeClock(() => {
+        render(
+          <ConfirmationCard
+            confirm={makeConfirm({ expiresAt: expiresIn(300) })}
+            onDecide={vi.fn()}
+            onExpire={vi.fn()}
+          />,
+        );
+
+        expect(screen.getByTestId('chat-confirm-countdown')).toHaveTextContent(
+          'Expires in 5:00',
+        );
+      });
+    });
+
+    it('ticks the remaining time down', () => {
+      withFakeClock(() => {
+        render(
+          <ConfirmationCard
+            confirm={makeConfirm({ expiresAt: expiresIn(300) })}
+            onDecide={vi.fn()}
+            onExpire={vi.fn()}
+          />,
+        );
+
+        act(() => {
+          vi.advanceTimersByTime(1_000);
+        });
+
+        expect(screen.getByTestId('chat-confirm-countdown')).toHaveTextContent(
+          'Expires in 4:59',
+        );
+      });
+    });
+
+    it('invokes onExpire exactly once when the deadline passes', () => {
+      withFakeClock(() => {
+        const onExpire = vi.fn();
+        const confirm = makeConfirm({ expiresAt: expiresIn(2) });
+        const { rerender } = render(
+          <ConfirmationCard
+            confirm={confirm}
+            onDecide={vi.fn()}
+            onExpire={onExpire}
+          />,
+        );
+
+        act(() => {
+          vi.advanceTimersByTime(5_000);
+        });
+
+        expect(onExpire).toHaveBeenCalledTimes(1);
+        expect(screen.getByTestId('chat-confirm-countdown')).toHaveTextContent(
+          'Expires in 0:00',
+        );
+
+        const laterOnExpire = vi.fn();
+        rerender(
+          <ConfirmationCard
+            confirm={confirm}
+            onDecide={vi.fn()}
+            onExpire={laterOnExpire}
+          />,
+        );
+        act(() => {
+          vi.advanceTimersByTime(3_000);
+        });
+
+        expect(onExpire).toHaveBeenCalledTimes(1);
+        expect(laterOnExpire).not.toHaveBeenCalled();
+      });
+    });
+
+    it('never invokes onExpire for a decided card', () => {
+      withFakeClock(() => {
+        const onExpire = vi.fn();
+        render(
+          <ConfirmationCard
+            confirm={makeConfirm({ decision: 'approved', expiresAt: expiresIn(-10) })}
+            onDecide={vi.fn()}
+            onExpire={onExpire}
+          />,
+        );
+
+        act(() => {
+          vi.advanceTimersByTime(5_000);
+        });
+
+        expect(onExpire).not.toHaveBeenCalled();
+        expect(screen.queryByTestId('chat-confirm-countdown')).toBeNull();
+      });
+    });
   });
 });

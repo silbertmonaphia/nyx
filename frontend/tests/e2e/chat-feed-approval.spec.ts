@@ -43,7 +43,7 @@ function frame(kind: string, payload: unknown): string {
 }
 
 /** Frames up to (and including) the confirm prompt — the stream pauses here. */
-function preamble(): string {
+function preamble(expiresInSeconds = 300): string {
   return (
     frame('run_id', { run_id: RUN_ID }) +
     frame('note', { text: 'fresh_run', kind: 'fresh_run', run_id: RUN_ID }) +
@@ -60,7 +60,7 @@ function preamble(): string {
       tool: 'create_feed',
       args: { name: FEED_NAME },
       approval_id: APPROVAL_ID,
-      expires_at: Date.now() / 1000 + 300,
+      expires_at: Date.now() / 1000 + expiresInSeconds,
     })
   );
 }
@@ -384,6 +384,36 @@ test.describe('Feed-tool approval flow (browser-level)', () => {
     // No retry affordance on a dead approval, and no error hint.
     await expect(page.getByTestId('chat-confirm-approve')).toHaveCount(0);
     await expect(page.getByTestId('chat-confirm-error')).toHaveCount(0);
+    mock.stop();
+  });
+
+  test('countdown: the card expires at its deadline with no decision POST', async ({
+    page,
+  }) => {
+    const mock = await startMock({
+      stream: preamble(3),
+      resume: () => denyContinuation(),
+    });
+    await routeToMock(page, mock.base);
+
+    await sendMessage(page, `create a feed called ${FEED_NAME}`);
+
+    const card = page.getByTestId('chat-confirm-card');
+    await expect(card).toBeVisible({ timeout: 10000 });
+    await expect(card).toHaveAttribute('data-decision', 'pending');
+    await expect(page.getByTestId('chat-confirm-countdown')).toContainText(
+      /Expires in 0:0[23]/,
+    );
+
+    await expect(card).toHaveAttribute('data-decision', 'expired', {
+      timeout: 15000,
+    });
+    await expect(page.getByTestId('chat-confirm-status')).toContainText(
+      /expired/i,
+    );
+    await expect(page.getByTestId('chat-confirm-approve')).toHaveCount(0);
+    await expect(page.getByTestId('chat-confirm-deny')).toHaveCount(0);
+    expect(mock.approvals).toHaveLength(0);
     mock.stop();
   });
 });

@@ -164,6 +164,7 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ open, onOpenChange }) => {
   const send = useChat((s) => s.send);
   const cancel = useChat((s) => s.cancel);
   const submitApproval = useChat((s) => s.submitApproval);
+  const expireApproval = useChat((s) => s.expireApproval);
   const reset = useChat((s) => s.reset);
   const useFeeds = useChat((s) => s.useFeeds);
   const setUseFeeds = useChat((s) => s.setUseFeeds);
@@ -364,6 +365,7 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ open, onOpenChange }) => {
                                 decision,
                               )
                             }
+                            onExpire={() => expireApproval(confirm.approvalId)}
                           />
                         );
                       })}

@@ -91,6 +91,8 @@ interface ChatState {
     decision: ApprovalDecision,
   ) => Promise<void>;
 
+  expireApproval: (approvalId: string) => void;
+
   // ---- Chat history (agent-chat-history-ui) -------------------------
 
   /**
@@ -342,6 +344,7 @@ function patchApprovalCard(
   set: ChatSet,
   approvalId: string,
   patch: Partial<ChatStepConfirm>,
+  onlyIfPending = false,
 ): void {
   set((state) => {
     let found = false;
@@ -355,6 +358,7 @@ function patchApprovalCard(
       // Unreachable (the findIndex above matched on it) — the guard
       // exists only so the spread below type-narrows.
       if (!confirm) return m;
+      if (onlyIfPending && confirm.decision !== "pending") return m;
       found = true;
       const steps = m.steps.slice();
       steps[idx] = { ...m.steps[idx], confirm: { ...confirm, ...patch } };
@@ -990,10 +994,17 @@ export const useChatStore = create<ChatState>((set, get) => ({
       // pending with a short local hint so the user can retry —
       // never echo `err.message` (SECURITY.md H7).
       logger.warn("chat.approval.submit_failed", { error: String(err) });
-      patchApprovalCard(set, approvalId, {
-        error: "Could not send your decision. Please try again.",
-      });
+      patchApprovalCard(
+        set,
+        approvalId,
+        { error: "Could not send your decision. Please try again." },
+        true,
+      );
     }
+  },
+
+  expireApproval: (approvalId) => {
+    patchApprovalCard(set, approvalId, { decision: "expired" }, true);
   },
 
   // ---- Chat history actions (agent-chat-history-ui) -----------------

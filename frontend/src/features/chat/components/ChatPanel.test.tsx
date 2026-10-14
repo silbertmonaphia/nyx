@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { act, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { ChatPanel } from './ChatPanel';
 import { useChatStore } from '../store/chatStore';
@@ -746,7 +746,9 @@ describe('ChatPanel approval card', () => {
    * Mirrors the held-stream shape the real agent produces (design.md
    * D2: one SSE response, decision brokered out-of-band).
    */
-  function mockPausedStream(): () => void {
+  function mockPausedStream(
+    expiresAtSeconds: number = Date.now() / 1000 + 300,
+  ): () => void {
     let release: (() => void) | null = null;
     mockedService.streamMessage.mockImplementationOnce(async function* () {
       yield {
@@ -761,7 +763,7 @@ describe('ChatPanel approval card', () => {
         tool: 'create_feed',
         args: { title: 'Rust Blog' },
         approval_id: 'ap-1',
-        expires_at: 1791979500.0,
+        expires_at: expiresAtSeconds,
       };
       await new Promise<void>((resolve) => {
         release = resolve;
@@ -921,6 +923,45 @@ describe('ChatPanel approval card', () => {
     expect(screen.queryByTestId('chat-confirm-deny')).toBeNull();
     expect(screen.queryByTestId('chat-confirm-error')).toBeNull();
     release();
+  });
+
+  it('expires the card at its deadline without posting a decision', async () => {
+    vi.useFakeTimers();
+    const T0 = new Date('2026-10-15T00:00:00Z').getTime();
+    vi.setSystemTime(new Date(T0));
+    try {
+      const release = mockPausedStream(T0 / 1000 + 2);
+      render(<ChatPanel open={true} onOpenChange={vi.fn()} />);
+      await act(async () => {
+        void useChatStore.getState().send('add the rust blog');
+      });
+
+      expect(screen.getByTestId('chat-confirm-card')).toHaveAttribute(
+        'data-decision',
+        'pending',
+      );
+      expect(
+        screen.getByTestId('chat-confirm-countdown'),
+      ).toHaveTextContent('Expires in 0:02');
+
+      act(() => {
+        vi.advanceTimersByTime(3_000);
+      });
+
+      expect(screen.getByTestId('chat-confirm-card')).toHaveAttribute(
+        'data-decision',
+        'expired',
+      );
+      expect(screen.getByTestId('chat-confirm-status')).toHaveTextContent(
+        /expired/i,
+      );
+      expect(screen.queryByTestId('chat-confirm-approve')).toBeNull();
+      expect(screen.queryByTestId('chat-confirm-deny')).toBeNull();
+      expect(mockedService.submitApproval).not.toHaveBeenCalled();
+      release();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('locks the composer with a hint while the active session has a live detached run', async () => {

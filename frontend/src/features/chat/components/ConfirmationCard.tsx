@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { AlertCircle, CheckCircle, History, X } from "lucide-react";
 import { Button } from "~/components/ui/Button";
 import { Card, CardContent } from "~/components/ui/Card";
@@ -12,6 +12,14 @@ import type { ApprovalDecision, ChatStepConfirm } from "../types/chat";
 export interface ConfirmationCardProps {
   confirm: ChatStepConfirm;
   onDecide: (decision: ApprovalDecision) => Promise<void>;
+  onExpire: () => void;
+}
+
+function formatRemaining(ms: number): string {
+  const totalSeconds = Math.max(Math.ceil(ms / 1000), 0);
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  return `${minutes}:${String(seconds).padStart(2, "0")}`;
 }
 
 /**
@@ -47,12 +55,29 @@ function formatArgs(args: unknown): string {
 export const ConfirmationCard: React.FC<ConfirmationCardProps> = ({
   confirm,
   onDecide,
+  onExpire,
 }) => {
   // Local in-flight guard: the decision POST is idempotent server-side
   // (first decision wins), but the buttons shouldn't invite a
   // double-click while the request is on the wire.
   const [submitting, setSubmitting] = useState(false);
+  const [nowMs, setNowMs] = useState(() => Date.now());
+  const notifiedExpiry = useRef(false);
   const isPending = confirm.decision === "pending";
+  const expiresAtMs = confirm.expiresAt * 1000;
+  const remainingMs = Math.max(expiresAtMs - nowMs, 0);
+
+  useEffect(() => {
+    if (!isPending) return;
+    const interval = window.setInterval(() => setNowMs(Date.now()), 1000);
+    return () => window.clearInterval(interval);
+  }, [isPending]);
+
+  useEffect(() => {
+    if (!isPending || remainingMs > 0 || notifiedExpiry.current) return;
+    notifiedExpiry.current = true;
+    onExpire();
+  }, [isPending, remainingMs, onExpire]);
 
   const handleDecide = async (decision: ApprovalDecision) => {
     if (submitting) return;
@@ -109,26 +134,35 @@ export const ConfirmationCard: React.FC<ConfirmationCardProps> = ({
           {formatArgs(confirm.args)}
         </pre>
         {isPending ? (
-          <div className="flex justify-end gap-2">
-            <Button
-              type="button"
-              size="sm"
-              variant="outline"
-              disabled={submitting}
-              data-testid="chat-confirm-deny"
-              onClick={() => void handleDecide("deny")}
+          <div className="flex items-center justify-between gap-2">
+            <span
+              className="opacity-70 tabular-nums"
+              data-testid="chat-confirm-countdown"
+              role="timer"
             >
-              Deny
-            </Button>
-            <Button
-              type="button"
-              size="sm"
-              disabled={submitting}
-              data-testid="chat-confirm-approve"
-              onClick={() => void handleDecide("approve")}
-            >
-              Approve
-            </Button>
+              Expires in {formatRemaining(remainingMs)}
+            </span>
+            <div className="flex gap-2">
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                disabled={submitting}
+                data-testid="chat-confirm-deny"
+                onClick={() => void handleDecide("deny")}
+              >
+                Deny
+              </Button>
+              <Button
+                type="button"
+                size="sm"
+                disabled={submitting}
+                data-testid="chat-confirm-approve"
+                onClick={() => void handleDecide("approve")}
+              >
+                Approve
+              </Button>
+            </div>
           </div>
         ) : (
           <div
