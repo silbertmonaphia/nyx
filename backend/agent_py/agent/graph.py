@@ -50,10 +50,16 @@ def _executor_step_factory(
     return _executor_step
 
 
-def _planner_step_factory(settings: Settings, tracer: Any):
-    """Closure that returns the LangGraph-compatible async node for the planner."""
+def _planner_step_factory(settings: Settings, tracer: Any, prefs_text: str = ""):
+    """Closure that returns the LangGraph-compatible async node for the planner.
+
+    `prefs_text` is the rendered per-user preferences block
+    (openspec/changes/agent-user-preferences D5) the caller loaded before
+    building the graph; it rides on the node closure into
+    `plan_node` → `_initial_messages`.
+    """
     async def _planner_step(state: AgentState) -> AgentState:
-        return await plan_node(state, settings, tracer)
+        return await plan_node(state, settings, tracer, prefs_text=prefs_text)
 
     return _planner_step
 
@@ -65,6 +71,7 @@ def build_graph(
     tools: ToolDispatcher,
     checkpointer: Any | None = None,
     tracer: Any | None = None,
+    prefs_text: str = "",
 ):
     """Build (and return) the compiled StateGraph ready for `astream(initial_state)`.
 
@@ -81,13 +88,18 @@ def build_graph(
     test: a second app in the same process exports its node spans to the
     first app's provider). Falls back to the global lookup when omitted, for
     callers that don't care.
+
+    `prefs_text` is the per-user preferences block (openspec/changes/
+    agent-user-preferences D5) the caller loaded from the PrefsStore before
+    building the graph. The default `""` keeps every pre-existing caller's
+    planner prompt byte-identical.
     """
     if tracer is None:
         from opentelemetry import trace
 
         tracer = trace.get_tracer("nyx.agent")
     builder = StateGraph(AgentState)
-    builder.add_node("planner", _planner_step_factory(settings, tracer))
+    builder.add_node("planner", _planner_step_factory(settings, tracer, prefs_text))
     builder.add_node("executor", _executor_step_factory(settings, budget, rag, tools, tracer))
     builder.add_edge(START, "planner")
     builder.add_edge("planner", "executor")

@@ -21,7 +21,6 @@ import asyncio
 import json as _json
 import os
 import uuid as _uuid
-from datetime import datetime, timedelta, timezone
 
 import asyncpg
 import pytest
@@ -219,7 +218,9 @@ async def test_soft_then_hard_delete_lifecycle(pool: asyncpg.Pool) -> None:
     # determinism, sleep 5ms before phase 2.
     await asyncio.sleep(0.005)
     deleted = await store.hard_delete_soft_deleted(grace_days=0)
-    assert deleted == 3
+    # Returns the hard-deleted session ids (agent-user-preferences D6);
+    # the caller's metric increment is `len(ids)`.
+    assert sorted(deleted) == sorted(session_ids)
 
     # Sessions + messages all gone (FK CASCADE carried the messages).
     async with pool.acquire() as conn:

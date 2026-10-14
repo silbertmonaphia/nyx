@@ -16,7 +16,7 @@
 ## 3. Production gates
 
 - [ ] 3.1 1-week CI green — agent pytest suites (including the new prefs tests) green in CI for ≥ 1 week before any production flip. Wait-and-record.
-- [ ] 3.2 Cost watch — after enabling in staging, watch `agent_tokens_total` for the extraction role and the LLM provider bill delta for ≥ 1 week. Expected increment: bounded by one small extraction call per preference-bearing turn (the gate skips the rest). Confirm within the cost budget; tune `PYTHON_AGENT_PREFS_GATE` heuristics only via a code change (not a hot knob). Record the numbers.
+- [ ] 3.2 Cost watch — after enabling in staging, watch `agent_tokens_total` for the extraction role and the LLM provider bill delta for ≥ 1 week. Expected increment: bounded by one small extraction call per preference-bearing turn (the gate skips the rest). Confirm within the cost budget; tune the gate heuristic only via a code change (it has no env knob by design). Record the numbers.
 - [ ] 3.3 Injection parity check — with zero prefs for the test user, verify the planner system prompt is byte-identical to the pre-injection form (log diff or Langfuse prompt compare). This is the "off-path is unchanged" contract. Record.
 - [ ] 3.4 Kill-switch drill in staging — set `PYTHON_AGENT_PREFS_ENABLED=false`, send a preference-bearing message, verify no extraction call fires and no rows are written while chats complete normally; flip back and verify extraction resumes. Record.
 - [ ] 3.5 Production flip — after 3.1–3.4, enable in production. Record the flip in the deploy notes (`docs/agent-deployment.md`: the new env vars, the gate heuristic, the kill-switch, the prefs table lifecycle — rows follow the chat-retention window collection story per `agent-chat-history-store`).

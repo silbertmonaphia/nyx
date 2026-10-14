@@ -43,6 +43,13 @@ from .observability import (
     shutdown_langfuse,
     shutdown_observability,
 )
+from .prefs import (
+    PrefsStore,
+    PrefsStoreUnavailable,
+    extract_preferences,
+    looks_like_preference,
+    prefs_block,
+)
 from .rag_client import RagClient
 from .ratelimit import IpRateLimiter, RateLimitMiddleware
 from .retention import RetentionCron
@@ -68,6 +75,15 @@ _UUID4_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}
 # a client-disconnect cancellation detaches the task while it is still
 # writing — without this set it could be GC'd mid-write.
 _FINALIZE_TASKS: set[asyncio.Task[None]] = set()
+
+# Strong refs to detached preference-extraction tasks
+# (openspec/changes/agent-user-preferences, design D2). Same hazard, same
+# fix as `_FINALIZE_TASKS`: the task is spawned from `_stream_agent_run`'s
+# finally (after the reply is finalized) and holds no reference to the
+# response generator, so a client disconnect cannot cancel it — but only
+# this set keeps it from being GC'd before it finishes writing prefs.
+# Tests await this set draining (see tests/test_prefs_injection.py).
+_PREFS_TASKS: set[asyncio.Task[None]] = set()
 
 
 @asynccontextmanager
@@ -119,6 +135,7 @@ async def lifespan(app: FastAPI):
     # relies on the dedicated `agent-migrate` one-shot service instead).
     run_metadata: RunMetadata | None = None
     chat_store: ChatStore | None = None
+    prefs_store: PrefsStore | None = None
     checkpointer = None
     retention: RetentionCron | None = None
     sweeper: StaleRunSweeper | None = None
@@ -153,6 +170,13 @@ async def lifespan(app: FastAPI):
         chat_store = ChatStore(
             pool, acquire_timeout=settings.database_pool_acquire_timeout_seconds
         )
+        # Per-user preferences (openspec/changes/agent-user-preferences).
+        # Reuses the same pool — no second pool. Serves the planner
+        # injection read, the post-`done` extraction writes, and the
+        # retention iteration's derived-memory cleanup.
+        prefs_store = PrefsStore(
+            pool, acquire_timeout=settings.database_pool_acquire_timeout_seconds
+        )
 
         # langGraph PostgresSaver — psycopg-based, so we strip the
         # URL `options=...` (set search_path via SQL instead) and SET
@@ -174,6 +198,12 @@ async def lifespan(app: FastAPI):
                 retention_chat_store,
                 checkpointer,
                 settings=settings,
+                # Derived-memory cleanup rides the chat hard-delete
+                # (agent-user-preferences D6). Passed regardless of
+                # `prefs_enabled`: the kill switch stops extraction and
+                # injection, but already-stored rows must still die with
+                # their source session.
+                prefs_store=prefs_store,
             )
             retention.start()
 
@@ -197,6 +227,7 @@ async def lifespan(app: FastAPI):
 
     app.state.run_metadata = run_metadata
     app.state.chat_store = chat_store
+    app.state.prefs_store = prefs_store
     app.state.checkpointer = checkpointer
     app.state.retention = retention
     app.state.sweeper = sweeper
@@ -479,6 +510,7 @@ async def _stream_agent_run(
     """
     run_metadata: RunMetadata | None = getattr(app.state, "run_metadata", None)
     chat_store: ChatStore | None = getattr(app.state, "chat_store", None)
+    prefs_store: PrefsStore | None = getattr(app.state, "prefs_store", None)
     checkpointer = getattr(app.state, "checkpointer", None)
 
     # Mint, resume, or continue the session (openspec/changes/agent-chat-history-ui).
@@ -640,6 +672,33 @@ async def _stream_agent_run(
         local=getattr(app.state, "local_tools", None) or LocalToolRegistry(),
     )
 
+    # Per-user preferences (openspec/changes/agent-user-preferences D5):
+    # best-effort load of the accumulated set, rendered into the planner
+    # system prompt. Failure — or the kill switch, or an empty set —
+    # degrades to `""`, and the composed prompt is then byte-identical to
+    # its pre-injection form (regression-pinned).
+    prefs_text = ""
+    if settings.prefs_enabled and prefs_store is not None:
+        prefs: list = []
+        try:
+            prefs = await prefs_store.load_prefs(
+                user_id, limit=settings.prefs_max_injected
+            )
+        except PrefsStoreUnavailable as exc:
+            log.warning(
+                "prefs load failed (injecting none): run_id=%s err=%r", run_id, exc
+            )
+        except Exception as exc:  # noqa: BLE001 — injection is best-effort:
+            # a novel fault here must never kill an otherwise healthy chat
+            # stream; the reply simply runs without the preferences block.
+            log.warning(
+                "prefs load raised unexpectedly (injecting none): "
+                "run_id=%s err=%r",
+                run_id,
+                exc,
+            )
+        prefs_text = prefs_block(prefs)
+
     # Build the graph with the checkpointer if persistence is enabled.
     # Re-build per-request because the saver needs `thread_id` per-run.
     graph = build_graph(
@@ -652,6 +711,7 @@ async def _stream_agent_run(
         # fresh global lookup, which would diverge in multi-app processes
         # (see build_graph's docstring).
         tracer=app.state.tracer,
+        prefs_text=prefs_text,
     )
 
     graph_config: dict | None = None
@@ -832,9 +892,79 @@ async def _stream_agent_run(
             )
             raise
 
+        # Preference extraction (openspec/changes/agent-user-preferences,
+        # design D2/D4): fire-and-forget AFTER the reply is finalized — it
+        # never delays, blocks, or alters the SSE stream. Spawned only on a
+        # completed run (`saw_done`) past the cheap gate; the tracked task
+        # holds no reference to this generator, so a later disconnect
+        # cannot cancel it (and a disconnect during the shield above skips
+        # the spawn entirely — acceptable per D2: the next
+        # preference-bearing turn re-extracts; keys are stable).
+        if settings.prefs_enabled and saw_done and prefs_store is not None:
+            last_user_text = next(
+                (
+                    (m.content or "")
+                    for m in reversed(chat_req.messages)
+                    if m.role == "user"
+                ),
+                "",
+            )
+            if last_user_text and looks_like_preference(last_user_text):
+                prefs_task = asyncio.create_task(
+                    _extract_and_store_prefs(
+                        prefs_store, user_id, run_id, last_user_text, settings
+                    ),
+                    name=f"agent-prefs-{run_id}",
+                )
+                # Module-level strong ref (mirrors `_FINALIZE_TASKS`):
+                # asyncio holds only weak refs, so without this the task
+                # could be GC'd mid-write after a disconnect teardown.
+                _PREFS_TASKS.add(prefs_task)
+                prefs_task.add_done_callback(_PREFS_TASKS.discard)
+
     # Frontend parser triggers its own terminator on `data: [DONE]`. Old clients
     # that listen on `event: terminator` still work because we emit that event too.
     yield b"data: [DONE]\n\n"
+
+
+async def _extract_and_store_prefs(
+    prefs_store: PrefsStore,
+    user_id: int,
+    run_id: str,
+    text: str,
+    settings: Settings,
+) -> None:
+    """Detached preference extraction + upsert for one turn (design D2/D4).
+
+    Spawned from `_stream_agent_run`'s finally (post-`done`) via
+    `asyncio.create_task` and tracked in `_PREFS_TASKS`. Contract:
+
+    - Never touches the SSE stream: no frame ever carries extraction state,
+      and the reply has already reached the client when this runs.
+    - NEVER consults the budget guard (design D4, explicit): the budget
+      prices *user-visible* model work, and extraction is an internal
+      byproduct bounded structurally to one small call per
+      preference-bearing turn. Charging it to the user's cap would make
+      prefs silently accelerate budget exhaustion — a UX trap.
+    - Failure-isolated: `extract_preferences` returns `[]` on any LLM or
+      parse failure by contract; an upsert fault (or anything else) is
+      warn-logged here and ends the task. Nothing is retried within the
+      run (design D2).
+    """
+    try:
+        prefs = await extract_preferences(text, settings=settings)
+        for p in prefs:
+            await prefs_store.upsert_pref(
+                user_id, p.key, p.value, source_session_id=run_id
+            )
+    except Exception as exc:  # noqa: BLE001 — warn-and-continue (D2)
+        log.warning(
+            "preference extraction/storage failed (non-fatal): "
+            "run_id=%s user_id=%s err=%r",
+            run_id,
+            user_id,
+            exc,
+        )
 
 
 def _sse_encode(event: Event) -> bytes:

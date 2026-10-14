@@ -75,12 +75,17 @@ Before each plan, the planner SHALL load the user's preferences (`updated_at DES
 
 ### Requirement: Lifecycle follows chat-history retention
 
-Preferences whose `source_session_id` session is hard-deleted by the chat-retention cron SHALL be deleted in the same retention iteration. This keeps derived memory from outliving the conversation it came from, and keeps the slice-4 erasure path able to enumerate every table carrying user data with a single source-session join.
+Preferences whose `source_session_id` session is hard-deleted by the chat-retention cron SHALL be deleted in the same retention iteration. This keeps derived memory from outliving the conversation it came from. A per-iteration orphan sweep SHALL collect any prefs whose source session no longer exists, so a cleanup failure or a crash between the session delete and the prefs delete cannot strand rows permanently; a counter makes the sweep observable.
 
 #### Scenario: Session hard-delete collects its prefs
 
 - **WHEN** a session is hard-deleted by retention and a prefs row's `source_session_id` is that session
 - **THEN** the prefs row is deleted in the same iteration; increments of `agent_chat_retention_deleted_total` are unaffected (prefs are not counted as sessions)
+
+#### Scenario: Stranded prefs are recovered by the orphan sweep
+
+- **WHEN** a prefs cleanup failed (or the process died) after its session rows were hard-deleted, leaving rows whose `source_session_id` matches no `chat_sessions` row
+- **THEN** a later retention tick's orphan sweep deletes them and increments `agent_chat_prefs_deleted_total`
 
 #### Scenario: Prefs with other sessions survive
 

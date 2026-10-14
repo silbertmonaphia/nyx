@@ -244,6 +244,42 @@ OTel span `agent.run.retention`.
 | `PYTHON_AGENT_RETENTION_DAYS`             | `30`    | Terminal rows older than this are deleted. |
 | `PYTHON_AGENT_RETENTION_INTERVAL_SECONDS` | `3600`  | Cron cadence.                              |
 
+## Chat history, session API, and user preferences
+
+Three coupled surfaces share the same DB and lifecycle (see
+`openspec/changes/agent-chat-history-storage/`,
+`agent-chat-history-ui/`, and `agent-user-preferences/`):
+
+- **Chat history** — every turn is persisted (`agent.chat_sessions` /
+  `agent.chat_messages`); a two-phase retention (soft-delete + grace,
+  then hard-delete) collects it after the window. Hard-deletes also
+  collect the session's derived preference rows, with a per-tick orphan
+  sweep as a backstop.
+- **Session API** — `GET/POST/DELETE /agent/sessions*` serves the SPA's
+  history sidebar (list, replay, create, resume, soft-delete),
+  owner-scoped via `X-Nyx-User-Id`. An echoed `run_id` on
+  `/agent/run` continues the matching live session.
+- **User preferences** — after a reply completes, a fire-and-forget
+  task extracts stated preferences from the turn's last user message
+  (gated by a conservative EN/ZH heuristic, never charged to the chat
+  budget) and upserts them per `(user_id, key)`. The planner prompt
+  gains a preferences block; with zero prefs the prompt is
+  byte-identical to the pre-injection form.
+
+| Env var                              | Default | Purpose                                                                 |
+|--------------------------------------|---------|-------------------------------------------------------------------------|
+| `PYTHON_AGENT_CHAT_RETENTION_DAYS`   | `365`   | Chat-history floor (one year). Values below 365 refuse startup.          |
+| `PYTHON_AGENT_CHAT_RETENTION_GRACE_DAYS` | `7` | Soft-delete grace before the hard-delete.                                |
+| `PYTHON_AGENT_CHAT_RETENTION_ENABLED`| `true`  | Rollback switch: `false` halts the chat-history GC only.                 |
+| `PYTHON_AGENT_SESSIONS_PAGE_SIZE`    | `10`    | Default sidebar page size for `GET /agent/sessions` (`[1, 50]`).         |
+| `PYTHON_AGENT_PREFS_ENABLED`         | `true`  | Rollback switch for preference extraction AND planner injection.         |
+| `PYTHON_AGENT_PREFS_MAX_INJECTED`    | `50`    | Top-N preferences injected into the planner prompt (≥ 0).                |
+
+Counters `agent_chat_retention_deleted_total` (session hard-deletes) and
+`agent_chat_prefs_deleted_total` (orphan-sweep recoveries — a nonzero
+rate there means the hot-path prefs cleanup is failing); spans
+`agent.chat.retention` + per-endpoint `agent.sessions.*`.
+
 ## LLM tracing: Langfuse (opt-in)
 
 Structured, per-run LLM traces — planner and executor prompts, model

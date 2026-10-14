@@ -95,13 +95,22 @@ class _PlanError:
 
 
 async def plan_node(
-    state: AgentState, settings: Settings, tracer: trace.Tracer
+    state: AgentState,
+    settings: Settings,
+    tracer: trace.Tracer,
+    prefs_text: str = "",
 ) -> AgentState:
     """Invoke the planner LLM; mutate state.plan and state.events_so_far.
 
     Whether structured-output binding is the primary path is governed by
     `settings.planner_structured_enabled`. The wire-format output is the
     same either way — the client observes a single `plan` SSE frame.
+
+    `prefs_text` is the rendered per-user preferences block
+    (openspec/changes/agent-user-preferences D5) appended to the system
+    prompt. It is `""` when the user has no prefs, the kill switch is
+    off, or the load failed — the composed prompt is then byte-identical
+    to its pre-injection form.
     """
     with (
         # Langfuse twin of the plan span (agent-langfuse-tracing 3.4).
@@ -136,9 +145,11 @@ async def plan_node(
         span.set_attribute("structured", settings.planner_structured_enabled)
 
         if settings.planner_structured_enabled:
-            plan_or_error = await _emit_structured_plan(state, settings, tracer)
+            plan_or_error = await _emit_structured_plan(
+                state, settings, tracer, prefs_text
+            )
         else:
-            plan_or_error = await _emit_legacy_plan(state, settings, tracer)
+            plan_or_error = await _emit_legacy_plan(state, settings, tracer, prefs_text)
 
         if isinstance(plan_or_error, _PlanError):
             update_observation(
@@ -221,16 +232,27 @@ def _build_structured_client(settings: Settings):
     )
 
 
-def _initial_messages(state: AgentState, settings: Settings) -> list:
+def _initial_messages(
+    state: AgentState, settings: Settings, prefs_text: str = ""
+) -> list:
     """The planner's opening messages.
 
     The system prompt is the static base plus the conditional web-tools
     block (openspec/changes/agent-web-tools D9) — the block is "" when
     both web-tool flags are off, keeping the prompt byte-identical to its
     pre-web-tools form.
+
+    The per-user preferences block (openspec/changes/agent-user-preferences
+    D5) appends LAST, after `planner_block`: the static base stays first
+    (providers cache the static prefix better), and `prefs_text` is `""`
+    whenever the user has no prefs, so the composition is then
+    byte-identical to its pre-injection form (regression-pinned in
+    `tests/test_prefs_injection.py`).
     """
     return [
-        SystemMessage(content=PLANNER_SYSTEM_PROMPT + planner_block(settings)),
+        SystemMessage(
+            content=PLANNER_SYSTEM_PROMPT + planner_block(settings) + (prefs_text or "")
+        ),
         HumanMessage(content=_messages_to_prompt(state.get("messages", []))),
     ]
 
@@ -242,6 +264,10 @@ def _append_error_to_messages(messages: list, error: str) -> list:
     instruction) so the schema instructions stay stable across retries —
     the model sees "your previous attempt failed" feedback alongside its
     original request rather than a moving schema target.
+
+    Only the LAST message is mutated, so the system message — including
+    the web-tools and preferences blocks — rides along unchanged on every
+    retry.
     """
     err_block = f"\n\n{PREVIOUS_ATTEMPT_FAILED_HEADER}\n{error}"
     msgs = list(messages)
@@ -274,7 +300,10 @@ def _format_validation_error(exc: ValidationError) -> str:
 
 
 async def _emit_structured_plan(
-    state: AgentState, settings: Settings, tracer: trace.Tracer
+    state: AgentState,
+    settings: Settings,
+    tracer: trace.Tracer,
+    prefs_text: str = "",
 ) -> Plan | _PlanError:
     """Bound the structured-output retry loop. Returns `Plan` or `_PlanError`.
 
@@ -303,7 +332,7 @@ async def _emit_structured_plan(
         log.warning("planner client construction failed: %r", exc)
         return _PlanError("planner_failed", "Plan generation failed", "provider call failed")
 
-    messages = _initial_messages(state, settings)
+    messages = _initial_messages(state, settings, prefs_text)
     had_validation_failure = False
 
     for attempt in range(settings.planner_retry_max + 1):
@@ -422,7 +451,10 @@ def _extract_text(resp) -> str:
 
 
 async def _emit_legacy_plan(
-    state: AgentState, settings: Settings, tracer: trace.Tracer
+    state: AgentState,
+    settings: Settings,
+    tracer: trace.Tracer,
+    prefs_text: str = "",
 ) -> Plan | _PlanError:
     """Legacy free-text path: fence-strip + `json.loads` + post-parse enrichment.
 
@@ -443,7 +475,9 @@ async def _emit_legacy_plan(
     with jaeger_span(tracer, "agent.planner.legacy") as span:
         span.set_attribute("structured", False)
         try:
-            resp = await client.ainvoke(_initial_messages(state, settings))
+            resp = await client.ainvoke(
+                _initial_messages(state, settings, prefs_text)
+            )
         except Exception as exc:  # noqa: BLE001 — surface as a typed error event
             log.warning("planner provider call failed (legacy path): %r", exc)
             return _PlanError(

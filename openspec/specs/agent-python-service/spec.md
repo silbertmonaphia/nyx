@@ -101,10 +101,16 @@ The following env vars are added by the chat-history UI change:
 
 The service SHALL refuse to start when `PYTHON_AGENT_SESSIONS_PAGE_SIZE` is outside `[1, 50]`.
 
+The following env vars are added by the user-preferences change:
+- `PYTHON_AGENT_PREFS_ENABLED` (default true) — kill-switch for preference extraction AND planner injection; when false, no extraction task fires and the planner prompt omits the prefs block
+- `PYTHON_AGENT_PREFS_MAX_INJECTED` (default 50) — maximum preferences injected into the planner prompt (top-N by `updated_at DESC`); MUST be ≥ 0
+
+The service SHALL refuse to start when `PYTHON_AGENT_PREFS_MAX_INJECTED` is negative.
+
 #### Scenario: Default values applied when env unset
 
 - **WHEN** the service starts with no env vars set
-- **THEN** `PYTHON_AGENT_PLAN_MAX_STEPS=10`, `PYTHON_AGENT_STEP_REACT_MAX_ITERATIONS=5`, `PYTHON_AGENT_MCP_URL=http://backend:8080/mcp`, `PYTHON_AGENT_RAG_BRIDGE_URL=http://backend:8080/internal/rag/retrieve`, `PYTHON_AGENT_PLANNER_RETRY_MAX=1`, `PYTHON_AGENT_PLANNER_STRUCTURED_ENABLED=true`, `PYTHON_AGENT_TOOL_RETRY_MAX=2`, `PYTHON_AGENT_HEARTBEAT_INTERVAL_SECONDS=30`, `PYTHON_AGENT_STALE_RUN_TIMEOUT_SECONDS=900`, `PYTHON_AGENT_SWEEP_INTERVAL_SECONDS=300`, `PYTHON_AGENT_SWEEP_ENABLED=true`, `PYTHON_AGENT_CHAT_RETENTION_DAYS=365`, `PYTHON_AGENT_CHAT_RETENTION_GRACE_DAYS=7`, `PYTHON_AGENT_CHAT_RETENTION_ENABLED=true`, `PYTHON_AGENT_SESSIONS_PAGE_SIZE=10` are applied and the service starts
+- **THEN** `PYTHON_AGENT_PLAN_MAX_STEPS=10`, `PYTHON_AGENT_STEP_REACT_MAX_ITERATIONS=5`, `PYTHON_AGENT_MCP_URL=http://backend:8080/mcp`, `PYTHON_AGENT_RAG_BRIDGE_URL=http://backend:8080/internal/rag/retrieve`, `PYTHON_AGENT_PLANNER_RETRY_MAX=1`, `PYTHON_AGENT_PLANNER_STRUCTURED_ENABLED=true`, `PYTHON_AGENT_TOOL_RETRY_MAX=2`, `PYTHON_AGENT_HEARTBEAT_INTERVAL_SECONDS=30`, `PYTHON_AGENT_STALE_RUN_TIMEOUT_SECONDS=900`, `PYTHON_AGENT_SWEEP_INTERVAL_SECONDS=300`, `PYTHON_AGENT_SWEEP_ENABLED=true`, `PYTHON_AGENT_CHAT_RETENTION_DAYS=365`, `PYTHON_AGENT_CHAT_RETENTION_GRACE_DAYS=7`, `PYTHON_AGENT_CHAT_RETENTION_ENABLED=true`, `PYTHON_AGENT_SESSIONS_PAGE_SIZE=10`, `PYTHON_AGENT_PREFS_ENABLED=true`, `PYTHON_AGENT_PREFS_MAX_INJECTED=50` are applied and the service starts
 
 #### Scenario: Required key missing refuses startup
 
@@ -160,6 +166,16 @@ The service SHALL refuse to start when `PYTHON_AGENT_SESSIONS_PAGE_SIZE` is outs
 
 - **WHEN** `PYTHON_AGENT_SESSIONS_PAGE_SIZE=0` (or 51) is set
 - **THEN** startup raises `ValueError: PYTHON_AGENT_SESSIONS_PAGE_SIZE must be in [1, 50]` and the process exits
+
+#### Scenario: Negative prefs cap refuses startup
+
+- **WHEN** `PYTHON_AGENT_PREFS_MAX_INJECTED=-1` is set
+- **THEN** startup raises `ValueError: PYTHON_AGENT_PREFS_MAX_INJECTED must be >= 0; got -1` and the process exits
+
+#### Scenario: Prefs kill switch disturbs nothing at startup
+
+- **WHEN** `PYTHON_AGENT_PREFS_ENABLED=false` is set
+- **THEN** the service starts normally; no extraction task is scheduled on any run and the planner prompt builder omits the prefs block
 
 ### Requirement: Health endpoint for compose
 

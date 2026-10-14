@@ -26,11 +26,12 @@ the `agent.*` schema) for user-facing chat history:
     the two-phase retention: set `deleted_at = now()` on sessions past
     the retention window; return the soft-deleted ids so the caller can
     audit
-  - `hard_delete_soft_deleted(grace_days) -> int` — second phase: delete
-    rows whose `deleted_at` is past the grace window; returns the count
-    so the caller can increment the metric. `chat_messages` cascades via
-    FK ON DELETE CASCADE — a single DELETE on `chat_sessions` cleans
-    the messages too.
+  - `hard_delete_soft_deleted(grace_days) -> list[str]` — second phase:
+    delete rows whose `deleted_at` is past the grace window; returns the
+    deleted session ids so the caller can increment the metric by
+    `len(ids)` and clean up derived rows (prefs). `chat_messages`
+    cascades via FK ON DELETE CASCADE — a single DELETE on
+    `chat_sessions` cleans the messages too.
 
 Same retry posture as `RunMetadata`: 100ms→200ms→400ms exponential
 backoff for transient `asyncpg.PostgresConnectionError`; pool acquire
@@ -494,18 +495,21 @@ class ChatStore:
 
         return await self._with_retry("soft_delete_expired", _update)
 
-    async def hard_delete_soft_deleted(self, grace_days: int) -> int:
+    async def hard_delete_soft_deleted(self, grace_days: int) -> list[str]:
         """Delete sessions whose `deleted_at` is past the grace window.
 
-        Second phase of the two-phase retention. Returns the count of
-        sessions hard-deleted (caller increments
-        `agent_chat_retention_deleted_total` by this value).
+        Second phase of the two-phase retention. Returns the ids of the
+        hard-deleted sessions — the caller increments
+        `agent_chat_retention_deleted_total` by `len(ids)` and hands the
+        ids to the derived-memory cleanup
+        (`PrefsStore.delete_prefs_for_sessions`): a session's preferences
+        do not outlive it (openspec/changes/agent-user-preferences D6).
 
         `chat_messages` cascades via `ON DELETE CASCADE` on the FK, so
         one statement cleans both tables.
         """
 
-        async def _delete(conn: asyncpg.Connection) -> int:
+        async def _delete(conn: asyncpg.Connection) -> list[str]:
             rows = await conn.fetch(
                 "DELETE FROM chat_sessions "
                 "WHERE deleted_at IS NOT NULL "
@@ -513,7 +517,7 @@ class ChatStore:
                 "RETURNING id",
                 grace_days,
             )
-            return len(rows)
+            return [str(r["id"]) for r in rows]
 
         return await self._with_retry("hard_delete_soft_deleted", _delete)
 

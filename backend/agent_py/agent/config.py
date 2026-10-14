@@ -152,6 +152,19 @@ class Settings(BaseSettings):
     # (same bound the validator below enforces on this default).
     sessions_page_size: int = 10
 
+    # --- User preferences (openspec/changes/agent-user-preferences) ---
+    # Kill switch for the whole preference memory layer: when false, no
+    # extraction task fires after a turn AND the planner prompt omits the
+    # injected block — stored rows stay in `agent.chat_user_prefs`
+    # untouched. Rollback path (design.md D7).
+    prefs_enabled: bool = True
+    # Cap on preferences injected into the planner system prompt: the
+    # planner loads the top-N by `updated_at DESC` per user. 0 = rows may
+    # still be extracted/upserted but nothing is injected. Negative values
+    # are rejected at startup (validator below). 50 is generous for the
+    # flat key/value regime (design.md risk "Prompt growth").
+    prefs_max_injected: int = 50
+
     # --- Stale-run sweeper (openspec/changes/agent-stale-run-sweeper) ---
     # Heartbeat cadence for live runs: while a run's SSE stream is in
     # flight, a background task touches `agent.runs.last_heartbeat_at`
@@ -424,6 +437,23 @@ class Settings(BaseSettings):
             raise ValueError(
                 "PYTHON_AGENT_SESSIONS_PAGE_SIZE must be in [1, 50]; "
                 f"got {self.sessions_page_size}"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _validate_prefs(self) -> Settings:
+        """Refuse to start on a preference-injection misconfiguration.
+
+        Per `openspec/changes/agent-user-preferences` (agent-python-service
+        delta): `PYTHON_AGENT_PREFS_MAX_INJECTED` MUST be >= 0 — the value
+        is the `LIMIT` bound of the planner's injection read, so a negative
+        value is an operator mistake. 0 disables injection while extraction
+        keeps writing rows.
+        """
+        if self.prefs_max_injected < 0:
+            raise ValueError(
+                "PYTHON_AGENT_PREFS_MAX_INJECTED must be >= 0; "
+                f"got {self.prefs_max_injected}"
             )
         return self
 
