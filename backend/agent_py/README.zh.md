@@ -41,10 +41,13 @@ flowchart TB
 - **默认就稳** —— 工具分发两类失败均有有界重试（校验失败重新提示 / 瞬时错误退避重试）、每用户 Redis token 预算（fail-closed）、按 IP 限流、运行状态存 Postgres 支持 `run_id` 恢复、僵尸运行清扫 + 保留期 GC。
 - **可观测** —— Prometheus 指标（:9001）、OpenTelemetry 链路（Jaeger）、可选 Langfuse LLM 追踪。
 - **可选 web 工具，默认关闭** —— agent 原生的 `web_search`（Tavily，无账号也可用 keyless 档）和带 SSRF 防护、非受信内容框定的 `web_fetch`。
+- **记忆** —— 每个会话与消息都会持久化（保留期下限 1 年，软删除 + 宽限期）；planner 会注入跨会话的"已知用户偏好"块；面向主体的接口全部按 owner 限定：`/agent/sessions*`（历史侧边栏 API）与 GDPR 导出/擦除（`/agent/me/*`，审计仅记计数）。
 
 ## 端点
 
 - `POST /agent/run` —— 入参 `{messages, agent?, model?, run_id?}`，出参 SSE（`plan`、`step_start`、`tool_call`、`tool_result`、`step_end`、`delta`、`done`、`note`、`error`、`terminator`）。
+- `GET|POST|DELETE /agent/sessions*` —— 历史侧边栏 API（列表 / 回放 / 新建 / 恢复 / 删除），经 `X-Nyx-User-Id` 按 owner 限定。
+- `GET /agent/me/export` · `DELETE /agent/me` —— GDPR 主体导出 + 物理擦除（幂等，含 langGraph 线程，审计仅记计数）；`PYTHON_AGENT_GDPR_ENABLED=false` 时两者均返回 503。
 - `GET /healthz` —— Redis 可达时 `200 {"status":"ok"}`；否则 503。
 - `GET /metrics` —— Prometheus 指标，端口 :9001。
 
@@ -90,6 +93,9 @@ cd backend/agent_py && pytest tests/ -v
 | `PYTHON_AGENT_WEB_FETCH_ENABLED` / `WEB_SEARCH_ENABLED` | `false` | agent 原生 web 工具；不带 `TAVILY_API_KEY` 时搜索走 keyless 档 |
 | `PYTHON_AGENT_SWEEP_ENABLED` | `true` | 僵尸运行清扫的 kill switch |
 | `PYTHON_AGENT_LANGFUSE_ENABLED` | `false` | 导出 LLM 级追踪到 Langfuse 实例 |
+| `PYTHON_AGENT_CHAT_RETENTION_DAYS` / `…_GRACE_DAYS` | `365` / `7` | 聊天历史保留期（下限 365 天）+ 软删除宽限期 |
+| `PYTHON_AGENT_PREFS_ENABLED` | `true` | 偏好抽取 + planner 注入的 kill switch |
+| `PYTHON_AGENT_GDPR_ENABLED` | `true` | GDPR 导出/擦除 kill switch（503，不碰任何数据） |
 
 全部开关、默认值与设计缘由 → [`README_ALL.md`](README_ALL.md)。
 
