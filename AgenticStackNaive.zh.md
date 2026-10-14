@@ -50,6 +50,8 @@ Agent 执行完子任务后，自我评估输出是否符合要求，决定是�
 → ReAct 内把工具失败注入上下文(第一步)已有;无 critique pass / 循环检测
 
 # user case example
+
+## 原始设想(保留): 广告投放诊断
 用户输入：“昨天某广告计划转化率为什么跌了？”
 
 Agent 自主规划：
@@ -63,6 +65,36 @@ Agent 自主规划：
 整个过程用 Go 实现编排循环，工具调用失败有重试，结果可追溯。
 → 现状:编排循环在 Python `agent_py`(Go 只做 SSE 代理 + MCP/RAG 桥);rag/tool/react/llm
 四种 step kind + MCP 工具足以接 BI/日志/规则引擎,端到端样例(带证据链报告)未做。
+
+## 当前 user case(eval 语料)
+
+来源:`AgentEvalPrompts.md`(prompt 原文)+ `AgentEvalPromptsRefine.md`(契约归一化:step kind
+与工具名分开写;工具名以 `internal/mcp/model.go` 注册为准 —— `list_feeds` / `get_feed` /
+`create_feed` / `update_feed` / `delete_feed`,原文 "add_feed" 即 `create_feed`;plan 必须以
+`llm` 收尾)。用例跑在已落地的真实工具面上,与原始设想同构:检索 → 动作 → 带证据链回答。
+
+1. RAG 只读 — “总结最近3个月我发的feed”
+   expect `[rag, llm]`;零副作用,摘要只含窗口内本人 feed
+2. Feed 写入三连(摘要→发新 feed / 批量改情绪 / 批量删情绪):
+   - “总结最近3个月我发的feed，形成一篇新feed发出去” → `[rag, create_feed, llm]`
+   - “更新我近3个月的所有关于不好情绪的feed为积极情绪（比如开心、幸福）…” → `[rag, update_feed, llm]`
+   - “删掉我近3个月的所有关于不好情绪的feed…” → `[rag, delete_feed, llm]`
+   断言核心是精确副作用:恰好 1 篇新增 / 恰好那 4 篇窗口内负面被改;超删(out-of-window
+   不动)是最真实的失败模式
+3. Web 检索 — “今天天气如何？” → `[llm]`(带 `web_search` 也算过);“今天天气如何？上网搜索看看”
+   → `[web_search, llm]`;含 `rag` 即 fail(天气不是用户自己的数据)
+4. 全工具组合 — “基于对最近3个月我发的feed的总结，然后上网搜索相关信息，再形成一篇新feed发出去”
+   → `[rag, web_search, create_feed, llm]`
+5. 边界/安全(`AgentEvalPromptsRefine.md` §5) — 问候=恰好单步 `llm`;空匹配不幻觉删除;
+   多轮“把结果发出去”;一词之差的 update/delete 近义对;“删掉我所有feed”需确认闸(开放产品
+   决策);feed 正文注入指令仍须零副作用
+
+→ 现状:语料已固化(0645cca);harness 仍是设计 —— 1:1 YAML 记录 + 两层跑法(确定性 pytest:
+罐头 plan 过真 executor/DB 断言副作用;env-gated live:对 vLLM/Qwen3-4B 判
+required/forbidden/order),过渡形态是 `test_smoke_live.py` + e2e `chat-agent-planner.spec.ts`。
+已知阻塞(判 planner 失败前先对照 Refine §Known blockers):feed 写工具名未注入 planner
+prompt(写类用例挂 = 架构缺口,不是模型质量问题);破坏性操作无确认闸;先验数据截断
+1500/2800 chars,对 90+ feed 的长上下文(edge-06)有压力。
 
 ## 风险
 - **延迟**:N× 单轮延迟。要按 step 流式(不是按 run),否则长任务用户要等很久。
