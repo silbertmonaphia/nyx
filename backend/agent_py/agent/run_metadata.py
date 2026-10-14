@@ -17,6 +17,12 @@ queries that langGraph's opaque `checkpoint_*` blob doesn't expose:
   - `retention_delete_terminal(days) -> [uuid]` — deletes expired terminal
     rows and returns their ids so the retention cron can GC their langGraph
     checkpoint threads.
+  - `delete_all_for_user(user_id) -> [uuid]` — owner-scoped erasure (GDPR
+    right-to-erasure, openspec/changes/agent-gdpr-compliance D3): deletes
+    every `agent.runs` row for one user and returns the run ids so the
+    endpoint can drive `adelete_thread` for each checkpoint thread.
+  - `list_all_runs_for_user(user_id)` — unpaginated export read for the
+    same change, oldest-first.
 
 State persistence itself is handled by langGraph's `AsyncPostgresSaver` (in
 `langgraph.*`). This module is the *metadata* mirror, not the state store.
@@ -221,6 +227,26 @@ class RunMetadata:
 
         return await self._with_retry("list_runs_for_user", _select)
 
+    async def list_all_runs_for_user(self, user_id: int) -> list[RunSummary]:
+        """Export read: every run row for the user, unpaginated, oldest-first.
+
+        Sibling of `list_runs_for_user` for the GDPR export
+        (openspec/changes/agent-gdpr-erasure): no LIMIT/OFFSET (export
+        completeness) and `(started_at ASC, id ASC)` ordering for a
+        deterministic dump — the `id` tiebreaker keeps same-microsecond
+        rows in insertion order.
+        """
+
+        async def _select(conn: asyncpg.Connection) -> list[RunSummary]:
+            rows = await conn.fetch(
+                f"SELECT {_RUN_COLUMNS} FROM runs WHERE user_id=$1 "
+                "ORDER BY started_at ASC, id ASC",
+                user_id,
+            )
+            return [_row_to_summary(r) for r in rows]
+
+        return await self._with_retry("list_all_runs_for_user", _select)
+
     async def retention_delete_terminal(self, retention_days: int) -> list[str]:
         """Delete completed/failed runs older than `retention_days`. Returns the deleted run ids.
 
@@ -249,6 +275,29 @@ class RunMetadata:
             return [str(r["id"]) for r in rows]
 
         return await self._with_retry("retention_delete_terminal", _delete)
+
+    async def delete_all_for_user(self, user_id: int) -> list[str]:
+        """Owner-scoped erasure: delete EVERY `agent.runs` row for the user.
+
+        The GDPR right-to-erasure path (openspec/changes/agent-gdpr-compliance
+        D3/D7) — unlike `retention_delete_terminal` this ignores `status`:
+        an erasure request deletes running, completed, and failed rows
+        alike. Returns the deleted run ids (canonical uuid strings) so the
+        endpoint can drive `adelete_thread(run_id)` for each langGraph
+        checkpoint thread — the thread id IS the run id, so this list is
+        the complete GC work-list. Touches only `agent.runs`; the
+        checkpoint delete is the caller's step (per-thread failures are
+        contained there). A second call returns `[]` (idempotent).
+        """
+
+        async def _delete(conn: asyncpg.Connection) -> list[str]:
+            rows = await conn.fetch(
+                "DELETE FROM runs WHERE user_id=$1 RETURNING id",
+                user_id,
+            )
+            return [str(r["id"]) for r in rows]
+
+        return await self._with_retry("delete_all_for_user", _delete)
 
     async def sweep_stale_runs(self, timeout_seconds: int) -> list[str]:
         """Reap zombie `running` rows (stale-run sweeper). Returns the reaped run ids.

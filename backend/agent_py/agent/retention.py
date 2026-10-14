@@ -22,13 +22,34 @@ successful hard-delete the deleted ids go to
 `PrefsStore.delete_prefs_for_sessions`, so a session's preferences die
 with the conversation they were extracted from. Prefs cleanup failure is
 warn-logged and never aborts the iteration; prefs are NOT counted toward
-`agent_chat_retention_deleted_total`.
+`agent_chat_retention_deleted_total`. Each hard-deleted session's
+langGraph checkpoint thread is GC'd in the same iteration
+(`adelete_thread` per id — continuation turns bind their graph thread to
+the session id and carry no `agent.runs` row, so the run-retention GC
+never sees them; review 2026-10-14 compliance fix). Per-id GC failure is
+warn-logged and contained.
+
+The audit iteration (`openspec/changes/agent-gdpr-compliance` D5) runs
+last on the same tick: it reaps `agent.data_audit_log` rows past
+`PYTHON_AGENT_AUDIT_RETENTION_DAYS` (default 1095 = 3 years). The audit
+window deliberately outlives the 1-year data retention — erase/export
+evidence stays verifiable after the underlying data would have been
+reaped anyway. It runs INDEPENDENTLY of `PYTHON_AGENT_GDPR_ENABLED`: the
+kill switch freezes the export/erase endpoints only; an audit trail that
+stopped being pruned while the endpoints were disabled would grow
+unbounded, and the evidence for erasures performed before the freeze
+must still expire on schedule. Failure isolation is the same as the
+other two iterations.
 
 OTel span `agent.run.retention` per iteration with `deleted_count` attribute.
 OTel span `agent.chat.retention` per iteration with `chat_deleted_count`
-attribute. Prometheus counter `agent_run_retention_deleted_total` increments
-by `deleted_count`; `agent_chat_retention_deleted_total` increments by the
-chat hard-delete count.
+attribute. OTel span `agent.audit.retention` per iteration with
+`deleted_count` attribute. Prometheus counter
+`agent_run_retention_deleted_total` increments by `deleted_count`;
+`agent_chat_retention_deleted_total` increments by the chat hard-delete
+count; `agent_audit_retention_deleted_total` is store-owned — it lives
+in `audit.py` and increments inside `AuditLog.retention_delete`, so the
+cron must NOT increment it again (double-count).
 """
 from __future__ import annotations
 
@@ -40,6 +61,7 @@ from opentelemetry import trace
 from prometheus_client import Counter
 
 if TYPE_CHECKING:
+    from .audit import AuditLog
     from .chat_store import ChatStore
     from .config import Settings
     from .prefs import PrefsStore
@@ -81,6 +103,7 @@ class RetentionCron:
         *,
         settings: Settings,
         prefs_store: PrefsStore | None = None,
+        audit_log: AuditLog | None = None,
     ) -> None:
         self._run_metadata = run_metadata
         # Chat-history retention surface (openspec/changes/agent-chat-history-storage).
@@ -99,6 +122,13 @@ class RetentionCron:
         # keep binding the same parameters, and when None the cleanup is
         # skipped (metadata-only dev; nothing to collect).
         self._prefs_store = prefs_store
+        # GDPR audit retention (openspec/changes/agent-gdpr-compliance D5):
+        # reaps `agent.data_audit_log` rows past `audit_retention_days`.
+        # Keyword-only with a None default, same posture as `prefs_store`:
+        # pre-existing positional constructions keep binding the same
+        # parameters, and when None the iteration is skipped
+        # (metadata-only dev; no audit store wired).
+        self._audit_log = audit_log
         # Keyword-only on purpose: `checkpointer` was inserted before
         # `settings`, so a stale positional call `RetentionCron(rm, settings)`
         # would silently bind settings to the checkpointer (test-review
@@ -118,11 +148,17 @@ class RetentionCron:
             if self._chat_store is not None and self._settings.chat_retention_enabled
             else ""
         )
+        audit_part = (
+            f" + audit (days={self._settings.audit_retention_days})"
+            if self._audit_log is not None
+            else ""
+        )
         log.info(
-            "retention cron started: every %ds, deletes runs older than %d days%s",
+            "retention cron started: every %ds, deletes runs older than %d days%s%s",
             self._settings.retention_interval_seconds,
             self._settings.retention_days,
             chat_part,
+            audit_part,
         )
 
     async def stop(self) -> None:
@@ -170,6 +206,19 @@ class RetentionCron:
                 await self._chat_iteration()
             except Exception as exc:  # noqa: BLE001
                 log.warning("retention: chat iteration failed: %r", exc)
+
+        # Audit-retention iteration (openspec/changes/agent-gdpr-compliance
+        # D5). Skipped only when no AuditLog is wired (metadata-only dev).
+        # Deliberately INDEPENDENT of `gdpr_enabled`: the kill switch
+        # freezes the export/erase endpoints, not the audit log's own
+        # retention — the trail must keep expiring on schedule either way
+        # (spec "GDPR kill switch disturbs nothing at startup"). Same
+        # failure isolation as the iterations above.
+        if self._audit_log is not None:
+            try:
+                await self._audit_iteration()
+            except Exception as exc:  # noqa: BLE001
+                log.warning("retention: audit iteration failed: %r", exc)
 
     async def _run_iteration(self) -> None:
         with _tracer.start_as_current_span("agent.run.retention") as span:
@@ -300,3 +349,48 @@ class RetentionCron:
                             "rows whose source sessions no longer exist",
                             orphaned,
                         )
+
+            # langGraph checkpoint GC for session-keyed threads (review
+            # 2026-10-14 compliance fix): continuation turns bind their
+            # graph thread to the SESSION id with no agent.runs row, so
+            # the run-retention GC above never sees them — without this,
+            # a hard-deleted session's checkpoint content would live
+            # forever. Single-turn sessions are no-ops here (their thread
+            # was already collected with the run row; adelete_thread on an
+            # absent thread is harmless). Per-id failure is contained,
+            # mirroring the run iteration's GC.
+            if hard_deleted_ids and self._checkpointer is not None:
+                for session_id in hard_deleted_ids:
+                    try:
+                        await self._checkpointer.adelete_thread(session_id)
+                    except Exception as exc:  # noqa: BLE001
+                        log.warning(
+                            "retention: adelete_thread failed for session=%s "
+                            "(non-fatal): %r",
+                            session_id,
+                            exc,
+                        )
+
+    async def _audit_iteration(self) -> None:
+        """Reap `agent.data_audit_log` rows past the audit retention window.
+
+        Opens an OTel span `agent.audit.retention` carrying `deleted_count`.
+        The counter (`agent_audit_retention_deleted_total`) is store-owned:
+        `AuditLog.retention_delete` increments it, so this iteration only
+        reports (span + log) and must NOT increment it again. The 3-year
+        default window (D5) outlives the 1-year data retention on purpose:
+        erase/export evidence must stay verifiable after the underlying
+        data would have been reaped anyway. The caller (`_run_once`) runs
+        this independently of `gdpr_enabled` — see the comment there.
+        """
+        with _tracer.start_as_current_span("agent.audit.retention") as span:
+            deleted = await self._audit_log.retention_delete(
+                self._settings.audit_retention_days
+            )
+            span.set_attribute("deleted_count", deleted)
+            if deleted:
+                log.info(
+                    "retention cron: deleted %d audit rows older than %d days",
+                    deleted,
+                    self._settings.audit_retention_days,
+                )

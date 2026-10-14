@@ -44,13 +44,14 @@ from __future__ import annotations
 
 import base64
 import uuid as uuid_lib
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 from fastapi import APIRouter, HTTPException, Request
 from opentelemetry import trace
 
 from ..chat_store import ChatStore, MessageRow, SessionSummary
 from ..config import Settings, get_settings
+from .deps import require_user_id as _deps_require_user_id
 
 router = APIRouter()
 
@@ -58,7 +59,7 @@ router = APIRouter()
 # export destination is owned by `setup_observability` in the lifespan.
 _tracer = trace.get_tracer("nyx.agent")
 
-_EPOCH = datetime(1970, 1, 1, tzinfo=timezone.utc)
+_EPOCH = datetime(1970, 1, 1, tzinfo=UTC)
 
 
 @router.get("/agent/sessions")
@@ -155,7 +156,7 @@ async def resume_session(request: Request, session_id: str) -> dict:
             raise HTTPException(status_code=404, detail="session not found")
         return {
             "session_id": session_id,
-            "resumed_at": datetime.now(timezone.utc).isoformat(),
+            "resumed_at": datetime.now(UTC).isoformat(),
         }
 
 
@@ -188,24 +189,11 @@ async def delete_session(request: Request, session_id: str) -> dict:
 def _require_user_id(request: Request) -> int:
     """Read the Go-verified user id from `X-Nyx-User-Id`.
 
-    Mirrors `/agent/run`'s handling (main.py) exactly: the 400 is not an
-    auth check (this hop has no auth — the network is the trust
-    boundary) but a loud failure for a misconfigured caller, which would
-    otherwise silently operate as user 0 and cross-write session state.
+    Shared implementation (`api/deps.require_user_id`, review N4
+    2026-10-14): loud 400 for a misconfigured caller — never an
+    implicit user 0.
     """
-    user_id_raw = request.headers.get("x-nyx-user-id", "").strip()
-    if not user_id_raw:
-        raise HTTPException(
-            status_code=400,
-            detail="missing X-Nyx-User-Id header (set by the Go chat handler)",
-        )
-    try:
-        return int(user_id_raw)
-    except ValueError as exc:
-        raise HTTPException(
-            status_code=400,
-            detail=f"X-Nyx-User-Id must be an integer, got {user_id_raw!r}",
-        ) from exc
+    return _deps_require_user_id(request)
 
 
 def _require_session_id(raw: str) -> str:

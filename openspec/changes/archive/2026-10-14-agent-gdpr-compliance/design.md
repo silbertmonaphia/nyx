@@ -2,7 +2,7 @@
 
 ## Context
 
-Slices 1–3 left four stores carrying user data: `agent.chat_sessions`, `agent.chat_messages`, `agent.chat_user_prefs`, `agent.runs`, plus langGraph's `langgraph.checkpoint_*` (keyed by thread id = run id). This slice adds the export surface, the erase surface, and an append-only audit log. See [`proposal.md`](./proposal.md) for motivation; the `agent-gdpr-erasure` spec carries the behavioral contract.
+Slices 1–3 left four stores carrying user data: `agent.chat_sessions`, `agent.chat_messages`, `agent.chat_user_prefs`, `agent.runs`, plus langGraph's `langgraph.checkpoint_*` — keyed by thread id, which is the run id for single-turn runs AND the session id for continuation turns (which carry no `agent.runs` row), so the erasure/export thread set is the deduped union. This slice adds the export surface, the erase surface, and an append-only audit log. See [`proposal.md`](./proposal.md) for motivation; the `agent-gdpr-erasure` spec carries the behavioral contract.
 
 Anchors: `agent/api/` package exists from slice 2 (`chat_sessions.py` + header enforcement pattern); `RetentionCron._chat_iteration` is the template for a new audit iteration; `RunMetadata` owns `agent.runs` SQL; the checkpointer (`adelete_thread`) is already injected into `RetentionCron` in `main.py`.
 

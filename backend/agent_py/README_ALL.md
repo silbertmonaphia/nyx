@@ -265,6 +265,16 @@ Three coupled surfaces share the same DB and lifecycle (see
   budget) and upserts them per `(user_id, key)`. The planner prompt
   gains a preferences block; with zero prefs the prompt is
   byte-identical to the pre-injection form.
+- **GDPR export + erasure** — `GET /agent/me/export` returns one JSON
+  body with every row tied to the `X-Nyx-User-Id` subject (sessions
+  incl. soft-deleted, messages, prefs, runs, checkpoint thread ids);
+  `DELETE /agent/me` physically erases the same footprint (chat →
+  prefs → runs → langGraph checkpoint threads) and responds with
+  per-table counts, idempotent on a second call. Every served
+  operation appends a counts-only row to `agent.data_audit_log`, whose
+  own retention window is separate (3y default). See
+  `openspec/changes/agent-gdpr-compliance/`; operator playbook in
+  `docs/agent-deployment.md` » GDPR data handling.
 
 | Env var                              | Default | Purpose                                                                 |
 |--------------------------------------|---------|-------------------------------------------------------------------------|
@@ -274,11 +284,16 @@ Three coupled surfaces share the same DB and lifecycle (see
 | `PYTHON_AGENT_SESSIONS_PAGE_SIZE`    | `10`    | Default sidebar page size for `GET /agent/sessions` (`[1, 50]`).         |
 | `PYTHON_AGENT_PREFS_ENABLED`         | `true`  | Rollback switch for preference extraction AND planner injection.         |
 | `PYTHON_AGENT_PREFS_MAX_INJECTED`    | `50`    | Top-N preferences injected into the planner prompt (≥ 0).                |
+| `PYTHON_AGENT_GDPR_ENABLED`          | `true`  | Kill switch for `GET /agent/me/export` + `DELETE /agent/me` (503; nothing read or written). |
+| `PYTHON_AGENT_AUDIT_RETENTION_DAYS`  | `1095`  | `agent.data_audit_log` window (3y); values below 365 refuse startup.     |
 
-Counters `agent_chat_retention_deleted_total` (session hard-deletes) and
+Counters `agent_chat_retention_deleted_total` (session hard-deletes),
 `agent_chat_prefs_deleted_total` (orphan-sweep recoveries — a nonzero
-rate there means the hot-path prefs cleanup is failing); spans
-`agent.chat.retention` + per-endpoint `agent.sessions.*`.
+rate there means the hot-path prefs cleanup is failing), and
+`agent_audit_retention_deleted_total` (audit rows reaped; store-owned —
+incremented by `AuditLog.retention_delete`, not the cron); spans
+`agent.chat.retention`, `agent.audit.retention`, `agent.gdpr.export` /
+`agent.gdpr.erase` + per-endpoint `agent.sessions.*`.
 
 ## LLM tracing: Langfuse (opt-in)
 

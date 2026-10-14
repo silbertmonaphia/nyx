@@ -32,6 +32,16 @@ the `agent.*` schema) for user-facing chat history:
     `len(ids)` and clean up derived rows (prefs). `chat_messages`
     cascades via FK ON DELETE CASCADE — a single DELETE on
     `chat_sessions` cleans the messages too.
+  - `delete_all_for_user(user_id) -> dict[str, Any]` — owner-scoped
+    erasure (GDPR right-to-erasure, openspec/changes/agent-gdpr-compliance
+    D3/D7): one transaction deleting messages → sessions → prefs for one
+    user, soft-deleted rows INCLUDED (retention is not a precondition for
+    erasure). Returns `{messages, sessions, prefs, session_ids}` — the ids
+    double as langGraph thread ids so the erase endpoint can GC
+    session-keyed threads.
+  - `list_all_sessions_for_user(user_id)` / `list_all_messages_for_user(user_id)`
+    — unpaginated export reads for the same change, soft-deleted rows
+    INCLUDED (export completeness), oldest-first.
 
 Same retry posture as `RunMetadata`: 100ms→200ms→400ms exponential
 backoff for transient `asyncpg.PostgresConnectionError`; pool acquire
@@ -50,7 +60,7 @@ import json as _json
 import logging
 import uuid as uuid_lib
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import asyncpg
@@ -93,7 +103,15 @@ class SessionSummary:
 
 @dataclass(slots=True)
 class MessageRow:
-    """One replayed message. `tool_calls` is the decoded JSON array (or None)."""
+    """One replayed message. `tool_calls` is the decoded JSON array (or None).
+
+    `session_id` (string form) links the message to its conversation —
+    needed by the GDPR export dump so message rows are interpretable
+    without cross-referencing (review 2026-10-14: the export shipped
+    session rows and message rows side by side with no join key). It is
+    additive on the dataclass only; the `/agent/sessions/{id}/messages`
+    replay wire still emits its documented field set (review L4).
+    """
 
     id: int
     role: str
@@ -101,6 +119,7 @@ class MessageRow:
     tool_calls: list[dict[str, Any]] | None
     tokens: int
     created_at: datetime
+    session_id: str
 
 
 class ChatStore:
@@ -136,7 +155,7 @@ class ChatStore:
             try:
                 async with self._pool.acquire(timeout=self._acquire_timeout) as conn:
                     return await fn(conn)
-            except asyncio.TimeoutError as exc:
+            except TimeoutError as exc:
                 log.warning(
                     "chat_store %s: pool acquire timeout after %.1fs (%r)",
                     op_name,
@@ -323,7 +342,8 @@ class ChatStore:
                 if exists is None:
                     return None
                 rows = await conn.fetch(
-                    "SELECT id, role, content, tool_calls::text AS tool_calls, "
+                    "SELECT id, session_id, role, content, "
+                    "tool_calls::text AS tool_calls, "
                     "tokens, created_at FROM chat_messages "
                     "WHERE session_id=$1 "
                     "ORDER BY created_at ASC, id ASC",
@@ -353,6 +373,14 @@ class ChatStore:
         Cross-user isolation: the WHERE clause on the touch enforces
         `user_id` even though the FK already guarantees the session
         exists — defence in depth, matches `RunMetadata`'s posture.
+
+        Disappearing-session races (review 2026-10-14, H2): a session
+        can be erased (GDPR `DELETE /agent/me`) or hard-deleted by
+        retention WHILE a run is streaming. The FK then rejects the
+        insert with `ForeignKeyViolationError` — translated here to
+        `ChatStoreUnavailable` so every call site's existing
+        best-effort `except ChatStoreUnavailable` handles it uniformly
+        (the session is unavailable; the stream continues).
         """
         session_id_str = str(session_id)
 
@@ -363,25 +391,36 @@ class ChatStore:
         )
 
         async def _tx(conn: asyncpg.Connection) -> int:
-            async with conn.transaction():
-                message_id: int = await conn.fetchval(
-                    "INSERT INTO chat_messages "
-                    "(session_id, role, content, tool_calls, tokens) "
-                    "VALUES ($1, $2, $3, $4::jsonb, $5) "
-                    "RETURNING id",
-                    session_id_str,
-                    role,
-                    content,
-                    tool_calls_json,
-                    tokens,
-                )
-                await conn.execute(
-                    "UPDATE chat_sessions SET last_active_at=now() "
-                    "WHERE id=$1 AND user_id=$2 AND deleted_at IS NULL",
-                    session_id_str,
-                    user_id,
-                )
-            return message_id
+            try:
+                async with conn.transaction():
+                    message_id: int = await conn.fetchval(
+                        "INSERT INTO chat_messages "
+                        "(session_id, role, content, tool_calls, tokens) "
+                        "VALUES ($1, $2, $3, $4::jsonb, $5) "
+                        "RETURNING id",
+                        session_id_str,
+                        role,
+                        content,
+                        tool_calls_json,
+                        tokens,
+                    )
+                    await conn.execute(
+                        "UPDATE chat_sessions SET last_active_at=now() "
+                        "WHERE id=$1 AND user_id=$2 AND deleted_at IS NULL",
+                        session_id_str,
+                        user_id,
+                    )
+                return message_id
+            except asyncpg.exceptions.ForeignKeyViolationError as exc:
+                # The parent session vanished under us (erasure / retention
+                # hard-delete). Same contract as a pool outage: the store
+                # is unavailable for this write; the caller warn-logs and
+                # the run continues. No retry — a deleted session never
+                # comes back.
+                raise ChatStoreUnavailable(
+                    f"record_message failed: session {session_id_str} no "
+                    "longer exists (erased or hard-deleted mid-run)"
+                ) from exc
 
         return await self._with_retry("record_message", _tx)
 
@@ -521,6 +560,126 @@ class ChatStore:
 
         return await self._with_retry("hard_delete_soft_deleted", _delete)
 
+    async def delete_all_for_user(self, user_id: int) -> dict[str, Any]:
+        """Owner-scoped erasure: delete EVERYTHING this user owns here.
+
+        The GDPR right-to-erasure path (openspec/changes/agent-gdpr-compliance
+        D3/D7) — distinct from the retention path above:
+
+          - Soft-deleted rows are included. Retention phase 1 is not a
+            precondition for erasure: an erasure request deletes whatever
+            exists for the subject, including rows the user (or the
+            retention cron) already soft-deleted.
+          - ALL preference rows are deleted, NULL-source included — the
+            erasure path is what collects prefs the retention path
+            deliberately leaves behind (`delete_orphaned` skips them).
+          - Owner predicate on EVERY statement (review discipline: erasure
+            must be the *least* likely code path to be missing a
+            `user_id` filter). The message delete joins through the
+            user's sessions — never delete-by-session-id alone.
+
+        ONE transaction, statements in reverse-dependency order
+        (messages → sessions → prefs): the explicit child-first delete
+        gives an exact message count for the erase response/audit instead
+        of relying on the FK CASCADE side effect, and the transaction
+        keeps a concurrent retention purge from interleaving. Returns the
+        per-table counts plus the deleted session ids
+        (`{"messages": n, "sessions": n, "prefs": n, "session_ids": [...]}`)
+        — the ids double as langGraph thread ids for continuation runs
+        (whose graph threads are keyed by session, not by a run row), so
+        the erase endpoint GCs them. A second call on an already-erased
+        user returns zeros + an empty id list (idempotent).
+        """
+
+        async def _tx(conn: asyncpg.Connection) -> dict[str, Any]:
+            async with conn.transaction():
+                # (a) Messages of the user's sessions — soft-deleted
+                # sessions included (their messages must go too).
+                msg_rows = await conn.fetch(
+                    "DELETE FROM chat_messages m "
+                    "USING chat_sessions s "
+                    "WHERE m.session_id = s.id AND s.user_id = $1 "
+                    "RETURNING m.id",
+                    user_id,
+                )
+                # (b) Every session row for the user, soft-deleted included.
+                sess_rows = await conn.fetch(
+                    "DELETE FROM chat_sessions "
+                    "WHERE user_id = $1 "
+                    "RETURNING id",
+                    user_id,
+                )
+                # (c) Every pref row for the user — NULL-source included
+                # (erasure path, not the retention path).
+                pref_rows = await conn.fetch(
+                    "DELETE FROM chat_user_prefs "
+                    "WHERE user_id = $1 "
+                    "RETURNING id",
+                    user_id,
+                )
+            return {
+                "messages": len(msg_rows),
+                "sessions": len(sess_rows),
+                "prefs": len(pref_rows),
+                # The deleted session ids double as langGraph thread ids:
+                # continuation runs bind their graph thread to the SESSION
+                # id and carry no agent.runs row, so the erase path is the
+                # only place those checkpoint threads can be GC'd from
+                # (review 2026-10-14 compliance fix). String form for the
+                # JSON serializer.
+                "session_ids": [str(r["id"]) for r in sess_rows],
+            }
+
+        return await self._with_retry("delete_all_for_user", _tx)
+
+    async def list_all_sessions_for_user(self, user_id: int) -> list[ChatSession]:
+        """Export read: every session row for the user, soft-deleted INCLUDED.
+
+        Unpaginated and unfiltered-by-state on purpose (export
+        completeness — `openspec/changes/agent-gdpr-erasure` "sessions
+        (every `agent.chat_sessions` row for the user, including
+        soft-deleted ones)"); ordered `(started_at ASC, id ASC)` so the
+        dump is deterministic. The `id` tiebreaker keeps same-microsecond
+        rows in insertion order.
+        """
+
+        async def _select(conn: asyncpg.Connection) -> list[ChatSession]:
+            rows = await conn.fetch(
+                "SELECT id, user_id, title, started_at, last_active_at, "
+                "ended_at, deleted_at FROM chat_sessions "
+                "WHERE user_id=$1 "
+                "ORDER BY started_at ASC, id ASC",
+                user_id,
+            )
+            return [_row_to_session(r) for r in rows]
+
+        return await self._with_retry("list_all_sessions_for_user", _select)
+
+    async def list_all_messages_for_user(self, user_id: int) -> list[MessageRow]:
+        """Export read: every message of the user's sessions, soft-deleted included.
+
+        Joins through the user's sessions (including soft-deleted ones —
+        export completeness) rather than taking session ids as an
+        argument, so the owner predicate lives in the SQL. Ordered
+        `(created_at ASC, id ASC)`, the same chronological order as
+        `list_messages`; `tool_calls::text` + `json.loads` decodes the
+        jsonb the same way.
+        """
+
+        async def _select(conn: asyncpg.Connection) -> list[MessageRow]:
+            rows = await conn.fetch(
+                "SELECT m.id, m.session_id, m.role, m.content, "
+                "m.tool_calls::text AS tool_calls, m.tokens, m.created_at "
+                "FROM chat_messages m "
+                "JOIN chat_sessions s ON s.id = m.session_id "
+                "WHERE s.user_id=$1 "
+                "ORDER BY m.created_at ASC, m.id ASC",
+                user_id,
+            )
+            return [_row_to_message(r) for r in rows]
+
+        return await self._with_retry("list_all_messages_for_user", _select)
+
 
 def _row_to_session(row: asyncpg.Record | Any) -> ChatSession:
     return ChatSession(
@@ -557,10 +716,11 @@ def _row_to_message(row: asyncpg.Record | Any) -> MessageRow:
         ),
         tokens=row["tokens"],
         created_at=row["created_at"],
+        session_id=str(row["session_id"]),
     )
 
 
-_EPOCH = datetime(1970, 1, 1, tzinfo=timezone.utc)
+_EPOCH = datetime(1970, 1, 1, tzinfo=UTC)
 
 
 def _encode_cursor(last_active_at: datetime, session_id: Any) -> str:

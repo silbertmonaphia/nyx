@@ -107,10 +107,16 @@ The following env vars are added by the user-preferences change:
 
 The service SHALL refuse to start when `PYTHON_AGENT_PREFS_MAX_INJECTED` is negative.
 
+The following env vars are added by the gdpr-compliance change:
+- `PYTHON_AGENT_GDPR_ENABLED` (default true) — kill-switch for `GET /agent/me/export` and `DELETE /agent/me`; when false, both respond 503 and touch no data
+- `PYTHON_AGENT_AUDIT_RETENTION_DAYS` (default 1095 = 3 years) — retention window for `agent.data_audit_log`; MUST be ≥ 365 so the audit trail always outlives the data it audits
+
+The service SHALL refuse to start when `PYTHON_AGENT_AUDIT_RETENTION_DAYS` is below 365.
+
 #### Scenario: Default values applied when env unset
 
 - **WHEN** the service starts with no env vars set
-- **THEN** `PYTHON_AGENT_PLAN_MAX_STEPS=10`, `PYTHON_AGENT_STEP_REACT_MAX_ITERATIONS=5`, `PYTHON_AGENT_MCP_URL=http://backend:8080/mcp`, `PYTHON_AGENT_RAG_BRIDGE_URL=http://backend:8080/internal/rag/retrieve`, `PYTHON_AGENT_PLANNER_RETRY_MAX=1`, `PYTHON_AGENT_PLANNER_STRUCTURED_ENABLED=true`, `PYTHON_AGENT_TOOL_RETRY_MAX=2`, `PYTHON_AGENT_HEARTBEAT_INTERVAL_SECONDS=30`, `PYTHON_AGENT_STALE_RUN_TIMEOUT_SECONDS=900`, `PYTHON_AGENT_SWEEP_INTERVAL_SECONDS=300`, `PYTHON_AGENT_SWEEP_ENABLED=true`, `PYTHON_AGENT_CHAT_RETENTION_DAYS=365`, `PYTHON_AGENT_CHAT_RETENTION_GRACE_DAYS=7`, `PYTHON_AGENT_CHAT_RETENTION_ENABLED=true`, `PYTHON_AGENT_SESSIONS_PAGE_SIZE=10`, `PYTHON_AGENT_PREFS_ENABLED=true`, `PYTHON_AGENT_PREFS_MAX_INJECTED=50` are applied and the service starts
+- **THEN** `PYTHON_AGENT_PLAN_MAX_STEPS=10`, `PYTHON_AGENT_STEP_REACT_MAX_ITERATIONS=5`, `PYTHON_AGENT_MCP_URL=http://backend:8080/mcp`, `PYTHON_AGENT_RAG_BRIDGE_URL=http://backend:8080/internal/rag/retrieve`, `PYTHON_AGENT_PLANNER_RETRY_MAX=1`, `PYTHON_AGENT_PLANNER_STRUCTURED_ENABLED=true`, `PYTHON_AGENT_TOOL_RETRY_MAX=2`, `PYTHON_AGENT_HEARTBEAT_INTERVAL_SECONDS=30`, `PYTHON_AGENT_STALE_RUN_TIMEOUT_SECONDS=900`, `PYTHON_AGENT_SWEEP_INTERVAL_SECONDS=300`, `PYTHON_AGENT_SWEEP_ENABLED=true`, `PYTHON_AGENT_CHAT_RETENTION_DAYS=365`, `PYTHON_AGENT_CHAT_RETENTION_GRACE_DAYS=7`, `PYTHON_AGENT_CHAT_RETENTION_ENABLED=true`, `PYTHON_AGENT_SESSIONS_PAGE_SIZE=10`, `PYTHON_AGENT_PREFS_ENABLED=true`, `PYTHON_AGENT_PREFS_MAX_INJECTED=50`, `PYTHON_AGENT_GDPR_ENABLED=true`, `PYTHON_AGENT_AUDIT_RETENTION_DAYS=1095` are applied and the service starts
 
 #### Scenario: Required key missing refuses startup
 
@@ -176,6 +182,16 @@ The service SHALL refuse to start when `PYTHON_AGENT_PREFS_MAX_INJECTED` is nega
 
 - **WHEN** `PYTHON_AGENT_PREFS_ENABLED=false` is set
 - **THEN** the service starts normally; no extraction task is scheduled on any run and the planner prompt builder omits the prefs block
+
+#### Scenario: Below-floor audit retention refuses startup
+
+- **WHEN** `PYTHON_AGENT_AUDIT_RETENTION_DAYS=100` is set
+- **THEN** startup raises `ValueError: PYTHON_AGENT_AUDIT_RETENTION_DAYS must be >= 365; got 100` and the process exits
+
+#### Scenario: GDPR kill switch disturbs nothing at startup
+
+- **WHEN** `PYTHON_AGENT_GDPR_ENABLED=false` is set
+- **THEN** the service starts normally; both GDPR routes respond 503 per the `agent-gdpr-erasure` spec and no audit-retention iteration is skipped (audit retention is independent of the endpoint flag)
 
 ### Requirement: Health endpoint for compose
 
