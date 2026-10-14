@@ -39,5 +39,5 @@
 
 ## 10. Archive
 
-- [ ] 10.1 Run `openspec archive agent-chat-history-storage` after every other task is checked. Verify: `openspec validate --archived` passes post-archive; the change moves to `openspec/changes/archive/2026-10-14-agent-chat-history-storage/` with delta specs synced to `openspec/specs/`.
+- [x] 10.1 Run `openspec archive agent-chat-history-storage` after every other task is checked. Verify: `openspec validate --archived` passes post-archive; the change moves to `openspec/changes/archive/2026-10-14-agent-chat-history-storage/` with delta specs synced to `openspec/specs/`.
 
