@@ -8,12 +8,12 @@ Gives the operator an owner-scoped data-export path and a right-to-erasure path 
 
 ### Requirement: Owner-scoped data export
 
-The service SHALL expose `GET /agent/me/export`, scoped to the user id in the `X-Nyx-User-Id` header (missing/non-integer → 400; no admin override, no cross-user parameter). The response SHALL be one JSON object containing: `user_id`, `exported_at`, `sessions` (every `agent.chat_sessions` row for the user, including soft-deleted ones), `messages` (every `agent.chat_messages` row belonging to those sessions, content included), `prefs` (every `agent.chat_user_prefs` row for the user), `runs` (every `agent.runs` row for the user), and `checkpoint_thread_ids` (the run ids whose langGraph checkpoint threads hold this user's state — ids only; checkpoint content is erased by deleting the thread, so the id list is the complete representation). A user with no data SHALL receive the same object with empty arrays (never 404). Each call SHALL append an `export` row to `agent.data_audit_log` with counts only.
+The service SHALL expose `GET /agent/me/export`, scoped to the user id in the `X-Nyx-User-Id` header (missing/non-integer → 400; no admin override, no cross-user parameter). The response SHALL be one JSON object containing: `user_id`, `exported_at`, `sessions` (every `agent.chat_sessions` row for the user, including soft-deleted ones), `messages` (every `agent.chat_messages` row belonging to those sessions, content included), `prefs` (every `agent.chat_user_prefs` row for the user), `runs` (every `agent.runs` row for the user), and `checkpoint_thread_ids` (every id that keys a langGraph checkpoint thread holding this user's state: run ids for single-turn runs ∪ session ids for continuation turns, which bind their graph thread to the session and carry no `agent.runs` row — deduped; ids only, because deleting the thread is the erasure unit and the format is internal, so the id list is the complete representation). The response SHALL also carry `audit_entries` — the subject's own audit rows (counts-only by construction). A user with no data SHALL receive the same object with empty arrays (never 404). Each call SHALL append an `export` row to `agent.data_audit_log` with counts only.
 
 #### Scenario: Export is complete for one user
 
 - **WHEN** a user with 2 sessions, 5 messages, 1 pref, and 2 runs calls the export
-- **THEN** the JSON carries all of those rows and exactly the user's two run ids as `checkpoint_thread_ids`
+- **THEN** the JSON carries all of those rows and exactly the user's run ids ∪ session ids as `checkpoint_thread_ids` (deduped)
 - **AND** none of another user's rows appear anywhere in the body
 
 #### Scenario: Empty export is a well-formed object
@@ -29,7 +29,7 @@ The service SHALL expose `GET /agent/me/export`, scoped to the user id in the `X
 
 ### Requirement: Right to erasure across every store
 
-The service SHALL expose `DELETE /agent/me`, scoped to the header user id, physically deleting the user's data in this order: `chat_messages` (all messages of the user's sessions, including sessions already soft-deleted) → `chat_sessions` → `chat_user_prefs` → `agent.runs` (capturing the deleted run ids first) → `langGraph` checkpoint thread deletion via `adelete_thread(run_id)` for every captured run id → append the audit row. The response SHALL be `{"deleted": {"sessions": n1, "messages": n2, "prefs": n3, "runs": n4, "threads": n5}}` where `threads` is the count of `adelete_thread` calls that completed without error (a per-thread failure is warn-logged, counted as not-deleted, and does NOT abort the remaining deletions or the audit row). The operation SHALL be idempotent: a second call deletes nothing and returns zero counts with 200.
+The service SHALL expose `DELETE /agent/me`, scoped to the header user id, physically deleting the user's data in this order: `chat_messages` (all messages of the user's sessions, including sessions already soft-deleted) → `chat_sessions` → `chat_user_prefs` → `agent.runs` (capturing the deleted run ids first) → `langGraph` checkpoint thread deletion via `adelete_thread(thread_id)` for every captured run id AND every deleted session id (continuation threads are session-keyed) → append the audit row. The response SHALL be `{"deleted": {"sessions": n1, "messages": n2, "prefs": n3, "runs": n4, "threads": n5, "thread_failures": n6}}` where `threads` is the count of `adelete_thread` calls that completed without error (a per-thread failure is warn-logged, counted as not-deleted, and does NOT abort the remaining deletions or the audit row). The operation SHALL be idempotent: a second call deletes nothing and returns zero counts with 200.
 
 #### Scenario: Erase walks every table
 
@@ -49,7 +49,12 @@ The service SHALL expose `DELETE /agent/me`, scoped to the header user id, physi
 #### Scenario: Checkpoint GC failure is contained
 
 - **WHEN** `adelete_thread` raises for one run id
-- **THEN** the remaining run ids are still attempted, the failure is warn-logged, `threads` counts only successes, the audit row is still written, and the response is still 200
+- **THEN** the remaining thread ids are still attempted, the failure is warn-logged, `threads` counts only successes while `thread_failures` counts the rest, the audit row is still written (carrying both counts), and the response is still 200
+
+#### Scenario: Late preference writes cannot resurrect erased data
+
+- **WHEN** an extraction task racing the erasure attempts an upsert whose `source_session_id` session was just deleted (the column has no FK by design)
+- **THEN** the write is skipped by the in-SQL existence guard — no prefs row is recreated for the erased subject
 
 #### Scenario: Cross-user isolation
 

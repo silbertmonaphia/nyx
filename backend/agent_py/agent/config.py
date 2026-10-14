@@ -165,6 +165,23 @@ class Settings(BaseSettings):
     # flat key/value regime (design.md risk "Prompt growth").
     prefs_max_injected: int = 50
 
+    # --- GDPR erasure + export (openspec/changes/agent-gdpr-compliance) ---
+    # Kill switch for `GET /agent/me/export` and `DELETE /agent/me`. When
+    # false, both respond 503 without reading data and without writing an
+    # audit row ("the forbidden operation never happened"). Default true:
+    # erasure is legally load-bearing, so the safe posture is on-by-default
+    # — a disabled-by-default compliance endpoint is a latent incident
+    # (design.md D6). The flag exists for the rollout drill and for an
+    # operator who must temporarily freeze destructive endpoints.
+    gdpr_enabled: bool = True
+    # Retention window for `agent.data_audit_log`, in days. Default 1095
+    # (3 years) deliberately outlives the 1-year chat retention so the
+    # erase/export audit trail remains verifiable after the underlying
+    # data would have been reaped anyway (design.md D5). MUST be >= 365 —
+    # the audit trail must always outlive the data it audits; refuses to
+    # start below (validator below).
+    audit_retention_days: int = 1095
+
     # --- Stale-run sweeper (openspec/changes/agent-stale-run-sweeper) ---
     # Heartbeat cadence for live runs: while a run's SSE stream is in
     # flight, a background task touches `agent.runs.last_heartbeat_at`
@@ -454,6 +471,23 @@ class Settings(BaseSettings):
             raise ValueError(
                 "PYTHON_AGENT_PREFS_MAX_INJECTED must be >= 0; "
                 f"got {self.prefs_max_injected}"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _validate_gdpr(self) -> Settings:
+        """Refuse to start on a below-floor audit retention.
+
+        Per `openspec/changes/agent-gdpr-compliance` (agent-python-service
+        delta): `PYTHON_AGENT_AUDIT_RETENTION_DAYS` MUST be ≥ 365 so the
+        audit trail always outlives the 1-year chat retention it audits
+        (design.md D5). `gdpr_enabled` needs no validation — both booleans
+        are valid configuration.
+        """
+        if self.audit_retention_days < 365:
+            raise ValueError(
+                "PYTHON_AGENT_AUDIT_RETENTION_DAYS must be >= 365; "
+                f"got {self.audit_retention_days}"
             )
         return self
 

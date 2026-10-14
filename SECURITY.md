@@ -91,6 +91,15 @@ Status legend: ☐ open · ☑ fixed · ◌ wontfix (with rationale).
 - **Log injection** — zerolog JSON-escapes user input. Response splitting via `X-Request-ID` blocked by `net/http` header validation.
 - **Authorization** — no object-level gaps. Feed create/update/delete is auth-required and owner-scoped: every query filters `WHERE user_id = @user_id`, cross-owner writes map to 404 (single `feed.ErrNotFound`, no `ErrForbidden` leak), and `GET /api/feeds` is auth-required so it can return only the caller's rows. The `feeds.user_id` column has an FK to `users.id` with no cascade (users soft-delete via `deleted_at`; a future hard-delete path must reassign or delete the user's feeds first).
 
+## Data handling
+
+How subject data is handled across the Python agent runtime (chat history, derived preferences, run metadata, langGraph checkpoint state, audit trail) is documented in one place: `docs/agent-deployment.md` » "GDPR data handling: export + erasure" — the data inventory (what each table holds, its retention window, erasure coverage), the operator playbook for `GET /agent/me/export` + `DELETE /agent/me`, and the kill switch. Security-relevant invariants restated here:
+
+- **Trust boundary.** The Python agent service performs no authentication; the Go layer verifies the JWT and injects the numeric `X-Nyx-User-Id`. A missing / non-integer header is a 400 (never an implicit user 0), no endpoint accepts a cross-user parameter, and no admin override exists.
+- **Erasure is physical.** `DELETE /agent/me` deletes rows (no tombstones) across chat sessions/messages, preferences, run metadata, and langGraph checkpoint threads, then appends an audit row.
+- **Audit rows carry counts, never content.** `agent.data_audit_log.payload_summary` is `dict[str, int]` by construction — the erase path must not create a shadow copy of the data it just deleted.
+- **Backup restore rule.** A restore is DR-only; recorded erasures (queryable in `agent.data_audit_log` where `action = 'erase'`) must be re-applied before the restored copy serves traffic again.
+
 ## Suggested remediation order
 
 1. **Backend hardening** — H1–H5, M1–M7, L1–L4 — landed in `2fd84e5` (H1) and `93b2ef2` (H2–H5, M1–M7, L1, L3, L4); M5 carried over from initial commit

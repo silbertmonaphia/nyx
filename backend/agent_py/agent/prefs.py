@@ -159,6 +159,16 @@ class PrefsStore:
         `source_session_id` may be None — a NULL-sourced pref is skipped
         by the retention cleanup (no id to name it) and follows the
         user-scoped erasure path instead (design.md D6).
+
+        **Erasure durability (review 2026-10-14, H2):** when a
+        `source_session_id` is given, the write is skipped unless that
+        session row still exists. The column deliberately has no FK
+        (D1 — NULL-source + retention decoupling), so without this guard
+        an extraction task racing an erasure (or a retention
+        hard-delete) could recreate a prefs row for a just-erased
+        subject pointing at a deleted session. The guard is expressed in
+        the SQL (`INSERT ... SELECT ... WHERE EXISTS`), so it cannot be
+        raced between a check and the write.
         """
         value_json = _json.dumps(value)
 
@@ -166,7 +176,10 @@ class PrefsStore:
             await conn.execute(
                 "INSERT INTO chat_user_prefs "
                 "(user_id, key, value, source_session_id) "
-                "VALUES ($1, $2, $3::jsonb, $4) "
+                "SELECT $1, $2, $3::jsonb, $4::uuid "
+                "WHERE $4::uuid IS NULL OR EXISTS ("
+                "  SELECT 1 FROM chat_sessions s WHERE s.id = $4::uuid"
+                ") "
                 "ON CONFLICT (user_id, key) DO UPDATE SET "
                 "value = EXCLUDED.value, "
                 "source_session_id = EXCLUDED.source_session_id, "
@@ -208,6 +221,29 @@ class PrefsStore:
         if limit <= 0:
             return []
         return await self._with_retry("load_prefs", _select)
+
+    async def list_all_prefs_for_user(self, user_id: int) -> list[Pref]:
+        """Export read: every preference row for the user, unpaginated.
+
+        Sibling of `load_prefs` for the GDPR export
+        (openspec/changes/agent-gdpr-erasure "prefs (every
+        `agent.chat_user_prefs` row for the user)"): no LIMIT (export
+        completeness) and `key ASC` ordering for a deterministic dump,
+        rather than `load_prefs`'s injection-oriented `updated_at DESC`.
+        Same `value::text` decode and `source_session_id` normalization.
+        """
+
+        async def _select(conn: asyncpg.Connection) -> list[Pref]:
+            rows = await conn.fetch(
+                "SELECT key, value::text AS value, source_session_id, updated_at "
+                "FROM chat_user_prefs "
+                "WHERE user_id = $1 "
+                "ORDER BY key ASC",
+                user_id,
+            )
+            return [_row_to_pref(r) for r in rows]
+
+        return await self._with_retry("list_all_prefs_for_user", _select)
 
     async def delete_prefs_for_user(self, user_id: int) -> int:
         """Delete every preference row for one user. Returns the count.

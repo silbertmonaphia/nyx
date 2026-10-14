@@ -14,6 +14,10 @@ Routes:
     create, resume, soft-delete), registered from `agent.api.chat_sessions`.
     Same trust model as /agent/run: owner-scoped via `X-Nyx-User-Id`; the
     ChatStore wired by the lifespan (`app.state.chat_store`) serves the reads.
+  - GET  /agent/me/export, DELETE /agent/me — GDPR data-subject surface
+    (export + right to erasure), registered from `agent.api.gdpr`. Same
+    trust model; gated by `PYTHON_AGENT_GDPR_ENABLED` (503 when off). The
+    audit trail lives in `agent.data_audit_log` (`app.state.audit_log`).
 """
 
 from __future__ import annotations
@@ -32,6 +36,8 @@ from prometheus_client import generate_latest, CONTENT_TYPE_LATEST
 from redis.asyncio import Redis
 
 from .api.chat_sessions import router as chat_sessions_router
+from .api.gdpr import router as gdpr_router
+from .audit import AuditLog
 from .budget import BudgetGuard
 from .chat_store import ChatStore, ChatStoreUnavailable
 from .config import Settings, get_settings
@@ -136,6 +142,7 @@ async def lifespan(app: FastAPI):
     run_metadata: RunMetadata | None = None
     chat_store: ChatStore | None = None
     prefs_store: PrefsStore | None = None
+    audit_log: AuditLog | None = None
     checkpointer = None
     retention: RetentionCron | None = None
     sweeper: StaleRunSweeper | None = None
@@ -177,6 +184,14 @@ async def lifespan(app: FastAPI):
         prefs_store = PrefsStore(
             pool, acquire_timeout=settings.database_pool_acquire_timeout_seconds
         )
+        # GDPR audit trail (openspec/changes/agent-gdpr-compliance).
+        # Reuses the same pool — no second pool. Owns
+        # `agent.data_audit_log`: the append-only evidence for
+        # export/erase (counts only, never content) plus its own
+        # retention iteration on the cron below.
+        audit_log = AuditLog(
+            pool, acquire_timeout=settings.database_pool_acquire_timeout_seconds
+        )
 
         # langGraph PostgresSaver — psycopg-based, so we strip the
         # URL `options=...` (set search_path via SQL instead) and SET
@@ -204,6 +219,12 @@ async def lifespan(app: FastAPI):
                 # injection, but already-stored rows must still die with
                 # their source session.
                 prefs_store=prefs_store,
+                # GDPR audit retention (agent-gdpr-compliance D5). Passed
+                # regardless of `gdpr_enabled`: audit retention runs
+                # independently of the endpoint kill switch, so the
+                # evidence trail keeps moving while the endpoints are
+                # frozen.
+                audit_log=audit_log,
             )
             retention.start()
 
@@ -228,6 +249,7 @@ async def lifespan(app: FastAPI):
     app.state.run_metadata = run_metadata
     app.state.chat_store = chat_store
     app.state.prefs_store = prefs_store
+    app.state.audit_log = audit_log
     app.state.checkpointer = checkpointer
     app.state.retention = retention
     app.state.sweeper = sweeper
@@ -476,6 +498,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     # the lifespan put on `app.state.chat_store` (503 when unset — no DB
     # configured); the Go proxy owns the public /api/chat/sessions shape.
     app.include_router(chat_sessions_router)
+
+    # GDPR data-subject surface (openspec/changes/agent-gdpr-compliance):
+    # GET /agent/me/export + DELETE /agent/me. Same trust model as the
+    # session surface; 503 when `PYTHON_AGENT_GDPR_ENABLED=false` (the
+    # handlers short-circuit before touching any store). Private-network
+    # only — no Go/SPA proxy in this slice.
+    app.include_router(gdpr_router)
 
     return app
 

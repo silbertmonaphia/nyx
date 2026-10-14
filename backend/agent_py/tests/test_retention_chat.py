@@ -471,9 +471,19 @@ async def test_orphan_sweep_collects_stranded_prefs(pool: asyncpg.Pool) -> None:
     )
 
     # A stranded pref: source session id that has NO chat_sessions row
-    # (exactly the post-crash state).
+    # (exactly the post-crash state). Seeded via raw SQL on purpose:
+    # `upsert_pref` now refuses a dead source_session_id (review H2a), so
+    # the store itself can no longer CREATE this state — the sweep only
+    # ever has to collect rows stranded by a crash between the two
+    # retention deletes or written before the guard existed.
     stranded = str(_uuid.uuid4())
-    await prefs_store.upsert_pref(7, "snack", "鱿鱼丝", source_session_id=stranded)
+    async with pool.acquire() as conn:
+        await conn.execute(
+            'INSERT INTO agent.chat_user_prefs '
+            '(user_id, key, value, source_session_id) '
+            "VALUES (7, 'snack', '\"鱿鱼丝\"'::jsonb, $1)",
+            _uuid.UUID(stranded),
+        )
 
     # A live user-B pref via a real session — must survive the sweep.
     survivor_session = str(_uuid.uuid4())
@@ -502,4 +512,66 @@ async def test_orphan_sweep_collects_stranded_prefs(pool: asyncpg.Pool) -> None:
         }
     assert survivor_keys == {"hobby", "timezone"}, (
         f"live-session and NULL-sourced prefs must survive; got {survivor_keys}"
+    )
+
+
+class _RecordingCheckpointer:
+    """Minimal duck-typed saver: records adelete_thread calls."""
+
+    def __init__(self) -> None:
+        self.calls: list[str] = []
+
+    async def adelete_thread(self, thread_id: str) -> None:
+        self.calls.append(str(thread_id))
+
+
+async def test_hard_delete_gcs_session_checkpoint_threads(
+    pool: asyncpg.Pool,
+) -> None:
+    """Review 2026-10-14 compliance fix: a hard-deleted session's langGraph
+    checkpoint thread is GC'd in the same iteration.
+
+    Continuation turns bind their graph thread to the SESSION id and
+    carry no agent.runs row, so the run-retention GC never sees those
+    threads — without this call, a hard-deleted session's checkpoint
+    content would live forever (and survive an erasure of the metadata).
+    """
+    import asyncio
+    import uuid as _uuid
+
+    from agent.chat_store import ChatStore
+    from agent.retention import RetentionCron
+
+    settings = _settings(chat_retention_grace_days=0)
+    store = ChatStore(pool)
+    recorder = _RecordingCheckpointer()
+    cron = RetentionCron(
+        run_metadata=None,
+        chat_store=store,
+        checkpointer=recorder,
+        settings=settings,
+    )
+
+    # Two expired sessions: one pushed past retention, one untouched.
+    doomed = str(_uuid.uuid4())
+    survivor = str(_uuid.uuid4())
+    await store.create_session(1, doomed)
+    await store.create_session(1, survivor)
+    async with pool.acquire() as conn:
+        await conn.execute(
+            "UPDATE chat_sessions SET last_active_at = now() - interval '400 days' "
+            "WHERE id = $1",
+            _uuid.UUID(doomed),
+        )
+
+    # With grace=0 the hard-delete may land in the same tick as the
+    # soft-delete (the predicate needs a strictly later now()), so run
+    # two ticks and assert on the cumulative recorder — whichever tick
+    # deleted the session must have GC'd its thread.
+    await cron._chat_iteration()
+    await asyncio.sleep(0.01)
+    await cron._chat_iteration()
+
+    assert recorder.calls == [doomed], (
+        f"exactly the hard-deleted session's thread is GC'd; got {recorder.calls}"
     )

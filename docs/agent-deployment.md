@@ -27,6 +27,9 @@ Set on the `agent` service in `docker-compose.yml`. None of these are required w
 | `PYTHON_AGENT_RETENTION_ENABLED` | no | `true` | Hard-delete completed/failed metadata after the retention window. |
 | `PYTHON_AGENT_RETENTION_DAYS` | no | `30` | |
 | `PYTHON_AGENT_RETENTION_INTERVAL_SECONDS` | no | `3600` | |
+| `PYTHON_AGENT_GDPR_ENABLED` | no | `true` | Kill switch for `GET /agent/me/export` + `DELETE /agent/me` (503 when `false`). |
+| `PYTHON_AGENT_AUDIT_RETENTION_DAYS` | no | `1095` | `agent.data_audit_log` window (3y); values below 365 refuse startup. |
+| `PYTHON_AGENT_CHAT_RETENTION_DAYS` | no | `365` | Chat-history window (1y); values below 365 refuse startup. Set by the chat slice, listed here for the erasure story. |
 
 The `PYTHON_AGENT_DATABASE_URL` shape: `postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}?options=-c%20search_path%3Dlanggraph%2Cagent`. The `options=` value is URL-encoded (`%20` for space, `%3D` for `=`) because compose interpolates unencoded values into the env literally; URL-encoding is the no-decoding-required form.
 
@@ -113,6 +116,78 @@ curl -fsS -X POST http://localhost:8080/api/chat \
   -N | head -3
 # Expect: stream opens with a delta frame (the Go path), no run_id / fresh_run frames.
 ```
+
+## GDPR data handling: export + erasure
+
+Companion to `openspec/changes/agent-gdpr-compliance/` (Slice 4 of `AgentMemoryRoadmap.md`). Two owner-scoped endpoints on the agent service:
+
+- `GET /agent/me/export` — one JSON body carrying every row tied to the subject (covers a subject-access request).
+- `DELETE /agent/me` — physical erasure of every row tied to the subject (covers a right-to-erasure request). Idempotent.
+
+**Precondition for an erasure while the subject may be chatting:** run the erase when no run for the subject is in flight, then re-check `agent.chat_user_prefs` for the user after a few seconds. A turn streaming at erase time can write its assistant message into a just-deleted session (contained and warn-logged — the FK rejection surfaces as store-unavailable) and its late preference extraction is skipped by the in-SQL source-session guard, but the precondition removes the ambiguity entirely. If a run was in flight, re-run the erase (idempotent).
+
+Both are scoped to the numeric user id in the `X-Nyx-User-Id` header — the same Go-verified header `/agent/sessions*` uses. A missing / non-integer header is a 400 (never an implicit user 0) and there is no admin override or cross-user parameter. This hop has no auth of its own: the agent service's network boundary is the trust boundary, so the operator invocations below must run from a host that can reach the agent port (host dev: `http://localhost:9000`; compose: from inside the compose network) and the header value must be the *Go* user id (the `users.id` behind the subject's JWT).
+
+### Data inventory (what a subject's data touches)
+
+| Table / store | Holds | Retention window | Covered by `DELETE /agent/me` |
+| --- | --- | --- | --- |
+| `agent.chat_sessions` | session rows, soft-deleted included | 365d (soft-delete + 7d grace, then hard-delete) | yes — every row, soft-deleted included |
+| `agent.chat_messages` | every message turn (content, tool calls, tokens) | follows its session (FK ON DELETE CASCADE) | yes — deleted with its session |
+| `agent.chat_user_prefs` | derived preference rows (`key` / `value`) | follows the source session; orphan-sweep backstop collects stragglers | yes — every row for the user |
+| `agent.runs` | run metadata (status, tokens, timings) | 30d (terminal rows) | yes — every row, any status |
+| `langgraph.checkpoint_*` | langGraph checkpoint state, keyed by thread id: the run id for single-turn runs, the **session id** for continuation turns (which carry no `agent.runs` row) | run-keyed threads GC with their `agent.runs` row; session-keyed threads GC when the chat-retention cron hard-deletes the session | yes — `adelete_thread` once per run id AND per deleted session id (the deduped union) |
+| `agent.data_audit_log` | export/erase evidence — counts only, never content | 1095d (3y) | **No — deliberately retained.** The audit row is the evidence the erasure happened; it must outlive the deleted data (design D5) |
+| **Langfuse** (opt-in, `PYTHON_AGENT_LANGFUSE_ENABLED=true`) | prompts + replies — i.e. message **content** — plus run/user ids | Langfuse instance retention (operator-configured; align with the run-retention parity goal, see the Langfuse rollout sibling) | **No — outside the erase path.** For a subject erasure with tracing enabled: delete the subject's traces in the Langfuse UI/API, or disable tracing. Not silent by design — this row is the operator checklist item |
+| **Redis** budget counters (`agent:budget:u={user_id}:h=…`) | pseudonymous token counts keyed by user id | ~90 minutes (self-expiring) | not needed — expires on its own |
+| **Jaeger** spans | run/step/tool metadata; `user_id` attribute; no message content | Jaeger storage retention (operator-configured) | not needed for content (ids only); expires with trace retention |
+
+`threads` in the erase response counts only `adelete_thread` calls that completed without error; a per-thread failure is warn-logged, counted as not-deleted, and does not abort the remaining ids or the audit row — re-running the erase is safe (idempotent) and retries whatever is left.
+
+### Operator playbook
+
+Export a subject:
+
+```bash
+curl -fsS -X GET http://localhost:9000/agent/me/export \
+  -H "X-Nyx-User-Id: 42" | jq .
+# → {"user_id": 42, "exported_at": "2026-10-14T12:00:00+00:00",
+#    "sessions": [{"id": "…", "title": "…", "started_at": "…", "deleted_at": null, …}],
+#    "messages": [{"id": 123, "session_id": "…", "role": "user", "content": "…", "tool_calls": null, "tokens": 8, "created_at": "…"}],
+#    "prefs": [{"key": "…", "value": …, "source_session_id": "…", "updated_at": "…"}],
+#    "runs": [{"id": "…", "status": "completed", "total_tokens": 1234, …}],
+#    "checkpoint_thread_ids": ["<run-id or session-id uuid>", …],
+#    "audit_entries": [{"action": "export", "payload_summary": {…counts…}, "requested_at": "…"}]}
+```
+
+A subject with no data gets the same shape with empty arrays (200 — never a 404). Each call appends an `export` audit row with counts only.
+
+Erase a subject:
+
+```bash
+curl -fsS -X DELETE http://localhost:9000/agent/me \
+  -H "X-Nyx-User-Id: 42" | jq .
+# → {"deleted": {"sessions": 3, "messages": 12, "prefs": 1, "runs": 2, "threads": 4, "thread_failures": 0}}
+```
+
+A second call returns all-zero counts with 200. Verify the post-state:
+
+```sql
+SELECT count(*) FROM agent.chat_sessions   WHERE user_id = 42;
+SELECT count(*) FROM agent.chat_user_prefs WHERE user_id = 42;
+SELECT count(*) FROM agent.runs            WHERE user_id = 42;
+SELECT action, payload_summary, requested_at FROM agent.data_audit_log
+  WHERE user_id = 42 ORDER BY requested_at;
+-- Expect: zeros above; 'export' + 'erase' rows here (counts only, no content).
+```
+
+**If an erase returned 200 but its audit row is missing** (log line `gdpr erase: audit record failed after data was deleted` + the `agent_gdpr_audit_write_failed_total{endpoint="erase"}` counter ticked): the data IS gone — the evidence row was lost. Do not re-run the erase to "fix" it (a re-run appends an all-zero row and the true counts are unrecoverable); record the erasure manually from the ERROR log line, which carries the full counts and the user id.
+
+**Backup / restore rule.** Backups may be restored for disaster recovery only — and a restored copy contains data for every subject erased since the backup was taken, so before the restored copy serves traffic again, re-apply every erasure recorded since that backup. The record of which erasures to re-apply is `agent.data_audit_log` (query `WHERE action = 'erase'`, take the `user_id`s with `requested_at` after the backup's timestamp), and the re-application is simply re-invoking `DELETE /agent/me` per recorded user id — it is idempotent, and the additional zero-count `erase` audit row it appends is correct evidence that the erasure was re-applied to the restored copy.
+
+### Kill switch
+
+`PYTHON_AGENT_GDPR_ENABLED=false` makes both endpoints return 503 with the standard error envelope (`{"error": "GDPR endpoints disabled", "details": …}`) and touch nothing: no store read, no store write, no audit row — "the forbidden operation never happened". The audit-retention iteration keeps running while the switch is off (the trail must expire on schedule regardless); only the two subject-facing endpoints are frozen. Re-enable by removing the variable / setting it `true` and restarting the agent service.
 
 ## Rollback
 

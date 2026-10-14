@@ -13,7 +13,7 @@ The roadmap locked "Retention floor ≥ 1 year" and flagged GDPR as non-negotiab
 - New retention iteration for the audit log in `RetentionCron` (span `agent.audit.retention`, counter `agent_audit_retention_deleted_total`).
 - `backend/agent_py/agent/audit.py` (new): `AuditLog` store (same pool/retry posture) with `record(user_id, action, summary)` + `retention_delete(days) -> int`.
 - `backend/agent_py/agent/api/gdpr.py` (new): the two endpoints on the slice-2 `api` package, same header enforcement + OTel span pattern.
-- Docs: `docs/agent-deployment.md` gains the data inventory table (which table holds what, which retention applies), the export/erase operator playbook (including the "restore-then-reapply-erase" note), and the SLA statement; `SECURITY.md` gains a cross-link. `FUTURE_AGENT.md` §2.1 marks the slice complete.
+- Docs: `docs/agent-deployment.md` gains the data inventory table (which table holds what, which retention applies), the export/erase operator playbook (including the "restore-then-reapply-erase" note and the in-flight-run precondition), and the operator-response statement (the endpoints are private-network operator routes — there is no self-service SPA path yet); `SECURITY.md` gains a cross-link. `FUTURE_AGENT.md` §2.1 marks the slice complete.
 - **Wire**: two new JSON REST endpoints on the private agent network (reachable by the Go backend / operators inside the compose network; a user-facing SPA proxy is explicitly deferred until a privacy UI exists). No SSE changes.
 
 ## Capabilities
@@ -34,5 +34,5 @@ The roadmap locked "Retention floor ≥ 1 year" and flagged GDPR as non-negotiab
 - **Wire**: two JSON endpoints on the agent side (no SPA surface in this slice).
 - **Dependencies**: none new.
 - **Docs**: `docs/agent-deployment.md` (data inventory + playbook + retention matrix), `SECURITY.md` (cross-link), `backend/agent_py/.env.example`, `FUTURE_AGENT.md` §2.1, `AgentMemoryRoadmap.md` Slice 4 tick.
-- **Tests**: `backend/agent_py/tests/test_gdpr.py` (export completeness incl. a second user's rows present-but-excluded; erase order + counts; idempotent double-erase; checkpoint-thread GC called per run id; audit rows for both actions with counts-not-content; disabled → 503; audit retention reaping), plus a retention-coupling test in `test_retention_chat.py` if the audit iteration lands there.
+- **Tests**: `backend/agent_py/tests/test_gdpr_stores.py` + `tests/test_gdpr_endpoints.py` (export completeness incl. a second user's rows present-but-excluded; erase order + counts + thread GC per run/session id; late-writer durability; idempotent double-erase; audit rows for both actions with counts-not-content enforced; disabled → 503; audit retention reaping), plus a retention-coupling test in `test_retention_chat.py` if the audit iteration lands there.
 - **Rollout gates tracked in** `openspec/changes/agent-gdpr-compliance-rollout/` (per the rollout-split convention).

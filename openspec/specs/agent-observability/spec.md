@@ -29,14 +29,18 @@ The following counters MUST exist and MUST be incremented on the corresponding p
 - `agent_tokens_total{role, model}` — incremented with every token delta and usage frame, tagged by `role` (planner / executor / rag / react) and `model`
 - `agent_tool_retries_total{tool, reason}` — incremented once per retry attempt (not on first-try success); `tool` is the registry tool name, `reason` is one of `tool_arg_invalid` (registry rejected the call's arguments) or `tool_execution_transient` (network timeout, 5xx, 408, 429)
 - `agent_runs_swept_total` — incremented by the stale-run sweeper with the number of `running` rows reaped in each sweep iteration (see `agent-run-sweeper`); zero-reap iterations do not increment it
-- **`agent_chat_retention_deleted_total`** — incremented by the number of `chat_sessions` rows hard-deleted by the retention cron (soft-deletes are NOT counted); incremented once per iteration, by `chat_deleted_count`
+- `agent_chat_retention_deleted_total` — incremented by the number of `chat_sessions` rows hard-deleted by the retention cron (soft-deletes are NOT counted); incremented once per iteration, by `chat_deleted_count`
+- **`agent_audit_retention_deleted_total`** — incremented by the number of `agent.data_audit_log` rows deleted by the audit-retention iteration; zero-delete iterations do not increment it
 
 The following OTel spans MUST be produced:
 - `agent.run` (run_id, user_id, plan_size, total_tokens) — one per run
 - `agent.step.{plan,tool,react,llm}` (step_id, kind, name?, iteration?, token counts) — one per step
 - `agent.run.retention` — one per run-retention iteration (deleted_count attribute)
-- **`agent.chat.retention`** — one per chat-retention iteration (chat_deleted_count attribute); emitted after `agent.run.retention` on the same tick
+- `agent.chat.retention` — one per chat-retention iteration (chat_deleted_count attribute); emitted after `agent.run.retention` on the same tick
 - `agent.run.sweep` — one per stale-run-sweeper iteration (reaped_count attribute)
+- **`agent.audit.retention`** — one per audit-retention iteration (deleted_count attribute)
+- **`agent.gdpr.export`** — one per export call (user_id, counts as attributes)
+- **`agent.gdpr.erase`** — one per erase call (user_id, counts as attributes; a per-thread `adelete_thread` failure is recorded as an attribute count of failures, never as an exception on the span)
 
 #### Scenario: Planner vs executor token split is visible
 
@@ -69,6 +73,16 @@ The following OTel spans MUST be produced:
 - **WHEN** the retention cron iterates and only soft-deletes (no hard-deletes)
 - **THEN** `agent_chat_retention_deleted_total` does NOT increment
 - **AND** the `agent.chat.retention` span is still emitted (visibility on soft-delete traffic)
+
+#### Scenario: Audit retention counter ticks per reap
+
+- **WHEN** the audit-retention iteration deletes N rows
+- **THEN** `agent_audit_retention_deleted_total` increases by N and the `agent.audit.retention` span carries `deleted_count=N`
+
+#### Scenario: Erase failures are visible on the span without raising
+
+- **WHEN** an erase call has one `adelete_thread` failure among its run ids
+- **THEN** the `agent.gdpr.erase` span completes normally with a thread-failure count attribute reflecting the failure; no span status error is set (the operation completed per its contract)
 
 ### Requirement: Per-user token budget guard fails closed
 
