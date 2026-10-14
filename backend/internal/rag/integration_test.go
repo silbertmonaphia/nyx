@@ -87,7 +87,7 @@ func requirePgvector(t *testing.T) *pgxpool.Pool {
 		t.Skipf("DB_URL unreachable: %v", err)
 	}
 	var has bool
-	if err := probe.QueryRow(ctx,
+	if err = probe.QueryRow(ctx,
 		`SELECT EXISTS (SELECT 1 FROM pg_available_extensions WHERE name = 'vector')`,
 	).Scan(&has); err != nil {
 		probe.Close()
@@ -98,7 +98,13 @@ func requirePgvector(t *testing.T) *pgxpool.Pool {
 		t.Skipf("DB_URL points at a Postgres without the pgvector extension; " +
 			"use the pgvector/pgvector:pg17-alpine image (docker-compose.yml's `db` service)")
 	}
-	if err := test.RunMigrationsForURL(ctx, url); err != nil {
+	release, err := test.AcquireIntegrationLock(ctx, url)
+	if err != nil {
+		probe.Close()
+		t.Fatalf("failed to acquire integration lock: %v", err)
+	}
+	t.Cleanup(release)
+	if err = test.RunMigrationsForURL(ctx, url); err != nil {
 		probe.Close()
 		t.Fatalf("failed to run migrations: %v", err)
 	}

@@ -41,9 +41,16 @@ func TestMain(m *testing.M) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 
+	var release func()
 	if !skipContainers {
 		if url := os.Getenv("DB_URL"); url != "" {
 			dbURL = url
+			var err error
+			release, err = test.AcquireIntegrationLock(ctx, dbURL)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "Failed to acquire integration lock: %v\n", err)
+				os.Exit(1)
+			}
 			if err := test.RunMigrationsForURL(ctx, dbURL); err != nil {
 				fmt.Fprintf(os.Stderr, "Failed to run migrations: %v\n", err)
 				os.Exit(1)
@@ -67,6 +74,10 @@ func TestMain(m *testing.M) {
 	}
 
 	code := m.Run()
+
+	if release != nil {
+		release()
+	}
 
 	if !skipContainers && testDB != nil && testDB.Container != nil {
 		_ = testDB.Container.Terminate(context.Background())
