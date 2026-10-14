@@ -22,6 +22,12 @@ const mockedService = chatService as unknown as {
 const CURRENT_SESSION_KEY = 'nyx.chat.currentSessionId';
 
 function resetStore() {
+  // Abort + clear any stream a previous test left live FIRST: the
+  // module-level bookkeeping (attachedToken / controller / detachHook /
+  // streamSeq) lives outside the store, so a test that ends mid-stream
+  // would otherwise leak a registered detach hook into the next test's
+  // navigation actions (injecting a phantom rail marker).
+  useChatStore.getState().clearActiveSession();
   useChatStore.setState({
     messages: [],
     isStreaming: false,
@@ -31,6 +37,7 @@ function resetStore() {
     sessionList: [],
     sessionListNextCursor: null,
     isFetchingMore: false,
+    runningSessionIds: [],
   });
   // Clear any persisted toggle / session id from a previous test.
   localStorage.clear();
@@ -1764,6 +1771,596 @@ describe('useChatStore', () => {
         'Confirmation required: the user denied this call. The `create_feed` tool was not executed.',
       );
       expect(step?.status).toBe('failed');
+    });
+  });
+
+  describe('background runs (navigation detaches instead of aborting)', () => {
+    /**
+     * Push-based stream mock: events are fed one at a time from the
+     * test, and `close()` ends the generator. Unlike the shared
+     * `makeStream` helper (whose single `__chatRelease` hook can only
+     * hold ONE stream), each instance is independent — detached-run
+     * tests need two live streams at once (a detached one + an
+     * attached one).
+     */
+    function makePushStream() {
+      const queue: ChatEvent[] = [];
+      let notify: (() => void) | null = null;
+      let closed = false;
+      let failure: Error | null = null;
+      const captured: {
+        signal?: AbortSignal;
+        opts?: { onRunId?: (id: string) => void };
+      } = {};
+      async function* impl(
+        _messages: unknown,
+        signal: AbortSignal,
+        opts?: { onRunId?: (id: string) => void },
+      ): AsyncGenerator<ChatEvent> {
+        captured.signal = signal;
+        captured.opts = opts;
+        while (!closed || queue.length > 0) {
+          if (failure) throw failure;
+          if (queue.length === 0) {
+            await new Promise<void>((resolve) => {
+              notify = resolve;
+            });
+            continue;
+          }
+          yield queue.shift()!;
+        }
+      }
+      return {
+        impl,
+        captured,
+        push(event: ChatEvent) {
+          queue.push(event);
+          notify?.();
+          notify = null;
+        },
+        close() {
+          closed = true;
+          notify?.();
+          notify = null;
+        },
+        fail(err: Error) {
+          failure = err;
+          notify?.();
+          notify = null;
+        },
+      };
+    }
+
+    it('startNewSession detaches the live stream: not aborted, still draining, rail marked', async () => {
+      useChatStore.setState({ currentSessionId: 'sess-a' });
+      const stream = makePushStream();
+      mockedService.streamMessage.mockImplementationOnce(stream.impl);
+
+      act(() => {
+        void useChatStore.getState().send('hi');
+      });
+      await waitFor(() => {
+        expect(useChatStore.getState().isStreaming).toBe(true);
+      });
+
+      await act(async () => {
+        await useChatStore.getState().startNewSession();
+      });
+
+      const state = useChatStore.getState();
+      // The core guarantee: the connection was NOT aborted — the run
+      // keeps going server-side.
+      expect(stream.captured.signal?.aborted).toBe(false);
+      // Panel moved on; the run's session is marked as still working.
+      expect(state.currentSessionId).toBe('srv-new');
+      expect(state.messages).toEqual([]);
+      expect(state.isStreaming).toBe(false);
+      expect(state.runningSessionIds).toEqual(['sess-a']);
+
+      // A frame that arrives after the detach is drained and dropped —
+      // it must not leak into the new session's panel.
+      await act(async () => {
+        stream.push({ kind: 'delta', delta: 'late answer' });
+        await Promise.resolve();
+      });
+      expect(useChatStore.getState().messages).toEqual([]);
+
+      // Natural end: the rail refreshes and the marker clears. The
+      // finished run belongs to 'sess-a', not the active 'srv-new', so
+      // no replay fetch fires.
+      await act(async () => {
+        stream.close();
+        await Promise.resolve();
+      });
+      await waitFor(() => {
+        expect(useChatStore.getState().runningSessionIds).toEqual([]);
+      });
+      expect(mockedService.listSessions).toHaveBeenCalledTimes(1);
+      expect(mockedService.getMessages).not.toHaveBeenCalled();
+      expect(useChatStore.getState().isStreaming).toBe(false);
+    });
+
+    it('replays the finished run when its session is back on screen', async () => {
+      useChatStore.setState({ currentSessionId: 'sess-a' });
+      const stream = makePushStream();
+      mockedService.streamMessage.mockImplementationOnce(stream.impl);
+
+      act(() => {
+        void useChatStore.getState().send('hi');
+      });
+      await waitFor(() => {
+        expect(useChatStore.getState().isStreaming).toBe(true);
+      });
+
+      // Detach, then come back to the run's session before it ends:
+      // the replay shows the persisted rows as they are now …
+      await act(async () => {
+        await useChatStore.getState().startNewSession();
+      });
+      mockedService.getMessages.mockResolvedValueOnce([
+        makeMessageRow({ id: 1, role: 'user', content: 'hi' }),
+      ]);
+      await act(async () => {
+        await useChatStore.getState().setCurrentSession('sess-a');
+      });
+      expect(useChatStore.getState().messages).toEqual([
+        { role: 'user', content: 'hi' },
+      ]);
+
+      // … and the run's terminal frame re-replays: by then the
+      // assistant row is durable server-side (the agent persists it
+      // before `[DONE]`), so the completed turn lands in full.
+      mockedService.getMessages.mockResolvedValueOnce([
+        makeMessageRow({ id: 1, role: 'user', content: 'hi' }),
+        makeMessageRow({ id: 2, role: 'assistant', content: 'full answer' }),
+      ]);
+      await act(async () => {
+        stream.close();
+        await Promise.resolve();
+      });
+      await waitFor(() => {
+        expect(useChatStore.getState().messages).toEqual([
+          { role: 'user', content: 'hi' },
+          { role: 'assistant', content: 'full answer' },
+        ]);
+      });
+      expect(mockedService.getMessages).toHaveBeenCalledTimes(2);
+      expect(useChatStore.getState().runningSessionIds).toEqual([]);
+    });
+
+    it('a run_id frame arriving while detached marks the frame id and is never adopted', async () => {
+      const stream = makePushStream();
+      mockedService.streamMessage.mockImplementationOnce(stream.impl);
+
+      act(() => {
+        void useChatStore.getState().send('first message');
+      });
+      await waitFor(() => {
+        expect(useChatStore.getState().isStreaming).toBe(true);
+      });
+
+      await act(async () => {
+        await useChatStore.getState().startNewSession();
+      });
+      expect(useChatStore.getState().currentSessionId).toBe('srv-new');
+
+      // The server mints the session (the frame follows the row
+      // insert): a detached stream re-keys its rail marker to the
+      // actual id but never adopts it into the panel.
+      await act(async () => {
+        stream.captured.opts?.onRunId?.('srv-minted');
+        await Promise.resolve();
+      });
+      expect(useChatStore.getState().currentSessionId).toBe('srv-new');
+      expect(useChatStore.getState().runningSessionIds).toEqual(['srv-minted']);
+
+      await act(async () => {
+        stream.close();
+        await Promise.resolve();
+      });
+      await waitFor(() => {
+        expect(useChatStore.getState().runningSessionIds).toEqual([]);
+      });
+    });
+
+    it("detached frames cannot leak into the new session's panel", async () => {
+      useChatStore.setState({ currentSessionId: 'sess-a' });
+      const streamA = makePushStream();
+      mockedService.streamMessage.mockImplementationOnce(streamA.impl);
+
+      act(() => {
+        void useChatStore.getState().send('a');
+      });
+      await waitFor(() => {
+        expect(useChatStore.getState().isStreaming).toBe(true);
+      });
+
+      await act(async () => {
+        await useChatStore.getState().startNewSession();
+      });
+
+      // The new session streams its own turn — its assistant row lands
+      // at the SAME index A's did (both are messages[1]). This is the
+      // collision the attachment gate exists to prevent.
+      const streamB = makePushStream();
+      mockedService.streamMessage.mockImplementationOnce(streamB.impl);
+      act(() => {
+        void useChatStore.getState().send('b');
+      });
+      await waitFor(() => {
+        expect(useChatStore.getState().isStreaming).toBe(true);
+      });
+      await act(async () => {
+        streamB.push({ kind: 'delta', delta: 'B-answer' });
+        await Promise.resolve();
+      });
+      await waitFor(() => {
+        expect(useChatStore.getState().messages[1]?.content).toBe('B-answer');
+      });
+
+      // A's late delta (index 1 in A's old array) must be dropped.
+      await act(async () => {
+        streamA.push({ kind: 'delta', delta: 'A-late' });
+        await Promise.resolve();
+      });
+      await waitFor(() => {
+        expect(useChatStore.getState().messages[1]?.content).toBe('B-answer');
+      });
+      expect(useChatStore.getState().messages).toHaveLength(2);
+      expect(useChatStore.getState().messages[1]?.content).not.toContain(
+        'A-late',
+      );
+
+      await act(async () => {
+        streamA.close();
+        streamB.close();
+        await Promise.resolve();
+      });
+    });
+
+    it('send refuses a follow-up while the active session has a live detached run', async () => {
+      useChatStore.setState({ currentSessionId: 'sess-a' });
+      const stream = makePushStream();
+      mockedService.streamMessage.mockImplementationOnce(stream.impl);
+
+      act(() => {
+        void useChatStore.getState().send('one');
+      });
+      await waitFor(() => {
+        expect(useChatStore.getState().isStreaming).toBe(true);
+      });
+
+      await act(async () => {
+        await useChatStore.getState().startNewSession();
+      });
+      await act(async () => {
+        await useChatStore.getState().setCurrentSession('sess-a');
+      });
+
+      // The busy session's composer is (also) guarded in the store: a
+      // second concurrent run on one session would interleave rows.
+      await act(async () => {
+        await useChatStore.getState().send('two');
+      });
+      expect(mockedService.streamMessage).toHaveBeenCalledTimes(1);
+      // The refused send appended nothing.
+      expect(useChatStore.getState().messages).toEqual([]);
+
+      await act(async () => {
+        stream.close();
+        await Promise.resolve();
+      });
+    });
+
+    it("an older stream's terminal cannot clear a newer stream's isStreaming", async () => {
+      useChatStore.setState({ currentSessionId: 'sess-a' });
+      const streamA = makePushStream();
+      mockedService.streamMessage.mockImplementationOnce(streamA.impl);
+
+      act(() => {
+        void useChatStore.getState().send('a');
+      });
+      await waitFor(() => {
+        expect(useChatStore.getState().isStreaming).toBe(true);
+      });
+
+      await act(async () => {
+        await useChatStore.getState().startNewSession();
+      });
+
+      const streamB = makePushStream();
+      mockedService.streamMessage.mockImplementationOnce(streamB.impl);
+      act(() => {
+        void useChatStore.getState().send('b');
+      });
+      await waitFor(() => {
+        expect(useChatStore.getState().isStreaming).toBe(true);
+      });
+
+      // A finishes long after B started: its finally must not flip the
+      // panel's streaming state off under B.
+      await act(async () => {
+        streamA.close();
+        await Promise.resolve();
+      });
+      await waitFor(() => {
+        expect(useChatStore.getState().runningSessionIds).toEqual([]);
+      });
+      expect(useChatStore.getState().isStreaming).toBe(true);
+
+      await act(async () => {
+        streamB.close();
+        await Promise.resolve();
+      });
+      await waitFor(() => {
+        expect(useChatStore.getState().isStreaming).toBe(false);
+      });
+    });
+
+    it('reset (dialog close) detaches instead of aborting', async () => {
+      useChatStore.setState({ currentSessionId: 'sess-a' });
+      const stream = makePushStream();
+      mockedService.streamMessage.mockImplementationOnce(stream.impl);
+
+      act(() => {
+        void useChatStore.getState().send('hi');
+      });
+      await waitFor(() => {
+        expect(useChatStore.getState().isStreaming).toBe(true);
+      });
+
+      await act(async () => {
+        useChatStore.getState().reset();
+      });
+
+      const state = useChatStore.getState();
+      expect(state.messages).toEqual([]);
+      expect(state.isStreaming).toBe(false);
+      expect(stream.captured.signal?.aborted).toBe(false);
+      expect(state.runningSessionIds).toEqual(['sess-a']);
+
+      await act(async () => {
+        stream.close();
+        await Promise.resolve();
+      });
+      await waitFor(() => {
+        expect(useChatStore.getState().runningSessionIds).toEqual([]);
+      });
+    });
+
+    it('setCurrentSession detaches the live stream of the session left behind', async () => {
+      useChatStore.setState({ currentSessionId: 'sess-a' });
+      const stream = makePushStream();
+      mockedService.streamMessage.mockImplementationOnce(stream.impl);
+
+      act(() => {
+        void useChatStore.getState().send('hi');
+      });
+      await waitFor(() => {
+        expect(useChatStore.getState().isStreaming).toBe(true);
+      });
+
+      await act(async () => {
+        await useChatStore.getState().setCurrentSession('sess-b');
+      });
+
+      expect(stream.captured.signal?.aborted).toBe(false);
+      expect(useChatStore.getState().currentSessionId).toBe('sess-b');
+      expect(useChatStore.getState().runningSessionIds).toEqual(['sess-a']);
+
+      await act(async () => {
+        stream.close();
+        await Promise.resolve();
+      });
+      await waitFor(() => {
+        expect(useChatStore.getState().runningSessionIds).toEqual([]);
+      });
+    });
+
+    it('deleting the active session still aborts its run (destructive gesture wins)', async () => {
+      useChatStore.setState({
+        currentSessionId: 'sess-a',
+        sessionList: [makeSession('sess-a')],
+      });
+      const stream = makePushStream();
+      mockedService.streamMessage.mockImplementationOnce(stream.impl);
+
+      act(() => {
+        void useChatStore.getState().send('hi');
+      });
+      await waitFor(() => {
+        expect(useChatStore.getState().isStreaming).toBe(true);
+      });
+
+      await act(async () => {
+        await useChatStore.getState().deleteSession('sess-a');
+      });
+
+      expect(stream.captured.signal?.aborted).toBe(true);
+      expect(useChatStore.getState().currentSessionId).toBeNull();
+      expect(useChatStore.getState().messages).toEqual([]);
+      expect(useChatStore.getState().runningSessionIds).toEqual([]);
+    });
+
+    it('a detached failure logs instead of surfacing in the panel', async () => {
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      useChatStore.setState({ currentSessionId: 'sess-a' });
+      const stream = makePushStream();
+      mockedService.streamMessage.mockImplementationOnce(stream.impl);
+
+      act(() => {
+        void useChatStore.getState().send('hi');
+      });
+      await waitFor(() => {
+        expect(useChatStore.getState().isStreaming).toBe(true);
+      });
+
+      await act(async () => {
+        await useChatStore.getState().startNewSession();
+      });
+
+      // Real failure (not an abort) while detached: the new session's
+      // panel must not show the old run's error — log only.
+      await act(async () => {
+        stream.fail(new Error('network down'));
+        await Promise.resolve();
+      });
+      await waitFor(() => {
+        expect(useChatStore.getState().runningSessionIds).toEqual([]);
+      });
+      expect(useChatStore.getState().error).toBeNull();
+      expect(useChatStore.getState().messages).toEqual([]);
+      warn.mockRestore();
+    });
+
+    it('keeps the rail marker (composer lock) up until the completion replay lands', async () => {
+      useChatStore.setState({ currentSessionId: 'sess-a' });
+      const stream = makePushStream();
+      mockedService.streamMessage.mockImplementationOnce(stream.impl);
+
+      act(() => {
+        void useChatStore.getState().send('hi');
+      });
+      await waitFor(() => {
+        expect(useChatStore.getState().isStreaming).toBe(true);
+      });
+
+      await act(async () => {
+        await useChatStore.getState().startNewSession();
+      });
+      await act(async () => {
+        await useChatStore.getState().setCurrentSession('sess-a');
+      });
+      expect(useChatStore.getState().runningSessionIds).toEqual(['sess-a']);
+
+      // The terminal frame lands while the session is on screen: the
+      // completion replay is issued but stays in flight.
+      let releaseReplay: ((rows: SessionMessage[]) => void) | null = null;
+      mockedService.getMessages.mockImplementationOnce(
+        () =>
+          new Promise<SessionMessage[]>((resolve) => {
+            releaseReplay = resolve;
+          }),
+      );
+      await act(async () => {
+        stream.close();
+        await Promise.resolve();
+      });
+      await waitFor(() => {
+        expect(mockedService.getMessages).toHaveBeenCalledTimes(2);
+      });
+      // Still marked: unlocking before the replay lands would let a
+      // fast follow-up start a run that the replay then clobbers.
+      expect(useChatStore.getState().runningSessionIds).toEqual(['sess-a']);
+      await act(async () => {
+        await useChatStore.getState().send('too early');
+      });
+      expect(mockedService.streamMessage).toHaveBeenCalledTimes(1);
+
+      await act(async () => {
+        releaseReplay!([
+          makeMessageRow({ id: 1, role: 'user', content: 'hi' }),
+          makeMessageRow({ id: 2, role: 'assistant', content: 'answer' }),
+        ]);
+        await Promise.resolve();
+      });
+      await waitFor(() => {
+        expect(useChatStore.getState().runningSessionIds).toEqual([]);
+      });
+      expect(useChatStore.getState().messages).toEqual([
+        { role: 'user', content: 'hi' },
+        { role: 'assistant', content: 'answer' },
+      ]);
+    });
+
+    it('tracks two detached runs in different sessions independently', async () => {
+      useChatStore.setState({ currentSessionId: 'sess-a' });
+
+      const streamA = makePushStream();
+      mockedService.streamMessage.mockImplementationOnce(streamA.impl);
+      act(() => {
+        void useChatStore.getState().send('a');
+      });
+      await waitFor(() => {
+        expect(useChatStore.getState().isStreaming).toBe(true);
+      });
+
+      mockedService.createSession.mockResolvedValueOnce({
+        session_id: 'srv-1',
+        started_at: '2026-10-14T00:00:00Z',
+      });
+      await act(async () => {
+        await useChatStore.getState().startNewSession();
+      });
+      expect(useChatStore.getState().runningSessionIds).toEqual(['sess-a']);
+
+      const streamB = makePushStream();
+      mockedService.streamMessage.mockImplementationOnce(streamB.impl);
+      act(() => {
+        void useChatStore.getState().send('b');
+      });
+      await waitFor(() => {
+        expect(useChatStore.getState().isStreaming).toBe(true);
+      });
+
+      mockedService.createSession.mockResolvedValueOnce({
+        session_id: 'srv-2',
+        started_at: '2026-10-14T00:00:00Z',
+      });
+      await act(async () => {
+        await useChatStore.getState().startNewSession();
+      });
+      expect(useChatStore.getState().runningSessionIds).toEqual([
+        'sess-a',
+        'srv-1',
+      ]);
+
+      // A finishes: only A's marker retires; B keeps pulsing.
+      await act(async () => {
+        streamA.close();
+        await Promise.resolve();
+      });
+      await waitFor(() => {
+        expect(useChatStore.getState().runningSessionIds).toEqual(['srv-1']);
+      });
+
+      await act(async () => {
+        streamB.close();
+        await Promise.resolve();
+      });
+      await waitFor(() => {
+        expect(useChatStore.getState().runningSessionIds).toEqual([]);
+      });
+    });
+
+    it('cancel is a no-op for a detached run (no client handle, marker intact)', async () => {
+      useChatStore.setState({ currentSessionId: 'sess-a' });
+      const stream = makePushStream();
+      mockedService.streamMessage.mockImplementationOnce(stream.impl);
+
+      act(() => {
+        void useChatStore.getState().send('a');
+      });
+      await waitFor(() => {
+        expect(useChatStore.getState().isStreaming).toBe(true);
+      });
+      await act(async () => {
+        await useChatStore.getState().startNewSession();
+      });
+
+      await act(async () => {
+        useChatStore.getState().cancel();
+      });
+      expect(stream.captured.signal?.aborted).toBe(false);
+      expect(useChatStore.getState().runningSessionIds).toEqual(['sess-a']);
+
+      await act(async () => {
+        stream.close();
+        await Promise.resolve();
+      });
+      await waitFor(() => {
+        expect(useChatStore.getState().runningSessionIds).toEqual([]);
+      });
     });
   });
 });

@@ -47,7 +47,12 @@ function makeRow(
   };
 }
 
-function resetStore() {
+function resetStore(
+  overrides: Partial<ReturnType<typeof useChatStore.getState>> = {},
+) {
+  // Abort + clear any stream a previous test left live (module-level
+  // bookkeeping sits outside the store — see the store's test file).
+  useChatStore.getState().clearActiveSession();
   useChatStore.setState({
     messages: [],
     isStreaming: false,
@@ -56,6 +61,8 @@ function resetStore() {
     sessionList: [],
     sessionListNextCursor: null,
     isFetchingMore: false,
+    runningSessionIds: [],
+    ...overrides,
   });
   sessionStorage.clear();
 }
@@ -914,5 +921,60 @@ describe('ChatPanel approval card', () => {
     expect(screen.queryByTestId('chat-confirm-deny')).toBeNull();
     expect(screen.queryByTestId('chat-confirm-error')).toBeNull();
     release();
+  });
+
+  it('locks the composer with a hint while the active session has a live detached run', async () => {
+    // The panel is watching the session a background run is still
+    // streaming into: sending would interleave a second run's rows
+    // into the same conversation (chatStore design D4).
+    resetStore({
+      currentSessionId: 'sess-busy',
+      runningSessionIds: ['sess-busy'],
+    });
+
+    render(<ChatPanel open={true} onOpenChange={vi.fn()} />);
+
+    expect(screen.getByTestId('chat-input')).toBeDisabled();
+    expect(screen.getByTestId('chat-send')).toBeDisabled();
+    expect(screen.getByTestId('chat-use-feeds')).toBeDisabled();
+    expect(
+      screen.getByTestId('chat-session-busy-hint'),
+    ).toHaveTextContent(/still working/i);
+    // Guarded by lock, not by a live stream of this panel's own — no
+    // Cancel affordance appears (the detached run has no abort handle).
+    expect(screen.queryByTestId('chat-cancel')).toBeNull();
+  });
+
+  it('re-enables the composer when the background run finishes', async () => {
+    resetStore({
+      currentSessionId: 'sess-busy',
+      runningSessionIds: ['sess-busy'],
+    });
+
+    render(<ChatPanel open={true} onOpenChange={vi.fn()} />);
+    expect(screen.getByTestId('chat-input')).toBeDisabled();
+
+    // The run reaches its terminal frame: the store clears the marker
+    // (and re-replays the session, which the mocked service answers
+    // empty).
+    useChatStore.setState({ runningSessionIds: [] });
+    await waitFor(() => {
+      expect(screen.getByTestId('chat-input')).not.toBeDisabled();
+    });
+    expect(screen.queryByTestId('chat-session-busy-hint')).toBeNull();
+  });
+
+  it('leaves the composer unlocked while the panel is on a different session', async () => {
+    // A background run in ANOTHER session must not lock this panel —
+    // that is the point of detaching: keep chatting elsewhere.
+    resetStore({
+      currentSessionId: 'sess-other',
+      runningSessionIds: ['sess-busy'],
+    });
+
+    render(<ChatPanel open={true} onOpenChange={vi.fn()} />);
+
+    expect(screen.getByTestId('chat-input')).not.toBeDisabled();
+    expect(screen.queryByTestId('chat-session-busy-hint')).toBeNull();
   });
 });

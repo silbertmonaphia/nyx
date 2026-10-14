@@ -65,6 +65,8 @@ Each slice produces an `openspec/changes/agent-<slice>/` (impl) + a sibling `*-r
 
 **Status: ✅ landed + archived** — `openspec/changes/archive/2026-10-14-agent-chat-history-ui/` · commit `996ed85` · rollout gates in `agent-chat-history-ui-rollout/`. As landed: the SPA reaches the agent via a Go proxy (`/api/agent/sessions*`), the sidebar is flag-gated (`VITE_CHAT_HISTORY_SIDEBAR_ENABLED`), and there is **no idle-based session splitting** — a session ends on explicit "+ New chat" only; echoing a live `run_id` resumes that run, while a new message on a live session continues it (fresh plan, no new `agent.runs` row).
 
+**Post-landing follow-up: `agent-chat-background-runs`** (2026-10-14, `openspec/changes/agent-chat-background-runs/`) — navigation no longer kills a run. `+ New chat`, a sidebar session switch, and dialog close now *detach* the SSE stream instead of aborting it (the connection is the run's liveness signal; aborting it cancels the agent server-side mid-flight). A detached run pulses on its rail row, locks the busy session's composer until its terminal frame (a second concurrent run on one session would interleave rows), then refreshes the rail and replays the completed turn. Cancel and deleting the active session remain the only aborts. Spec delta: `chat-history-sidebar` ("Click-to-replay", "Plus-New-chat button", new "Background runs survive navigation").
+
 **Scope.** Make stored history visible and replayable.
 
 - Endpoints (Python agent):

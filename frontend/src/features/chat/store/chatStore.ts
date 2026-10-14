@@ -59,12 +59,22 @@ interface ChatState {
    * the user message immediately, opens the stream, and patches a
    * single assistant message in place as deltas arrive. Always
    * resolves `isStreaming=false` in `finally` so a thrown error
-   * can't leave the UI stuck.
+   * can't leave the UI stuck. Refuses while a stream is attached
+   * (`isStreaming`) or while the active session has a detached
+   * background run (`runningSessionIds`).
    */
   send: (text: string) => Promise<void>;
-  /** Drop the entire history (manual reset / on logout). */
+  /**
+   * Drop the entire history (dialog close). Any live stream is
+   * detached, not aborted — the run continues in the background and
+   * surfaces through the rail.
+   */
   reset: () => void;
-  /** Abort the in-flight stream, if any. Idempotent. */
+  /**
+   * Abort the attached in-flight stream, if any. Idempotent. The one
+   * explicit stop gesture: navigation detaches (the run survives),
+   * Cancel kills a run.
+   */
   cancel: () => void;
   /**
    * Record an approve/deny decision for a paused `confirm_request`
@@ -112,20 +122,36 @@ interface ChatState {
    */
   refreshSessionList: () => Promise<void>;
   /**
-   * Switch the active session: abort any live stream, clear the panel,
-   * persist the id, resume the session (`last_active_at`) and load its
-   * messages for replay. A no-op when the id is already active; a 404
-   * clears the active session quietly.
+   * Switch the active session: detach any live stream (the run
+   * continues in the background), clear the panel, persist the id,
+   * resume the session (`last_active_at`) and load its messages for
+   * replay. A no-op when the id is already active; a 404 clears the
+   * active session quietly.
    */
   setCurrentSession: (id: string) => Promise<void>;
-  /** Drop the active session (and its panel) without touching the list. */
+  /**
+   * Drop the active session (and its panel) without touching the
+   * list. Aborts any attached stream — the destructive delete gesture
+   * kills the run streaming into the deleted session.
+   */
   clearActiveSession: () => void;
   /**
    * Mint a fresh session and make it active, resetting the panel. The
    * sidebar keeps its rows; the new session has none until the next
-   * list fetch.
+   * list fetch. Any live stream is detached, not aborted — the run
+   * continues in the background.
    */
   startNewSession: () => Promise<void>;
+  /**
+   * Session ids with a live detached run streaming into them —
+   * navigation moved the panel on but the SSE connection stayed open
+   * so the run can finish (see `detachLiveStream`). Rendered as a
+   * running indicator on the matching rail row; `send` refuses to
+   * start a second concurrent run in a busy session, and the composer
+   * shows the matching disabled state. Managed exclusively by the
+   * stream that owns the run.
+   */
+  runningSessionIds: string[];
   /**
    * Restore the active session after a reload / dialog reopen: read the
    * persisted id, adopt it, and fetch its messages. No-op when there is
@@ -146,13 +172,24 @@ const USE_FEEDS_KEY = "nyx.chat.useFeeds";
 
 // Module-level singleton so the abort controller survives across
 // render boundaries. The store holds only the live reference; the
-// controller itself is internal to this module.
+// controller itself is internal to this module. Only the ATTACHED
+// stream's controller is held here — a detached run has no client
+// abort handle by design (it runs to its terminal state server-side).
 let controller: AbortController | null = null;
-// Set to true by `reset()` so the in-flight stream's `finally`
-// block can skip the "drop half-built assistant" branch — reset
-// has already wiped the messages array, so slicing it again would
-// resurrect a row that the UI just declared gone.
-let resetting = false;
+// Monotonic id handed to each `send()`. A stream may write into the
+// store only while its token is the attached one — see `attachedToken`.
+let streamSeq = 0;
+// Token of the stream that currently owns the panel — the only one
+// whose frames render and whose callbacks mutate session state.
+// Cleared when a stream ends, or by a detach (navigation) / abort.
+let attachedToken: number | null = null;
+// Poked by `detachLiveStream()` so the in-flight stream can raise its
+// session's rail marker ("still working") the moment it is detached.
+// Waiting for the next SSE frame instead would lag a run sitting in a
+// silent tool call — heartbeat comment frames are dropped by the
+// parser, so no store event fires. Set and cleared by the stream that
+// owns it.
+let detachHook: (() => void) | null = null;
 
 // Read the persisted toggle at module init. localStorage access in
 // the browser is synchronous and silent on failure (Safari private
@@ -198,17 +235,39 @@ function persistSessionId(id: string | null): void {
 }
 
 /**
- * Abort the in-flight stream, if any, and mark the reset so the
- * generator's `finally` skips its "drop the half-built assistant row"
- * slice. That slice indexes into the messages array the stream started
- * with; after a session switch (which replaces the array) it would
- * delete an unrelated row. Mirrors `reset()`, but only flags a reset
- * when there is actually something to cancel — otherwise a stray
- * `resetting = true` would be left behind for the next send.
+ * Detach the panel-bound stream WITHOUT aborting it. The SSE
+ * connection is the run's liveness signal: aborting it cancels the
+ * agent mid-flight server-side (Go tears the upstream request down on
+ * client disconnect; the Python agent's run generator is cancelled at
+ * its next await and its `finally` cancels the run's pump task).
+ * Navigation — `+ New chat`, a session switch, closing the dialog —
+ * must leave the connection open and merely stop rendering its frames:
+ * the detached stream keeps draining (and dropping) frames until it
+ * reaches its terminal state, then surfaces what landed (see the
+ * detached branch in `send`'s `finally`).
+ *
+ * No-op when nothing is attached (nothing to detach).
+ */
+function detachLiveStream(): void {
+  if (attachedToken === null) return;
+  attachedToken = null;
+  controller = null;
+  detachHook?.();
+  detachHook = null;
+}
+
+/**
+ * Abort the panel-bound stream, if any, and clear the attached token
+ * so the aborted stream's `finally` skips its "drop the half-built
+ * assistant row" slice — the caller (a destructive session delete
+ * clearing the panel) replaces or clears that state itself. The
+ * stream still observes the abort through its signal and skips its
+ * post-completion duties (an aborted run is not a finished one).
  */
 function abortLiveStream(): void {
+  attachedToken = null;
+  detachHook = null;
   if (!controller) return;
-  resetting = true;
   controller.abort();
   controller = null;
 }
@@ -306,8 +365,18 @@ function patchApprovalCard(
 }
 
 /**
+ * Monotonic id for replay writes. Two replays of the SAME session can be
+ * in flight at once — a user click and a detached run's completion both
+ * target the run's session — and the fetched rows are snapshots taken at
+ * request time: without ordering, the older (user-row-only) snapshot can
+ * resolve last and overwrite the completed turn. Only the newest replay
+ * may write.
+ */
+let replaySeq = 0;
+
+/**
  * Resume one session and replay its messages into the panel. Shared by
- * `setCurrentSession` and `hydrateSession`.
+ * `setCurrentSession`, `hydrateSession`, and the detached-run completion.
  *
  * A 404 on either call means the row is gone (deleted here, in another
  * tab, or reaped by retention): clear the active session without
@@ -320,6 +389,7 @@ async function loadSessionInto(
   set: ChatSet,
   id: string,
 ): Promise<void> {
+  const replay = ++replaySeq;
   try {
     // Touch `last_active_at` so the session ranks at the top of the next
     // list fetch and retention sees it as live.
@@ -333,9 +403,15 @@ async function loadSessionInto(
   }
   try {
     const rows = await chatService.getMessages(id);
-    // A switch (or `+ New chat`) may have landed while the fetch was in
-    // flight — the later intent wins.
+    // The write is guarded three ways. A switch (or `+ New chat`) may
+    // have landed while the fetch was in flight — the later intent wins.
+    // A NEWER replay of the same session supersedes this snapshot. And a
+    // stream may have attached to the panel meanwhile — writing would
+    // clobber its live turn (the send that started it snapshotted the
+    // messages before this fetch resolved).
+    if (replay !== replaySeq) return;
     if (get().currentSessionId !== id) return;
+    if (attachedToken !== null) return;
     set({ messages: rows.map(toReplayMessage) });
   } catch (err) {
     if (isSessionGone(err)) {
@@ -363,6 +439,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
   sessionList: [],
   sessionListNextCursor: null,
   isFetchingMore: false,
+  runningSessionIds: [],
 
   setUseFeeds: (next) => {
     if (typeof localStorage !== "undefined") {
@@ -381,6 +458,18 @@ export const useChatStore = create<ChatState>((set, get) => ({
     const trimmed = text.trim();
     if (!trimmed) return;
     if (get().isStreaming) return;
+    // Refuse a follow-up while the active session still has a detached
+    // run streaming into it: a second concurrent run on one session
+    // would interleave its user/assistant rows and garble the
+    // conversation's replay. (The composer renders the same guard as a
+    // disabled state + hint.)
+    const activeSessionId = get().currentSessionId;
+    if (
+      activeSessionId !== null &&
+      get().runningSessionIds.includes(activeSessionId)
+    ) {
+      return;
+    }
 
     const userMessage: ChatMessage = { role: "user", content: trimmed };
     // Push the user message + open a placeholder assistant row that
@@ -403,12 +492,42 @@ export const useChatStore = create<ChatState>((set, get) => ({
     }));
 
     const localController = new AbortController();
+    const token = ++streamSeq;
     controller = localController;
+    attachedToken = token;
     // Capture the session this request is sent with — the adoption guard
     // below compares against THIS value, not the live store (review M2,
     // 2026-10-14).
     const sentSessionId = get().currentSessionId;
-    let aborted = false;
+    // The session this run is actually writing to: the echoed id until
+    // the server's `run_id` frame says otherwise (a fresh mint when the
+    // echoed id was unknown / soft-deleted). Tracked even while
+    // detached — the rail marker and the post-completion replay key off
+    // it — but never adopted into `currentSessionId` after a detach
+    // (the panel already moved on).
+    let runSessionId: string | null = sentSessionId;
+    // Only the stream whose token is attached may write into the store.
+    const isAttached = () => attachedToken === token;
+    // This stream's rail marker ("still working" on the run's session
+    // row), written only from this closure so its bookkeeping — which
+    // id is currently marked — stays consistent.
+    let markedSession: string | null = null;
+    const railMark = (id: string | null) => {
+      if (id === markedSession) return;
+      const prev = markedSession;
+      markedSession = id;
+      set((state) => {
+        let next = state.runningSessionIds;
+        if (prev !== null) next = next.filter((r) => r !== prev);
+        if (id !== null && !next.includes(id)) next = [...next, id];
+        return { runningSessionIds: next };
+      });
+    };
+    // `detachLiveStream` pokes this the moment this stream is detached
+    // so the rail marker appears immediately — waiting for the next SSE
+    // frame can lag a run sitting in a silent tool call.
+    const onStreamDetached = () => railMark(runSessionId);
+    detachHook = onStreamDetached;
     try {
       const stream = chatService.streamMessage(
         [...baseMessages].map((m) => ({ role: m.role, content: m.content })),
@@ -424,9 +543,20 @@ export const useChatStore = create<ChatState>((set, get) => ({
           // a fresh mint when the echoed id was unknown / soft-deleted /
           // hit a chat-store hiccup. If the user switched sessions while
           // this stream was in flight, their pick wins (the switch
-          // aborts this stream anyway; this is the belt to that
-          // suspenders).
+          // detaches this stream; this is the belt to that suspenders).
+          // A detached stream never adopts — it just re-keys its rail
+          // marker to the id the run actually landed on.
           onRunId: (id) => {
+            runSessionId = id;
+            if (!isAttached()) {
+              railMark(id);
+              // The rail may not carry this id yet — a run detached
+              // before its first frame (navigation within ms of send)
+              // mints its session after the tab's last list fetch. Pull
+              // page 1 so the pulse has a row to sit on.
+              void get().refreshSessionList();
+              return;
+            }
             if (id === sentSessionId) return; // request landed where sent
             if (get().currentSessionId !== sentSessionId) return; // user moved on
             set({ currentSessionId: id });
@@ -460,12 +590,16 @@ export const useChatStore = create<ChatState>((set, get) => ({
             );
           }),
         ]);
-        if (localController.signal.aborted) {
-          aborted = true;
-          break;
-        }
+        // Cancel path: the race above resolves on abort — leave the
+        // loop; the `finally` reads the signal to distinguish a kill
+        // from a natural end.
+        if (localController.signal.aborted) break;
         if (next.done) break;
         const event = next.value;
+        // Detached (navigation moved the panel on): keep draining so
+        // the run stays alive server-side, but drop the frame — it
+        // belongs to a conversation the panel is no longer showing.
+        if (!isAttached()) continue;
         if (event.kind === "delta") {
           set((state) => {
             const next = state.messages.slice();
@@ -703,11 +837,15 @@ export const useChatStore = create<ChatState>((set, get) => ({
       const name = (err as { name?: string } | null)?.name;
       if (name === "AbortError") {
         // Drop the half-built assistant row so the UI doesn't show
-        // a stranded empty bubble after a Cancel.
-        set((state) => ({
-          messages: state.messages.slice(0, assistantIndex),
-        }));
-      } else {
+        // a stranded empty bubble after a Cancel. Skipped when the
+        // stream was already detached — the detach replaced or cleared
+        // the panel, so slicing would touch unrelated rows.
+        if (isAttached()) {
+          set((state) => ({
+            messages: state.messages.slice(0, assistantIndex),
+          }));
+        }
+      } else if (isAttached()) {
         const message =
           err instanceof Error ? err.message : "Chat request failed";
         // Same empty-vs-partial rule as the mid-stream error branch:
@@ -724,33 +862,74 @@ export const useChatStore = create<ChatState>((set, get) => ({
             ? get().messages.slice(0, assistantIndex + 1)
             : get().messages.slice(0, assistantIndex),
         });
+      } else {
+        // A detached run's failure is not this panel's error — the
+        // panel is showing a different conversation. Log for
+        // diagnosability; the run's session replays as user-only (the
+        // server records an assistant row only on `done`).
+        logger.warn("chat.send.detached_failed", { error: String(err) });
       }
     } finally {
-      controller = null;
-      // If the consumer aborted mid-stream, drop the half-built
-      // assistant row so the UI doesn't show a stranded empty
-      // bubble. The catch block handles the same shape when the
-      // abort surfaces as AbortError from fetch; this branch covers
-      // the race-based cancel path that exits the loop cleanly.
-      // Skipped when reset() already cleared messages.
-      if (aborted && !resetting) {
-        set((state) => ({
-          messages: state.messages.slice(0, assistantIndex),
-        }));
+      // Only the stream that still owns the controller may clear it —
+      // a newer send may have replaced it while this one drained.
+      if (controller === localController) controller = null;
+      if (detachHook === onStreamDetached) detachHook = null;
+      if (attachedToken === token) {
+        // Ended (or was cancelled) while it was still the panel's
+        // stream. Drop the half-built assistant row after a Cancel so
+        // the UI doesn't show a stranded empty bubble; skipped for a
+        // clean end. `signal.aborted` covers both the race-based break
+        // above and a fetch that rejected with AbortError. This
+        // stream's rail marker (never set while attached) retires too.
+        railMark(null);
+        attachedToken = null;
+        if (localController.signal.aborted) {
+          set((state) => ({
+            messages: state.messages.slice(0, assistantIndex),
+          }));
+        }
+        set({ isStreaming: false });
+      } else if (localController.signal.aborted) {
+        // Killed while detached — a Cancel that raced a navigation
+        // (the detach already poked the marker) or a destructive
+        // session clear. Nothing will replay; retire the marker now.
+        railMark(null);
+      } else {
+        // Detached: navigation moved the panel on but left the SSE
+        // connection open, so the run reached its terminal state
+        // server-side and its writes are durable — the agent's shielded
+        // finalize persists the assistant row BEFORE it yields
+        // `[DONE]`, which is what let this loop exit. Surface what
+        // landed: when the finished session is the one on screen, replay
+        // it FIRST and keep the rail marker (the composer lock) up until
+        // the replay lands — unlocking before the fetch resolves would
+        // let a fast user start a new run whose panel the replay would
+        // then clobber. The marker always clears, even when the session
+        // is gone (the replay's own 404 path asks for exactly that).
+        void (async () => {
+          try {
+            if (
+              runSessionId !== null &&
+              get().currentSessionId === runSessionId
+            ) {
+              await loadSessionInto(get, set, runSessionId);
+            }
+          } finally {
+            railMark(null);
+          }
+          void get().refreshSessionList();
+        })();
       }
-      resetting = false;
-      set({ isStreaming: false });
     }
   },
 
   reset: () => {
-    // Cancel any in-flight stream so the generator doesn't keep
-    // patching the store after the reset.
-    resetting = true;
-    if (controller) {
-      controller.abort();
-      controller = null;
-    }
+    // Detach any in-flight stream instead of aborting it: closing the
+    // dialog must not kill a run that is mid-answer (the SSE
+    // connection is the run's liveness signal — see
+    // `detachLiveStream`). The run finishes server-side and surfaces
+    // through the rail.
+    detachLiveStream();
     // A fresh dialog session starts with RAG off; the persisted
     // user preference survives but is not auto-applied until the
     // user re-toggles it. Avoids surprising the next visitor who
@@ -766,6 +945,14 @@ export const useChatStore = create<ChatState>((set, get) => ({
   },
 
   cancel: () => {
+    // The one explicit client stop gesture — the only path that kills
+    // a run (navigation detaches; see `detachLiveStream`). The stream
+    // observes the abort through its signal and drops its half-built
+    // row from its own `finally` (the attached-token check). That drop
+    // is deferred by one microtask drain: a programmatic `send()`
+    // issued in the same tick would take the token first and strand
+    // the row — unreachable from the UI, where the composer disables
+    // synchronously and the next click is a later task.
     if (controller) {
       controller.abort();
       controller = null;
@@ -869,10 +1056,11 @@ export const useChatStore = create<ChatState>((set, get) => ({
     // Clicking the row of the active session is a no-op — no refetch,
     // no panel clear (design.md D7).
     if (get().currentSessionId === id) return;
-    // Drop the live view first: abort any in-flight stream so its
-    // half-built assistant row can't leak into the replayed history,
-    // then clear the messages before the fetch lands.
-    abortLiveStream();
+    // Drop the live view first — clear the messages before the fetch
+    // lands — but detach (not abort) any in-flight stream: the run
+    // continues in the background and surfaces through the rail (see
+    // `detachLiveStream`).
+    detachLiveStream();
     set({ currentSessionId: id, messages: [], isStreaming: false, error: null });
     persistSessionId(id);
     await loadSessionInto(get, set, id);
@@ -892,8 +1080,10 @@ export const useChatStore = create<ChatState>((set, get) => ({
   startNewSession: async () => {
     // Clear immediately so the panel flips to the welcome state whether
     // or not the POST succeeds — spec Scenario "New chat clears the
-    // panel" is a UI guarantee, not a network one.
-    abortLiveStream();
+    // panel" is a UI guarantee, not a network one. Any live stream is
+    // detached, not aborted: the run finishes in the background and
+    // surfaces through the rail (see `detachLiveStream`).
+    detachLiveStream();
     persistSessionId(null);
     set({ currentSessionId: null, messages: [], isStreaming: false, error: null });
     try {

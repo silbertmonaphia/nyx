@@ -169,6 +169,16 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ open, onOpenChange }) => {
   const setUseFeeds = useChat((s) => s.setUseFeeds);
   const hydrateSession = useChat((s) => s.hydrateSession);
   const startNewSession = useChat((s) => s.startNewSession);
+  // The active session still has a detached background run streaming
+  // into it (navigation moved this panel on, the run kept going).
+  // The composer locks — a second concurrent run on one session would
+  // interleave its user/assistant rows — and a hint explains why.
+  const sessionBusy = useChat(
+    (s) =>
+      s.currentSessionId !== null &&
+      s.runningSessionIds.includes(s.currentSessionId),
+  );
+  const composerLocked = isStreaming || sessionBusy;
 
   const [draft, setDraft] = useState("");
   // Mobile-only drawer state. At `md:` and up the rail is always
@@ -229,7 +239,11 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ open, onOpenChange }) => {
   const handleSubmit = (e?: React.FormEvent) => {
     e?.preventDefault();
     const text = draft.trim();
-    if (!text || isStreaming) return;
+    // Mirror the store's own guards (`isStreaming` + busy-session lock):
+    // an implicit submit from a nested control (Enter on the checkbox)
+    // can reach here even with the textarea disabled, and clearing the
+    // draft first would silently eat it.
+    if (!text || composerLocked) return;
     setDraft("");
     void send(text);
   };
@@ -420,7 +434,7 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ open, onOpenChange }) => {
                   id="chat-use-feeds"
                   checked={useFeeds}
                   onChange={(e) => setUseFeeds(e.target.checked)}
-                  disabled={isStreaming}
+                  disabled={composerLocked}
                   data-testid="chat-use-feeds"
                   className="h-4 w-4 rounded border-input accent-primary"
                   aria-label="Use my feeds"
@@ -437,13 +451,23 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ open, onOpenChange }) => {
                   </span>
                 )}
               </div>
+              {sessionBusy && (
+                <p
+                  className="text-[10px] text-muted-foreground"
+                  data-testid="chat-session-busy-hint"
+                  role="status"
+                >
+                  The agent is still working on this conversation — you can
+                  reply when it finishes.
+                </p>
+              )}
               <Textarea
                 value={draft}
                 onChange={(e) => setDraft(e.target.value)}
                 onKeyDown={handleKeyDown}
                 placeholder="Type a message…"
                 rows={2}
-                disabled={isStreaming}
+                disabled={composerLocked}
                 data-testid="chat-input"
               />
               <div className="flex gap-2 justify-end">
@@ -460,7 +484,7 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ open, onOpenChange }) => {
                 )}
                 <Button
                   type="submit"
-                  disabled={isStreaming || draft.trim().length === 0}
+                  disabled={composerLocked || draft.trim().length === 0}
                   data-testid="chat-send"
                 >
                   <Send className="h-4 w-4" />

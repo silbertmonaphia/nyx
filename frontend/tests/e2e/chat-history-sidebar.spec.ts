@@ -82,8 +82,11 @@ async function reopenChat(page: Page): Promise<void> {
 async function sendMessage(page: Page, text: string): Promise<void> {
   await page.getByTestId('chat-input').fill(text);
   await page.getByTestId('chat-send').click();
+  // `/^[\s…]*$/` — the bubble renders the "…" placeholder while
+  // streaming with no content yet; a bare `/^\s*$/` would pass on that
+  // placeholder and make the "stream started" gate vacuous.
   await expect(page.getByTestId('chat-message-assistant').last()).not.toHaveText(
-    /^\s*$/,
+    /^[\s…]*$/u,
     { timeout: 45000 },
   );
   await expect(page.getByTestId('chat-cancel')).toHaveCount(0, {

@@ -56,6 +56,7 @@ function resetStore(
     sessionList: [],
     sessionListNextCursor: null,
     isFetchingMore: false,
+    runningSessionIds: [],
     ...overrides,
   });
   sessionStorage.clear();
@@ -321,5 +322,48 @@ describe('ChatSidebar', () => {
     const [first, second] = screen.getAllByTestId('chat-session-row');
     expect(first).not.toHaveAttribute('aria-current');
     expect(second).toHaveAttribute('aria-current', 'true');
+  });
+
+  it('shows a running indicator only on rows with a live detached run', () => {
+    resetStore({
+      sessionList: [makeSession('s1'), makeSession('s2'), makeSession('s3')],
+      // A background run is still streaming into s2 (the panel may be
+      // showing any of the three).
+      runningSessionIds: ['s2'],
+    });
+
+    render(<ChatSidebar />);
+
+    const indicators = screen.getAllByTestId('chat-session-running');
+    expect(indicators).toHaveLength(1);
+    const row = indicators[0].closest('[data-testid="chat-session-row"]');
+    expect(row).toHaveAttribute('data-session-id', 's2');
+    // Screen-reader affordance: the dot itself is decorative, the
+    // wrapper carries the label.
+    expect(indicators[0]).toHaveAttribute('role', 'status');
+    expect(indicators[0]).toHaveAttribute(
+      'aria-label',
+      'Agent is still working on this conversation',
+    );
+  });
+
+  it('removes the running indicator once the run finishes', async () => {
+    resetStore({
+      sessionList: [makeSession('s1')],
+      runningSessionIds: ['s1'],
+    });
+
+    render(<ChatSidebar />);
+    expect(screen.getAllByTestId('chat-session-running')).toHaveLength(1);
+
+    // The stream's terminal frame clears the marker (store-side);
+    // the row re-renders without it.
+    resetStore({
+      sessionList: [makeSession('s1')],
+      runningSessionIds: [],
+    });
+    await waitFor(() => {
+      expect(screen.queryByTestId('chat-session-running')).toBeNull();
+    });
   });
 });

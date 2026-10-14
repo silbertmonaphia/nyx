@@ -75,6 +75,7 @@ export const ChatSidebar: React.FC<ChatSidebarProps> = ({
   const nextCursor = useChat((s) => s.sessionListNextCursor);
   const currentSessionId = useChat((s) => s.currentSessionId);
   const isFetchingMore = useChat((s) => s.isFetchingMore);
+  const runningSessionIds = useChat((s) => s.runningSessionIds);
   const loadMore = useChat((s) => s.loadMore);
   const setCurrentSession = useChat((s) => s.setCurrentSession);
   const deleteSession = useChat((s) => s.deleteSession);
@@ -190,6 +191,26 @@ export const ChatSidebar: React.FC<ChatSidebarProps> = ({
                     data-testid="chat-session-time"
                   >
                     {relativeTime(session.last_active_at)}
+                    {runningSessionIds.includes(session.id) && (
+                      // A detached run is still streaming into this
+                      // session (the panel moved on but the SSE
+                      // connection stayed open — see chatStore's
+                      // `detachLiveStream`). The indicator lives in
+                      // `runningSessionIds` until the run's terminal
+                      // frame.
+                      <span
+                        className="ml-1 inline-flex items-center align-middle"
+                        data-testid="chat-session-running"
+                        role="status"
+                        aria-label="Agent is still working on this conversation"
+                        title="Agent is still working on this conversation"
+                      >
+                        <span
+                          className="h-1.5 w-1.5 rounded-full bg-emerald-500 animate-pulse"
+                          aria-hidden="true"
+                        />
+                      </span>
+                    )}
                   </span>
                 </button>
                 <button
