@@ -38,7 +38,7 @@ All work is dev/CI completable; no rollout gates are foreseen (feature is defaul
 ## 7. Wire fixtures and e2e
 
 - [x] 7.1 Python producer tests pinning the SSE bytes for a web_search + web_fetch run (`tool_call`/`tool_result` frames) into `frontend/tests/e2e/fixtures/web-tools-*.sse` — same pattern as the existing tool-retry wire fixtures (`test_executor.py`). Verify: tests fail if producer output drifts from the fixture bytes.
-- [x] 7.2 `frontend/tests/e2e/chat-web-tools.spec.ts`: replay the fixtures through the app's own SSE parser (no live model or network) — step rendering for search and fetch, fetched text displayed as plain text (not HTML), final answer streams. Verify: `npm run test:e2e` green headless with the documented dev-stack prerequisites (`make up` + `make dev`). Live-stack smoke against real Brave is documented in the spec header as a manual dev check, not a CI gate (needs an API key + network egress).
+- [x] 7.2 `frontend/tests/e2e/chat-web-tools.spec.ts`: replay the fixtures through the app's own SSE parser (no live model or network) — step rendering for search and fetch, fetched text displayed as plain text (not HTML), final answer streams. Verify: `npm run test:e2e` green headless with the documented dev-stack prerequisites (`make up` + `make dev`). Live-stack smoke against the real search provider is documented in the spec header as a manual dev check, not a CI gate (keyless — no API key needed; needs network egress).
 
 ## 8. Documentation and full-suite gate
 
@@ -46,3 +46,21 @@ All work is dev/CI completable; no rollout gates are foreseen (feature is defaul
 - [ ] 8.2 Broader integration gate: `cd backend/agent_py && pytest tests/ -v` fully green with no live network (all web calls mocked); frontend `npm test` and `npm run test:e2e` green. Verify: the three commands pass in the dev environment.
 
 > 8.2 status (2026-10-14): plain `pytest tests/ -q` → 264 passed / 34 skipped in ~8s, no env overrides (the earlier langfuse-teardown hang was fixed upstream in 8a80b17 — `fix(observability)`; this change needs no override). `npm test` 207 passed. e2e: chat-web-tools (re-run against the regenerated fixture after the review fixes), chat-rag, chat-agent-planner, chat-agent-retry all green; `feed-crud.spec.ts` fails independently of this change (no feeds files in the diff; backend CRUD verified healthy via direct API probe) — unresolved, owner decision pending. Review round (test-reviewer, 2026-10-14): "request changes" with 5 required fixes (malformed-URL ValueError escape, bogus-charset LookupError, UnicodeError/odd provider-payload escapes, internal-IP disclosure, 5xx spec wording) + cheap should-fixes — all addressed; 21 new tests pin them.
+
+## 9. Provider swap: Brave → Tavily (post-landing, 2026-10-14)
+
+Brave Search API requires binding a credit card at signup (user constraint: refused). Swapped to Tavily — keyless tier (no account, no card, rate-limited) with an optional free key (1k searches/month, also no card). Commit 4a1fdd1 landed the Brave implementation; this section supersedes §3.1's provider and §5.1's `brave_*` field names.
+
+- [x] 9.1 `config.py`: `brave_api_key`/`brave_base_url` → `tavily_api_key` (optional) / `tavily_base_url`; the search-without-key refuse-start validator is removed (keyless is a supported mode); negative-numeric checks unchanged. Verify: `test_config.py` — keyless-boots scenario, updated defaults, keyed-accepted case.
+- [x] 9.2 `web_tools.py` `search_web`: POST `{query, max_results}` to the Tavily endpoint; `Authorization: Bearer <key>` when configured, else `X-Tavily-Access-Mode: keyless`; parse `results[].content` → description; 429/5xx/timeout transient, 432/433 plan-limit and other 4xx non-retryable. Verify: request-shape tests (keyed + keyless header cases), classification tests, payload-shape guard tests.
+- [x] 9.3 Spec deltas: `agent-web-tools` search requirement retitled to Tavily + keyless/plan-limit scenarios added; `agent-python-service` env requirement renamed keys, refuse-start rule replaced with keyless-boots. Verify: `openspec validate agent-web-tools`.
+- [x] 9.4 Docs: README (prose + env table), `.env.example`, docker-compose comment, design D7/risks/migration, proposal updates. Verify: grep shows no live `BRAVE` references outside historical task records (§3.1/§5.1).
+- [x] 9.5 Gates: full pytest green; ruff/mypy clean; **live keyless search smoke through the dev box's proxy** (real provider call, no key) — 5 ranked results returned, untrusted-framed.
+
+## 10. Fix: small-model context overflow on web-tool plans (2026-10-14)
+
+Live incident: `web_search` + answering step on Qwen3-4B (4096-token context) failed with `OpenAIInvalidRequestError 400 — 4097 input tokens`; the run ended `empty_answer`. Root cause: the answering step's prior-data block re-injected 5 framed search results; with JSON escaping + Chinese tokenization that alone exceeded the model's ceiling. Fix layering: (1) bounded prior-data injection in `_render_prior_data` (per-section + total char caps, most recent sections win), (2) untrusted-content markers stripped from the prior-data rendering (kept on the wire tool_result frame), (3) the agent-web-tools spec's framing requirement amended to match.
+
+- [x] 10.1 `executor.py`: `PRIOR_DATA_MAX_CHARS=2800` / `PRIOR_DATA_PER_SECTION_MAX_CHARS=1500`, most-recent-kept drop policy; `_strip_untrusted_markers` + `_strip_markers_recursive` applied to prior-data sections. Verify: 4 new executor tests (per-section cap, total cap + drop policy, single-huge-section, marker stripping incl. JSON-escaped values).
+- [x] 10.2 Spec delta updated (framing requirement + new "Prior-data injection is bounded" scenario). Verify: `openspec validate agent-web-tools`.
+- [x] 10.3 Live verification: side instance on :9003 with the fix → same failing prompt (`今天天气如何上网搜索看看？`) now produces `web_search ok → final_answer ok` with a streamed answer. Verify: no `empty_answer`, no provider 400.

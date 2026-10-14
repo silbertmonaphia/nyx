@@ -20,17 +20,17 @@ The orchestrator SHALL support step kinds `rag` (vector retrieval over feeds via
 
 ### Requirement: New env keys for web tools
 
-The service SHALL read `PYTHON_AGENT_WEB_FETCH_ENABLED` (default false), `PYTHON_AGENT_WEB_SEARCH_ENABLED` (default false), `PYTHON_AGENT_BRAVE_API_KEY` (`PYTHON_AGENT_BRAVE_BASE_URL` default `https://api.search.brave.com/res/v1/web/search`), `PYTHON_AGENT_WEB_SEARCH_MAX_RESULTS` (default 5, clamped to the hard cap of 10), `PYTHON_AGENT_WEB_FETCH_MAX_BYTES` (default 2097152), `PYTHON_AGENT_WEB_FETCH_TIMEOUT_SECONDS` (default 10), `PYTHON_AGENT_WEB_FETCH_MAX_CHARS` (default 20000), `PYTHON_AGENT_WEB_FETCH_MAX_REDIRECTS` (default 5), and `PYTHON_AGENT_WEB_FETCH_ALLOW_PRIVATE` (default false; relaxes the private-address refusal and the 80/443 port restriction for local fixture servers — same posture as the Go backend's `LLM_ALLOW_PRIVATE_URL`). The service SHALL refuse to start when `PYTHON_AGENT_WEB_SEARCH_ENABLED=true` and `PYTHON_AGENT_BRAVE_API_KEY` is empty, with a clear error naming the missing key, and when any numeric web-tool setting is negative.
+The service SHALL read `PYTHON_AGENT_WEB_FETCH_ENABLED` (default false), `PYTHON_AGENT_WEB_SEARCH_ENABLED` (default false), `PYTHON_AGENT_TAVILY_API_KEY` (optional — an empty key selects the provider's keyless tier; `PYTHON_AGENT_TAVILY_BASE_URL` default `https://api.tavily.com/search`), `PYTHON_AGENT_WEB_SEARCH_MAX_RESULTS` (default 5, clamped to the hard cap of 10), `PYTHON_AGENT_WEB_FETCH_MAX_BYTES` (default 2097152), `PYTHON_AGENT_WEB_FETCH_TIMEOUT_SECONDS` (default 10), `PYTHON_AGENT_WEB_FETCH_MAX_CHARS` (default 20000), `PYTHON_AGENT_WEB_FETCH_MAX_REDIRECTS` (default 5), and `PYTHON_AGENT_WEB_FETCH_ALLOW_PRIVATE` (default false; relaxes the private-address refusal and the 80/443 port restriction for local fixture servers — same posture as the Go backend's `LLM_ALLOW_PRIVATE_URL`). The service SHALL refuse to start when any numeric web-tool setting is negative. Search without an API key is valid configuration (keyless tier) and MUST NOT refuse startup.
 
 #### Scenario: Defaults disable both tools
 
 - **WHEN** the service starts with no web-tool env vars set
 - **THEN** `PYTHON_AGENT_WEB_FETCH_ENABLED=false` and `PYTHON_AGENT_WEB_SEARCH_ENABLED=false` are applied and the service starts
 
-#### Scenario: Search enabled without key refuses startup
+#### Scenario: Keyless search boots without a key
 
-- **WHEN** `PYTHON_AGENT_WEB_SEARCH_ENABLED=true` and `PYTHON_AGENT_BRAVE_API_KEY` is unset or empty
-- **THEN** the service fails to start with a clear error naming the missing key
+- **WHEN** `PYTHON_AGENT_WEB_SEARCH_ENABLED=true` and `PYTHON_AGENT_TAVILY_API_KEY` is unset or empty
+- **THEN** the service starts cleanly and search dispatches against the provider's keyless tier
 
 #### Scenario: Negative numeric setting refuses startup
 

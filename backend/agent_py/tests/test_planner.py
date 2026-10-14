@@ -984,7 +984,7 @@ def test_planner_prompt_lists_enabled_web_tools():
     settings = _web_settings(
         web_fetch_enabled=True,
         web_search_enabled=True,
-        brave_api_key="k",
+        tavily_api_key="k",
     )
     prompt = _initial_messages(_planner_state(), settings)[0].content
     assert prompt.startswith(PLANNER_SYSTEM_PROMPT)

@@ -14,7 +14,7 @@ See proposal.md — Why. Shape of the current code that constrains the approach:
 
 **Goals:**
 
-- Two tools — `web_search` (Brave), `web_fetch` (guarded) — usable from `tool` steps and react loops with zero changes to the retry machinery, wire contract, or step kinds.
+- Two tools — `web_search` (Tavily), `web_fetch` (guarded) — usable from `tool` steps and react loops with zero changes to the retry machinery, wire contract, or step kinds.
 - Fetch safety at least as strong as the Go backend's guard: deny-class IP check, per-hop re-validation, dial-address pinning (rebind defense), bounded everything.
 - Byte-identical behavior when the flags are off.
 
@@ -45,19 +45,19 @@ See proposal.md — Why. Shape of the current code that constrains the approach:
 **D6 — HTML→text via stdlib `html.parser`.** A small `HTMLParser` subclass: drop `script/style/noscript/template/svg` subtrees, block tags → newline, inline tags → space, `convert_charrefs=True`, collapse whitespace, then cap at `WEB_FETCH_MAX_CHARS` with a truncation marker. No new dependencies.
 *Alternatives:* `trafilatura`/`readability-lxml`/`selectolax` (better extraction, new deps + heavier installs — deferred; revisit only if observed quality is poor — Open Question 2).
 
-**D7 — Brave stays concrete; the seam is the configurable base URL + a single `_brave_search()` function.** The user selected Brave; one provider behind a function boundary is enough indirection for now. The base URL override is what makes e2e stubs and unit tests possible without mocking at the HTTP level (they still can via `httpx.MockTransport`, matching `test_tools_client.py`).
-*Alternative:* a `SearchProvider` protocol mirroring `internal/llm.Provider` (premature with one implementation — rejected; revisit when a second provider is real).
+**D7 — Tavily stays concrete; the seam is the configurable base URL + the `search_web()` function.** Provider swap (2026-10-14, post-landing): Brave was the original pick but requires binding a credit card; Tavily's keyless tier (no account, rate-limited) with an optional card-free free key (1k searches/mo) satisfies "no card" without self-hosting. One provider behind a function boundary is enough indirection for now. The base URL override is what makes e2e stubs and unit tests possible without mocking at the HTTP level (they still can via `httpx.MockTransport`, matching `test_tools_client.py`).
+*Alternatives:* SearXNG self-hosted (no accounts at all, but adds a compose service + `settings.yml` JSON-format enablement, engine CAPTCHA/rate-limit fragility, and container proxy config on proxy-only hosts — heavier ops for the same outcome; revisit if vendor independence becomes a requirement); DuckDuckGo scraping (no account but fragile HTML/ToS-gray — rejected); a `SearchProvider` protocol mirroring `internal/llm.Provider` (premature with one implementation — rejected; revisit when a second provider is real).
 
 **D8 — Untrusted framing is applied inside the tool implementation.** Search snippets and fetched text are wrapped in `<untrusted_web_content>` markers at the point of construction, so both the SSE `tool_result` frame and `_render_prior_data`'s "Data gathered by earlier steps" block carry the markers without renderer changes. Tool descriptions state the content is data, never instructions.
 
 **D9 — Planner learns about the tools via a conditional prompt block.** `plan_node` composes `PLANNER_SYSTEM_PROMPT + web_tools_block(settings)`; the block is `""` when both tools are off (byte-identical requirement) and lists the enabled tool names + the "use for current events / external info / user URLs" rule when on. This is the minimal fix for the planner being catalog-blind; a full dynamic-catalog injection (fetch `list_tools` at plan time) is deliberately not done here.
 
-**D10 — Deterministic e2e via pinned SSE fixtures; live smoke is optional.** New `frontend/tests/e2e/chat-web-tools.spec.ts` replays `web-tools-*.sse` fixtures through the app's own parser (the `chat-agent-retry.spec.ts` pattern), with the fixture bytes pinned by Python producer tests in `test_executor.py`. A live-stack describe running a real chat through Brave is documented as a manual smoke (needs a key + egress); it is not a CI gate.
+**D10 — Deterministic e2e via pinned SSE fixtures; live smoke is optional.** New `frontend/tests/e2e/chat-web-tools.spec.ts` replays `web-tools-*.sse` fixtures through the app's own parser (the `chat-agent-retry.spec.ts` pattern), with the fixture bytes pinned by Python producer tests in `test_executor.py`. A live-stack describe running a real chat through Tavily is documented as a manual smoke (keyless needs no key; it is not a CI gate).
 
 ## Risks / Trade-offs
 
 - **Prompt injection through fetched content** → framing + caps reduce the attack surface but cannot eliminate it; a 4B-parameter model is credulous. Accepted: the tools are read-only, per-owner data tools remain per-owner scoped, and the blast radius is the model's own plan. Tool descriptions and the untrusted markers are the mitigation; note it in README's trust model.
-- **Brave free tier is ~1 rps** → concurrent runs can 429; the existing transient-retry path absorbs it with backoff, but a burst of runs may surface `tool_execution_transient` failures. Acceptable for dev/first shipping; a token bucket can be added behind `web_search` later without spec change (Open Question 1).
+- **Keyless-tier throttling** → concurrent runs can 429; the existing transient-retry path absorbs it with backoff, but a burst of runs may surface `tool_execution_transient` failures. Acceptable for dev/first shipping; a free key raises the limit, and a token bucket can be added behind `web_search` later without spec change (Open Question 1).
 - **Dial-pinning transport is the most intricate piece** → if the custom transport proves too invasive on the pinned httpx/httpcore version, the fallback is resolve→validate→connect-immediately with a narrow TOCTOU window, explicitly noted in code. The spec's rebind scenario (agent-web-tools » refuses private targets) is the contract either way; the pinned dial is the strong form.
 - **JS-heavy pages return little text** → honest truncation/low-content results beat fabricated content; model may retry with a different URL. Documented in the tool description.
 - **Small-model tool selection** (Qwen3-4B may over-use web tools or mis-format URLs) → planner rules + correctable-error re-prompts; `agent_tool_calls_total{name}` metric distinguishes web-tool usage; observe before tuning.
@@ -66,9 +66,9 @@ See proposal.md — Why. Shape of the current code that constrains the approach:
 
 ## Migration Plan
 
-Default-off, so deploying this change is inert: no env flip, no behavior change, no schema/data migration. Enablement is `PYTHON_AGENT_WEB_*` flags + `PYTHON_AGENT_BRAVE_API_KEY` (provisioned wherever the agent runs; dev: `.env` + compose passthrough). Rollback is flipping the flags back to `false` — no state to unwind. Production enablement rides the existing PM-owned `agent-production-rollout`; no rollout sibling is created for this change.
+Default-off, so deploying this change is inert: no env flip, no behavior change, no schema/data migration. Enablement is `PYTHON_AGENT_WEB_*` flags (+ optional `PYTHON_AGENT_TAVILY_API_KEY`; keyless works with none). Rollback is flipping the flags back to `false` — no state to unwind. Production enablement rides the existing PM-owned `agent-production-rollout`; no rollout sibling is created for this change.
 
 ## Open Questions
 
-1. Per-user rate limit on `web_search`/`web_fetch` (beyond model-budget gating) — deferred; caps + bounded retries first, add if Brave 429s or observed abuse justify it. Does not change specs or approach.
+1. Per-user rate limit on `web_search`/`web_fetch` (beyond model-budget gating) — deferred; caps + bounded retries first, add if provider throttling or observed abuse justify it. Does not change specs or approach.
 2. HTML extraction quality on structured pages (docs sites, articles) — deferred; swap the stdlib extractor for a readability library later behind the same tool contract if quality is poor in practice.

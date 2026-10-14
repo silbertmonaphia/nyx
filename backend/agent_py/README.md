@@ -123,8 +123,10 @@ MCP registry tools (openspec/changes/agent-web-tools):
 - **`web_fetch`** — fetches a public http(s) URL and returns its readable
   text (stdlib HTML→text extraction, byte + char caps, ports 80/443 only,
   content-type allowlist).
-- **`web_search`** — Brave Search API queries returning compact ranked
-  results (title / URL / snippet).
+- **`web_search`** — Tavily Search API queries returning compact ranked
+  results (title / URL / snippet). Runs keyless by default (no account,
+  rate-limited); an optional card-free key (1k searches/month) raises the
+  limits.
 
 Both default **off**; with them off the merged tool list equals the MCP
 registry list and the planner prompt is byte-identical to its
@@ -134,8 +136,8 @@ pre-web-tools form.
 |---|---|---|
 | `PYTHON_AGENT_WEB_FETCH_ENABLED` | `false` | Register the `web_fetch` tool. |
 | `PYTHON_AGENT_WEB_SEARCH_ENABLED` | `false` | Register the `web_search` tool (requires the key below; empty key refuses startup). |
-| `PYTHON_AGENT_BRAVE_API_KEY` | — | Brave Search API subscription token. |
-| `PYTHON_AGENT_BRAVE_BASE_URL` | Brave endpoint | Overridden by tests/e2e to point at a stub. |
+| `PYTHON_AGENT_TAVILY_API_KEY` | — (empty = keyless) | Optional Tavily key; empty runs the keyless tier. |
+| `PYTHON_AGENT_TAVILY_BASE_URL` | Tavily endpoint | Overridden by tests/e2e to point at a stub. |
 | `PYTHON_AGENT_WEB_SEARCH_MAX_RESULTS` | `5` | Results per search (hard cap 10). |
 | `PYTHON_AGENT_WEB_FETCH_MAX_BYTES` | `2097152` | Response byte cap (streamed — an oversized body never fully enters memory). |
 | `PYTHON_AGENT_WEB_FETCH_TIMEOUT_SECONDS` | `10` | Request timeout (also used for the search provider call). |

@@ -172,7 +172,7 @@ async def test_disabled_flags_leave_merged_list_identical_to_mcp():
 
 async def test_enabled_flags_register_tools():
     settings = make_settings(
-        web_fetch_enabled=True, web_search_enabled=True, brave_api_key="k"
+        web_fetch_enabled=True, web_search_enabled=True, tavily_api_key="k"
     )
     local = LocalToolRegistry(build_local_tools(settings))
     dispatcher = ToolDispatcher(mcp=FakeMcp(schemas=[]), local=local)

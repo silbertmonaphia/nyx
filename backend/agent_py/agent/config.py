@@ -164,18 +164,19 @@ class Settings(BaseSettings):
 
     # --- Web tools (openspec/changes/agent-web-tools) ---
     # Opt-in agent-native tools: web_fetch (SSRF-guarded page retrieval)
-    # and web_search (Brave Search API). Both default OFF: enabling
-    # introduces outbound egress and, for search, an external API
-    # key/cost. When off, the merged tool list equals the MCP registry
-    # list and the planner prompt is byte-identical to its pre-web-tools
-    # form.
+    # and web_search (Tavily Search API). Both default OFF: enabling
+    # introduces outbound egress. When off, the merged tool list equals
+    # the MCP registry list and the planner prompt is byte-identical to
+    # its pre-web-tools form.
     web_fetch_enabled: bool = False
     web_search_enabled: bool = False
-    # Brave Search API (web_search). Required when web_search_enabled —
-    # an empty key refuses startup (validator below). The base URL is
-    # the full endpoint so tests/e2e can point it at a local stub.
-    brave_api_key: SecretStr = SecretStr("")
-    brave_base_url: str = "https://api.search.brave.com/res/v1/web/search"
+    # Tavily Search API (web_search). Optional: with an empty key the
+    # tool uses Tavily's keyless tier (rate-limited, no account needed);
+    # with a free key (1k searches/month, no credit card) usage counts
+    # against the account. The base URL is the full endpoint so
+    # tests/e2e can point it at a local stub.
+    tavily_api_key: SecretStr = SecretStr("")
+    tavily_base_url: str = "https://api.tavily.com/search"
     # Result caps / bounds. web_search_max_results is clamped to the hard
     # cap of 10 at dispatch time; negative values are rejected at startup.
     web_search_max_results: int = 5
@@ -367,18 +368,12 @@ class Settings(BaseSettings):
         """Refuse to start on a broken web-tools config.
 
         Per `openspec/changes/agent-web-tools` (agent-python-service delta
-        "New env keys for web tools"): `PYTHON_AGENT_WEB_SEARCH_ENABLED=true`
-        without `PYTHON_AGENT_BRAVE_API_KEY` would make every search call
-        fail with a 401 the operator only discovers at first use — fail
-        fast at startup instead. Negative numerics break the caps'
+        "New env keys for web tools"): negative numerics break the caps'
         semantics (a negative max_bytes would refuse every body), so they
-        are operator mistakes too.
+        are operator mistakes. No key requirement: Tavily's keyless tier
+        is a supported mode (search works without an account), so an
+        empty `PYTHON_AGENT_TAVILY_API_KEY` is valid configuration.
         """
-        if self.web_search_enabled and not self.brave_api_key.get_secret_value():
-            raise ValueError(
-                "PYTHON_AGENT_BRAVE_API_KEY is required when "
-                "PYTHON_AGENT_WEB_SEARCH_ENABLED=true"
-            )
         for name in (
             "web_search_max_results",
             "web_fetch_max_bytes",

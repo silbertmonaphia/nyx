@@ -9,6 +9,7 @@ retry taxonomy fails these tests too.
 
 from __future__ import annotations
 
+import json
 import socket
 
 import httpx
@@ -357,59 +358,79 @@ async def test_search_request_shape_and_parsing(monkeypatch):
     captured = {}
 
     def handler(request: httpx.Request) -> httpx.Response:
+        captured["method"] = request.method
         captured["url"] = str(request.url)
-        captured["token"] = request.headers.get("x-subscription-token")
+        captured["auth"] = request.headers.get("authorization")
+        captured["keyless"] = request.headers.get("x-tavily-access-mode")
+        captured["body"] = json.loads(request.content)
         return httpx.Response(
             200,
             json={
-                "web": {
-                    "results": [
-                        {"title": "A", "url": "https://a.test/", "description": "da"},
-                        {"title": "B", "url": "https://b.test/", "description": "db"},
-                    ]
-                }
+                "results": [
+                    {"title": "A", "url": "https://a.test/", "content": "da", "score": 0.9},
+                    {"title": "B", "url": "https://b.test/", "content": "db", "score": 0.8},
+                ]
             },
         )
 
     patched_async_client(monkeypatch, handler)
     settings = make_settings(
-        web_search_enabled=True, brave_api_key="brave-key", web_search_max_results=2
+        web_search_enabled=True, tavily_api_key="tvly-key", web_search_max_results=2
     )
     result = await search_web("nyx agent", settings)
 
-    assert captured["url"].startswith("https://api.search.brave.com/res/v1/web/search")
-    assert "q=nyx+agent" in captured["url"] or "q=nyx%20agent" in captured["url"]
-    assert "count=2" in captured["url"]
-    assert captured["token"] == "brave-key"
+    assert captured["method"] == "POST"
+    assert captured["url"] == "https://api.tavily.com/search"
+    assert captured["body"] == {"query": "nyx agent", "max_results": 2}
+    assert captured["auth"] == "Bearer tvly-key"
+    assert captured["keyless"] is None
     titles = [r["title"] for r in result["results"]]
     assert "A" in titles[0] and "B" in titles[1]
     assert all(t.startswith("<untrusted_web_content") for t in titles)
     assert result["results"][0]["description"].startswith("<untrusted_web_content")
 
 
+async def test_search_keyless_sends_access_mode_header(monkeypatch):
+    """No key configured → keyless tier: the access-mode header is sent
+    and no Authorization header exists (spec scenario "Keyless search
+    boots without a key")."""
+    captured = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["auth"] = request.headers.get("authorization")
+        captured["keyless"] = request.headers.get("x-tavily-access-mode")
+        return httpx.Response(200, json={"results": []})
+
+    patched_async_client(monkeypatch, handler)
+    settings = make_settings(web_search_enabled=True)
+    result = await search_web("q", settings)
+
+    assert captured["auth"] is None
+    assert captured["keyless"] == "keyless"
+    assert result == {"query": "q", "results": []}
+
+
 async def test_search_results_clamped_to_hard_cap(monkeypatch):
     captured = {}
 
     def handler(request: httpx.Request) -> httpx.Response:
-        captured["url"] = str(request.url)
+        captured["body"] = json.loads(request.content)
         return httpx.Response(
             200,
             json={
-                "web": {
-                    "results": [
-                        {"title": str(i), "url": f"https://x{i}.test/", "description": "d"}
-                        for i in range(50)
-                    ]
-                }
+                "results": [
+                    {"title": str(i), "url": f"https://x{i}.test/", "content": "d"}
+                    for i in range(50)
+                ]
             },
         )
 
     patched_async_client(monkeypatch, handler)
     settings = make_settings(
-        web_search_enabled=True, brave_api_key="k", web_search_max_results=50
+        web_search_enabled=True, tavily_api_key="k", web_search_max_results=50
     )
     result = await search_web("q", settings)
-    assert "count=10" in captured["url"]
+    assert captured["body"]["max_results"] == 10
     assert len(result["results"]) == 10
 
 
@@ -419,7 +440,7 @@ async def test_search_throttle_and_5xx_are_transient(monkeypatch, status):
         return httpx.Response(status)
 
     patched_async_client(monkeypatch, handler)
-    settings = make_settings(web_search_enabled=True, brave_api_key="k")
+    settings = make_settings(web_search_enabled=True, tavily_api_key="k")
     with pytest.raises(ToolUnavailableError):
         await search_web("q", settings)
 
@@ -429,7 +450,7 @@ async def test_search_401_is_non_retryable(monkeypatch):
         return httpx.Response(401, text="bad key")
 
     patched_async_client(monkeypatch, handler)
-    settings = make_settings(web_search_enabled=True, brave_api_key="k")
+    settings = make_settings(web_search_enabled=True, tavily_api_key="k")
     with pytest.raises(ToolRejectedError):
         await search_web("q", settings)
 
@@ -439,7 +460,7 @@ async def test_search_timeout_is_transient(monkeypatch):
         raise httpx.ReadTimeout("slow", request=request)
 
     patched_async_client(monkeypatch, handler)
-    settings = make_settings(web_search_enabled=True, brave_api_key="k")
+    settings = make_settings(web_search_enabled=True, tavily_api_key="k")
     with pytest.raises(ToolUnavailableError):
         await search_web("q", settings)
 
@@ -449,14 +470,14 @@ async def test_search_bad_json_is_transient(monkeypatch):
         return httpx.Response(200, content=b"<html>not json</html>")
 
     patched_async_client(monkeypatch, handler)
-    settings = make_settings(web_search_enabled=True, brave_api_key="k")
+    settings = make_settings(web_search_enabled=True, tavily_api_key="k")
     with pytest.raises(ToolUnavailableError):
         await search_web("q", settings)
 
 
 @pytest.mark.parametrize("query", ["", "   ", "x" * 401, None, 123])
 async def test_search_bad_query_is_correctable(query):
-    settings = make_settings(web_search_enabled=True, brave_api_key="k")
+    settings = make_settings(web_search_enabled=True, tavily_api_key="k")
     with pytest.raises(ToolError):
         await search_web(query, settings)
 
@@ -472,7 +493,7 @@ def test_build_local_tools_gating():
     assert [t.name for t in build_local_tools(fetch_only)] == ["web_fetch"]
 
     both = make_settings(
-        web_fetch_enabled=True, web_search_enabled=True, brave_api_key="k"
+        web_fetch_enabled=True, web_search_enabled=True, tavily_api_key="k"
     )
     assert [t.name for t in build_local_tools(both)] == ["web_fetch", "web_search"]
 
@@ -487,7 +508,7 @@ def test_planner_block_off_is_empty_on():
     assert "web_search" not in block
 
     both = make_settings(
-        web_fetch_enabled=True, web_search_enabled=True, brave_api_key="k"
+        web_fetch_enabled=True, web_search_enabled=True, tavily_api_key="k"
     )
     block = planner_block(both)
     assert "web_fetch" in block and "web_search" in block
@@ -615,9 +636,9 @@ async def test_fetch_byte_cap_exact_boundary(monkeypatch):
     "payload",
     [
         b"[]",
-        b'{"web": "nope"}',
-        b'{"web": []}',
-        b'{"web": {"results": "nope"}}',
+        b'{"results": "nope"}',
+        b'{"results": {}}',
+        b'{"fresh": 1}',
         b'"just a string"',
     ],
 )
@@ -629,7 +650,7 @@ async def test_search_odd_payload_shapes_yield_empty_results(monkeypatch, payloa
         return httpx.Response(200, content=payload)
 
     patched_async_client(monkeypatch, handler)
-    settings = make_settings(web_search_enabled=True, brave_api_key="k")
+    settings = make_settings(web_search_enabled=True, tavily_api_key="k")
     result = await search_web("q", settings)
     assert result == {"query": "q", "results": []}
 
@@ -639,16 +660,14 @@ async def test_search_fields_are_capped(monkeypatch):
         return httpx.Response(
             200,
             json={
-                "web": {
-                    "results": [
-                        {"title": "T" * 5000, "url": "https://x.test/", "description": "D" * 9000}
-                    ]
-                }
+                "results": [
+                    {"title": "T" * 5000, "url": "https://x.test/", "content": "D" * 9000}
+                ]
             },
         )
 
     patched_async_client(monkeypatch, handler)
-    settings = make_settings(web_search_enabled=True, brave_api_key="k")
+    settings = make_settings(web_search_enabled=True, tavily_api_key="k")
     result = await search_web("q", settings)
     item = result["results"][0]
     assert len(item["title"]) < 5000 and "truncated" in item["title"]
@@ -662,6 +681,6 @@ async def test_search_oversized_body_is_capped(monkeypatch):
         return httpx.Response(200, content=b"x" * (2 * 1024 * 1024))
 
     patched_async_client(monkeypatch, handler)
-    settings = make_settings(web_search_enabled=True, brave_api_key="k")
+    settings = make_settings(web_search_enabled=True, tavily_api_key="k")
     with pytest.raises(ToolUnavailableError):  # capped body is truncated mid-JSON
         await search_web("q", settings)

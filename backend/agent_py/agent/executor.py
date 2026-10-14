@@ -16,6 +16,7 @@ import asyncio
 import json
 import logging
 import random
+import re
 import uuid
 from typing import Any
 
@@ -419,6 +420,69 @@ def _state_messages_to_lc(messages) -> list:
     return out
 
 
+# Hard cap on the prior-data context block injected into the answering
+# step's prompt. Picked for the small-model default (Qwen3-4B has a
+# 4096-token context, and Chinese/Japanese tokenize at ~1 token per
+# character — so the cap must be in characters, not tokens, and tight
+# enough that the *whole* answer prompt (system + prior-data +
+# conversation + answer) fits in ~3 000 characters under multilingual
+# content). The exact number is best-effort: the goal is "small-model
+# friendly by default, configurable for the few users running larger
+# contexts". The OpenAIInvalidRequestError 400 the live agent hit on
+# 2026-10-14 with Qwen3-4B + 5 web_search results is the
+# motivating incident — those 5 results were ~5 000 framed characters
+# which alone exceed 4 000 tokens of Chinese text.
+PRIOR_DATA_MAX_CHARS = 2800
+PRIOR_DATA_PER_SECTION_MAX_CHARS = 1500
+
+PRIOR_DATA_TRUNCATION_MARKER = "\n[truncated: section exceeded {limit} characters]"
+
+
+# Untrusted-content markers emitted by the tools on the wire
+# (`<untrusted_web_content source="…">…</untrusted_web_content>`). The
+# prior-data block feeds the SAME text back to the model for the answer
+# step, and on a small model those markers consume 50-100% of the
+# available context for the answer prompt. The model still needs the
+# raw text to reason over; only the markers are stripped. The wire-
+# side tool_result frame still carries the framed text — the framing
+# is preserved end-to-end, just not doubled into the answer prompt.
+_UNTRUSTED_OPEN_RE = re.compile(r"<untrusted_web_content[^>]*>")
+_UNTRUSTED_CLOSE_RE = re.compile(r"</untrusted_web_content>")
+
+
+def _cap_section(text: str, limit: int) -> str:
+    if limit <= 0 or len(text) <= limit:
+        return text
+    return text[:limit] + PRIOR_DATA_TRUNCATION_MARKER.format(limit=limit)
+
+
+def _strip_untrusted_markers(text: str) -> str:
+    """Drop the wire-side untrusted-content framing from text destined
+    for the *answer step's prompt*. The framing is still on the original
+    tool_result frame; we only avoid re-pasting it into the prompt
+    where it would consume most of a small model's context window.
+    """
+    text = _UNTRUSTED_OPEN_RE.sub("", text)
+    text = _UNTRUSTED_CLOSE_RE.sub("", text)
+    # Collapse the blank lines the stripped tags left behind, so the
+    # answer prompt is easier on the model's eyes.
+    return re.sub(r"\n{3,}", "\n\n", text)
+
+
+def _strip_markers_recursive(value):
+    """Apply `_strip_untrusted_markers` to every string leaf in a nested
+    JSON-shaped value. Dicts and lists are walked; non-string scalars
+    (numbers, bools, None) are returned unchanged.
+    """
+    if isinstance(value, str):
+        return _strip_untrusted_markers(value)
+    if isinstance(value, dict):
+        return {k: _strip_markers_recursive(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_strip_markers_recursive(v) for v in value]
+    return value
+
+
 def _render_prior_data(state: AgentState, current_step_id: str) -> str:
     """Render earlier data-step outputs (rag context / tool results) as a context block.
 
@@ -429,15 +493,31 @@ def _render_prior_data(state: AgentState, current_step_id: str) -> str:
     anything, so data-free plans (e.g. a greeting) keep their exact
     prior prompt shape.
 
-    Motivating bug (2026-10): "summarize recent 3 months feed" planned a
-    rag-only plan; the retrieved context was written to step_outputs and
-    never read by anything, so the summary could never see the feeds.
+    The block is bounded by `PRIOR_DATA_MAX_CHARS` total (most recent
+    step first; older sections are dropped when the cap is hit) and by
+    `PRIOR_DATA_PER_SECTION_MAX_CHARS` per section (the per-section cap
+    fires before the total so a single huge prior step cannot starve
+    later ones). Bounding is what stops a 5-result `web_search` from
+    pushing the answer-step prompt past a small model's context
+    window (the 2026-10-14 in-the-wild repro: provider 400 on
+    4097 input tokens).
+
+    Motivating bug (2026-10, original): "summarize recent 3 months feed"
+    planned a rag-only plan; the retrieved context was written to
+    step_outputs and never read by anything, so the summary could never
+    see the feeds.
+    Motivating bug (2026-10-14, follow-up): web_search returning
+    multiple results inflated the answer step's prompt past the
+    small-model context window; provider rejected with
+    OpenAIInvalidRequestError 400.
     """
     plan = state.get("plan")
     outputs = state.get("step_outputs") or {}
     if plan is None:
         return ""
-    sections: list[str] = []
+    # Build sections in plan order first, then reverse so the most
+    # recent data step wins when the total cap drops older sections.
+    plan_sections: list[tuple[str, str]] = []
     for s in plan.steps:
         if s.id == current_step_id:
             break
@@ -447,14 +527,55 @@ def _render_prior_data(state: AgentState, current_step_id: str) -> str:
         if s.kind.value == "rag" and isinstance(out, dict):
             block = out.get("context_block")
             if block:
-                sections.append(f"[{s.id} — retrieved context]\n{block}")
+                # `rag` context blocks are bare text — strip markers
+                # directly on the block.
+                plan_sections.append(
+                    (s.id, f"[{s.id} — retrieved context]\n{_strip_untrusted_markers(block)}")
+                )
         elif s.kind.value == "tool":
-            sections.append(
-                f"[{s.id} — tool result from {s.tool}]\n{json.dumps(out, default=str)}"
+            # `tool` sections JSON-dump the entire result dict, so the
+            # `description` field carrying the untrusted-framed text is
+            # *escaped* inside the JSON string. Walk the dict, strip
+            # markers inside string fields, then re-emit. Anything
+            # non-string (nested dict, list) is left as-is.
+            stripped = _strip_markers_recursive(out)
+            plan_sections.append(
+                (
+                    s.id,
+                    f"[{s.id} — tool result from {s.tool}]\n{json.dumps(stripped, default=str)}",
+                )
             )
-    if not sections:
+
+    if not plan_sections:
         return ""
-    return "Data gathered by earlier steps:\n\n" + "\n\n".join(sections)
+
+    # Per-section cap first (a single huge section must not eat the budget).
+    # Strip the untrusted-content markers from each section's body before
+    # capping — the markers are for the wire-side tool_result frame, not
+    # the model's context. (See `_strip_untrusted_markers` for rationale.)
+    capped = [
+        (sid, _cap_section(_strip_untrusted_markers(body), PRIOR_DATA_PER_SECTION_MAX_CHARS))
+        for sid, body in plan_sections
+    ]
+    # Total cap: keep the most recent section; if it alone fits, prepend
+    # earlier ones while there is room.
+    total = 0
+    kept: list[str] = []
+    for sid, body in reversed(capped):
+        addition = len(body) + (2 if kept else 0)  # separator between sections
+        if total + addition > PRIOR_DATA_MAX_CHARS:
+            # First (newest) section never fits because of total cap alone:
+            # cap it to whatever room remains. Earlier sections are dropped.
+            if not kept:
+                remaining = max(PRIOR_DATA_MAX_CHARS, 0)
+                kept.append(_cap_section(body, remaining))
+                total = PRIOR_DATA_MAX_CHARS
+            continue
+        kept.append(body)
+        total += addition
+    kept.reverse()
+
+    return "Data gathered by earlier steps:\n\n" + "\n\n".join(kept)
 
 
 def _extract_text(resp) -> str:

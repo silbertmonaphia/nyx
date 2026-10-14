@@ -252,8 +252,8 @@ def test_langfuse_enabled_with_credentials_accepted():
 _WEB_ENV_KEYS = (
     "WEB_FETCH_ENABLED",
     "WEB_SEARCH_ENABLED",
-    "BRAVE_API_KEY",
-    "BRAVE_BASE_URL",
+    "TAVILY_API_KEY",
+    "TAVILY_BASE_URL",
     "WEB_SEARCH_MAX_RESULTS",
     "WEB_FETCH_MAX_BYTES",
     "WEB_FETCH_TIMEOUT_SECONDS",
@@ -278,22 +278,24 @@ def test_web_tools_default_off(monkeypatch):
     assert s.web_fetch_max_chars == 20000
     assert s.web_fetch_max_redirects == 5
     assert s.web_fetch_allow_private is False
-    assert s.brave_base_url == "https://api.search.brave.com/res/v1/web/search"
+    assert s.tavily_base_url == "https://api.tavily.com/search"
     # SecretStr must not leak the raw value via repr/logging.
-    assert s.brave_api_key.get_secret_value() == ""
+    assert s.tavily_api_key.get_secret_value() == ""
 
 
-def test_web_search_enabled_without_key_refused(monkeypatch):
-    """Spec scenario "Search enabled without key refuses startup"."""
+def test_web_search_enabled_keyless_boots(monkeypatch):
+    """Spec scenario "Keyless search boots without a key": Tavily's
+    keyless tier is a supported mode — enabling search without a key must
+    start cleanly (the provider-swap replaced the old refuse-start rule)."""
     for key in _WEB_ENV_KEYS:
         monkeypatch.delenv(f"PYTHON_AGENT_{key}", raising=False)
-    with pytest.raises(ValueError) as excinfo:
-        Settings(
-            _env_file=None,
-            llm_base_url="http://vllm:8000/v1",
-            web_search_enabled=True,
-        )
-    assert "PYTHON_AGENT_BRAVE_API_KEY" in str(excinfo.value)
+    s = Settings(
+        _env_file=None,
+        llm_base_url="http://vllm:8000/v1",
+        web_search_enabled=True,
+    )
+    assert s.web_search_enabled is True
+    assert s.tavily_api_key.get_secret_value() == ""
 
 
 def test_web_search_enabled_with_key_accepted(monkeypatch):
@@ -303,10 +305,10 @@ def test_web_search_enabled_with_key_accepted(monkeypatch):
         _env_file=None,
         llm_base_url="http://vllm:8000/v1",
         web_search_enabled=True,
-        brave_api_key="brave-test-key",
+        tavily_api_key="tvly-test-key",
     )
     assert s.web_search_enabled is True
-    assert "brave-test-key" not in repr(s)
+    assert "tvly-test-key" not in repr(s)
 
 
 @pytest.mark.parametrize(

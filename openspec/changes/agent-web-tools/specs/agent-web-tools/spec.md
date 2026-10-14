@@ -2,7 +2,7 @@
 
 ## Purpose
 
-Gives the agent read-only access to the public web — Brave-backed search and SSRF-guarded page fetching — as agent-native tools dispatched through the executor's existing tool funnel, without extending the MCP surface.
+Gives the agent read-only access to the public web — Tavily-backed search and SSRF-guarded page fetching — as agent-native tools dispatched through the executor's existing tool funnel, without extending the MCP surface.
 
 ## ADDED Requirements
 
@@ -30,19 +30,29 @@ When enabled, `web_search` and `web_fetch` SHALL be available to `tool` steps an
 - **WHEN** the merged tool list would contain two tools with the same name
 - **THEN** the agent-native tool is dispatched for that name, the collision is logged once per run, and the MCP tool remains reachable only under a non-colliding name
 
-### Requirement: `web_search` queries the Brave Search API
+### Requirement: `web_search` queries the Tavily Search API
 
-`web_search` SHALL accept a `query` string (required, 1–400 characters) and return a compact ranked result list — for each result a title, URL, and description snippet — bounded by a configurable maximum (default 5, hard cap 10). The search provider base URL and API key SHALL come from configuration. Provider throttling (HTTP 429), server errors (5xx), and timeouts SHALL be classified as transient (retryable); malformed or invalid queries SHALL be classified as correctable argument errors.
+`web_search` SHALL accept a `query` string (required, 1–400 characters) and return a compact ranked result list — for each result a title, URL, and description snippet — bounded by a configurable maximum (default 5, hard cap 10). The search provider base URL SHALL come from configuration and the API key SHALL be optional: with an empty key the tool MUST operate against the provider's keyless tier (no account required), and with a configured key it MUST authenticate against the account. Provider throttling (HTTP 429), server errors (5xx), and timeouts SHALL be classified as transient (retryable); malformed or invalid queries SHALL be classified as correctable argument errors; account/plan-limit rejections SHALL NOT be retried.
 
 #### Scenario: Search returns bounded compact results
 
 - **WHEN** the model calls `web_search` with a valid query
 - **THEN** the tool returns at most the configured maximum number of results, each carrying only title, URL, and description
 
+#### Scenario: Keyless operation without an API key
+
+- **WHEN** `web_search` runs with no API key configured
+- **THEN** the search succeeds against the provider's keyless tier and no Authorization credential is sent
+
 #### Scenario: Provider throttling is transient
 
 - **WHEN** the upstream search provider responds HTTP 429 or times out
 - **THEN** the failure is classified transient and dispatched on the backoff-retry path
+
+#### Scenario: Plan-limit rejection is not retried
+
+- **WHEN** the provider rejects the request because the account or plan limit is exhausted
+- **THEN** the failure is classified non-retryable and the step fails fast
 
 #### Scenario: Oversized query is a correctable error
 
@@ -99,17 +109,22 @@ When enabled, `web_search` and `web_fetch` SHALL be available to `tool` steps an
 
 ### Requirement: Web content is framed as untrusted data
 
-Text originating from the web — search snippets and fetched page text — SHALL be wrapped in explicit `<untrusted_web_content>` markers in every tool result and in every downstream context rendering, and the tool descriptions SHALL state that the content is data to be summarized or quoted, never instructions to follow.
+Text originating from the web — search snippets and fetched page text — SHALL be wrapped in explicit `<untrusted_web_content>` markers in every tool result frame, and the tool descriptions SHALL state that the content is data to be summarized or quoted, never instructions to follow. Downstream context renderings (the executor's prior-data block injected into the answering step) SHALL preserve the text content; the marker overhead MAY be stripped there, because on small-context models the framing alone can exhaust the answer prompt's token budget (the 2026-10-14 Qwen3-4B 4096-token incident).
 
 #### Scenario: Fetched text carries the untrusted markers
 
 - **WHEN** `web_fetch` succeeds
-- **THEN** the model-visible result wraps the extracted text in `<untrusted_web_content>` markers and the tool description marks the content untrusted
+- **THEN** the model-visible tool result frame wraps the extracted text in `<untrusted_web_content>` markers and the tool description marks the content untrusted
 
 #### Scenario: Search snippets carry the untrusted markers
 
 - **WHEN** `web_search` succeeds
-- **THEN** each result's description snippet is delivered under the same untrusted-content framing
+- **THEN** each result's description snippet is delivered under the same untrusted-content framing in the tool result frame
+
+#### Scenario: Prior-data injection is bounded for small models
+
+- **WHEN** a plan's answering step receives earlier web-tool outputs as prior data
+- **THEN** the injected block is bounded (per-section and total character caps, most recent sections kept) and carries the result text without the marker overhead, so the answer prompt stays within a small model's context window
 
 ### Requirement: Disabled web tools are indistinguishable from today
 

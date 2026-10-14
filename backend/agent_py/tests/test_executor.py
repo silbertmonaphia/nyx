@@ -1125,8 +1125,8 @@ async def test_banner_fires_when_retry_budget_split_across_dispatches(
 # demands byte equality — any frame-shape drift fails here and, through the
 # shared bytes, in the Playwright spec.
 
-import itertools  # noqa: E402
-import pathlib  # noqa: E402
+import itertools
+import pathlib
 
 WEB_TOOLS_FIXTURE = (
     pathlib.Path(__file__).resolve().parents[3]
@@ -1278,3 +1278,129 @@ async def test_web_tools_wire_fixture_matches_producer(tracer):
     assert generated == WEB_TOOLS_FIXTURE.read_bytes(), (
         "SSE wire drift: regenerate the fixture and re-run chat-web-tools.spec.ts"
     )
+
+
+# --- context-overflow guard (2026-10-14) ------------------------------------
+# Motivated by an in-the-wild repro: a `web_search` step returning 5 results
+# inflated the answer step's prompt past the 4B small-model context window;
+# the provider rejected with OpenAIInvalidRequestError 400. The fix is
+# in `_render_prior_data`: bound the per-section and total block sizes.
+# These tests pin both caps and the "keep most recent, drop older" policy.
+
+
+def test_render_prior_data_caps_per_section():
+    from agent.executor import (
+        PRIOR_DATA_PER_SECTION_MAX_CHARS,
+        _render_prior_data,
+    )
+
+    big = "x" * (PRIOR_DATA_PER_SECTION_MAX_CHARS * 2)
+    state = _state(
+        [
+            PlanStep(id="data_1", kind="tool", tool="web_search"),
+            PlanStep(id="answer", kind="llm", prompt="reply"),
+        ],
+        {"data_1": {"results": [{"title": big, "url": "u", "description": "d"}]}},
+    )
+
+    block = _render_prior_data(state, "answer")
+    assert len(block) < len(big) + 200
+    assert "truncated: section exceeded" in block
+
+
+def test_render_prior_data_caps_total_and_keeps_most_recent():
+    from agent.executor import (
+        PRIOR_DATA_MAX_CHARS,
+        PRIOR_DATA_PER_SECTION_MAX_CHARS,
+        _render_prior_data,
+    )
+
+    # Three prior steps, each at the per-section cap; their sum
+    # (3 × PRIOR_DATA_PER_SECTION_MAX_CHARS = 18000) exceeds the total
+    # cap (PRIOR_DATA_MAX_CHARS = 12000), so older sections must drop.
+    payload_size = PRIOR_DATA_PER_SECTION_MAX_CHARS
+    state = _state(
+        [
+            PlanStep(id="data_old", kind="tool", tool="web_search"),
+            PlanStep(id="data_mid", kind="tool", tool="web_search"),
+            PlanStep(id="data_new", kind="tool", tool="web_search"),
+            PlanStep(id="answer", kind="llm", prompt="reply"),
+        ],
+        {
+            "data_old": {"results": [{"title": "o" * payload_size}]},
+            "data_mid": {"results": [{"title": "m" * payload_size}]},
+            "data_new": {"results": [{"title": "n" * payload_size}]},
+        },
+    )
+
+    block = _render_prior_data(state, "answer")
+    # The most recent section must survive. The total cap allows ONE
+    # full per-section-cap section (6000 chars) plus a smaller partial
+    # second; the policy drops older sections first.
+    assert "data_new" in block
+    # The oldest section must not survive when the cap requires dropping.
+    assert "data_old" not in block
+    # Total block stays under the cap (with small slack for the header
+    # + any per-section truncation marker on the kept second section).
+    assert len(block) <= PRIOR_DATA_MAX_CHARS + 200
+
+
+def test_render_prior_data_single_huge_section_caps_to_total_budget():
+    """If a single section alone would blow the total cap (after the
+    per-section cap already trimmed it), it must still get a final cap
+    instead of starving the answer step entirely."""
+    from agent.executor import PRIOR_DATA_MAX_CHARS, _render_prior_data
+
+    state = _state(
+        [
+            PlanStep(id="data_1", kind="tool", tool="web_search"),
+            PlanStep(id="answer", kind="llm", prompt="reply"),
+        ],
+        {
+            "data_1": {
+                "results": [
+                    {"title": "a", "url": "u", "description": "x" * 100000}
+                ]
+            }
+        },
+    )
+
+    block = _render_prior_data(state, "answer")
+    # The final block must be at most the total cap, with a marker.
+    assert len(block) <= PRIOR_DATA_MAX_CHARS + 200
+    assert "truncated" in block
+
+
+def test_render_prior_data_strips_untrusted_markers():
+    """The wire-side untrusted-content markers must not be re-pasted
+    into the answer step's prompt — they double the per-result
+    character count and exhaust small-model context windows (the
+    2026-10-14 live Qwen3-4B 400 incident). The text content itself
+    is preserved.
+    """
+    from agent.executor import _render_prior_data
+
+    framed = (
+        '<untrusted_web_content source="https://x.test/agent">\n'
+        "正文 — important content.\n"
+        "</untrusted_web_content>"
+    )
+    state = _state(
+        [
+            PlanStep(id="data_1", kind="tool", tool="web_search"),
+            PlanStep(id="answer", kind="llm", prompt="reply"),
+        ],
+        {"data_1": {"results": [{"title": "t", "url": "u", "description": framed}]}},
+    )
+
+    block = _render_prior_data(state, "answer")
+    assert "<untrusted_web_content" not in block
+    assert "</untrusted_web_content>" not in block
+    # The section JSON is dumped with ensure_ascii (default), so Chinese
+    # renders as \uXXXX escapes — decode the section to check the
+    # content value survived the strip.
+    import json as _json
+
+    section = block.split("[data_1 — tool result from web_search]\n", 1)[1]
+    desc = _json.loads(section)["results"][0]["description"]
+    assert "正文 — important content" in desc

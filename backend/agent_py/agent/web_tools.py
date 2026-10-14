@@ -1,11 +1,11 @@
 """Agent-native web tools (openspec/changes/agent-web-tools).
 
 `web_fetch` — SSRF-guarded retrieval of a public URL, reduced to readable
-text. `web_search` — Brave Search API queries returning compact ranked
-results. Both are gated by `Settings.web_fetch_enabled` /
-`Settings.web_search_enabled` (default off); `build_local_tools` returns
-nothing when disabled, so a disabled service's merged tool list equals the
-MCP registry list.
+text. `web_search` — Tavily Search API queries returning compact ranked
+results (keyless tier by default; a free API key raises the limits). Both
+are gated by `Settings.web_fetch_enabled` / `Settings.web_search_enabled`
+(default off); `build_local_tools` returns nothing when disabled, so a
+disabled service's merged tool list equals the MCP registry list.
 
 Error taxonomy (design.md D2): every failure is raised as one of the
 dispatcher's existing exception types so the executor's retry classifier
@@ -318,10 +318,12 @@ async def _read_capped(response: httpx.Response, max_bytes: int) -> bytes:
 
 
 async def search_web(query: str, settings: Settings) -> dict[str, Any]:
-    """Query the Brave Search API; return compact ranked results.
+    """Query the Tavily Search API; return compact ranked results.
 
-    The fetch timeout is reused for the provider call (the spec's env-key
-    list carries no separate search timeout).
+    Runs keyless (no account, rate-limited) when `tavily_api_key` is
+    empty, with `Authorization: Bearer` when set. The fetch timeout is
+    reused for the provider call (the spec's env-key list carries no
+    separate search timeout).
     """
     if not isinstance(query, str) or not query.strip():
         raise ToolError("web_search: 'query' must be a non-empty string")
@@ -335,8 +337,14 @@ async def search_web(query: str, settings: Settings) -> dict[str, Any]:
 
     headers = {
         "Accept": "application/json",
-        "X-Subscription-Token": settings.brave_api_key.get_secret_value(),
+        "Content-Type": "application/json",
     }
+    api_key = settings.tavily_api_key.get_secret_value()
+    if api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
+    else:
+        # Keyless tier — no account required, rate-limited by the provider.
+        headers["X-Tavily-Access-Mode"] = "keyless"
     # NOTE: unlike the fetch client (trust_env=False — its pinned-dial
     # guarantee only holds when this process dials), the search client
     # deliberately honors ambient proxy configuration: there is no
@@ -348,9 +356,9 @@ async def search_web(query: str, settings: Settings) -> dict[str, Any]:
             timeout=float(settings.web_fetch_timeout_seconds)
         ) as client:
             request = client.build_request(
-                "GET",
-                settings.brave_base_url,
-                params={"q": query, "count": count},
+                "POST",
+                settings.tavily_base_url,
+                json={"query": query, "max_results": count},
                 headers=headers,
             )
             response = await client.send(request, stream=True)
@@ -374,8 +382,9 @@ async def search_web(query: str, settings: Settings) -> dict[str, Any]:
         # Provider throttling / outage — retryable with backoff.
         raise ToolUnavailableError(f"web_search: provider status {status}")
     if status != 200:
-        # Other 4xx (401 bad key, 422 malformed request): retrying the same
-        # call cannot succeed — fail fast, no retry.
+        # 400/401/422 (bad request / bad key / validation) and 432/433
+        # (account or plan limit exhausted): retrying the same call cannot
+        # succeed — fail fast, no retry.
         raise ToolRejectedError(
             f"web_search: provider rejected the request (status {status})",
             status_code=status,
@@ -386,10 +395,9 @@ async def search_web(query: str, settings: Settings) -> dict[str, Any]:
         raise ToolUnavailableError("web_search: provider returned non-JSON") from exc
 
     # Shape-guard: a 200 whose body is not the documented envelope
-    # (non-object, `web` not an object, `results` not a list) yields an
-    # empty result list rather than an AttributeError escaping the tool.
-    web = data.get("web") if isinstance(data, dict) else None
-    raw_results = web.get("results") if isinstance(web, dict) else None
+    # (non-object, `results` not a list) yields an empty result list
+    # rather than an AttributeError escaping the tool.
+    raw_results = data.get("results") if isinstance(data, dict) else None
     if not isinstance(raw_results, list):
         raw_results = []
     results: list[dict[str, str]] = []
@@ -405,7 +413,7 @@ async def search_web(query: str, settings: Settings) -> dict[str, Any]:
                 "url": url,
                 "description": frame_untrusted(
                     cap_text(
-                        str(item.get("description", "")), DESCRIPTION_MAX_CHARS
+                        str(item.get("content", "")), DESCRIPTION_MAX_CHARS
                     ),
                     url,
                 ),
