@@ -1,0 +1,6 @@
+schema: spec-driven
+created: 2026-10-14
+goal: Track the production rollout gates for user-preference memory (extraction
+  observation window, injection parity check, kill-switch drill, cost watch) so
+  the implementation change archives independently
+skip_specs: true

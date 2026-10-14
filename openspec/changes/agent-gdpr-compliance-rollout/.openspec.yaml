@@ -1,0 +1,6 @@
+schema: spec-driven
+created: 2026-10-14
+goal: Track the production rollout gates for GDPR export/erase (staging erasure
+  drill, restore-drill on backups, audit-retention policy, operator playbook
+  sign-off) so the implementation change archives independently
+skip_specs: true

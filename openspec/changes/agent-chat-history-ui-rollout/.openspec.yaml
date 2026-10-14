@@ -1,0 +1,6 @@
+schema: spec-driven
+created: 2026-10-14
+goal: Track the production rollout gates for the chat-history sidebar (REST
+  proxy on a deployed stack, live-stack browser smoke, pagination load check,
+  rollback via the SPA flag) so the implementation change archives independently
+skip_specs: true
