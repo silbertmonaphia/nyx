@@ -51,7 +51,29 @@ test.describe('Feed CRUD', () => {
     await page.getByRole('button', { name: /Add Feed/i }).click();
     await page.getByPlaceholder(/Feed title/i).fill(feedTitle);
     await page.getByPlaceholder(/Description/i).fill('This is a test description.');
+    // The optimistic row (sentinel id) renders before the POST resolves;
+    // the later Edit would then target a not-yet-created row, and the
+    // update mutation's placeholder guard rejects without a network call
+    // (`Cannot update a feed before it has been created` — 2026-10-14
+    // triage of this spec's flake on a loaded dev DB). Wait for the
+    // create to be server-confirmed: the POST 201, then the refetch the
+    // mutation's invalidation triggers (both armed before the click so
+    // neither can be missed).
+    const createSettled = page.waitForResponse(
+      (r) =>
+        r.url().includes('/api/feeds?') &&
+        r.request().method() === 'GET' &&
+        r.ok(),
+    );
+    const createPosted = page.waitForResponse(
+      (r) =>
+        r.url().includes('/api/feeds') &&
+        r.request().method() === 'POST' &&
+        r.status() === 201,
+    );
     await page.getByRole('button', { name: /Save Feed/i }).click();
+    await createPosted;
+    await createSettled;
 
     await expect(page.getByText(feedTitle)).toBeVisible();
 
