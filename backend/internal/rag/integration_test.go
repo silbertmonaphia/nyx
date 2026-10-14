@@ -11,6 +11,7 @@ import (
 	"nyx/internal/llm"
 	"nyx/internal/user"
 	userdb "nyx/internal/user/db"
+	"nyx/test"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/stretchr/testify/assert"
@@ -85,16 +86,21 @@ func requirePgvector(t *testing.T) *pgxpool.Pool {
 	if err != nil {
 		t.Skipf("DB_URL unreachable: %v", err)
 	}
-	defer probe.Close()
 	var has bool
 	if err := probe.QueryRow(ctx,
 		`SELECT EXISTS (SELECT 1 FROM pg_available_extensions WHERE name = 'vector')`,
 	).Scan(&has); err != nil {
+		probe.Close()
 		t.Skipf("could not probe pgvector availability: %v", err)
 	}
 	if !has {
+		probe.Close()
 		t.Skipf("DB_URL points at a Postgres without the pgvector extension; " +
 			"use the pgvector/pgvector:pg17-alpine image (docker-compose.yml's `db` service)")
+	}
+	if err := test.RunMigrationsForURL(ctx, url); err != nil {
+		probe.Close()
+		t.Fatalf("failed to run migrations: %v", err)
 	}
 
 	return probe
@@ -139,10 +145,6 @@ func TestIntegration_CrossUserCanary(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	// Migrations already applied by the CI runner (the same
-	// golang-migrate RunMigrations used by the feed / user
-	// integration tests). Re-run idempotently here so this test
-	// is self-contained when invoked ad hoc.
 	require.NoError(t, runRagMigrationsForTest(ctx, pool))
 
 	// Two users with distinct content. The titles are designed
