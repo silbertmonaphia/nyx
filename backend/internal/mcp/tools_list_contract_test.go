@@ -123,8 +123,9 @@ func liveToolsList(t *testing.T) map[string]map[string]any {
 
 // TestHandler_ToolsList_AnnotationContract pins the producer half of the
 // confirmation-gate contract (design D3): read-only tools assert
-// readOnlyHint=true, mutating tools assert readOnlyHint=false AND
-// destructiveHint=true. The consumer half lives in
+// readOnlyHint=true AND destructiveHint=false (a read tool mislabeled
+// destructive misleads hosts that surface the hint), mutating tools
+// assert readOnlyHint=false AND destructiveHint=true. The consumer half lives in
 // backend/agent_py/tests (normalization + gate), which fails safe when
 // annotations are absent — so a dropped annotation here would silently
 // turn every read into a confirmation prompt.
@@ -137,8 +138,8 @@ func TestHandler_ToolsList_AnnotationContract(t *testing.T) {
 		wantReadOnly    bool
 		wantDestructive *bool // nil → destructiveHint not asserted for this tool
 	}{
-		{tool: ToolListFeeds, wantReadOnly: true},
-		{tool: ToolGetFeed, wantReadOnly: true},
+		{tool: ToolListFeeds, wantReadOnly: true, wantDestructive: boolPtr(false)},
+		{tool: ToolGetFeed, wantReadOnly: true, wantDestructive: boolPtr(false)},
 		{tool: ToolCreateFeed, wantReadOnly: false, wantDestructive: boolPtr(true)},
 		{tool: ToolUpdateFeed, wantReadOnly: false, wantDestructive: boolPtr(true)},
 		{tool: ToolDeleteFeed, wantReadOnly: false, wantDestructive: boolPtr(true)},

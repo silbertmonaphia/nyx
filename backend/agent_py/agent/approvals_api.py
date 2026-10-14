@@ -66,7 +66,7 @@ async def post_approval(request: Request, body: ApprovalDecisionBody) -> dict:
         store = _approval_store(request)
         try:
             expires_at = await store.check_intent(body.run_id, body.approval_id)
-        except Exception as exc:  # noqa: BLE001 — static detail, never internals
+        except Exception as exc:
             log.warning("approval intent lookup failed: %r", exc)
             raise HTTPException(
                 status_code=503, detail="approval store unavailable"
@@ -80,9 +80,14 @@ async def post_approval(request: Request, body: ApprovalDecisionBody) -> dict:
 
         try:
             recorded = await store.record_decision(
-                body.run_id, body.approval_id, body.decision
+                body.run_id,
+                body.approval_id,
+                body.decision,
+                # Remaining window + margin (review round 1): a stalled
+                # waiter must not lose an already-recorded decision.
+                expires_at=expires_at,
             )
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             log.warning("approval decision write failed: %r", exc)
             raise HTTPException(
                 status_code=503, detail="approval store unavailable"

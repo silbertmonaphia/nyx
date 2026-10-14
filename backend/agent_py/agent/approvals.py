@@ -29,6 +29,7 @@ import asyncio
 import logging
 import time
 import uuid
+
 from redis.asyncio import Redis
 
 from .state import AgentState
@@ -70,14 +71,25 @@ class RunSink:
     `run_agent_stream` consumes it as an optional parameter.
     """
 
-    def __init__(self, queue: "asyncio.Queue") -> None:
+    def __init__(self, queue: asyncio.Queue) -> None:
         self._queue = queue
-        self._delivered = 0
+        # Identity of every event already delivered. Identity (not a
+        # positional index) because the executor inserts the
+        # partial-failure note MID-LIST (`_note_insert_index`) possibly
+        # after some events were already flushed mid-node: a positional
+        # counter would re-emit the element at the stale index (the
+        # confirm_request — reviving an already-decided card) and drop
+        # the note. Events are referenced by the run's state for the
+        # whole run, so `id()` cannot be recycled while this set lives.
+        self._delivered: set[int] = set()
 
     async def flush(self, events: list) -> None:
-        while self._delivered < len(events):
-            await self._queue.put(("event", events[self._delivered]))
-            self._delivered += 1
+        for ev in events:
+            key = id(ev)
+            if key in self._delivered:
+                continue
+            self._delivered.add(key)
+            await self._queue.put(("event", ev))
 
     async def comment(self, text: str) -> None:
         await self._queue.put(("comment", text))
@@ -128,19 +140,29 @@ class ApprovalStore:
             return None
 
     async def record_decision(
-        self, run_id: str, approval_id: str, decision: str
+        self,
+        run_id: str,
+        approval_id: str,
+        decision: str,
+        expires_at: float | None = None,
     ) -> bool:
         """`SET NX` — True when this call recorded the (first) decision.
 
         False on a duplicate: the first decision wins and is never
-        overwritten. The key only needs to outlive the waiter's poll
-        cadence after the decision, so the margin alone is its TTL.
+        overwritten. When the caller passes the intent's `expires_at`,
+        the key's TTL is the remaining window + margin (review round 1):
+        a waiter stalled longer than the flat margin then cannot lose an
+        already-recorded decision and wrongly close the call as expired.
         """
+        if expires_at is not None:
+            ttl = int(expires_at - time.time()) + _KEY_MARGIN_SECONDS
+        else:
+            ttl = _KEY_MARGIN_SECONDS
         stored = await self._redis.set(
             self.decision_key(run_id, approval_id),
             decision,
             nx=True,
-            ex=_KEY_MARGIN_SECONDS,
+            ex=max(ttl, 1),
         )
         return stored is not None
 
@@ -181,7 +203,7 @@ class ApprovalGate:
     """
 
     def __init__(
-        self, store: ApprovalStore, ttl_seconds: int, sink: "RunSink | None" = None
+        self, store: ApprovalStore, ttl_seconds: int, sink: RunSink | None = None
     ) -> None:
         self._store = store
         self._ttl_seconds = ttl_seconds

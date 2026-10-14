@@ -370,7 +370,16 @@ async def test_react_step_emits_iteration_cap_error(app_and_state):
     frames = _parsed_frames(resp.text)
     # step_start frame for the react step.
     step_starts = [f for f in frames if isinstance(f, dict) and f.get("step_id") and f.get("kind") == "react"]
-    tool_calls = [f for f in frames if "call_id" in f and f.get("name") == "list_feeds"]
+    # Registry is DOWN in this harness (the MCP stub 502s) and no approval
+    # gate is wired: the fail-closed gate (review round 1) closes every
+    # dispatch as a denial before the registry is reached, so the loop
+    # advances on denial tool_results instead of tool_call frames. The
+    # cap mechanics under test are unchanged.
+    denials = [
+        f
+        for f in frames
+        if isinstance(f, dict) and f.get("ok") is False and f.get("call_id")
+    ]
     errors = [f for f in frames if isinstance(f, dict) and f.get("code") == "react_iterations_exceeded"]
     step_ends = [
         f for f in frames
@@ -379,7 +388,7 @@ async def test_react_step_emits_iteration_cap_error(app_and_state):
         and f.get("status") == "failed"
     ]
     assert step_starts, f"expected at least one react step_start; got: {frames}"
-    assert tool_calls, "react loop should dispatch at least one tool call before capping"
+    assert denials, f"expected denial tool_results before capping; got: {frames}"
     assert errors, f"expected react_iterations_exceeded error; got: {frames}"
     assert step_ends, f"expected step_end(failed, react_max_iterations); got: {frames}"
 
@@ -388,7 +397,7 @@ async def test_react_step_emits_iteration_cap_error(app_and_state):
     assert step_starts, f"expected at least one react step_start; got: {frames}"
 
     # At least one tool_call / tool_result pair (the loop dispatches each iteration).
-    assert tool_calls, "react loop should dispatch at least one tool call before capping"
+    assert denials, f"expected denial tool_results before capping; got: {frames}"
 
     # Cap hit: error frame carries `code:"react_iterations_exceeded"`.
     assert errors, f"expected react_iterations_exceeded error; got: {frames}"

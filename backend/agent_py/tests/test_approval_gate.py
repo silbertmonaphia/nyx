@@ -203,7 +203,7 @@ async def test_mutating_call_confirms_then_dispatches_on_approve(tracer):
     state = _state()
     args = {"name": "Big Shit"}
 
-    ok, result, _ = await _dispatch(
+    ok, _result, _ = await _dispatch(
         _dispatcher(mcp),
         state,
         name="create_feed",
@@ -508,3 +508,47 @@ async def test_brokered_decision_resolves_the_waiting_dispatch(tracer):
     assert ok is True
     assert mcp.calls == [("create_feed", {"name": "x"})]
     await redis.aclose()
+
+
+async def test_sink_survives_mid_list_insert_without_duplicates_or_loss():
+    """Regression (review round 1): the executor inserts the partial-failure
+    note MID-LIST — possibly at an index below what a mid-node gate flush
+    already delivered. A positional delivery counter would re-emit the
+    element at the stale index (the confirm_request — reviving a decided
+    card) and drop the note. Identity-based delivery ships each event
+    exactly once and still delivers the inserted note."""
+    queue: asyncio.Queue = asyncio.Queue()
+    sink = RunSink(queue)
+    events = [
+        Event(
+            kind="step_start",
+            payload=StepStartEvent(step_id=STEP, kind=StepKind.tool).model_dump(),
+        ),
+        Event(kind="delta", payload={"delta": "already streamed"}),
+    ]
+    await sink.flush(events)  # the gate's mid-node flush delivers both
+    first_drain = []
+    while not queue.empty():
+        first_drain.append(queue.get_nowait())
+    assert [item[1].kind for item in first_drain] == ["step_start", "delta"]
+
+    note = Event(
+        kind="note",
+        payload={
+            "text": "Run diverged from the plan",
+            "kind": "partial_failure",
+            "failed_steps": [STEP],
+        },
+    )
+    events.insert(0, note)  # _note_insert_index picks an index below the delivered prefix
+    events.append(Event(kind="done", payload={}))
+
+    await sink.flush(events)
+
+    drained = []
+    while not queue.empty():
+        drained.append(queue.get_nowait())
+    assert [item[0] for item in drained] == ["event", "event"]
+    # Exactly the two new events — nothing re-emitted, nothing lost.
+    assert [item[1].kind for item in drained] == ["note", "done"]
+    assert len(sink._delivered) == 4

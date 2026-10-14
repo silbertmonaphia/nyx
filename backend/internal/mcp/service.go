@@ -86,15 +86,19 @@ func (s *Service) Registry() *tool.Registry { return s.registry }
 // gates on before dispatching a mutating call (openspec change
 // agent-feed-tools, design D3): the agent requires confirmation for
 // every registry tool whose annotations do NOT assert
-// readOnlyHint=true, so reads claim it explicitly and writes pin
-// readOnlyHint=false + destructiveHint=true rather than relying on
-// mcp-go's struct defaults. Absent annotations fail safe (confirm),
+// readOnlyHint=true, so reads pin readOnlyHint=true +
+// destructiveHint=false and writes pin readOnlyHint=false +
+// destructiveHint=true rather than relying on mcp-go's struct
+// defaults (whose destructiveHint=true on reads is meaningless per
+// the MCP spec but mislabels read tools in hosts that surface it).
+// Absent annotations fail safe (confirm),
 // which is why the read-only claim must be deliberate here.
 // Contract tests: tools_list_contract_test.go.
 func (s *Service) RegisterTools(mcpServer *server.MCPServer) {
 	mcpServer.AddTool(
 		mcp.NewTool(ToolListFeeds,
 			mcp.WithReadOnlyHintAnnotation(true),
+			mcp.WithDestructiveHintAnnotation(false),
 			mcp.WithDescription("List the authenticated caller's feeds. Supports search (max 200 chars), page (min 1, default 1), page_size (clamped to 100, default 20), and order (asc|desc, default desc). Returns the standard pagination envelope: {data, page, page_size, total, has_more}."),
 			mcp.WithString("query",
 				mcp.Description("Case-insensitive search term matched against title and description."),
@@ -119,6 +123,7 @@ func (s *Service) RegisterTools(mcpServer *server.MCPServer) {
 	mcpServer.AddTool(
 		mcp.NewTool(ToolGetFeed,
 			mcp.WithReadOnlyHintAnnotation(true),
+			mcp.WithDestructiveHintAnnotation(false),
 			mcp.WithDescription("Read a single feed by id. Returns an error result when the feed does not exist OR is owned by another user (single sentinel, no existence leak)."),
 			mcp.WithNumber("id",
 				mcp.Required(),

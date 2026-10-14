@@ -521,9 +521,21 @@ export const chatService = {
                   approval_id: parsed.approval_id,
                   expires_at: parsed.expires_at,
                 };
+              } else {
+                // A producer-side wire drift (renamed field, changed
+                // type) would otherwise silently present "no card" for
+                // the whole approval TTL — make it diagnosable
+                // (review round 1).
+                console.warn(
+                  "chat: confirm_request frame missing required fields",
+                  parsed,
+                );
               }
             } catch {
-              // Drop malformed confirm_request frame.
+              // Drop malformed confirm_request frame — warn so wire
+              // drift is diagnosable instead of silently hiding the
+              // card (review round 1).
+              console.warn("chat: malformed confirm_request frame", dataStr);
             }
           } else if (currentEvent === "tool_call") {
             try {

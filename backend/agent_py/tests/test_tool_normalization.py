@@ -240,3 +240,13 @@ async def test_registry_planner_block_empty_when_no_tools():
     assert registry_planner_block([]) == ""
     dispatcher = ToolDispatcher(mcp=_StubMcp(fail=True), local=LocalToolRegistry())
     assert registry_planner_block(await dispatcher.registry_tools()) == ""
+
+
+async def test_confirmation_required_fails_closed_on_registry_outage():
+    """Review round 1: when the registry lookup itself FAILS, "read-only"
+    cannot be proven for ANY non-local name — the gate must fail closed.
+    A session that saw a mutating tool in an earlier turn can still plan
+    it even though this run was never bound registry tools."""
+    dispatcher = ToolDispatcher(mcp=_StubMcp(fail=True), local=LocalToolRegistry())
+    assert await dispatcher.confirmation_required("create_feed") is True
+    assert await dispatcher.confirmation_required("list_feeds") is True  # unproven ⇒ gated

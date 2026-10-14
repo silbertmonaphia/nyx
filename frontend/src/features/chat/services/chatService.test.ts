@@ -5,13 +5,15 @@ import api, { tokenStore, refreshTokensAndReplay } from '~/services/api';
 import * as telemetry from '~/services/telemetry';
 
 // Captured producer fixture (openspec/changes/agent-feed-tools §6.1):
-// the exact bytes the Python service emits for a `confirm_request`
-// frame — `event: <kind>\ndata: <compact json>\n\n` per main.py's
-// `_sse_encode`, payload mirroring `ConfirmRequestEvent` in
-// backend/agent_py/agent/types.py (`expires_at` is epoch seconds, a
-// JSON number — not an ISO string). The Python emitter test asserts
-// the same wire shape; if either runtime drifts, both suites fail
-// together (design.md D8).
+// the exact bytes the Python emitter produces for a `confirm_request`
+// frame — GENERATED and byte-pinned by
+// backend/agent_py/tests/test_confirm_frame_wire.py, which encodes the
+// frame through the real `main._sse_encode` and asserts this file is
+// byte-identical (design.md D8 — a producer-side rename or type change
+// fails that test before it can silently degrade the UI to "no card").
+// Regenerate it from that test with
+// PYTHON_AGENT_UPDATE_WIRE_FIXTURES=1; the expected literals below move
+// with it.
 //
 // Imported through Vite's `?raw` (rather than readFileSync): the file
 // has to resolve the same way whether vitest runs from `frontend/`

@@ -178,20 +178,24 @@ class ToolDispatcher:
     async def confirmation_required(self, name: str) -> bool:
         """Whether a call to `name` must be confirmed before dispatch.
 
-        Fail-safe policy (design D3): a tool in the registry view whose
-        annotations do not assert `readOnlyHint=true` — including absent
-        or empty annotations — requires confirmation. Agent-native tools
-        never gate (the gate is a registry-tool policy). A name absent
-        from the registry view is not a registry tool (dispatch rejects
-        it naturally), so it does not gate; when the registry fetch
-        itself failed, no name is known — the model was never bound
-        registry tools in that state either.
+        Fail-safe policy (design D3): a tool whose annotations do not
+        assert `readOnlyHint=true` — including absent or empty
+        annotations — requires confirmation. Agent-native tools never
+        gate (the gate is a registry-tool policy). When the registry
+        lookup itself FAILS the gate fails closed for every non-local
+        name (review round 1): "read-only" cannot be proven, and a
+        session that saw a mutating tool in an earlier turn can still
+        plan it even though this run was never bound it. A name absent
+        from a SUCCESSFUL lookup is not a registry tool — the server's
+        own registry rejects it at dispatch, so it cannot mutate
+        anything and does not gate (the retry machinery supplies the
+        model's correction path).
         """
         if name in self._local:
             return False
         loaded = await self._load_registry()
         if loaded is None:
-            return False
+            return True
         _, annotations = loaded
         entry = annotations.get(name)
         if entry is None:

@@ -96,3 +96,19 @@ def test_denial_texts_name_tool_and_reason():
     for text in (deny, expired, unavailable):
         assert text.startswith("Confirmation required")
         assert "was not executed" in text
+
+
+async def test_decision_ttl_follows_intent_expiry():
+    """Review round 1: a decision recorded with the intent's expiry keeps a
+    TTL of remaining window + margin, so a waiter stalled longer than the
+    flat margin cannot lose an already-recorded decision."""
+    redis = fakeredis.aioredis.FakeRedis(decode_responses=True)
+    store = ApprovalStore(redis)
+    expires = time.time() + 300
+    assert (
+        await store.record_decision("r1", "a1", DECISION_APPROVE, expires_at=expires)
+        is True
+    )
+    ttl = await redis.ttl(store.decision_key("r1", "a1"))
+    assert ttl > 300  # remaining ≈ 300 plus the margin
+    await redis.aclose()
