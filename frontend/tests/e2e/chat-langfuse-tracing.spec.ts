@@ -134,7 +134,7 @@ async function pollUntil(
   return observations;
 }
 
-test.describe('Chat / Langfuse tracing (browser-level)', () => {
+test.describe('Chat / Langfuse tracing (browser-level)', { tag: '@live' }, () => {
   // Run + async ingestion poll: well past the default 30s.
   test.setTimeout(180_000);
 

@@ -44,7 +44,7 @@ async function registerAndOpenChat(page: Page): Promise<void> {
 const FEED_NAME = `Live Smoke ${Date.now()}`;
 const FEED_URL = 'https://example.com/feed.xml';
 
-test.describe('Feed-tool approval flow (live stack)', () => {
+test.describe('Feed-tool approval flow (live stack)', { tag: '@live' }, () => {
   test('create_feed pauses on the card, approve executes, feed lands', async ({
     page,
   }) => {

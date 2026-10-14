@@ -115,7 +115,7 @@ function rowFor(page: Page, sessionId: string) {
   );
 }
 
-test.describe('Chat background runs (browser-level, live backend)', () => {
+test.describe('Chat background runs (browser-level, live backend)', { tag: '@live' }, () => {
   test('New chat mid-stream: the run survives, pulses in the rail, and replays in full', async ({
     page,
   }) => {

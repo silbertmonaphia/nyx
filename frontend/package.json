@@ -10,9 +10,10 @@
     "lint:arch": "depcruise --config .dependency-cruiser.cjs src/",
     "preview": "vite preview",
     "test": "vitest run",
-    "test:e2e": "playwright test",
+    "test:e2e": "playwright test --grep-invert @live",
     "openapi:gen": "openapi-typescript ../api/openapi.json -o src/api/openapi/schema.d.ts",
-    "openapi:check": "openapi-typescript ../api/openapi.json -o /tmp/openapi-check.d.ts && diff -u src/api/openapi/schema.d.ts /tmp/openapi-check.d.ts"
+    "openapi:check": "openapi-typescript ../api/openapi.json -o /tmp/openapi-check.d.ts && diff -u src/api/openapi/schema.d.ts /tmp/openapi-check.d.ts",
+    "test:e2e:live": "playwright test --grep @live --workers=1"
   },
   "dependencies": {
     "@hookform/resolvers": "^5.2.2",

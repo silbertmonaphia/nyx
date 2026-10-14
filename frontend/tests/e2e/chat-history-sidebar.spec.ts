@@ -128,7 +128,7 @@ async function railRowIds(page: Page): Promise<string[]> {
     );
 }
 
-test.describe('Chat history sidebar (browser-level, live backend)', () => {
+test.describe('Chat history sidebar (browser-level, live backend)', { tag: '@live' }, () => {
   test('a new account starts with an empty rail', async ({ page }) => {
     await registerAndOpenChat(page);
 

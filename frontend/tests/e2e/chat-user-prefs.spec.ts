@@ -156,7 +156,7 @@ async function expectReplayedTurns(page: Page, prompts: string[]): Promise<void>
   }
 }
 
-test.describe('Chat / user preferences (browser-level, live stack)', () => {
+test.describe('Chat / user preferences (browser-level, live stack)', { tag: '@live' }, () => {
   // Two live LLM turns + a DB-extraction poll: comfortably above
   // Playwright's 30s default on a shared-GPU box.
   test.setTimeout(120_000);

@@ -67,7 +67,7 @@ async function registerAndOpenChat(page: Page): Promise<void> {
   await expect(page.getByTestId('chat-form')).toBeVisible();
 }
 
-test.describe('Chat / planner tool-step path (browser-level)', () => {
+test.describe('Chat / planner tool-step path (browser-level)', { tag: '@live' }, () => {
   test.beforeEach(async ({ page }) => {
     await registerAndOpenChat(page);
   });

@@ -81,7 +81,7 @@ async function waitForStreamEnd(
   }
 }
 
-test.describe('Chat / RAG flow (browser-level)', () => {
+test.describe('Chat / RAG flow (browser-level)', { tag: '@live' }, () => {
   test.beforeEach(async ({ page }) => {
     await registerAndOpenChat(page);
   });
