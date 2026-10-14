@@ -32,6 +32,17 @@ $0 ~ /^ok[[:space:]]/ {
         }
     }
 
+    # `coverage: [no statements]` — a package containing only _test.go
+    # files (e.g. the parity harness, which lives in its own package to
+    # break an openai<->vllm import cycle). There is no non-test
+    # denominator to measure, so the floor cannot apply; go test still
+    # prints an `ok` line. A measured 0.0% is NOT this case — it stays
+    # a regression below. Checked before COVERAGE_IGNORE so an ignored
+    # test-only package doesn't print a nonsense percentage.
+    if (substr(pct, 1, 1) == "[") {
+        printf("skip    %-50s (no non-test statements to measure)\n", pkg)
+        next
+    }
     if (excluded[pkg]) {
         printf("skip    %-50s %s%%  (in COVERAGE_IGNORE)\n", pkg, pct)
         next
