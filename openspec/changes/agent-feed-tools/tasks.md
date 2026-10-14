@@ -8,21 +8,21 @@
 
 ## 2. Python — MCP-native schema normalization
 
-- [ ] 2.1 Normalize registry-sourced schemas at the dispatcher boundary (`tools_client.py` / `tool_dispatch.py`): `inputSchema` → OpenAI `parameters`, annotations preserved per tool on a side record, unbindable entries logged and skipped — verify unit tests consuming the captured Go fixture show the bound function carries the real parameters and the annotations are reachable.
-- [ ] 2.2 Fix `_tool_schema_text` in `executor.py` to read the normalized shape — verify the retry re-prompt test asserts a non-empty parameter schema for an MCP-delivered tool (fails against the un-normalized shape).
-- [ ] 2.3 Guard the consumer-parser contract: the normalization tests MUST source their input from the checked-in Go fixture (no hand-written OpenAI dicts) — verify mutating the fixture's `inputSchema` breaks the bound-parameters assertion.
-- [ ] 2.4 Memoize the registry `tools/list` per dispatcher instance (per run, per bearer): the merged view, registry-only view, and annotation map all derive from one fetch — verify with a transport double that two `list_tools()` calls hit the transport once and the annotation map is still populated.
+- [x] 2.1 Normalize registry-sourced schemas at the dispatcher boundary (`tools_client.py` / `tool_dispatch.py`): `inputSchema` → OpenAI `parameters`, annotations preserved per tool on a side record, unbindable entries logged and skipped — verify unit tests consuming the captured Go fixture show the bound function carries the real parameters and the annotations are reachable.
+- [x] 2.2 Fix `_tool_schema_text` in `executor.py` to read the normalized shape — verify the retry re-prompt test asserts a non-empty parameter schema for an MCP-delivered tool (fails against the un-normalized shape).
+- [x] 2.3 Guard the consumer-parser contract: the normalization tests MUST source their input from the checked-in Go fixture (no hand-written OpenAI dicts) — verify mutating the fixture's `inputSchema` breaks the bound-parameters assertion.
+- [x] 2.4 Memoize the registry `tools/list` per dispatcher instance (per run, per bearer): the merged view, registry-only view, and annotation map all derive from one fetch — verify with a transport double that two `list_tools()` calls hit the transport once and the annotation map is still populated.
 
 ## 3. Python — dynamic planner catalog
 
-- [ ] 3.1 Expose the registry-only tool view on the dispatcher (merged list minus agent-native tools) — verify a unit test shows local web tools are excluded and registry entries included.
+- [x] 3.1 Expose the registry-only tool view on the dispatcher (merged list minus agent-native tools) — verify a unit test shows local web tools are excluded and registry entries included.
 - [ ] 3.2 Build the planner "Registry tools available" block from that view at plan time; omit the block when the registry call fails or returns empty — verify unit tests: block lists the fixture tools with names; prompt equals the pre-change text when the list raises or is empty.
 - [ ] 3.3 Thread the dispatcher into the planner node (graph factory change mirroring the executor factory) — verify planner + graph wiring tests pass with the new parameter.
 
 ## 4. Python — confirmation gate and decision broker
 
-- [ ] 4.1 Approval decision store module (Redis): keys `approval:{run_id}:{approval_id}`, `SET NX` first-wins, waiter poll (~0.5 s), key TTL = approval TTL + margin — verify unit tests (Redis double) for first-wins, duplicate no-op, expiry, and store-unavailable.
-- [ ] 4.2 Gate inside `_dispatch_tool_with_retries`: confirm when annotations do not assert `readOnlyHint=true`; deny / expiry / store-unavailable close the call as a model-visible denial result (no dispatch, no retry-counter increment); approved calls dispatch unmodified without re-confirmation on transient retry — verify per-branch unit tests and a react-loop gate test.
+- [x] 4.1 Approval decision store module (Redis): keys `approval:{run_id}:{approval_id}`, `SET NX` first-wins, waiter poll (~0.5 s), key TTL = approval TTL + margin — verify unit tests (Redis double) for first-wins, duplicate no-op, expiry, and store-unavailable.
+- [x] 4.2 Gate inside `_dispatch_tool_with_retries`: confirm when annotations do not assert `readOnlyHint=true`; deny / expiry / store-unavailable close the call as a model-visible denial result (no dispatch, no retry-counter increment); approved calls dispatch unmodified without re-confirmation on transient retry — verify per-branch unit tests and a react-loop gate test.
 - [ ] 4.3 Emit the `confirm_request` frame (run id, step id, tool, masked args, approval id, expiry) and SSE comment keep-alives (~15 s) while waiting — verify frame-shape and keep-alive unit tests.
 - [ ] 4.4 `POST /agent/approvals` endpoint: `X-Nyx-User-Id` 400 contract, run-ownership via run metadata (single-sentinel 404), idempotent duplicates, typed 404 for unknown/expired approval ids — verify endpoint tests cover each case and no internal error text reaches the body.
 - [ ] 4.5 `PYTHON_AGENT_APPROVAL_TTL_SECONDS` (default 300, refuse < 1) in config, documented in `backend/agent_py/.env.example` + `README.md` — verify config tests and the startup-refusal test.
@@ -34,9 +34,9 @@
 
 ## 6. Frontend — confirmation affordance
 
-- [ ] 6.1 Parse the `confirm_request` frame in `services/chatService.ts` (+ types/store plumbing) — verify a parser unit test consuming a captured Python frame fixture; unknown-kind skipping by old parsers stays covered.
-- [ ] 6.2 Approve/deny affordance in the chat turn rendering tool + args, POSTing the decision, and rendering the denial result in-line — verify component tests for render, approve call, deny call, and denied-result rendering.
-- [ ] 6.3 Verify `cd frontend && npm test && npm run lint && npm run build` pass.
+- [x] 6.1 Parse the `confirm_request` frame in `services/chatService.ts` (+ types/store plumbing) — verify a parser unit test consuming a captured Python frame fixture; unknown-kind skipping by old parsers stays covered.
+- [x] 6.2 Approve/deny affordance in the chat turn rendering tool + args, POSTing the decision, and rendering the denial result in-line — verify component tests for render, approve call, deny call, and denied-result rendering.
+- [x] 6.3 Verify `cd frontend && npm test && npm run lint && npm run build` pass.
 
 ## 7. Integration — e2e and repo gates
 

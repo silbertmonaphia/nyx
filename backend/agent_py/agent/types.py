@@ -108,6 +108,25 @@ class StepEndEvent(BaseModel):
     reason: str | None = None
 
 
+class ConfirmRequestEvent(BaseModel):
+    """Mutating-call confirmation prompt (openspec/changes/agent-feed-tools).
+
+    Emitted at the shared dispatch funnel before a registry call whose
+    annotations do not assert `readOnlyHint=true` (fail-safe on absent
+    annotations). The client answers via `POST /api/chat/approvals`;
+    `args` mirrors the corresponding `tool_call` frame's args, and
+    `expires_at` is epoch seconds — after it the call closes as denied
+    (expiry), never auto-approved.
+    """
+
+    run_id: str
+    step_id: str
+    tool: str
+    args: dict[str, Any]
+    approval_id: str
+    expires_at: float
+
+
 class DeltaEvent(BaseModel):
     """Token delta — wire field `delta` per `frontend/src/features/chat/services/chatService.ts:176`."""
 
@@ -201,6 +220,7 @@ class Event(BaseModel):
         "error",
         "terminator",
         "run_id",  # new — server-minted run_id (agent-run-state)
+        "confirm_request",  # new — mutating-call confirmation (agent-feed-tools)
     ]
     payload: dict[str, Any] = Field(default_factory=dict)
 

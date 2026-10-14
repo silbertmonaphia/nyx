@@ -140,12 +140,21 @@ async def test_mcp_outage_without_local_tools_is_empty(caplog):
         assert await dispatcher.list_tools() == []
 
 
-async def test_native_mcp_schema_shapes_supported():
+async def test_native_mcp_schemas_are_normalized_not_passed_through():
+    """The dispatcher boundary normalizes MCP-native entries (task 2.1):
+    `inputSchema` becomes the bound function's `parameters`. The old
+    passthrough reached the model schemaless — LangChain's
+    `convert_to_openai_tool` silently drops `inputSchema`."""
     dispatcher = ToolDispatcher(
         mcp=FakeMcp(schemas=[native_schema("list_feeds")]), local=LocalToolRegistry()
     )
     merged = await dispatcher.list_tools()
-    assert merged == [native_schema("list_feeds")]
+    assert merged == [
+        {
+            "type": "function",
+            "function": {"name": "list_feeds", "description": "", "parameters": {}},
+        }
+    ]
 
 
 def test_duplicate_local_registration_refused():

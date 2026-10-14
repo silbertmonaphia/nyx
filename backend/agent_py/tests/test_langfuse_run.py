@@ -205,6 +205,10 @@ async def _app_ctx(
             return [
                 {
                     "type": "function",
+                    # readOnlyHint keeps the confirmation gate out of the
+                    # picture: these tests exercise retry/tracing behavior
+                    # for a read tool (agent-feed-tools D3).
+                    "annotations": {"readOnlyHint": True},
                     "function": {
                         "name": "list_feeds",
                         "description": "List user's feeds",

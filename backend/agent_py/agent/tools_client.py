@@ -7,9 +7,12 @@ and receive `{"result": ...}` on success or `{"error": {...}}` on failure.
 
 from __future__ import annotations
 
+import logging
 import uuid
 
 import httpx
+
+log = logging.getLogger("nyx.agent.tools_client")
 
 
 class ToolAuthError(Exception):
@@ -161,6 +164,90 @@ class ToolsClient:
             # the rejection to the model as a successful result.
             raise ToolError(f"{name}: {_iserror_text(result)}")
         return result
+
+
+def normalize_registry_tools(raw_tools: object) -> tuple[list[dict], dict[str, dict]]:
+    """Normalize MCP-native `tools/list` entries into bindable function tools.
+
+    The Go server's wire shape is `{name, description, inputSchema,
+    annotations}` (mcp-go). LangChain's `convert_to_openai_tool` ACCEPTS
+    that shape but silently drops `inputSchema` (verified against the
+    pinned langchain-core) — bound MCP tools reach the model schemaless.
+    Normalize once at the dispatcher boundary: `inputSchema` becomes the
+    bound function's `parameters`. Annotations are preserved on a side map
+    — they must NOT travel inside the bound function object, which is the
+    same silent-drop trap this normalization exists to fix.
+
+    Entries that cannot be bound (missing name, or a schema that is not an
+    object) are logged and skipped; the run continues with the rest. An
+    absent or empty `annotations` object normalizes to `{}` (fail-safe:
+    the confirmation policy gates on a positive `readOnlyHint=true`).
+
+    Returns `(schemas, annotations_by_name)`.
+    """
+    schemas: list[dict] = []
+    annotations: dict[str, dict] = {}
+    if not isinstance(raw_tools, list):
+        return schemas, annotations
+    for entry in raw_tools:
+        if not isinstance(entry, dict):
+            log.warning(
+                "registry tools/list: skipping non-object entry (%s)",
+                type(entry).__name__,
+            )
+            continue
+        function = entry.get("function")
+        if isinstance(function, dict):
+            # Defensive: tolerate an already-normalized entry (the wire is
+            # ours today; a future server-side pre-normalization must not
+            # crash the consumer).
+            name = function.get("name")
+            if not isinstance(name, str) or not name:
+                log.warning("registry tools/list: skipping entry without a name")
+                continue
+            parameters = function.get("parameters")
+            schemas.append(
+                {
+                    "type": "function",
+                    "function": {
+                        "name": name,
+                        "description": function.get("description") or "",
+                        "parameters": parameters if isinstance(parameters, dict) else {},
+                    },
+                }
+            )
+        else:
+            name = entry.get("name")
+            if not isinstance(name, str) or not name:
+                log.warning(
+                    "registry tools/list: skipping entry without a name: keys=%s",
+                    sorted(entry.keys()),
+                )
+                continue
+            schema = entry.get("inputSchema")
+            if not isinstance(schema, dict):
+                log.warning(
+                    "registry tools/list: skipping %r — inputSchema is not an "
+                    "object (%s)",
+                    name,
+                    type(schema).__name__,
+                )
+                continue
+            schemas.append(
+                {
+                    "type": "function",
+                    "function": {
+                        "name": name,
+                        "description": entry.get("description") or "",
+                        "parameters": schema,
+                    },
+                }
+            )
+        entry_annotations = entry.get("annotations")
+        annotations[name] = (
+            entry_annotations if isinstance(entry_annotations, dict) else {}
+        )
+    return schemas, annotations
 
 
 def _iserror_text(result: dict) -> str:

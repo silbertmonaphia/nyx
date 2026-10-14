@@ -25,6 +25,12 @@ from langchain_openai import ChatOpenAI
 from opentelemetry import trace
 from pydantic import SecretStr
 
+from .approvals import (
+    DECISION_APPROVE,
+    DECISION_UNAVAILABLE,
+    ApprovalGate,
+    denial_text_for,
+)
 from .budget import BudgetGuard
 from .config import Settings
 from .observability import (
@@ -77,6 +83,7 @@ async def executor_node(
     budget: BudgetGuard,
     rag: RagClient,
     tools: ToolDispatcher,
+    approvals: ApprovalGate | None = None,
 ) -> AgentState:
     plan: Plan | None = state.get("plan")
     if plan is None:
@@ -154,12 +161,13 @@ async def executor_node(
                         tracer=tracer,
                         budget=budget,
                         tools=tools,
+                        approvals=approvals,
                         span=span,
                     )
                 elif step.kind.value == "llm":
                     await _run_llm(state, step, settings, tracer, budget, span)
                 elif step.kind.value == "react":
-                    await _run_react(state, step, settings, tracer, budget, tools, span)
+                    await _run_react(state, step, settings, tracer, budget, tools, span, approvals=approvals)
                 else:
                     raise ValueError(f"unsupported step kind: {step.kind}")
             except _BudgetExceededError:
@@ -231,6 +239,7 @@ async def _run_tool(
     tracer: trace.Tracer,
     budget: BudgetGuard,
     tools: ToolDispatcher,
+    approvals: ApprovalGate | None = None,
     span: trace.Span,
 ) -> None:
     if not step.tool:
@@ -242,6 +251,7 @@ async def _run_tool(
         tool_name=step.tool,
         args=args,
         tools=tools,
+        approvals=approvals,
         settings=settings,
         tracer=tracer,
         budget=budget,
@@ -296,6 +306,7 @@ async def _run_react(
     budget: BudgetGuard,
     tools: ToolDispatcher,
     span: trace.Span,
+    approvals: ApprovalGate | None = None,
 ) -> None:
     max_iters = step.max_iterations or settings.step_react_max_iterations
     model = state.get("model") or settings.llm_model
@@ -367,6 +378,7 @@ async def _run_react(
                     tool_name=tc_name,
                     args=args,
                     tools=tools,
+                    approvals=approvals,
                     settings=settings,
                     tracer=tracer,
                     budget=budget,
@@ -667,6 +679,7 @@ async def _dispatch_tool_with_retries(
     tool_name: str,
     args: dict,
     tools: ToolDispatcher,
+    approvals: ApprovalGate | None = None,
     settings: Settings,
     tracer: trace.Tracer,
     budget: BudgetGuard,
@@ -676,6 +689,11 @@ async def _dispatch_tool_with_retries(
     model_tool_call_id: str | None = None,
 ) -> tuple[bool, Any, str]:
     """Dispatch one tool call under the two retry paths.
+
+    Mutating registry calls first pass the confirmation gate (D5): checked
+    exactly once per (tool, args) pair, before that pair's first dispatch
+    attempt. A denial returns `ok=False` with the model-visible denial
+    text and consumes no retry budget.
 
     Returns `(ok, result, content)`:
       - `ok=True` → `result` is the raw tool result; `content` is its
@@ -716,7 +734,52 @@ async def _dispatch_tool_with_retries(
     # strict OpenAI-compatible providers, which 400 on that shape.
     reprompt_carry: list = []
 
+    # Confirmation gate (openspec/changes/agent-feed-tools D5/D6): checked
+    # before the first dispatch attempt of each new (tool, args) pair —
+    # transient retries of an approved pair do NOT re-confirm (the approval
+    # covers that intended mutation), while a corrected re-dispatch (new
+    # args, or a corrected tool name, after a registry rejection) does: an
+    # approval binds to the exact call it names.
+    gated_key: tuple[str, str] | None = None
+
     while True:
+        gate_key = (current_name, _canonical_args(current_args))
+        if gate_key != gated_key:
+            checker = getattr(tools, "confirmation_required", None)
+            needs_confirmation = False
+            if checker is not None:
+                try:
+                    needs_confirmation = await checker(current_name)
+                except Exception as exc:  # noqa: BLE001 — fail toward confirmation
+                    log.warning(
+                        "confirmation_required failed; requiring confirmation: %r",
+                        exc,
+                    )
+                    needs_confirmation = True
+            if needs_confirmation:
+                decision = DECISION_UNAVAILABLE
+                if approvals is not None:
+                    decision = await approvals.request_confirmation(
+                        state,
+                        step_id=step_id,
+                        tool_name=current_name,
+                        args=current_args,
+                    )
+                if decision != DECISION_APPROVE:
+                    denial = denial_text_for(decision, current_name)
+                    # Closed outcome, not a failure class: the tool is not
+                    # dispatched, no retry-counter consumption, no re-prompt
+                    # — the denial is a model-visible tool result (D6).
+                    _emit_tool_result(
+                        state,
+                        step_id,
+                        str(uuid.uuid4()),
+                        ok=False,
+                        error=denial,
+                        retry_count=0,
+                    )
+                    return False, None, denial
+            gated_key = gate_key
         call_id = str(uuid.uuid4())
         state["events_so_far"].append(
             Event(
@@ -992,13 +1055,27 @@ def _compute_backoff_ms(attempt: int, settings: Settings) -> float:
     return min(max(jittered, 0.0), float(settings.tool_retry_backoff_ceiling_ms))
 
 
+def _canonical_args(args: dict) -> str:
+    """Stable string key for an args dict — the approval-binding key (D5)."""
+    try:
+        return json.dumps(args, sort_keys=True, default=str)
+    except (TypeError, ValueError):
+        return repr(args)
+
+
 def _tool_schema_text(schemas: list, tool_name: str) -> str:
+    """Argument-schema JSON for `tool_name` from the normalized function
+    shape the dispatcher serves (design D1/D8): `function.parameters`.
+    Returns "{}" when the tool is unknown here or the schema is empty —
+    the re-prompt still carries the rejection text."""
     for s in schemas:
         if not isinstance(s, dict):
             continue
         fn = s.get("function", s)
         if isinstance(fn, dict) and fn.get("name") == tool_name:
-            return json.dumps(fn.get("parameters", {}), default=str)
+            parameters = fn.get("parameters")
+            if isinstance(parameters, dict) and parameters:
+                return json.dumps(parameters, default=str)
     return "{}"
 
 
