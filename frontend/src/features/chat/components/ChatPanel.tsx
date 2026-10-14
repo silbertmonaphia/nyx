@@ -19,6 +19,7 @@ import { Textarea } from "~/components/ui/Textarea";
 import { cn } from "~/utils/cn";
 import { useChat } from "../hooks/useChat";
 import { ChatSidebar } from "./ChatSidebar";
+import { ConfirmationCard } from "./ConfirmationCard";
 import { PartialFailureBanner } from "./PartialFailureBanner";
 import type { ChatStep } from "../types/chat";
 
@@ -162,6 +163,7 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ open, onOpenChange }) => {
   const error = useChat((s) => s.error);
   const send = useChat((s) => s.send);
   const cancel = useChat((s) => s.cancel);
+  const submitApproval = useChat((s) => s.submitApproval);
   const reset = useChat((s) => s.reset);
   const useFeeds = useChat((s) => s.useFeeds);
   const setUseFeeds = useChat((s) => s.setUseFeeds);
@@ -329,6 +331,28 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ open, onOpenChange }) => {
                         failedSteps={m.partialFailure.failedSteps}
                       />
                     )}
+                    {m.role === "assistant" &&
+                      (m.steps ?? []).map((s) => {
+                        const confirm = s.confirm;
+                        if (!confirm) return null;
+                        // Approval cards sit at the bubble level, not
+                        // inside the "agent steps" disclosure: a paused
+                        // run must be visibly actionable without the
+                        // user expanding anything.
+                        return (
+                          <ConfirmationCard
+                            key={`confirm-${s.id}`}
+                            confirm={confirm}
+                            onDecide={(decision) =>
+                              submitApproval(
+                                confirm.runId,
+                                confirm.approvalId,
+                                decision,
+                              )
+                            }
+                          />
+                        );
+                      })}
                     {m.content ||
                       (isStreaming && m.role === "assistant" ? "…" : "")}
                     {m.role === "assistant" &&

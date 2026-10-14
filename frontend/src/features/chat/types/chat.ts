@@ -135,6 +135,29 @@ export type ChatStepEnd = {
   reason: string;
 };
 
+// New in the agent-feed-tools slice: the orchestrator pauses a mutating
+// registry call and asks the end user to confirm it. The frame carries
+// the run id, the paused step, the tool name, its args (masked with the
+// same policy as `tool_call` frames), the approval id the decision POST
+// refers to, and the approval's expiry.
+//
+// `expires_at` is epoch seconds (a JSON number) — the Python producer's
+// `ConfirmRequestEvent.expires_at: float` in
+// backend/agent_py/agent/types.py. Not an ISO string.
+//
+// Additive kind: parsers that branch on the pre-change kinds only skip
+// it, and every pre-change frame keeps its position + shape (spec
+// "Clients that ignore the new kind are unaffected").
+export type ChatConfirmRequest = {
+  kind: "confirm_request";
+  run_id: string;
+  step_id: string;
+  tool: string;
+  args: unknown;
+  approval_id: string;
+  expires_at: number;
+};
+
 export type ChatEvent =
   | ChatDelta
   | ChatDone
@@ -146,7 +169,51 @@ export type ChatEvent =
   | ChatToolCall
   | ChatToolResult
   | ChatStepEnd
-  | ChatPartialFailure;
+  | ChatPartialFailure
+  | ChatConfirmRequest;
+
+/**
+ * Decision a user can record for a paused `confirm_request`.
+ * Mirrors the `decision` field of `POST /api/chat/approvals`.
+ */
+export type ApprovalDecision = "approve" | "deny";
+
+/**
+ * Approval-card lifecycle: awaiting the user, decided + recorded, or
+ * resolved dead — the decision POST answered the endpoint's typed 404
+ * for an approval id that can no longer resolve (design.md D2: a
+ * resumed run replays its checkpointed `confirm_request`, whose
+ * approval id is expired).
+ */
+export type ApprovalOutcome = "pending" | "approved" | "denied" | "expired";
+
+/**
+ * UI-side record of an in-flight approval request on a step. Built from
+ * a `confirm_request` SSE frame; the decision is recorded through
+ * `POST /api/chat/approvals`. Ephemeral (in-memory only, like the rest
+ * of the chat store) — a replayed session carries no approval cards.
+ */
+export interface ChatStepConfirm {
+  runId: string;
+  approvalId: string;
+  tool: string;
+  args: unknown;
+  /** Epoch seconds, straight off the wire (see `ChatConfirmRequest`). */
+  expiresAt: number;
+  decision: ApprovalOutcome;
+  // Set when the decision POST failed (the axios interceptor already
+  // toasted it): a short static client-side hint, never server text.
+  // The card stays pending so the user can retry. A 404 instead
+  // resolves the card as `expired` and leaves this unset.
+  error?: string;
+}
+
+/** `POST /api/chat/approvals` request body (agent-feed-tools §6.2). */
+export interface ApprovalRequest {
+  run_id: string;
+  approval_id: string;
+  decision: ApprovalDecision;
+}
 
 /**
  * UI-side per-step record. Lives on `ChatMessage` and is rebuilt as
@@ -170,6 +237,10 @@ export interface ChatStep {
   // Retries made for the step's latest tool dispatch (latest-result
   // semantics, like toolResult). Rendered as a small badge when > 0.
   retryCount?: number;
+  // Present while a mutating call on this step is awaiting (or has
+  // completed) an approve/deny decision. Drives the inline
+  // confirmation card; absent on steps with no confirmation.
+  confirm?: ChatStepConfirm;
 }
 
 /**

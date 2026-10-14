@@ -1,8 +1,26 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { chatService } from './chatService';
 import { ChatApiError, ChatStreamError } from '../types/chat';
-import { tokenStore, refreshTokensAndReplay } from '~/services/api';
+import api, { tokenStore, refreshTokensAndReplay } from '~/services/api';
 import * as telemetry from '~/services/telemetry';
+
+// Captured producer fixture (openspec/changes/agent-feed-tools §6.1):
+// the exact bytes the Python service emits for a `confirm_request`
+// frame — `event: <kind>\ndata: <compact json>\n\n` per main.py's
+// `_sse_encode`, payload mirroring `ConfirmRequestEvent` in
+// backend/agent_py/agent/types.py (`expires_at` is epoch seconds, a
+// JSON number — not an ISO string). The Python emitter test asserts
+// the same wire shape; if either runtime drifts, both suites fail
+// together (design.md D8).
+//
+// Imported through Vite's `?raw` (rather than readFileSync): the file
+// has to resolve the same way whether vitest runs from `frontend/`
+// (`npm test`) or from the repo root (the pre-commit hook runs
+// `vitest --root frontend … related`, which leaves process.cwd() at the
+// repo root). `?raw` is a module resolution, so it is cwd-independent —
+// `import.meta.url` is not an option (jsdom rewrites it to an `http://`
+// URL, which `fileURLToPath` rejects).
+import CONFIRM_FRAME from './__fixtures__/confirm_request.sse?raw';
 
 // The chatService uses raw `fetch` for SSE (axios can't stream), and
 // `refreshTokensAndReplay` for the 401-retry contract. Mock both.
@@ -805,6 +823,174 @@ describe('chatService.streamMessage', () => {
       { kind: 'delta', delta: 'alive' },
       { kind: 'terminator' },
     ]);
+  });
+
+  // --- agent-feed-tools: confirm_request frame (task 6.1) -----------
+
+  it('parses the captured confirm_request fixture inside the paused step', async () => {
+    // Frame order per the spec: step_start, then confirm_request, and
+    // only after the decision the tool_call / tool_result pair, then
+    // step_end. Every pre-change frame keeps its position + shape.
+    expect(CONFIRM_FRAME.endsWith('\n\n')).toBe(true);
+    const sse =
+      'event: plan\ndata: {"steps":[{"id":"step_2","kind":"tool","tool":"create_feed","args":{"title":"Rust Blog","url":"https://blog.rust-lang.org/feed.xml"}}]}\n\n' +
+      'event: step_start\ndata: {"step_id":"step_2","kind":"tool"}\n\n' +
+      CONFIRM_FRAME +
+      'event: tool_call\ndata: {"step_id":"step_2","call_id":"c1","name":"create_feed","args":{"title":"Rust Blog","url":"https://blog.rust-lang.org/feed.xml"}}\n\n' +
+      'event: tool_result\ndata: {"step_id":"step_2","call_id":"c1","ok":true,"result":{"id":7}}\n\n' +
+      'event: step_end\ndata: {"step_id":"step_2","status":"ok","reason":""}\n\n' +
+      'data: [DONE]\n\n';
+    fetchMock.mockResolvedValueOnce(sseResponse([sse]));
+
+    const events: unknown[] = [];
+    for await (const e of chatService.streamMessage(
+      [{ role: 'user', content: 'add the rust blog' }],
+      new AbortController().signal,
+    )) {
+      events.push(e);
+    }
+
+    // The literal expected values are the contract; the fixture holds
+    // the producer bytes. Changing one without the other fails here.
+    expect(events).toEqual([
+      {
+        kind: 'plan',
+        steps: [
+          {
+            id: 'step_2',
+            kind: 'tool',
+            tool: 'create_feed',
+            args: { title: 'Rust Blog', url: 'https://blog.rust-lang.org/feed.xml' },
+            query: undefined,
+            prompt: undefined,
+            max_iterations: undefined,
+          },
+        ],
+      },
+      { kind: 'step_start', step_id: 'step_2', step_kind: 'tool' },
+      {
+        kind: 'confirm_request',
+        run_id: '2f6c1a94-8d3e-4b57-9c02-7e5a1d8b3f60',
+        step_id: 'step_2',
+        tool: 'create_feed',
+        args: { title: 'Rust Blog', url: 'https://blog.rust-lang.org/feed.xml' },
+        approval_id: 'ap_9c4d2f80b1e34a7db6f5c3a2e10d7b45',
+        expires_at: 1791979500.0,
+      },
+      {
+        kind: 'tool_call',
+        step_id: 'step_2',
+        call_id: 'c1',
+        name: 'create_feed',
+        args: { title: 'Rust Blog', url: 'https://blog.rust-lang.org/feed.xml' },
+      },
+      {
+        kind: 'tool_result',
+        step_id: 'step_2',
+        call_id: 'c1',
+        ok: true,
+        result: { id: 7 },
+        error: undefined,
+      },
+      { kind: 'step_end', step_id: 'step_2', status: 'ok', reason: '' },
+      { kind: 'terminator' },
+    ]);
+  });
+
+  it('drops malformed confirm_request frames without stopping the loop', async () => {
+    const sse =
+      // missing approval_id
+      'event: confirm_request\ndata: {"run_id":"r1","step_id":"step_2","tool":"create_feed","args":{},"expires_at":1791979500.0}\n\n' +
+      // empty step_id
+      'event: confirm_request\ndata: {"run_id":"r1","step_id":"","tool":"create_feed","args":{},"approval_id":"ap-1","expires_at":1791979500.0}\n\n' +
+      // expires_at as an ISO string — the producer emits epoch seconds
+      'event: confirm_request\ndata: {"run_id":"r1","step_id":"step_2","tool":"create_feed","args":{},"approval_id":"ap-1","expires_at":"2026-10-14T12:05:00Z"}\n\n' +
+      // not JSON at all
+      'event: confirm_request\ndata: not-json\n\n' +
+      'event: delta\ndata: {"delta":"alive"}\n\n' +
+      'data: [DONE]\n\n';
+    fetchMock.mockResolvedValueOnce(sseResponse([sse]));
+
+    const events: unknown[] = [];
+    for await (const e of chatService.streamMessage(
+      [{ role: 'user', content: 'hi' }],
+      new AbortController().signal,
+    )) {
+      events.push(e);
+    }
+
+    expect(events).toEqual([
+      { kind: 'delta', delta: 'alive' },
+      { kind: 'terminator' },
+    ]);
+  });
+
+  it('skips unknown event kinds so pre-change parsers keep every frame in place', async () => {
+    // Spec scenario "Clients that ignore the new kind are unaffected":
+    // the parser branches on known kinds only, so an unknown kind
+    // (yesterday: confirm_request on an old bundle; today: whatever
+    // comes next) is skipped without disturbing its neighbours.
+    const sse =
+      'event: step_start\ndata: {"step_id":"s1","kind":"llm"}\n\n' +
+      'event: some_future_kind\ndata: {"whatever":true}\n\n' +
+      'event: delta\ndata: {"delta":"hi"}\n\n' +
+      'data: [DONE]\n\n';
+    fetchMock.mockResolvedValueOnce(sseResponse([sse]));
+
+    const events: unknown[] = [];
+    for await (const e of chatService.streamMessage(
+      [{ role: 'user', content: 'hi' }],
+      new AbortController().signal,
+    )) {
+      events.push(e);
+    }
+
+    expect(events).toEqual([
+      { kind: 'step_start', step_id: 's1', step_kind: 'llm' },
+      { kind: 'delta', delta: 'hi' },
+      { kind: 'terminator' },
+    ]);
+  });
+});
+
+// ---- Approval decisions (openspec change agent-feed-tools §6.2) -----
+// The decision rides on the wrapped axios client, so the JWT request
+// interceptor + single-flight 401 refresh + global error toast all
+// apply. The store owns the card's pending/decided state.
+
+describe('chatService.submitApproval', () => {
+  it('POSTs the decision body to /chat/approvals through the axios client', async () => {
+    const postSpy = vi
+      .spyOn(api, 'post')
+      .mockResolvedValueOnce({ status: 200 } as never);
+
+    await chatService.submitApproval({
+      run_id: 'run-1',
+      approval_id: 'ap-1',
+      decision: 'approve',
+    });
+
+    expect(postSpy).toHaveBeenCalledWith('/chat/approvals', {
+      run_id: 'run-1',
+      approval_id: 'ap-1',
+      decision: 'approve',
+    });
+    postSpy.mockRestore();
+  });
+
+  it('rejects when the proxy rejects the decision', async () => {
+    const postSpy = vi
+      .spyOn(api, 'post')
+      .mockRejectedValueOnce(new Error('denied'));
+
+    await expect(
+      chatService.submitApproval({
+        run_id: 'run-1',
+        approval_id: 'ap-1',
+        decision: 'deny',
+      }),
+    ).rejects.toThrow('denied');
+    postSpy.mockRestore();
   });
 });
 

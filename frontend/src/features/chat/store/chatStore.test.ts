@@ -10,6 +10,7 @@ vi.mock('../services/chatService');
 
 const mockedService = chatService as unknown as {
   streamMessage: ReturnType<typeof vi.fn>;
+  submitApproval: ReturnType<typeof vi.fn>;
   listSessions: ReturnType<typeof vi.fn>;
   getMessages: ReturnType<typeof vi.fn>;
   createSession: ReturnType<typeof vi.fn>;
@@ -42,6 +43,7 @@ function resetStore() {
  */
 function resetService() {
   mockedService.streamMessage.mockReset();
+  mockedService.submitApproval.mockReset().mockResolvedValue(undefined);
   mockedService.listSessions
     .mockReset()
     .mockResolvedValue({ sessions: [], nextCursor: null });
@@ -1477,6 +1479,291 @@ describe('useChatStore', () => {
       });
 
       expect(useChatStore.getState().sessionList.map((s) => s.id)).toEqual(['s1']);
+    });
+  });
+
+  // ---- Approval cards (openspec change agent-feed-tools §6.1/6.2) ----
+
+  describe('approvals', () => {
+    /** Seed an assistant turn whose step carries a pending card. */
+    function seedPendingCard() {
+      useChatStore.setState({
+        messages: [
+          { role: 'user', content: 'add a feed' },
+          {
+            role: 'assistant',
+            content: '',
+            steps: [
+              {
+                id: 'step_2',
+                kind: 'tool',
+                status: 'running',
+                toolName: 'create_feed',
+                confirm: {
+                  runId: 'run-1',
+                  approvalId: 'ap-1',
+                  tool: 'create_feed',
+                  args: { title: 'Rust Blog' },
+                  expiresAt: 1791979500.0,
+                  decision: 'pending',
+                },
+              },
+            ],
+          },
+        ],
+        isStreaming: false,
+        error: null,
+      });
+    }
+
+    it('attaches a pending card to the step named by the confirm_request frame', async () => {
+      mockedService.streamMessage.mockImplementationOnce(
+        (_messages: unknown, signal: AbortSignal) =>
+          makeStream(
+            [
+              {
+                kind: 'plan',
+                steps: [{ id: 'step_2', kind: 'tool', tool: 'create_feed' }],
+              },
+              { kind: 'step_start', step_id: 'step_2', step_kind: 'tool' },
+              {
+                kind: 'confirm_request',
+                run_id: 'run-1',
+                step_id: 'step_2',
+                tool: 'create_feed',
+                args: { title: 'Rust Blog' },
+                approval_id: 'ap-1',
+                expires_at: 1791979500.0,
+              },
+              {
+                kind: 'done',
+                usage: {
+                  prompt_tokens: 1,
+                  completion_tokens: 1,
+                  total_tokens: 2,
+                },
+              },
+            ],
+            signal,
+          ),
+      );
+
+      await act(async () => {
+        useChatStore.getState().send('add a feed');
+      });
+
+      await act(async () => {
+        releaseStream();
+      });
+
+      const assistant = useChatStore
+        .getState()
+        .messages.find((m) => m.role === 'assistant');
+      expect(assistant?.steps?.[0]).toEqual({
+        id: 'step_2',
+        kind: 'tool',
+        status: 'running',
+        toolName: 'create_feed',
+        toolArgs: { title: 'Rust Blog' },
+        confirm: {
+          runId: 'run-1',
+          approvalId: 'ap-1',
+          tool: 'create_feed',
+          args: { title: 'Rust Blog' },
+          expiresAt: 1791979500.0,
+          decision: 'pending',
+        },
+      });
+    });
+
+    it('appends a step row when the confirm_request precedes any step frame', async () => {
+      // Defensive fallback: a partial trace (no plan / step_start) must
+      // still give the card a row to render on.
+      mockedService.streamMessage.mockImplementationOnce(
+        (_messages: unknown, signal: AbortSignal) =>
+          makeStream(
+            [
+              {
+                kind: 'confirm_request',
+                run_id: 'run-1',
+                step_id: 'step_9',
+                tool: 'delete_feed',
+                args: { id: 4 },
+                approval_id: 'ap-9',
+                expires_at: 1791979500.0,
+              },
+              {
+                kind: 'done',
+                usage: {
+                  prompt_tokens: 1,
+                  completion_tokens: 1,
+                  total_tokens: 2,
+                },
+              },
+            ],
+            signal,
+          ),
+      );
+
+      await act(async () => {
+        useChatStore.getState().send('delete that feed');
+      });
+
+      await act(async () => {
+        releaseStream();
+      });
+
+      const assistant = useChatStore
+        .getState()
+        .messages.find((m) => m.role === 'assistant');
+      expect(assistant?.steps?.[0]).toEqual({
+        id: 'step_9',
+        kind: 'tool',
+        status: 'running',
+        toolName: 'delete_feed',
+        toolArgs: { id: 4 },
+        confirm: {
+          runId: 'run-1',
+          approvalId: 'ap-9',
+          tool: 'delete_feed',
+          args: { id: 4 },
+          expiresAt: 1791979500.0,
+          decision: 'pending',
+        },
+      });
+    });
+
+    it('posts the approve decision body and flips the card to approved', async () => {
+      seedPendingCard();
+
+      await act(async () => {
+        await useChatStore.getState().submitApproval('run-1', 'ap-1', 'approve');
+      });
+
+      expect(mockedService.submitApproval).toHaveBeenCalledWith({
+        run_id: 'run-1',
+        approval_id: 'ap-1',
+        decision: 'approve',
+      });
+      const step = useChatStore.getState().messages[1].steps?.[0];
+      expect(step?.confirm?.decision).toBe('approved');
+      expect(step?.confirm?.error).toBeUndefined();
+    });
+
+    it('posts the deny decision body and flips the card to denied', async () => {
+      seedPendingCard();
+
+      await act(async () => {
+        await useChatStore.getState().submitApproval('run-1', 'ap-1', 'deny');
+      });
+
+      expect(mockedService.submitApproval).toHaveBeenCalledWith({
+        run_id: 'run-1',
+        approval_id: 'ap-1',
+        decision: 'deny',
+      });
+      expect(
+        useChatStore.getState().messages[1].steps?.[0].confirm?.decision,
+      ).toBe('denied');
+    });
+
+    it('keeps the card pending with a hint when the decision POST fails', async () => {
+      seedPendingCard();
+      mockedService.submitApproval.mockRejectedValueOnce(new Error('boom'));
+
+      await act(async () => {
+        await useChatStore.getState().submitApproval('run-1', 'ap-1', 'approve');
+      });
+
+      const confirm = useChatStore.getState().messages[1].steps?.[0].confirm;
+      expect(confirm?.decision).toBe('pending');
+      // A static client-side hint — never the server / axios message.
+      expect(confirm?.error).toMatch(/could not send/i);
+      expect(confirm?.error).not.toContain('boom');
+    });
+
+    it('resolves the card as expired when the decision POST 404s', async () => {
+      // Design.md D2: a resumed run replays its checkpointed
+      // confirm_request, whose approval id the decision endpoint
+      // answers with a typed 404 — the client resolves that card as
+      // expired instead of offering a retry that can never succeed.
+      seedPendingCard();
+      mockedService.submitApproval.mockRejectedValueOnce({
+        response: { status: 404 },
+      });
+
+      await act(async () => {
+        await useChatStore.getState().submitApproval('run-1', 'ap-1', 'approve');
+      });
+
+      const confirm = useChatStore.getState().messages[1].steps?.[0].confirm;
+      expect(confirm?.decision).toBe('expired');
+      // No retry hint on the terminal path.
+      expect(confirm?.error).toBeUndefined();
+    });
+
+    it('records the denial tool_result on the step (existing result path)', async () => {
+      // After a deny, the agent answers the paused call with an
+      // `ok:false` tool_result carrying the denial text; the store
+      // routes it through the regular step-result field.
+      mockedService.streamMessage.mockImplementationOnce(
+        (_messages: unknown, signal: AbortSignal) =>
+          makeStream(
+            [
+              { kind: 'step_start', step_id: 'step_2', step_kind: 'tool' },
+              {
+                kind: 'confirm_request',
+                run_id: 'run-1',
+                step_id: 'step_2',
+                tool: 'create_feed',
+                args: { title: 'Rust Blog' },
+                approval_id: 'ap-1',
+                expires_at: 1791979500.0,
+              },
+              {
+                kind: 'tool_result',
+                step_id: 'step_2',
+                call_id: 'c1',
+                ok: false,
+                // The producer's static denial text (approvals.py
+                // `denial_text_for`), byte-for-byte.
+                error:
+                  'Confirmation required: the user denied this call. The `create_feed` tool was not executed.',
+              },
+              {
+                kind: 'step_end',
+                step_id: 'step_2',
+                status: 'failed',
+                reason: 'tool_denied',
+              },
+              {
+                kind: 'done',
+                usage: {
+                  prompt_tokens: 1,
+                  completion_tokens: 1,
+                  total_tokens: 2,
+                },
+              },
+            ],
+            signal,
+          ),
+      );
+
+      await act(async () => {
+        useChatStore.getState().send('add a feed');
+      });
+
+      await act(async () => {
+        releaseStream();
+      });
+
+      const step = useChatStore
+        .getState()
+        .messages.find((m) => m.role === 'assistant')?.steps?.[0];
+      expect(step?.toolResult).toBe(
+        'Confirmation required: the user denied this call. The `create_feed` tool was not executed.',
+      );
+      expect(step?.status).toBe('failed');
     });
   });
 });

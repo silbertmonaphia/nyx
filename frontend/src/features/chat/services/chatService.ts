@@ -1,9 +1,10 @@
 import type { ApiError } from "~/api/openapi";
-import { tokenStore, refreshTokensAndReplay } from "~/services/api";
+import api, { tokenStore, refreshTokensAndReplay } from "~/services/api";
 import { injectTraceparent } from "~/services/telemetry";
 import {
   ChatApiError,
   ChatStreamError,
+  type ApprovalRequest,
   type ChatEvent,
   type ChatRequest,
   type Message,
@@ -480,6 +481,50 @@ export const chatService = {
             } catch {
               // Drop malformed step_start frame.
             }
+          } else if (currentEvent === "confirm_request") {
+            // Mutating-call confirmation (agent-feed-tools §6.1): the
+            // run is paused inside the same stream until the decision
+            // POST lands. Additive kind — the parser skips unknown
+            // kinds anyway, so pre-change consumers are unaffected.
+            // Required fields per the spec: run id, step id, tool,
+            // args (masked like `tool_call`), approval id, expiry.
+            // `expires_at` is epoch seconds — a JSON number matching
+            // the producer's `float` field, not an ISO string. A frame
+            // missing any required field is dropped; a bad frame must
+            // not tear the stream down.
+            try {
+              const parsed = JSON.parse(dataStr) as {
+                run_id?: unknown;
+                step_id?: unknown;
+                tool?: unknown;
+                args?: unknown;
+                approval_id?: unknown;
+                expires_at?: unknown;
+              };
+              if (
+                typeof parsed.run_id === "string" &&
+                parsed.run_id !== "" &&
+                typeof parsed.step_id === "string" &&
+                parsed.step_id !== "" &&
+                typeof parsed.tool === "string" &&
+                parsed.tool !== "" &&
+                typeof parsed.approval_id === "string" &&
+                parsed.approval_id !== "" &&
+                typeof parsed.expires_at === "number"
+              ) {
+                yield {
+                  kind: "confirm_request",
+                  run_id: parsed.run_id,
+                  step_id: parsed.step_id,
+                  tool: parsed.tool,
+                  args: parsed.args,
+                  approval_id: parsed.approval_id,
+                  expires_at: parsed.expires_at,
+                };
+              }
+            } catch {
+              // Drop malformed confirm_request frame.
+            }
           } else if (currentEvent === "tool_call") {
             try {
               const parsed = JSON.parse(dataStr) as {
@@ -578,6 +623,25 @@ export const chatService = {
         // already released — ignore
       }
     }
+  },
+
+  /**
+   * POST /api/chat/approvals — record the user's approve/deny decision
+   * for a paused `confirm_request` (agent-feed-tools §6.2).
+   *
+   * Deliberately the wrapped axios client (not the raw-`fetch` posture
+   * the SSE call uses): the request interceptor stamps the Bearer JWT
+   * and the traceparent, the response interceptor runs the shared
+   * single-flight refresh on a 401, and a non-2xx surfaces through the
+   * global error toast. The Go proxy forwards the body to the Python
+   * agent, whose paused run resolves the decision from Redis.
+   *
+   * Resolves on any 2xx (the agent answers 200 for the first decision
+   * and for idempotent duplicates); rejects otherwise, leaving the
+   * caller to keep the card pending for a retry.
+   */
+  async submitApproval(body: ApprovalRequest): Promise<void> {
+    await api.post("/chat/approvals", body);
   },
 
   /**

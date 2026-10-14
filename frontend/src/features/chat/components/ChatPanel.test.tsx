@@ -10,6 +10,7 @@ vi.mock('../services/chatService');
 
 const mockedService = chatService as unknown as {
   streamMessage: ReturnType<typeof vi.fn>;
+  submitApproval: ReturnType<typeof vi.fn>;
   listSessions: ReturnType<typeof vi.fn>;
   getMessages: ReturnType<typeof vi.fn>;
   resumeSession: ReturnType<typeof vi.fn>;
@@ -706,5 +707,212 @@ describe('ChatPanel chat history', () => {
     );
     expect(mockedService.resumeSession).toHaveBeenCalledWith('s9');
     expect(useChatStore.getState().currentSessionId).toBe('s9');
+  });
+});
+
+// ---- Approval cards (openspec change agent-feed-tools §6.2) ----
+// A `confirm_request` frame renders an inline card inside the assistant
+// turn. Approve/Deny post the decision through chatService (the axios
+// client stamps the JWT); the stream stays paused until the decision
+// lands. A denial then arrives as the call's `tool_result` and renders
+// through the regular agent-step result path.
+
+describe('ChatPanel approval card', () => {
+  beforeEach(() => {
+    resetStore();
+    mockedService.streamMessage.mockReset();
+    mockedService.submitApproval.mockReset().mockResolvedValue(undefined);
+    mockedService.listSessions
+      .mockReset()
+      .mockResolvedValue({ sessions: [], nextCursor: null });
+    mockedService.getMessages.mockReset().mockResolvedValue([]);
+    mockedService.resumeSession.mockReset().mockResolvedValue(undefined);
+    mockedService.createSession
+      .mockReset()
+      .mockResolvedValue({ session_id: 's-new' });
+    mockedService.deleteSession.mockReset().mockResolvedValue(undefined);
+  });
+
+  /**
+   * Stream that pauses on a `confirm_request` until the returned
+   * release hook fires, then continues with the denied call's frames.
+   * Mirrors the held-stream shape the real agent produces (design.md
+   * D2: one SSE response, decision brokered out-of-band).
+   */
+  function mockPausedStream(): () => void {
+    let release: (() => void) | null = null;
+    mockedService.streamMessage.mockImplementationOnce(async function* () {
+      yield {
+        kind: 'plan',
+        steps: [{ id: 'step_2', kind: 'tool', tool: 'create_feed' }],
+      };
+      yield { kind: 'step_start', step_id: 'step_2', step_kind: 'tool' };
+      yield {
+        kind: 'confirm_request',
+        run_id: 'run-1',
+        step_id: 'step_2',
+        tool: 'create_feed',
+        args: { title: 'Rust Blog' },
+        approval_id: 'ap-1',
+        expires_at: 1791979500.0,
+      };
+      await new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      yield {
+        kind: 'tool_result',
+        step_id: 'step_2',
+        call_id: 'c1',
+        ok: false,
+        // The producer's static denial text (approvals.py
+        // `denial_text_for`), byte-for-byte.
+        error:
+          'Confirmation required: the user denied this call. The `create_feed` tool was not executed.',
+      };
+      yield {
+        kind: 'step_end',
+        step_id: 'step_2',
+        status: 'failed',
+        reason: 'tool_denied',
+      };
+      yield { kind: 'delta', delta: 'OK — I did not create it.' };
+      yield {
+        kind: 'done',
+        usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
+      };
+      yield { kind: 'terminator' };
+    });
+    return () => release?.();
+  }
+
+  async function sendMessage() {
+    await userEvent.type(screen.getByTestId('chat-input'), 'add the rust blog');
+    await userEvent.click(screen.getByTestId('chat-send'));
+  }
+
+  it('renders the inline card with the tool and args inside the assistant turn', async () => {
+    const release = mockPausedStream();
+    render(<ChatPanel open={true} onOpenChange={vi.fn()} />);
+    await sendMessage();
+
+    const card = await screen.findByTestId('chat-confirm-card');
+    expect(card).toHaveAttribute('data-decision', 'pending');
+    expect(card).toHaveAttribute('data-approval-id', 'ap-1');
+    expect(screen.getByTestId('chat-confirm-tool')).toHaveTextContent(
+      'create_feed',
+    );
+    expect(screen.getByTestId('chat-confirm-args')).toHaveTextContent(
+      'Rust Blog',
+    );
+    // At the bubble level, not inside the agent-steps disclosure: a
+    // paused run must be actionable without expanding anything.
+    expect(screen.getByTestId('chat-message-assistant')).toContainElement(
+      card,
+    );
+    release();
+  });
+
+  it('posts the approve decision body and flips the card to decided', async () => {
+    const release = mockPausedStream();
+    render(<ChatPanel open={true} onOpenChange={vi.fn()} />);
+    await sendMessage();
+
+    await userEvent.click(await screen.findByTestId('chat-confirm-approve'));
+
+    expect(mockedService.submitApproval).toHaveBeenCalledTimes(1);
+    expect(mockedService.submitApproval).toHaveBeenCalledWith({
+      run_id: 'run-1',
+      approval_id: 'ap-1',
+      decision: 'approve',
+    });
+    await waitFor(() => {
+      expect(screen.getByTestId('chat-confirm-card')).toHaveAttribute(
+        'data-decision',
+        'approved',
+      );
+    });
+    expect(screen.queryByTestId('chat-confirm-approve')).toBeNull();
+    release();
+  });
+
+  it('posts the deny decision body and renders the denial result in the turn', async () => {
+    const release = mockPausedStream();
+    render(<ChatPanel open={true} onOpenChange={vi.fn()} />);
+    await sendMessage();
+
+    await userEvent.click(await screen.findByTestId('chat-confirm-deny'));
+
+    expect(mockedService.submitApproval).toHaveBeenCalledTimes(1);
+    expect(mockedService.submitApproval).toHaveBeenCalledWith({
+      run_id: 'run-1',
+      approval_id: 'ap-1',
+      decision: 'deny',
+    });
+
+    // The agent continues on the denial: the paused call closes with a
+    // result frame the existing step-row renderer shows in-line.
+    release();
+    await waitFor(() => {
+      expect(screen.getByTestId('chat-confirm-card')).toHaveAttribute(
+        'data-decision',
+        'denied',
+      );
+    });
+    expect(await screen.findByTestId('chat-agent-step-result')).toHaveTextContent(
+      'Confirmation required: the user denied this call',
+    );
+    expect(screen.getByTestId('chat-message-assistant')).toHaveTextContent(
+      'OK — I did not create it.',
+    );
+  });
+
+  it('keeps the buttons live and shows a hint when the decision POST fails', async () => {
+    mockedService.submitApproval.mockRejectedValueOnce(new Error('boom'));
+    const release = mockPausedStream();
+    render(<ChatPanel open={true} onOpenChange={vi.fn()} />);
+    await sendMessage();
+
+    await userEvent.click(await screen.findByTestId('chat-confirm-approve'));
+
+    await waitFor(() => {
+      expect(screen.getByTestId('chat-confirm-error')).toHaveTextContent(
+        /could not send/i,
+      );
+    });
+    expect(screen.getByTestId('chat-confirm-card')).toHaveAttribute(
+      'data-decision',
+      'pending',
+    );
+    expect(screen.getByTestId('chat-confirm-approve')).toBeInTheDocument();
+    release();
+  });
+
+  it('resolves the card as expired when the decision POST 404s', async () => {
+    // Design.md D2: a resumed run replays its checkpointed
+    // confirm_request, whose approval id the decision endpoint
+    // answers with a typed 404 — the card resolves as expired, with
+    // no retry affordance (a retry could never succeed).
+    mockedService.submitApproval.mockRejectedValueOnce({
+      response: { status: 404 },
+    });
+    const release = mockPausedStream();
+    render(<ChatPanel open={true} onOpenChange={vi.fn()} />);
+    await sendMessage();
+
+    await userEvent.click(await screen.findByTestId('chat-confirm-approve'));
+
+    await waitFor(() => {
+      expect(screen.getByTestId('chat-confirm-card')).toHaveAttribute(
+        'data-decision',
+        'expired',
+      );
+    });
+    expect(screen.getByTestId('chat-confirm-status')).toHaveTextContent(
+      /expired/i,
+    );
+    expect(screen.queryByTestId('chat-confirm-approve')).toBeNull();
+    expect(screen.queryByTestId('chat-confirm-deny')).toBeNull();
+    expect(screen.queryByTestId('chat-confirm-error')).toBeNull();
+    release();
   });
 });

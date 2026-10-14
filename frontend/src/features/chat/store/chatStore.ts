@@ -3,7 +3,9 @@ import { logger } from "~/services/logger";
 import { chatService } from "../services/chatService";
 import {
   ChatApiError,
+  type ApprovalDecision,
   type ChatStep,
+  type ChatStepConfirm,
   type Message,
   type SessionMessage,
   type SessionSummary,
@@ -64,6 +66,20 @@ interface ChatState {
   reset: () => void;
   /** Abort the in-flight stream, if any. Idempotent. */
   cancel: () => void;
+  /**
+   * Record an approve/deny decision for a paused `confirm_request`
+   * and POST it to the agent through the chat proxy. On success the
+   * card flips to its decided state; a failed POST keeps it pending
+   * (with a short local error hint) so the user can retry — the axios
+   * interceptor has already toasted the failure. A 404 is the one
+   * non-retryable failure: the approval id is dead server-side, so
+   * the card resolves as `expired` (design.md D2).
+   */
+  submitApproval: (
+    runId: string,
+    approvalId: string,
+    decision: ApprovalDecision,
+  ) => Promise<void>;
 
   // ---- Chat history (agent-chat-history-ui) -------------------------
 
@@ -203,6 +219,20 @@ function isSessionGone(err: unknown): boolean {
 }
 
 /**
+ * True when the decision POST answered 404 — the approval id is dead
+ * server-side. Design.md D2: a resumed run replays its checkpointed
+ * `confirm_request`, whose approval id the decision endpoint answers
+ * with a typed 404. The approvals call goes through the raw axios
+ * client (not `ChatApiError`), so the status is read structurally —
+ * same shape `useAuthReconciliation` uses.
+ */
+function isApprovalExpired(err: unknown): boolean {
+  const status = (err as { response?: { status?: number } } | null)?.response
+    ?.status;
+  return status === 404;
+}
+
+/**
  * Convert a stored message row into the panel's `ChatMessage` shape.
  * Assistant rows carry their persisted `tool_calls` (the wire envelope
  * verbatim: `{step_id, call_id, name, args}`) which rehydrate as
@@ -240,7 +270,40 @@ function toReplayMessage(row: SessionMessage): ChatMessage {
 // structurally so zustand's own SetState signature stays the single
 // source of truth for the store factory below.
 type ChatGet = () => ChatState;
-type ChatSet = (partial: Partial<ChatState>) => void;
+type ChatSet = (
+  partial: Partial<ChatState> | ((state: ChatState) => Partial<ChatState>),
+) => void;
+
+/**
+ * Patch the approval card carrying `approvalId`, wherever it lives.
+ * Keyed by approval id (not step) because a decision can resolve after
+ * the stream moved on; a non-matching id leaves the store untouched.
+ */
+function patchApprovalCard(
+  set: ChatSet,
+  approvalId: string,
+  patch: Partial<ChatStepConfirm>,
+): void {
+  set((state) => {
+    let found = false;
+    const messages = state.messages.map((m) => {
+      if (m.role !== "assistant" || !m.steps) return m;
+      const idx = m.steps.findIndex(
+        (s) => s.confirm?.approvalId === approvalId,
+      );
+      if (idx === -1) return m;
+      const confirm = m.steps[idx].confirm;
+      // Unreachable (the findIndex above matched on it) — the guard
+      // exists only so the spread below type-narrows.
+      if (!confirm) return m;
+      found = true;
+      const steps = m.steps.slice();
+      steps[idx] = { ...m.steps[idx], confirm: { ...confirm, ...patch } };
+      return { ...m, steps };
+    });
+    return found ? { messages } : state;
+  });
+}
 
 /**
  * Resume one session and replay its messages into the panel. Shared by
@@ -492,6 +555,47 @@ export const useChatStore = create<ChatState>((set, get) => ({
             next[assistantIndex] = { ...target, steps };
             return { messages: next };
           });
+        } else if (event.kind === "confirm_request") {
+          // The run is paused on a mutating call: attach the approval
+          // card to the step the frame names. A step row may not exist
+          // yet (no plan / step_start seen), so one is appended — the
+          // card must render even on a partial trace. The confirm's
+          // tool + args mirror the frames a `tool_call` would carry,
+          // so they seed the step the same way (latest wins).
+          set((state) => {
+            const next = state.messages.slice();
+            const target = next[assistantIndex];
+            if (!target || target.role !== "assistant") return state;
+            const steps = (target.steps ?? []).slice();
+            const confirm: ChatStepConfirm = {
+              runId: event.run_id,
+              approvalId: event.approval_id,
+              tool: event.tool,
+              args: event.args,
+              expiresAt: event.expires_at,
+              decision: "pending",
+            };
+            const idx = steps.findIndex((s) => s.id === event.step_id);
+            if (idx >= 0) {
+              steps[idx] = {
+                ...steps[idx],
+                toolName: event.tool,
+                toolArgs: event.args,
+                confirm,
+              };
+            } else {
+              steps.push({
+                id: event.step_id,
+                kind: "tool",
+                status: "running",
+                toolName: event.tool,
+                toolArgs: event.args,
+                confirm,
+              });
+            }
+            next[assistantIndex] = { ...target, steps };
+            return { messages: next };
+          });
         } else if (event.kind === "tool_call") {
           // Annotate the step with the dispatched tool's name + args.
           // Multiple tool calls per step (react sub-loop) overwrite
@@ -667,6 +771,42 @@ export const useChatStore = create<ChatState>((set, get) => ({
       controller = null;
     }
     set({ isStreaming: false });
+  },
+
+  submitApproval: async (runId, approvalId, decision) => {
+    try {
+      await chatService.submitApproval({
+        run_id: runId,
+        approval_id: approvalId,
+        decision,
+      });
+      patchApprovalCard(set, approvalId, {
+        decision: decision === "approve" ? "approved" : "denied",
+        error: undefined,
+      });
+    } catch (err) {
+      // A 404 is the endpoint's typed answer for an approval id that
+      // can no longer resolve (design.md D2: a resumed run replays its
+      // checkpointed `confirm_request`, whose approval id is expired).
+      // Resolve the card as expired — the run moved on, so a retry
+      // could never succeed and a retry hint would be a lie.
+      if (isApprovalExpired(err)) {
+        logger.warn("chat.approval.expired", { error: String(err) });
+        patchApprovalCard(set, approvalId, {
+          decision: "expired",
+          error: undefined,
+        });
+        return;
+      }
+      // The axios interceptor already toasted the failure (4xx bodies
+      // are contract strings; 5xx stays generic). Keep the card
+      // pending with a short local hint so the user can retry —
+      // never echo `err.message` (SECURITY.md H7).
+      logger.warn("chat.approval.submit_failed", { error: String(err) });
+      patchApprovalCard(set, approvalId, {
+        error: "Could not send your decision. Please try again.",
+      });
+    }
   },
 
   // ---- Chat history actions (agent-chat-history-ui) -----------------
