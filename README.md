@@ -1,6 +1,9 @@
 # Nyx
 
 > 🌐 **中文版 / Chinese**: [`README.zh.md`](README.zh.md)
+>
+> 🤖 **Only here for the agent?** Jump straight to
+> [`backend/agent_py/README.md`](backend/agent_py/README.md).
 
 **A feed app with a Plan-and-Execute AI agent growing on top of it.**
 

@@ -1,6 +1,9 @@
 # Nyx
 
 > 🌐 **English version**: [`README.md`](README.md)
+>
+> 🤖 **只关心 agent？** 直接跳转
+> [`backend/agent_py/README.zh.md`](backend/agent_py/README.zh.md)。
 
 **一个 feed 应用，上面长着一个 Plan-and-Execute AI Agent。**
 
@@ -116,7 +119,7 @@ make dev-vllm-embed   # 向量模型  (Qwen3-Embedding-0.6B, :8001, 支撑 RAG)
 - [`FUTURE_AGENT.md`](FUTURE_AGENT.md) —— agent 路线图：已完成什么、下一步做什么。
 - [`AgentArchitecture.md`](AgentArchitecture.md) —— agent 的整体设计。
 - [`AgentFaultTolerance.md`](AgentFaultTolerance.md) —— 每一个故障面，以及由什么来兜底。
-- [`backend/agent_py/README.md`](backend/agent_py/README.md) —— Python 服务详细文档。
+- [`backend/agent_py/README.zh.md`](backend/agent_py/README.zh.md) —— Python 服务详细文档。
 - [`docs/agent-deployment.md`](docs/agent-deployment.md) —— agent 的生产上线流程。
 - [`CLAUDE.md`](CLAUDE.md) · [`SECURITY.md`](SECURITY.md) · [`FUTURE.md`](FUTURE.md) · [`openspec/`](openspec/)
 
