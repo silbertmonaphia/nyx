@@ -8,6 +8,45 @@ Feed 应用本身小而完整：注册、登录、管理自己的条目 —— �
 
 底层应用刻意按生产系统的标准搭建 —— 类型安全的 SQL、轮转的 auth token、启动即迁移、链路追踪 —— 因为 agent 需要一个诚实的底座来跑：真实的数据、真实的鉴权边界、真实的故障模式。
 
+## 架构
+
+```mermaid
+flowchart TB
+    subgraph Client["浏览器"]
+        SPA["React 19 SPA<br/>feed · 认证 · 聊天"]
+    end
+
+    subgraph API["Go API :8080"]
+        H["chi + huma<br/>OpenAPI 3.1<br/>REST · chat SSE<br/>MCP 工具面"]
+    end
+
+    subgraph Agent["Python agent :9000（可选）"]
+        A["FastAPI + LangGraph<br/>planner → executor → tools"]
+    end
+
+    subgraph Data["数据"]
+        PG[("PostgreSQL<br/>唯一事实来源")]
+        RD["Redis<br/>可选缓存"]
+    end
+
+    LLM["LLM<br/>vLLM 或 OpenAI<br/>（可选）"]
+    OBS["Jaeger · Sentry<br/>（可选）"]
+
+    SPA -->|"REST · Bearer JWT<br/>chat 走 SSE"| H
+    H -->|"chat 代理<br/>（AGENT_ENABLED=true）"| A
+    A -->|"MCP 工具 · RAG 检索"| H
+    H --> PG
+    H -.-> RD
+    H -->|"chat completions<br/>（agent 关闭时）"| LLM
+    A -->|"chat completions"| LLM
+    A -->|"运行状态"| PG
+    SPA -.->|"OTel · 错误上报"| OBS
+    H -.-> OBS
+```
+
+实线箭头是请求路径，虚线为链路追踪 / 可选项 —— 可选项默认关闭。完整生产拓扑见
+[`README_FULL.md` § Architecture](README_FULL.md#architecture)。
+
 ## Agent
 
 - **Plan-and-Execute 循环** —— planner 把你的请求拆解成带类型的步骤，executor 逐步执行，聊天 UI 通过 SSE 实时渲染每一步（`plan` → `step_start` → `tool_call` → `tool_result` → …）。

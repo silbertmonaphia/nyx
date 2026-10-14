@@ -13,6 +13,45 @@ The app underneath is deliberately built like a production system — typed SQL,
 tokens, migrations, tracing — because the agent needs an honest substrate to run against: real
 data, real auth boundaries, real failure modes.
 
+## Architecture
+
+```mermaid
+flowchart TB
+    subgraph Client["Browser"]
+        SPA["React 19 SPA<br/>feeds · auth · chat"]
+    end
+
+    subgraph API["Go API :8080"]
+        H["chi + huma<br/>OpenAPI 3.1<br/>REST · chat SSE<br/>MCP tool surface"]
+    end
+
+    subgraph Agent["Python agent :9000 (optional)"]
+        A["FastAPI + LangGraph<br/>planner → executor → tools"]
+    end
+
+    subgraph Data["Data"]
+        PG[("PostgreSQL<br/>source of truth")]
+        RD["Redis<br/>optional cache"]
+    end
+
+    LLM["LLM<br/>vLLM or OpenAI<br/>(optional)"]
+    OBS["Jaeger · Sentry<br/>(optional)"]
+
+    SPA -->|"REST · Bearer JWT<br/>chat over SSE"| H
+    H -->|"chat proxy<br/>(AGENT_ENABLED=true)"| A
+    A -->|"MCP tools · RAG retrieve"| H
+    H --> PG
+    H -.-> RD
+    H -->|"chat completions<br/>(agent off)"| LLM
+    A -->|"chat completions"| LLM
+    A -->|"run state"| PG
+    SPA -.->|"OTel · errors"| OBS
+    H -.-> OBS
+```
+
+Solid arrows are request paths, dashed are telemetry / optional extras — the optional pieces are
+off by default. Full production topology → [`README_FULL.md` § Architecture](README_FULL.md#architecture).
+
 ## The agent
 
 - **Plan-and-Execute loop** — a planner turns your request into typed steps, the executor runs
