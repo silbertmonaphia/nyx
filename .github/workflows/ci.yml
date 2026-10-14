@@ -378,7 +378,7 @@ jobs:
         # specific audit-signatures version is not possible — npm pulls
         # the registry data fresh; CI just records what npm saw at run
         # time.
-        run: cd frontend && npm audit --audit-level=high
+        run: cd frontend && npm audit --workspaces=false --audit-level=high
 
   # Release job — only runs on push (not on PRs), and only after CI
   # is green. Drives semantic-release which:
