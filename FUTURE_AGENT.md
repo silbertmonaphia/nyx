@@ -119,6 +119,7 @@ Recommendation: the second. Each step has a stable `id` so SSE frames can be cor
 ### 2.1 Cross-session memory — **deferred to a follow-up change**
 
 - [ ] **`chat_sessions` + `chat_messages` tables** — move from FUTURE.md:84 into this roadmap. Soft-delete + retention cron.
+  - **Landed (storage layer) in `openspec/changes/archive/2026-10-14-agent-chat-history-storage/`** (Slice 1 of `AgentMemoryRoadmap.md`). Two tables + ChatStore + retention cron extension with soft-delete + grace; the read-side / UI / Slice 2 + Slice 3 + Slice 4 follow per `AgentMemoryRoadmap.md`.
 - [ ] **Conversation summary on session end** — when a session goes idle for `AGENT_SESSION_IDLE_MIN` (default 30m), summarize into `chat_summaries` (or a `summary` column on `chat_sessions`) for fast re-hydration.
 - [ ] **User preferences memory** — short structured facts ("user is an ad ops analyst at Acme") distilled from prior sessions. Stored as `chat_user_prefs(user_id, key, value, updated_at)`. Injected into planner prompt.
 - [ ] **Cross-session recall** — when a new session starts, top-K retrieval over past sessions for the same user. Optional (`AGENT_MEMORY_RECALL_ENABLED` default `false` until retention + privacy review passes).

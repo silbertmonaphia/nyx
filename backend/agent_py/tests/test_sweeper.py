@@ -510,7 +510,9 @@ async def test_reap_preserves_checkpoints_and_retention_deletes_them(
     from agent.retention import RetentionCron
 
     cron_settings = app_ctx.state.settings.model_copy(update={"retention_days": 30})
-    cron = RetentionCron(rm, app_ctx.state.checkpointer, settings=cron_settings)
+    # `chat_store=None` (chat retention is exercised in its own test
+    # suite; this suite focuses on run-state retention GC).
+    cron = RetentionCron(rm, None, app_ctx.state.checkpointer, settings=cron_settings)
     await cron._run_once()
 
     async with rm._pool.acquire() as conn:
@@ -778,7 +780,7 @@ async def test_retention_gc_failure_is_contained(app_ctx):
 
     saver = _FlakySaver()
     settings = app_ctx.state.settings.model_copy(update={"retention_days": 30})
-    cron = RetentionCron(rm, saver, settings=settings)
+    cron = RetentionCron(rm, None, saver, settings=settings)
     await cron._run_once()  # must not raise
 
     assert sorted(saver.attempted) == sorted(ids), (

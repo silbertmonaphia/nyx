@@ -8,8 +8,19 @@ checkpoint data; see `openspec/changes/agent-stale-run-sweeper`). A per-run
 GC failure is logged at WARN and does not abort the remaining deletes; the
 documented manual fallback is a direct SQL sweep of `langgraph.checkpoint_*`.
 
+Also runs the chat-history retention iteration
+(`openspec/changes/agent-chat-history-storage`) on the same tick: a
+two-phase soft-delete + grace + hard-delete cycle for
+`agent.chat_sessions` (and `agent.chat_messages` via FK ON DELETE
+CASCADE). Failure in one iteration is logged at WARN and the other still
+runs — the two surfaces have independent observability counters and OTel
+spans (`agent.run.retention` + `agent.chat.retention`).
+
 OTel span `agent.run.retention` per iteration with `deleted_count` attribute.
-Prometheus counter `agent_run_retention_deleted_total` increments by `deleted_count`.
+OTel span `agent.chat.retention` per iteration with `chat_deleted_count`
+attribute. Prometheus counter `agent_run_retention_deleted_total` increments
+by `deleted_count`; `agent_chat_retention_deleted_total` increments by the
+chat hard-delete count.
 """
 from __future__ import annotations
 
@@ -21,6 +32,7 @@ from opentelemetry import trace
 from prometheus_client import Counter
 
 if TYPE_CHECKING:
+    from .chat_store import ChatStore
     from .config import Settings
     from .run_metadata import RunMetadata
 
@@ -32,6 +44,13 @@ agent_run_retention_deleted_total = Counter(
     "Total number of terminal agent.runs rows deleted by the retention cron.",
 )
 
+agent_chat_retention_deleted_total = Counter(
+    "agent_chat_retention_deleted_total",
+    "Total number of agent.chat_sessions rows hard-deleted by the retention cron. "
+    "Soft-deletes are NOT counted (only rows that pass through both the soft-delete "
+    "and grace phases and are physically removed).",
+)
+
 
 class RetentionCron:
     """Single asyncio task that fires every `retention_interval_seconds`."""
@@ -39,11 +58,16 @@ class RetentionCron:
     def __init__(
         self,
         run_metadata: RunMetadata,
+        chat_store: ChatStore | None,
         checkpointer=None,
         *,
         settings: Settings,
     ) -> None:
         self._run_metadata = run_metadata
+        # Chat-history retention surface (openspec/changes/agent-chat-history-storage).
+        # Required for the chat retention iteration; when None, the chat iteration
+        # is skipped (matches the metadata-only dev posture for `checkpointer`).
+        self._chat_store = chat_store
         # langGraph `AsyncPostgresSaver` (or None in metadata-only dev, where
         # no checkpoint threads exist). Duck-typed: only `adelete_thread` is
         # used, so tests can inject a fake without importing the framework.
@@ -61,10 +85,17 @@ class RetentionCron:
             return
         self._stop.clear()
         self._task = asyncio.create_task(self._loop(), name="agent-run-retention")
+        chat_part = (
+            f" + chat (days={self._settings.chat_retention_days}, "
+            f"grace={self._settings.chat_retention_grace_days})"
+            if self._chat_store is not None and self._settings.chat_retention_enabled
+            else ""
+        )
         log.info(
-            "retention cron started: every %ds, deletes runs older than %d days",
+            "retention cron started: every %ds, deletes runs older than %d days%s",
             self._settings.retention_interval_seconds,
             self._settings.retention_days,
+            chat_part,
         )
 
     async def stop(self) -> None:
@@ -92,6 +123,28 @@ class RetentionCron:
                 continue
 
     async def _run_once(self) -> None:
+        # Run-retention iteration. Failure of this block is isolated from
+        # the chat iteration below — a poison run-retention query can
+        # never block chat-history GC.
+        try:
+            await self._run_iteration()
+        except Exception as exc:  # noqa: BLE001 — one iteration never kills the cron
+            log.warning("retention: run iteration failed: %r", exc)
+
+        # Chat-retention iteration (openspec/changes/agent-chat-history-storage).
+        # Skipped when chat retention is disabled or no ChatStore is wired
+        # (metadata-only dev). Failures here are logged at WARN and do not
+        # propagate to the next tick.
+        if (
+            self._chat_store is not None
+            and self._settings.chat_retention_enabled
+        ):
+            try:
+                await self._chat_iteration()
+            except Exception as exc:  # noqa: BLE001
+                log.warning("retention: chat iteration failed: %r", exc)
+
+    async def _run_iteration(self) -> None:
         with _tracer.start_as_current_span("agent.run.retention") as span:
             deleted_ids = await self._run_metadata.retention_delete_terminal(
                 retention_days=self._settings.retention_days
@@ -120,4 +173,50 @@ class RetentionCron:
                     "retention cron: deleted %d terminal runs older than %d days",
                     deleted,
                     self._settings.retention_days,
+                )
+
+    async def _chat_iteration(self) -> None:
+        """Two-phase chat retention: soft-delete expired, then hard-delete the grace-expired.
+
+        Opens an OTel span `agent.chat.retention` carrying `chat_deleted_count`
+        for the hard-delete phase. Soft-deletes are NOT counted toward the
+        counter — only rows that pass through both phases and are physically
+        removed increment `agent_chat_retention_deleted_total`. The soft-delete
+        pass itself can fail without aborting the hard-delete pass (separate
+        try/except inside the span), matching the run-iteration's per-id
+        error isolation.
+        """
+        with _tracer.start_as_current_span("agent.chat.retention") as span:
+            # Phase 1: soft-delete. Soft-deletes are not counted.
+            try:
+                soft_ids = await self._chat_store.soft_delete_expired(
+                    retention_days=self._settings.chat_retention_days
+                )
+            except Exception as exc:  # noqa: BLE001
+                log.warning(
+                    "retention: chat soft-delete failed (non-fatal): %r", exc
+                )
+                soft_ids = []
+            span.set_attribute("soft_deleted_count", len(soft_ids))
+
+            # Phase 2: hard-delete. Only the rows that survive both phases
+            # count toward the metric.
+            try:
+                hard_deleted = await self._chat_store.hard_delete_soft_deleted(
+                    grace_days=self._settings.chat_retention_grace_days
+                )
+            except Exception as exc:  # noqa: BLE001
+                log.warning(
+                    "retention: chat hard-delete failed (non-fatal): %r", exc
+                )
+                hard_deleted = 0
+            span.set_attribute("chat_deleted_count", hard_deleted)
+            agent_chat_retention_deleted_total.inc(hard_deleted)
+
+            if hard_deleted:
+                log.info(
+                    "retention cron: hard-deleted %d chat sessions past the "
+                    "%d-day grace window",
+                    hard_deleted,
+                    self._settings.chat_retention_grace_days,
                 )

@@ -28,6 +28,7 @@ from prometheus_client import generate_latest, CONTENT_TYPE_LATEST
 from redis.asyncio import Redis
 
 from .budget import BudgetGuard
+from .chat_store import ChatStore, ChatStoreUnavailable
 from .config import Settings, get_settings
 from .graph import build_graph, run_agent_stream
 from .observability import (
@@ -106,6 +107,7 @@ async def lifespan(app: FastAPI):
     # unless `PYTHON_AGENT_MIGRATIONS_DISABLED=true` (compose prod path
     # relies on the dedicated `agent-migrate` one-shot service instead).
     run_metadata: RunMetadata | None = None
+    chat_store: ChatStore | None = None
     checkpointer = None
     retention: RetentionCron | None = None
     sweeper: StaleRunSweeper | None = None
@@ -133,6 +135,13 @@ async def lifespan(app: FastAPI):
         run_metadata = RunMetadata(
             pool, acquire_timeout=settings.database_pool_acquire_timeout_seconds
         )
+        # Chat-history store (openspec/changes/agent-chat-history-storage).
+        # Reuses the same pool — no second pool (design.md D9). Owns
+        # `agent.chat_sessions` + `agent.chat_messages` for the SSE
+        # generator writes and the retention cron.
+        chat_store = ChatStore(
+            pool, acquire_timeout=settings.database_pool_acquire_timeout_seconds
+        )
 
         # langGraph PostgresSaver — psycopg-based, so we strip the
         # URL `options=...` (set search_path via SQL instead) and SET
@@ -143,7 +152,18 @@ async def lifespan(app: FastAPI):
         await checkpointer.setup()
 
         if settings.retention_enabled and run_metadata is not None:
-            retention = RetentionCron(run_metadata, checkpointer, settings=settings)
+            # ChatStore is required for the chat-retention iteration; when
+            # chat retention is disabled, pass None so the iteration is
+            # skipped (per design.md D5 + D7).
+            retention_chat_store = (
+                chat_store if settings.chat_retention_enabled else None
+            )
+            retention = RetentionCron(
+                run_metadata,
+                retention_chat_store,
+                checkpointer,
+                settings=settings,
+            )
             retention.start()
 
         # Stale-run sweeper: reaps zombie `running` rows. Takes no
@@ -165,6 +185,7 @@ async def lifespan(app: FastAPI):
         )
 
     app.state.run_metadata = run_metadata
+    app.state.chat_store = chat_store
     app.state.checkpointer = checkpointer
     app.state.retention = retention
     app.state.sweeper = sweeper
@@ -440,6 +461,7 @@ async def _stream_agent_run(
         we mark `'failed'`. langGraph's checkpoint tables carry the state itself.
     """
     run_metadata: RunMetadata | None = getattr(app.state, "run_metadata", None)
+    chat_store: ChatStore | None = getattr(app.state, "chat_store", None)
     checkpointer = getattr(app.state, "checkpointer", None)
 
     # Mint or resume run_id.
@@ -462,6 +484,48 @@ async def _stream_agent_run(
                 run_id = str(uuid.uuid4())
         else:
             run_id = str(uuid.uuid4())
+
+    # Chat-history writes (openspec/changes/agent-chat-history-storage).
+    # Best-effort: failures are warn-logged and the stream continues
+    # (design.md D7). The session row is the foundation for every
+    # downstream message write — record_message cascades through
+    # `ON DELETE CASCADE` to keep the slice self-contained.
+    if chat_store is not None:
+        try:
+            # `create_session` is idempotent (`ON CONFLICT (id) DO
+            # NOTHING`), so it's safe to call on both fresh and resumed
+            # runs. On resume, the row may have been written by a prior
+            # process or it may be missing — both cases are handled.
+            await chat_store.create_session(user_id, run_id)
+            # Refresh `last_active_at` regardless of fresh/resumed.
+            await chat_store.touch_session(run_id, user_id)
+            # Record every inbound user message — only on fresh runs.
+            # On resumed runs, the user messages already exist (they
+            # were recorded at the original request entry); re-recording
+            # would duplicate them.
+            if not resumed:
+                for msg in chat_req.messages:
+                    if msg.role == "user":
+                        try:
+                            await chat_store.record_message(
+                                run_id,
+                                user_id,
+                                role="user",
+                                content=msg.content,
+                            )
+                        except ChatStoreUnavailable as exc:
+                            log.warning(
+                                "chat_store.record_message(user) failed "
+                                "(non-fatal): run_id=%s err=%r",
+                                run_id,
+                                exc,
+                            )
+        except ChatStoreUnavailable as exc:
+            log.warning(
+                "chat_store session init failed (non-fatal): run_id=%s err=%r",
+                run_id,
+                exc,
+            )
 
     # First frame: server-minted run_id (echoed so client can resume later).
     yield _sse_encode(
@@ -569,6 +633,13 @@ async def _stream_agent_run(
     total_tokens = 0
     error_code: str | None = None
     saw_done = False
+    # Chat-history accumulation (openspec/changes/agent-chat-history-storage):
+    # collect the assistant's text via every `delta` frame and every tool
+    # invocation via `tool_call` frames. The final assistant message is
+    # recorded after the run completes (best-effort; failures degrade to
+    # warn-log and the stream is unaffected).
+    assistant_text_parts: list[str] = []
+    assistant_tool_calls: list[dict] = []
     try:
         async for event in run_agent_stream(
             state,
@@ -589,6 +660,21 @@ async def _stream_agent_run(
                 saw_done = True
             elif event.kind == "error":
                 error_code = event.payload.get("code")
+            elif event.kind == "delta":
+                text = event.payload.get("delta")
+                if isinstance(text, str):
+                    assistant_text_parts.append(text)
+            elif event.kind == "tool_call":
+                # Capture verbatim from the wire envelope so future replay
+                # is byte-faithful (design.md D3).
+                assistant_tool_calls.append(
+                    {
+                        "step_id": event.payload.get("step_id"),
+                        "call_id": event.payload.get("call_id"),
+                        "name": event.payload.get("name"),
+                        "args": event.payload.get("args"),
+                    }
+                )
     finally:
         # Stop the heartbeat before the terminal write so a late touch
         # cannot interleave with (or outlive) the terminal transition.
@@ -618,6 +704,38 @@ async def _stream_agent_run(
             except RunMetadataUnavailable as exc:
                 log.warning(
                     "metadata terminal write failed (non-fatal): run_id=%s err=%r",
+                    run_id,
+                    exc,
+                )
+
+        # Chat-history: record the assistant message once the run reaches a
+        # terminal state (design.md D6 — synchronous write on the hot path
+        # before the stream closes; D7 — failures degrade to warn-log).
+        # Only record when the run reached `done`; partial-failure runs
+        # (e.g. `error{code:"plan_too_large"}` before any assistant output)
+        # leave no assistant row, which is the correct slice of state for
+        # replay (the user sees a clear failure, not a half-answer).
+        if (
+            chat_store is not None
+            and saw_done
+            and (assistant_text_parts or assistant_tool_calls)
+        ):
+            try:
+                await chat_store.record_message(
+                    run_id,
+                    user_id,
+                    role="assistant",
+                    content="".join(assistant_text_parts),
+                    tool_calls=assistant_tool_calls or None,
+                    tokens=total_tokens,
+                )
+                # Stamp the session's ended_at so Slice 2's sidebar can
+                # render a "finished" state instead of "live".
+                await chat_store.end_session(run_id, user_id)
+            except ChatStoreUnavailable as exc:
+                log.warning(
+                    "chat_store assistant record failed (non-fatal): "
+                    "run_id=%s err=%r",
                     run_id,
                     exc,
                 )

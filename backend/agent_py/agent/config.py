@@ -128,6 +128,24 @@ class Settings(BaseSettings):
     database_pool_max_size: int = 10
     database_pool_acquire_timeout_seconds: float = 5.0
 
+    # --- Chat-history retention (openspec/changes/agent-chat-history-storage) ---
+    # Retention floor for `agent.chat_sessions` and `agent.chat_messages`.
+    # The user requirement is ≥1 year (one year is the minimum; longer
+    # retention is an operator choice). Refuses to start below 365 — the
+    # user-facing floor is non-negotiable.
+    chat_retention_days: int = 365
+    # Soft-delete grace period before hard-delete. A row whose
+    # `last_active_at` is past `chat_retention_days` is soft-deleted on
+    # the first retention iteration that observes it, then hard-deleted
+    # after `chat_retention_grace_days` has elapsed. 0 = single-phase
+    # hard-delete. Slice 4 (GDPR) is the only consumer that reads the
+    # soft-deleted state.
+    chat_retention_grace_days: int = 7
+    # Kill switch for the chat retention cron. When false, the cron is
+    # not constructed and no chat rows are deleted; writes continue (so a
+    # future flip-back resumes normal retention). Rollback path.
+    chat_retention_enabled: bool = True
+
     # --- Stale-run sweeper (openspec/changes/agent-stale-run-sweeper) ---
     # Heartbeat cadence for live runs: while a run's SSE stream is in
     # flight, a background task touches `agent.runs.last_heartbeat_at`
@@ -360,6 +378,29 @@ class Settings(BaseSettings):
             raise ValueError(
                 " and ".join(missing)
                 + " required when PYTHON_AGENT_LANGFUSE_ENABLED=true"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _validate_chat_retention(self) -> Settings:
+        """Refuse to start on a chat-retention misconfiguration.
+
+        Per `openspec/changes/agent-chat-history-storage` (Configurable via
+        environment delta): `PYTHON_AGENT_CHAT_RETENTION_DAYS` MUST be ≥
+        365 — the one-year floor is a user-facing requirement, not just a
+        default. `PYTHON_AGENT_CHAT_RETENTION_GRACE_DAYS` MUST be ≥ 0
+        (negative values are operator mistakes; 0 means single-phase
+        hard-delete).
+        """
+        if self.chat_retention_days < 365:
+            raise ValueError(
+                "PYTHON_AGENT_CHAT_RETENTION_DAYS must be >= 365; "
+                f"got {self.chat_retention_days}"
+            )
+        if self.chat_retention_grace_days < 0:
+            raise ValueError(
+                "PYTHON_AGENT_CHAT_RETENTION_GRACE_DAYS must be >= 0; "
+                f"got {self.chat_retention_grace_days}"
             )
         return self
 
