@@ -19,6 +19,10 @@ else
   echo "  CI still scans (see .github/workflows/gitleaks.yml)"
 fi
 
+if command -v python3 >/dev/null 2>&1 && git cat-file -e HEAD:scripts/check_no_comments.py 2>/dev/null; then
+  python3 scripts/check_no_comments.py --staged || exit 1
+fi
+
 # lint-staged config lives at lint-staged.config.cjs at the repo
 # root; patterns are repo-relative (e.g. `frontend/src/**`,
 # `frontend/package.json`). Run the binary directly from the repo

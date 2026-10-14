@@ -1,4 +1,4 @@
-.PHONY: sqlc sqlc-diff sqlc-version openapi openapi-diff coverage coverage-check coverage-html migration-check help
+.PHONY: sqlc sqlc-diff sqlc-version openapi openapi-diff coverage coverage-check coverage-html migration-check stream-budget-check help
 
 # COVERAGE_MIN is the per-package floor that `make coverage-check`
 # enforces. Each package's coverage must be at or above this number;
@@ -102,6 +102,9 @@ coverage-html:
 migration-check:
 	@python3 $(CURDIR)/../scripts/check-migrations.py
 
+stream-budget-check:
+	@python3 $(CURDIR)/../scripts/check_stream_budget.py
+
 help:
 	@echo "Targets:"
 	@echo "  make sqlc             - regenerate internal/{movie,user}/db from queries/*.sql"
@@ -110,6 +113,7 @@ help:
 	@echo "  make openapi          - regenerate ../api/openapi.json from the huma operations"
 	@echo "  make openapi-diff     - regenerate and fail if the committed spec is stale"
 	@echo "  make migration-check  - fail on single-step destructive migrations"
+	@echo "  make stream-budget-check - fail when the stream cap is shorter than one approval wait"
 	@echo "  make coverage         - print per-package coverage as a table"
 	@echo "  make coverage-check   - fail if any package drops below $(COVERAGE_MIN)%"
 	@echo "  make coverage-html    - write backend/coverage.html for browser viewing"
