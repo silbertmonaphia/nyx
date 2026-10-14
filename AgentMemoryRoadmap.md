@@ -33,9 +33,13 @@ Slice 4: gdpr-compliance             ── 把所有用户数据出口/入口�
 
 Each slice produces an `openspec/changes/agent-<slice>/` (impl) + a sibling `*-rollout/` per `openspec/config.yaml`. Total: **8 OpenSpec changes**.
 
+**All four impl slices are landed, reviewed, e2e-verified, and archived** (per-slice `Status` lines below). The four `*-rollout` siblings remain active — prod env flips + CI-green windows are rollout work, not dev work.
+
 ---
 
 ### Slice 1 — `agent-chat-history-storage`
+
+**Status: ✅ landed + archived** — `openspec/changes/archive/2026-10-14-agent-chat-history-storage/` · commit `ab3f9e0` · rollout gates in `agent-chat-history-storage-rollout/`.
 
 **Scope.** The data plane. Nothing user-visible.
 
@@ -58,6 +62,8 @@ Each slice produces an `openspec/changes/agent-<slice>/` (impl) + a sibling `*-r
 ---
 
 ### Slice 2 — `agent-chat-history-ui`
+
+**Status: ✅ landed + archived** — `openspec/changes/archive/2026-10-14-agent-chat-history-ui/` · commit `996ed85` · rollout gates in `agent-chat-history-ui-rollout/`. As landed: the SPA reaches the agent via a Go proxy (`/api/agent/sessions*`), the sidebar is flag-gated (`VITE_CHAT_HISTORY_SIDEBAR_ENABLED`), and there is **no idle-based session splitting** — a session ends on explicit "+ New chat" only; echoing a live `run_id` resumes that run, while a new message on a live session continues it (fresh plan, no new `agent.runs` row).
 
 **Scope.** Make stored history visible and replayable.
 
@@ -89,6 +95,8 @@ Each slice produces an `openspec/changes/agent-<slice>/` (impl) + a sibling `*-r
 
 ### Slice 3 — `agent-user-preferences`
 
+**Status: ✅ landed + archived** — `openspec/changes/archive/2026-10-14-agent-user-preferences/` · commit `44306ce` · rollout gates in `agent-user-preferences-rollout/`. As landed: rollback switch is `PYTHON_AGENT_PREFS_ENABLED` (extraction + injection together); extraction is bounded (key regex, value cap, per-turn cap) and never budget-charged.
+
 **Scope.** Agent remembers user-stated preferences across sessions.
 
 - New table: `agent.chat_user_prefs(user_id, key, value jsonb, source_session_id, updated_at)` with index on `(user_id, updated_at desc)`.
@@ -113,6 +121,8 @@ Each slice produces an `openspec/changes/agent-<slice>/` (impl) + a sibling `*-r
 ---
 
 ### Slice 4 — `agent-gdpr-compliance`
+
+**Status: ✅ landed + archived** — `openspec/changes/archive/2026-10-14-agent-gdpr-compliance/` · commit `3814dac` · rollout gates in `agent-gdpr-compliance-rollout/`. As landed: checkpoint-thread erasure/export covers the **deduped union of run ids ∪ session ids** (continuation turns are session-keyed); export additionally carries the subject's own `audit_entries`; audit retention default 1095d with a 365d floor; the Playwright leg is replaced by live curl smokes + unit coverage (operator-only endpoints, transcript in the change's `e2e-evidence.md`).
 
 **Scope.** Seal all user-data exits; right-to-erasure end-to-end.
 
