@@ -23,9 +23,9 @@
 
 - [x] 4.1 Approval decision store module (Redis): keys `approval:{run_id}:{approval_id}`, `SET NX` first-wins, waiter poll (~0.5 s), key TTL = approval TTL + margin — verify unit tests (Redis double) for first-wins, duplicate no-op, expiry, and store-unavailable.
 - [x] 4.2 Gate inside `_dispatch_tool_with_retries`: confirm when annotations do not assert `readOnlyHint=true`; deny / expiry / store-unavailable close the call as a model-visible denial result (no dispatch, no retry-counter increment); approved calls dispatch unmodified without re-confirmation on transient retry — verify per-branch unit tests and a react-loop gate test.
-- [ ] 4.3 Emit the `confirm_request` frame (run id, step id, tool, masked args, approval id, expiry) and SSE comment keep-alives (~15 s) while waiting — verify frame-shape and keep-alive unit tests.
+- [x] 4.3 Emit the `confirm_request` frame (run id, step id, tool, masked args, approval id, expiry) and SSE comment keep-alives (~15 s) while waiting — verify frame-shape and keep-alive unit tests.
 - [x] 4.4 `POST /agent/approvals` endpoint: `X-Nyx-User-Id` 400 contract, run-ownership via run metadata (single-sentinel 404), idempotent duplicates, typed 404 for unknown/expired approval ids — verify endpoint tests cover each case and no internal error text reaches the body.
-- [ ] 4.5 `PYTHON_AGENT_APPROVAL_TTL_SECONDS` (default 300, refuse < 1) in config, documented in `backend/agent_py/.env.example` + `README.md` — verify config tests and the startup-refusal test.
+- [x] 4.5 `PYTHON_AGENT_APPROVAL_TTL_SECONDS` (default 300, refuse < 1) in config, documented in `backend/agent_py/.env.example` + `README.md` — verify config tests and the startup-refusal test.
 
 ## 5. Go — approval route
 

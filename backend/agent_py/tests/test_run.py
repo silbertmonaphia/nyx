@@ -169,6 +169,10 @@ def settings():
         llm_planner_model="",
         plan_max_steps=10,
         step_react_max_iterations=2,
+        # agent-feed-tools: registry calls are gated (the MCP stub is down
+        # ⇒ the gate fails closed); a 1 s approval TTL keeps each confirm
+        # wait to about one poll instead of the 300 s default.
+        approval_ttl_seconds=1,
         mcp_url="http://mcp.test",
         rag_bridge_url="http://rag.test",
         redis_url="redis://stub:6379",
@@ -370,11 +374,12 @@ async def test_react_step_emits_iteration_cap_error(app_and_state):
     frames = _parsed_frames(resp.text)
     # step_start frame for the react step.
     step_starts = [f for f in frames if isinstance(f, dict) and f.get("step_id") and f.get("kind") == "react"]
-    # Registry is DOWN in this harness (the MCP stub 502s) and no approval
-    # gate is wired: the fail-closed gate (review round 1) closes every
-    # dispatch as a denial before the registry is reached, so the loop
-    # advances on denial tool_results instead of tool_call frames. The
-    # cap mechanics under test are unchanged.
+    # Registry is DOWN in this harness (the MCP stub 502s): the fail-closed
+    # gate (review round 1) requires confirmation for every dispatch, and
+    # the harness's 1-second approval TTL closes each as an expiry denial
+    # before the registry is reached — so the loop advances on denial
+    # tool_results instead of tool_call frames. The cap mechanics under
+    # test are unchanged.
     denials = [
         f
         for f in frames

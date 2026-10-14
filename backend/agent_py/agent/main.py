@@ -18,6 +18,10 @@ Routes:
     (export + right to erasure), registered from `agent.api.gdpr`. Same
     trust model; gated by `PYTHON_AGENT_GDPR_ENABLED` (503 when off). The
     audit trail lives in `agent.data_audit_log` (`app.state.audit_log`).
+  - POST /agent/approvals — mutating-call approval decisions
+    (openspec/changes/agent-feed-tools), registered from
+    `agent.approvals_api`. Same trust model; records the decision in the
+    shared Redis broker the paused run waits on (fail-closed everywhere).
 """
 
 from __future__ import annotations
@@ -27,16 +31,18 @@ import json
 import logging
 import re
 import uuid
+from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
-from typing import AsyncIterator
 
 from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.responses import StreamingResponse
-from prometheus_client import generate_latest, CONTENT_TYPE_LATEST
+from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 from redis.asyncio import Redis
 
 from .api.chat_sessions import router as chat_sessions_router
 from .api.gdpr import router as gdpr_router
+from .approvals import ApprovalGate, ApprovalStore, RunSink
+from .approvals_api import router as approvals_router
 from .audit import AuditLog
 from .budget import BudgetGuard
 from .chat_store import ChatStore, ChatStoreUnavailable
@@ -60,8 +66,8 @@ from .rag_client import RagClient
 from .ratelimit import IpRateLimiter, RateLimitMiddleware
 from .retention import RetentionCron
 from .run_metadata import RunMetadata, RunMetadataUnavailable, build_pool
+from .state import AgentState, new_state
 from .sweeper import StaleRunSweeper
-from .state import new_state
 from .tool_dispatch import LocalToolRegistry, ToolDispatcher
 from .tools_client import ToolsClient
 from .types import (
@@ -110,7 +116,7 @@ async def lifespan(app: FastAPI):
 
     try:
         _prom_start(settings.metrics_port)
-    except OSError as exc:  # noqa: BLE001 — port already bound across tests
+    except OSError as exc:
         if "Address already in use" not in str(exc):
             raise
     log.info("prometheus exporter listening on :%d/metrics", settings.metrics_port)
@@ -164,7 +170,7 @@ async def lifespan(app: FastAPI):
                 timeout=settings.database_pool_acquire_timeout_seconds
             ) as conn:
                 await conn.execute("SELECT 1")
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             log.error("database connectivity check failed: %r", exc)
             raise
         run_metadata = RunMetadata(
@@ -473,7 +479,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
         try:
             chat_req = ChatRequest.model_validate(body)
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             raise HTTPException(status_code=400, detail=f"invalid request: {exc}") from exc
 
         return StreamingResponse(
@@ -506,7 +512,68 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     # only — no Go/SPA proxy in this slice.
     app.include_router(gdpr_router)
 
+    # Mutating-call approval decisions (openspec/changes/agent-feed-tools):
+    # the Go chat proxy posts approve/deny to POST /agent/approvals. Same
+    # private-network trust model; the waiting run resolves through the
+    # shared Redis broker (fail-closed when it is unavailable).
+    app.include_router(approvals_router)
+
     return app
+
+
+# Keep-alive cadence while a run produces no frame (agent-feed-tools
+# D2/D6): a paused mutating call holds the stream open for up to the
+# approval TTL, and intermediaries cut idle connections — an SSE comment
+# is protocol-legal and skipped by the existing frontend parser.
+_STREAM_KEEPALIVE_SECONDS = 15.0
+
+
+async def _pump_events(state: AgentState, *, sink: RunSink, **kwargs) -> None:
+    """Drive `run_agent_stream` in sink mode and close the channel at end.
+
+    The graph's frames are delivered through the run's `RunSink` queue;
+    this task exists so the SSE drain and the graph progress concurrently
+    — which is what lets the gate's mid-node confirm prompt reach the
+    client during the approval pause (and keeps frames flowing out of a
+    slow node). Runs until exhaustion or cancellation; the `finally`
+    always closes the channel so the drain can terminate.
+    """
+    try:
+        async for _ in run_agent_stream(state, sink=sink, **kwargs):
+            pass  # sink mode yields nothing — delivery rides the queue
+    finally:
+        await sink.close()
+
+
+async def _drain_run_queue(
+    queue: asyncio.Queue,
+) -> AsyncIterator[tuple[str, object] | None]:
+    """Yield the run's sink items in order, with an idle keep-alive.
+
+    Items are `("event", Event)`, `("comment", str)`, or `None` (the run's
+    channel closed). After `_STREAM_KEEPALIVE_SECONDS` without an item, a
+    `("comment", "keep-alive")` is yielded so the connection stays warm
+    while a run awaits an approval decision. The pending `queue.get()` is
+    carried across keep-alive ticks (never cancelled mid-wait), so no item
+    can be lost at a timeout boundary.
+    """
+    getter: asyncio.Task | None = None
+    try:
+        while True:
+            getter = getter or asyncio.create_task(queue.get())
+            done, _ = await asyncio.wait({getter}, timeout=_STREAM_KEEPALIVE_SECONDS)
+            if not done:
+                yield ("comment", "keep-alive")
+                continue
+            item = getter.result()
+            getter = None
+            if item is None:
+                yield None
+                return
+            yield item
+    finally:
+        if getter is not None and not getter.done():
+            getter.cancel()
 
 
 async def _stream_agent_run(
@@ -728,6 +795,22 @@ async def _stream_agent_run(
             )
         prefs_text = prefs_block(prefs)
 
+    # Live frame channel + confirmation gate (openspec/changes/agent-feed-tools
+    # D2/D5/D6): the sink lets frames — including the gate's mid-node
+    # confirm prompt — reach the client during the approval pause; the gate
+    # is wired whenever Redis is configured, and fails closed (mutating
+    # calls close as denials) when it is not. Nothing auto-approves.
+    run_queue: asyncio.Queue = asyncio.Queue()
+    sink = RunSink(run_queue)
+    redis = getattr(app.state, "redis", None)
+    approvals: ApprovalGate | None = None
+    if redis is not None:
+        approvals = ApprovalGate(
+            store=ApprovalStore(redis),
+            ttl_seconds=settings.approval_ttl_seconds,
+            sink=sink,
+        )
+
     # Build the graph with the checkpointer if persistence is enabled.
     # Re-build per-request because the saver needs `thread_id` per-run.
     graph = build_graph(
@@ -741,6 +824,7 @@ async def _stream_agent_run(
         # (see build_graph's docstring).
         tracer=app.state.tracer,
         prefs_text=prefs_text,
+        approvals=approvals,
     )
 
     graph_config: dict | None = None
@@ -795,18 +879,37 @@ async def _stream_agent_run(
     # warn-log and the stream is unaffected).
     assistant_text_parts: list[str] = []
     assistant_tool_calls: list[dict] = []
+    pump_task: asyncio.Task[None] | None = None
     try:
-        async for event in run_agent_stream(
-            state,
-            settings=settings,
-            tracer=app.state.tracer,
-            budget=app.state.budget,
-            rag=rag,
-            tools=tools,
-            graph=graph,
-            graph_config=graph_config,
-            resumed=resumed,
-        ):
+        # Live drain (agent-feed-tools D2): the pump drives the graph while
+        # the drain forwards frames from the sink queue — the gate's
+        # confirm prompt arrives mid-node, and an idle run gets SSE
+        # keep-alive comments instead of a stalled connection.
+        pump_task = asyncio.create_task(
+            _pump_events(
+                state,
+                sink=sink,
+                settings=settings,
+                tracer=app.state.tracer,
+                budget=app.state.budget,
+                rag=rag,
+                tools=tools,
+                graph=graph,
+                graph_config=graph_config,
+                resumed=resumed,
+            ),
+            name=f"agent-pump-{run_id}",
+        )
+        async for item in _drain_run_queue(run_queue):
+            if item is None:
+                break
+            kind, payload = item
+            if kind == "comment":
+                # SSE comment frame — protocol-legal, skipped by the
+                # existing frontend parser.
+                yield f": {payload}\n\n".encode()
+                continue
+            event = payload  # an ("event", Event) pair
             yield _sse_encode(event)
             # Track terminal totals for metadata persistence.
             if event.kind == "done":
@@ -830,7 +933,19 @@ async def _stream_agent_run(
                         "args": event.payload.get("args"),
                     }
                 )
+
+        # Drain ended (the pump closed the channel). Surface any pump
+        # failure with the same semantics the pre-sink direct iteration
+        # had — the exception propagates through the finally below.
+        if pump_task.done() and pump_task.exception() is not None:
+            raise pump_task.exception()
     finally:
+        if pump_task is not None and not pump_task.done():
+            pump_task.cancel()
+            try:
+                await pump_task
+            except asyncio.CancelledError:
+                pass
         # Stop the heartbeat before the terminal write so a late touch
         # cannot interleave with (or outlive) the terminal transition.
         if heartbeat_task is not None:
@@ -1014,7 +1129,7 @@ def _sse_encode(event: Event) -> bytes:
       - terminator    → {reason}
     """
     data = json.dumps(event.payload, separators=(",", ":"))
-    return f"event: {event.kind}\ndata: {data}\n\n".encode("utf-8")
+    return f"event: {event.kind}\ndata: {data}\n\n".encode()
 
 
 app = create_app()

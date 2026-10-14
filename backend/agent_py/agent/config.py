@@ -182,6 +182,13 @@ class Settings(BaseSettings):
     # start below (validator below).
     audit_retention_days: int = 1095
 
+    # --- Mutating-call approval TTL (openspec/changes/agent-feed-tools) ---
+    # Wall-clock window a paused mutating-call confirmation stays open
+    # before it closes as denied (design.md D6). MUST be >= 1 — a zero or
+    # negative window would deny every mutating call instantly (validator
+    # below); the default matches the design's 300 s.
+    approval_ttl_seconds: int = 300
+
     # --- Stale-run sweeper (openspec/changes/agent-stale-run-sweeper) ---
     # Heartbeat cadence for live runs: while a run's SSE stream is in
     # flight, a background task touches `agent.runs.last_heartbeat_at`
@@ -488,6 +495,22 @@ class Settings(BaseSettings):
             raise ValueError(
                 "PYTHON_AGENT_AUDIT_RETENTION_DAYS must be >= 365; "
                 f"got {self.audit_retention_days}"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _validate_approval_ttl(self) -> Settings:
+        """Refuse to start on a non-positive approval TTL.
+
+        Per `openspec/changes/agent-feed-tools` (agent-python-service delta
+        "New env key for approval TTL"): the value is the wall-clock window
+        a mutating-call confirmation stays open, so 0 or negative would
+        deny every mutating call instantly — an operator mistake.
+        """
+        if self.approval_ttl_seconds < 1:
+            raise ValueError(
+                "PYTHON_AGENT_APPROVAL_TTL_SECONDS must be >= 1; "
+                f"got {self.approval_ttl_seconds}"
             )
         return self
 

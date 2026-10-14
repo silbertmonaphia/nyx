@@ -368,3 +368,23 @@ def test_sessions_page_size_out_of_range_refused(value):
             sessions_page_size=value,
         )
     assert "PYTHON_AGENT_SESSIONS_PAGE_SIZE must be in [1, 50]" in str(excinfo.value)
+
+
+def test_approval_ttl_defaults_to_300():
+    """Spec scenario "Default TTL applied when unset": a pending
+    confirmation expires 300 s after the `confirm_request` frame
+    (agent-feed-tools)."""
+    s = Settings(_env_file=None, llm_base_url="http://vllm:8000/v1")
+    assert s.approval_ttl_seconds == 300
+
+
+@pytest.mark.parametrize("value", [0, -1])
+def test_approval_ttl_below_one_refused(value):
+    """Spec scenario "Invalid TTL refuses startup"."""
+    with pytest.raises(ValueError) as excinfo:
+        Settings(
+            _env_file=None,
+            llm_base_url="http://vllm:8000/v1",
+            approval_ttl_seconds=value,
+        )
+    assert "PYTHON_AGENT_APPROVAL_TTL_SECONDS must be >= 1" in str(excinfo.value)

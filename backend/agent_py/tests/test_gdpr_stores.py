@@ -71,7 +71,16 @@ async def _build_pool() -> asyncpg.Pool:
 @pytest.fixture
 async def pool():
     """Isolated pool per test: drop + rebuild both schemas, then migrate to
-    head (which creates `data_audit_log` via alembic 0006)."""
+    head (which creates `data_audit_log` via alembic 0006).
+
+    The guard here is load-bearing beyond `_DB_ONLY`: a test that reaches
+    this fixture WITHOUT the marker (or a future one added without it)
+    must skip, not blackhole on a real connect against a DSN-less
+    environment (found 2026-10-14: a ~60 s connect timeout from an
+    unmarked test).
+    """
+    if not _DSN:
+        pytest.skip("TEST_ASYNC_PG_DSN not set; needs a live Postgres")
     await _drop_schemas()
     pool = await _build_pool()
     from migrations._dev_upgrade_hook import run_upgrade_head
@@ -469,6 +478,7 @@ def test_boundary_audit_retention_accepted(monkeypatch):
     assert s.audit_retention_days == 365
 
 
+@_DB_ONLY
 async def test_upsert_pref_refuses_a_dead_source_session(pool: asyncpg.Pool) -> None:
     """Review H2a (2026-10-14): a prefs write whose source session no
     longer exists is skipped — the erasure-durability guard.
