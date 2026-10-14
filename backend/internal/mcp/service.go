@@ -81,9 +81,20 @@ func (s *Service) Registry() *tool.Registry { return s.registry }
 // surface (the JSON-Schema the agent client receives). The
 // dispatcher body, arg validation, and per-owner scoping live in
 // internal/tool — see RegisterFeedTools.
+//
+// Annotations carry the read-only / destructive contract the agent
+// gates on before dispatching a mutating call (openspec change
+// agent-feed-tools, design D3): the agent requires confirmation for
+// every registry tool whose annotations do NOT assert
+// readOnlyHint=true, so reads claim it explicitly and writes pin
+// readOnlyHint=false + destructiveHint=true rather than relying on
+// mcp-go's struct defaults. Absent annotations fail safe (confirm),
+// which is why the read-only claim must be deliberate here.
+// Contract tests: tools_list_contract_test.go.
 func (s *Service) RegisterTools(mcpServer *server.MCPServer) {
 	mcpServer.AddTool(
 		mcp.NewTool(ToolListFeeds,
+			mcp.WithReadOnlyHintAnnotation(true),
 			mcp.WithDescription("List the authenticated caller's feeds. Supports search (max 200 chars), page (min 1, default 1), page_size (clamped to 100, default 20), and order (asc|desc, default desc). Returns the standard pagination envelope: {data, page, page_size, total, has_more}."),
 			mcp.WithString("query",
 				mcp.Description("Case-insensitive search term matched against title and description."),
@@ -107,6 +118,7 @@ func (s *Service) RegisterTools(mcpServer *server.MCPServer) {
 
 	mcpServer.AddTool(
 		mcp.NewTool(ToolGetFeed,
+			mcp.WithReadOnlyHintAnnotation(true),
 			mcp.WithDescription("Read a single feed by id. Returns an error result when the feed does not exist OR is owned by another user (single sentinel, no existence leak)."),
 			mcp.WithNumber("id",
 				mcp.Required(),
@@ -119,6 +131,8 @@ func (s *Service) RegisterTools(mcpServer *server.MCPServer) {
 
 	mcpServer.AddTool(
 		mcp.NewTool(ToolCreateFeed,
+			mcp.WithReadOnlyHintAnnotation(false),
+			mcp.WithDestructiveHintAnnotation(true),
 			mcp.WithDescription("Create a new feed. title is required (1-100 chars); description is optional (max 1000 chars). Returns the created feed (with server-generated id, created_at, updated_at)."),
 			mcp.WithString("title",
 				mcp.Required(),
@@ -136,6 +150,8 @@ func (s *Service) RegisterTools(mcpServer *server.MCPServer) {
 
 	mcpServer.AddTool(
 		mcp.NewTool(ToolUpdateFeed,
+			mcp.WithReadOnlyHintAnnotation(false),
+			mcp.WithDestructiveHintAnnotation(true),
 			mcp.WithDescription("Update an existing feed. id is required; title is required (1-100 chars); description is optional (max 1000 chars). Returns an error result if the feed does not exist OR is owned by another user."),
 			mcp.WithNumber("id",
 				mcp.Required(),
@@ -158,6 +174,8 @@ func (s *Service) RegisterTools(mcpServer *server.MCPServer) {
 
 	mcpServer.AddTool(
 		mcp.NewTool(ToolDeleteFeed,
+			mcp.WithReadOnlyHintAnnotation(false),
+			mcp.WithDestructiveHintAnnotation(true),
 			mcp.WithDescription("Soft-delete a feed by id. Returns an error result if the feed does not exist OR is owned by another user."),
 			mcp.WithNumber("id",
 				mcp.Required(),

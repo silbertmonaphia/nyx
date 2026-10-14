@@ -2,9 +2,9 @@
 
 ## 1. Go — annotate the MCP feed tools
 
-- [ ] 1.1 Annotate the five feed tools in `internal/mcp/service.go` (`list_feeds`/`get_feed`: `WithReadOnlyHintAnnotation(true)`; `create_feed`/`update_feed`/`delete_feed`: `WithReadOnlyHintAnnotation(false)` + `WithDestructiveHintAnnotation(true)`) — verify `cd backend && go test ./internal/mcp/...` passes and existing name/description/inputSchema assertions are unchanged.
-- [ ] 1.2 Extend the MCP service/handler test to assert the tools/list response carries the expected `annotations` per tool — verify the new assertions fail against the un-annotated code, then pass.
-- [ ] 1.3 Freeze the tools/list wire (native `inputSchema` + `annotations`) as a checked-in cross-runtime fixture (`backend/agent_py/tests/fixtures/mcp_tools_list.json`) plus a Go test asserting the server's live response matches it — verify the golden test passes and the fixture parses as JSON with all five tools.
+- [x] 1.1 Annotate the five feed tools in `internal/mcp/service.go` (`list_feeds`/`get_feed`: `WithReadOnlyHintAnnotation(true)`; `create_feed`/`update_feed`/`delete_feed`: `WithReadOnlyHintAnnotation(false)` + `WithDestructiveHintAnnotation(true)`) — verify `cd backend && go test ./internal/mcp/...` passes and existing name/description/inputSchema assertions are unchanged.
+- [x] 1.2 Extend the MCP service/handler test to assert the tools/list response carries the expected `annotations` per tool — verify the new assertions fail against the un-annotated code, then pass.
+- [x] 1.3 Freeze the tools/list wire (native `inputSchema` + `annotations`) as a checked-in cross-runtime fixture (`backend/agent_py/tests/fixtures/mcp_tools_list.json`) plus a Go test asserting the server's live response matches it — verify the golden test passes and the fixture parses as JSON with all five tools.
 
 ## 2. Python — MCP-native schema normalization
 

@@ -8,7 +8,6 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
-	"strings"
 	"testing"
 	"time"
 
@@ -87,26 +86,14 @@ func postRPCCall(t *testing.T, router http.Handler, body []byte, headers map[str
 // response body. Streamable HTTP may return either a single JSON
 // object (Content-Type: application/json) or an SSE stream of
 // `data: {...}\n\n` events (Content-Type: text/event-stream); the
-// MCP test contract accepts either.
+// MCP test contract accepts either. firstJSONObject owns the
+// transport-decoding rule; the contract tests reuse it to capture raw
+// bytes (see tools_list_contract_test.go).
 func decodeSSEOrJSONBody(t *testing.T, rr *httptest.ResponseRecorder) map[string]any {
 	t.Helper()
-	body := rr.Body.Bytes()
-	if json.Valid(body) {
-		var out map[string]any
-		require.NoError(t, json.Unmarshal(body, &out))
-		return out
-	}
-	// SSE: pick the first `data: {...}` line.
-	for _, line := range strings.Split(string(body), "\n") {
-		if !strings.HasPrefix(line, "data: ") {
-			continue
-		}
-		var out map[string]any
-		require.NoError(t, json.Unmarshal([]byte(strings.TrimPrefix(line, "data: ")), &out))
-		return out
-	}
-	t.Fatalf("could not decode SSE/JSON body: %s", body)
-	return nil
+	var out map[string]any
+	require.NoError(t, json.Unmarshal(firstJSONObject(t, rr.Body.Bytes()), &out))
+	return out
 }
 
 // ---- Auth tests ----
