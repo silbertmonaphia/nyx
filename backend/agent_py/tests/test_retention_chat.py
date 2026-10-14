@@ -15,12 +15,15 @@ Covers:
      requires a `now()` strictly after `deleted_at`, which is true after
      a microsecond-level clock advance; the test uses a small sleep to
      avoid the race)
+  6. Derived-memory coupling (openspec/changes/agent-user-preferences D6):
+     a hard-deleted session's prefs vanish in the same iteration, another
+     session's prefs survive, a hard-delete failure leaves prefs intact,
+     and a prefs-cleanup failure never aborts the iteration
 
 Gated on `TEST_ASYNC_PG_DSN` (self-skips without a live Postgres).
 """
 from __future__ import annotations
 
-import asyncio
 import os
 
 import asyncpg
@@ -202,11 +205,11 @@ async def test_chat_iteration_failure_isolated(
     settings = _settings()
 
     class _BoomStore:
-        async def soft_delete_expired(self, retention_days):  # noqa: ARG002
+        async def soft_delete_expired(self, retention_days):
             raise RuntimeError("simulated DB outage")
 
-        async def hard_delete_soft_deleted(self, grace_days):  # noqa: ARG002
-            return 0
+        async def hard_delete_soft_deleted(self, grace_days):
+            return []
 
     cron = RetentionCron(
         run_metadata=None,
@@ -281,3 +284,222 @@ async def test_soft_delete_observed_first_then_hard_delete_later(
         )
     assert gone == 0
     assert agent_chat_retention_deleted_total._value.get() == counter_before + 1
+
+
+async def _prefs_keys_for(user_id: int) -> list[str]:
+    conn = await asyncpg.connect(
+        dsn=_DSN, server_settings={"search_path": "agent,langgraph"}
+    )
+    try:
+        rows = await conn.fetch(
+            "SELECT key FROM agent.chat_user_prefs WHERE user_id=$1 "
+            "ORDER BY key ASC",
+            user_id,
+        )
+        return [r["key"] for r in rows]
+    finally:
+        await conn.close()
+
+
+async def test_hard_delete_collects_session_prefs(pool: asyncpg.Pool) -> None:
+    """A hard-deleted session's prefs vanish in the same iteration; prefs
+    sourced from a live session survive (spec: "Session hard-delete
+    collects its prefs" + "Prefs with other sessions survive").
+
+    Soft-delete (phase 1) deliberately leaves prefs injectable — a
+    session inside the grace window is still "recently real" (design D6).
+    """
+    import uuid as _uuid
+
+    from agent.chat_store import ChatStore
+    from agent.prefs import PrefsStore
+    from agent.retention import RetentionCron
+
+    settings = _settings(chat_retention_grace_days=7)
+    store = ChatStore(pool)
+    prefs_store = PrefsStore(pool)
+    cron = RetentionCron(
+        run_metadata=None,
+        chat_store=store,
+        checkpointer=None,
+        settings=settings,
+        prefs_store=prefs_store,
+    )
+
+    doomed = str(_uuid.uuid4())
+    survivor = str(_uuid.uuid4())
+    await store.create_session(7, doomed)
+    await store.create_session(7, survivor)
+    await prefs_store.upsert_pref(7, "snack", "鱿鱼丝", source_session_id=doomed)
+    await prefs_store.upsert_pref(7, "hobby", "ACG", source_session_id=survivor)
+
+    async with pool.acquire() as conn:
+        await conn.execute(
+            "UPDATE agent.chat_sessions SET last_active_at = now() - interval '400 days' "
+            "WHERE id=$1",
+            _uuid.UUID(doomed),
+        )
+
+    # Phase 1: soft-delete only — prefs must stay (design D6).
+    await cron._chat_iteration()
+    assert await _prefs_keys_for(7) == ["hobby", "snack"]
+
+    # Phase 2: backdate `deleted_at` past the grace window → hard-delete
+    # + prefs cleanup in the same iteration.
+    async with pool.acquire() as conn:
+        await conn.execute(
+            "UPDATE agent.chat_sessions SET deleted_at = now() - interval '30 days' "
+            "WHERE id=$1",
+            _uuid.UUID(doomed),
+        )
+    await cron._chat_iteration()
+
+    assert await _prefs_keys_for(7) == ["hobby"], (
+        "the hard-deleted session's prefs must be gone; the other "
+        "session's prefs must survive"
+    )
+
+
+async def test_hard_delete_failure_leaves_prefs_intact(
+    pool: asyncpg.Pool,
+) -> None:
+    """When the session hard-delete itself fails, nothing was deleted —
+    the prefs rows must stay for the retry on the next tick."""
+    import uuid as _uuid
+
+    from agent.chat_store import ChatStore
+    from agent.prefs import PrefsStore
+    from agent.retention import RetentionCron
+
+    class _BoomHardDelete:
+        async def soft_delete_expired(self, retention_days):
+            return []
+
+        async def hard_delete_soft_deleted(self, grace_days):
+            raise RuntimeError("simulated hard-delete failure")
+
+    settings = _settings(chat_retention_grace_days=7)
+    store = ChatStore(pool)
+    prefs_store = PrefsStore(pool)
+    sid = str(_uuid.uuid4())
+    await store.create_session(8, sid)
+    await prefs_store.upsert_pref(8, "snack", "鱿鱼丝", source_session_id=sid)
+
+    cron = RetentionCron(
+        run_metadata=None,
+        chat_store=_BoomHardDelete(),  # type: ignore[arg-type]
+        checkpointer=None,
+        settings=settings,
+        prefs_store=prefs_store,
+    )
+    await cron._chat_iteration()  # must not raise
+
+    assert await _prefs_keys_for(8) == ["snack"], (
+        "a failed hard-delete must not touch prefs (no ids were returned)"
+    )
+
+
+async def test_prefs_cleanup_failure_never_aborts_iteration(
+    pool: asyncpg.Pool,
+) -> None:
+    """A prefs-cleanup fault is warn-logged and isolated: the session
+    hard-delete (and its counter) already stand, and the iteration
+    completes normally."""
+    import uuid as _uuid
+
+    from agent.chat_store import ChatStore
+    from agent.retention import RetentionCron, agent_chat_retention_deleted_total
+
+    class _BoomPrefsStore:
+        async def delete_prefs_for_sessions(self, session_ids):
+            raise RuntimeError("simulated prefs-store outage")
+
+    settings = _settings(chat_retention_grace_days=7)
+    store = ChatStore(pool)
+    sid = str(_uuid.uuid4())
+    await store.create_session(9, sid)
+    async with pool.acquire() as conn:
+        await conn.execute(
+            "UPDATE agent.chat_sessions SET deleted_at = now() - interval '30 days' "
+            "WHERE id=$1",
+            _uuid.UUID(sid),
+        )
+
+    cron = RetentionCron(
+        run_metadata=None,
+        chat_store=store,
+        checkpointer=None,
+        settings=settings,
+        prefs_store=_BoomPrefsStore(),  # type: ignore[arg-type]
+    )
+    counter_before = agent_chat_retention_deleted_total._value.get()
+    await cron._chat_iteration()  # does not raise
+
+    assert agent_chat_retention_deleted_total._value.get() == counter_before + 1
+    async with pool.acquire() as conn:
+        left = await conn.fetchval(
+            "SELECT count(*) FROM agent.chat_sessions WHERE id=$1", _uuid.UUID(sid)
+        )
+    assert left == 0, "the hard-delete must stand despite the cleanup failure"
+
+
+async def test_orphan_sweep_collects_stranded_prefs(pool: asyncpg.Pool) -> None:
+    """H1 backstop (review 2026-10-14): prefs whose source session no
+    longer exists are collected by the per-iteration orphan sweep, and
+    the counter makes the recovery observable.
+
+    This is the failure shape the hot-path cleanup cannot retry: the
+    session hard-delete succeeded, then the prefs delete failed (or the
+    process died between the two) — the ids are gone, so the sweep's
+    NOT EXISTS is the only path that can ever match those rows again.
+    """
+    import uuid as _uuid
+
+    from agent.chat_store import ChatStore
+    from agent.prefs import PrefsStore
+    from agent.retention import RetentionCron, agent_chat_prefs_deleted_total
+
+    settings = _settings()
+    store = ChatStore(pool)
+    prefs_store = PrefsStore(pool)
+    cron = RetentionCron(
+        run_metadata=None,
+        chat_store=store,
+        checkpointer=None,
+        settings=settings,
+        prefs_store=prefs_store,
+    )
+
+    # A stranded pref: source session id that has NO chat_sessions row
+    # (exactly the post-crash state).
+    stranded = str(_uuid.uuid4())
+    await prefs_store.upsert_pref(7, "snack", "鱿鱼丝", source_session_id=stranded)
+
+    # A live user-B pref via a real session — must survive the sweep.
+    survivor_session = str(_uuid.uuid4())
+    await store.create_session(8, survivor_session)
+    await prefs_store.upsert_pref(8, "hobby", "ACG", source_session_id=survivor_session)
+
+    # A NULL-sourced pref — slice-4 erasure path, must survive too.
+    await prefs_store.upsert_pref(8, "timezone", "Asia/Shanghai", source_session_id=None)
+
+    counter_before = agent_chat_prefs_deleted_total._value.get()
+    await cron._chat_iteration()
+    counter_after = agent_chat_prefs_deleted_total._value.get()
+
+    assert counter_after == counter_before + 1, "the sweep counts its deletions"
+
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
+            "SELECT key FROM agent.chat_user_prefs WHERE user_id=7"
+        )
+        assert rows == [], "the stranded pref must be swept"
+        survivor_keys = {
+            r["key"]
+            for r in await conn.fetch(
+                "SELECT key FROM agent.chat_user_prefs WHERE user_id=8"
+            )
+        }
+    assert survivor_keys == {"hobby", "timezone"}, (
+        f"live-session and NULL-sourced prefs must survive; got {survivor_keys}"
+    )

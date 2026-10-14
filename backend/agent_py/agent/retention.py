@@ -16,6 +16,14 @@ CASCADE). Failure in one iteration is logged at WARN and the other still
 runs — the two surfaces have independent observability counters and OTel
 spans (`agent.run.retention` + `agent.chat.retention`).
 
+The chat iteration also collects the derived memory of the hard-deleted
+sessions (`openspec/changes/agent-user-preferences` D6): after a
+successful hard-delete the deleted ids go to
+`PrefsStore.delete_prefs_for_sessions`, so a session's preferences die
+with the conversation they were extracted from. Prefs cleanup failure is
+warn-logged and never aborts the iteration; prefs are NOT counted toward
+`agent_chat_retention_deleted_total`.
+
 OTel span `agent.run.retention` per iteration with `deleted_count` attribute.
 OTel span `agent.chat.retention` per iteration with `chat_deleted_count`
 attribute. Prometheus counter `agent_run_retention_deleted_total` increments
@@ -34,6 +42,7 @@ from prometheus_client import Counter
 if TYPE_CHECKING:
     from .chat_store import ChatStore
     from .config import Settings
+    from .prefs import PrefsStore
     from .run_metadata import RunMetadata
 
 log = logging.getLogger("nyx.agent.retention")
@@ -51,6 +60,15 @@ agent_chat_retention_deleted_total = Counter(
     "and grace phases and are physically removed).",
 )
 
+agent_chat_prefs_deleted_total = Counter(
+    "agent_chat_prefs_deleted_total",
+    "Total number of agent.chat_user_prefs rows deleted by the retention cron's "
+    "orphan sweep (prefs whose source session no longer exists). Increments when a "
+    "cleanup failure or a crash between the session delete and the prefs delete is "
+    "recovered on a later tick — a nonzero rate is the signal that the hot-path "
+    "cleanup is failing.",
+)
+
 
 class RetentionCron:
     """Single asyncio task that fires every `retention_interval_seconds`."""
@@ -62,6 +80,7 @@ class RetentionCron:
         checkpointer=None,
         *,
         settings: Settings,
+        prefs_store: PrefsStore | None = None,
     ) -> None:
         self._run_metadata = run_metadata
         # Chat-history retention surface (openspec/changes/agent-chat-history-storage).
@@ -72,6 +91,14 @@ class RetentionCron:
         # no checkpoint threads exist). Duck-typed: only `adelete_thread` is
         # used, so tests can inject a fake without importing the framework.
         self._checkpointer = checkpointer
+        # Derived-memory cleanup (openspec/changes/agent-user-preferences D6):
+        # after the chat hard-delete, the deleted session ids go to
+        # `delete_prefs_for_sessions` so a session's prefs do not outlive it.
+        # Keyword-only with a None default — pre-existing positional
+        # constructions `RetentionCron(rm, chat_store, checkpointer, ...)`
+        # keep binding the same parameters, and when None the cleanup is
+        # skipped (metadata-only dev; nothing to collect).
+        self._prefs_store = prefs_store
         # Keyword-only on purpose: `checkpointer` was inserted before
         # `settings`, so a stale positional call `RetentionCron(rm, settings)`
         # would silently bind settings to the checkpointer (test-review
@@ -202,14 +229,15 @@ class RetentionCron:
             # Phase 2: hard-delete. Only the rows that survive both phases
             # count toward the metric.
             try:
-                hard_deleted = await self._chat_store.hard_delete_soft_deleted(
+                hard_deleted_ids = await self._chat_store.hard_delete_soft_deleted(
                     grace_days=self._settings.chat_retention_grace_days
                 )
             except Exception as exc:  # noqa: BLE001
                 log.warning(
                     "retention: chat hard-delete failed (non-fatal): %r", exc
                 )
-                hard_deleted = 0
+                hard_deleted_ids = []
+            hard_deleted = len(hard_deleted_ids)
             span.set_attribute("chat_deleted_count", hard_deleted)
             agent_chat_retention_deleted_total.inc(hard_deleted)
 
@@ -220,3 +248,55 @@ class RetentionCron:
                     hard_deleted,
                     self._settings.chat_retention_grace_days,
                 )
+
+            # Derived-memory cleanup (openspec/changes/agent-user-preferences
+            # D6): a hard-deleted session takes its extracted preferences
+            # with it — derived memory must not outlive its conversation.
+            # Runs only when the hard-delete succeeded (a failed delete
+            # returns no ids, so prefs stay intact for the retry next tick).
+            # Failure isolation: a cleanup fault is warn-logged and never
+            # aborts the iteration; prefs are NOT counted as sessions
+            # (the metric above took `len(ids)` already).
+            if hard_deleted_ids and self._prefs_store is not None:
+                try:
+                    prefs_deleted = await self._prefs_store.delete_prefs_for_sessions(
+                        hard_deleted_ids
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    log.warning(
+                        "retention: prefs cleanup failed (non-fatal): %r", exc
+                    )
+                else:
+                    if prefs_deleted:
+                        log.info(
+                            "retention cron: deleted %d preference rows sourced "
+                            "from %d hard-deleted chat sessions",
+                            prefs_deleted,
+                            hard_deleted,
+                        )
+
+            # Orphan sweep backstop (review 2026-10-14 / H1): the cleanup
+            # above is a separate transaction on a separate connection —
+            # a transient failure or a crash between the two deletes
+            # would strand those prefs forever (their session ids can
+            # never be matched again). This sweep runs every tick, so
+            # stranded rows are collected on the next pass, and the
+            # counter makes the gap observable instead of silent. NULL-
+            # sourced prefs are deliberately kept (slice-4 erasure path).
+            if self._prefs_store is not None:
+                try:
+                    orphaned = await self._prefs_store.delete_orphaned()
+                except Exception as exc:  # noqa: BLE001
+                    log.warning(
+                        "retention: prefs orphan sweep failed (non-fatal): %r",
+                        exc,
+                    )
+                else:
+                    span.set_attribute("chat_prefs_orphans_deleted", orphaned)
+                    agent_chat_prefs_deleted_total.inc(orphaned)
+                    if orphaned:
+                        log.info(
+                            "retention cron: orphan sweep deleted %d preference "
+                            "rows whose source sessions no longer exist",
+                            orphaned,
+                        )

@@ -143,7 +143,7 @@ Each slice produces an `openspec/changes/agent-<slice>/` (impl) + a sibling `*-r
 |---|---|
 | **Dependency order** | Slice 1 is the unmovable foundation; Slices 2 + 3 are two independent product capabilities on top; Slice 4 seals everything. |
 | **Solo archive** | Each slice has clean design/tasks/e2e/archive boundaries — no "one task blocks archive" trap. |
-| **Solo rollback** | Slice 3 broken? Turn off `PYTHON_AGENT_PREFS_EXTRACTION_ENABLED=false`. Slice 2 broken? Hide the sidebar behind a flag. No flag-day coupling. |
+| **Solo rollback** | Slice 3 broken? Turn off `PYTHON_AGENT_PREFS_ENABLED=false`. Slice 2 broken? Hide the sidebar behind a flag. No flag-day coupling. |
 | **Solo rollout** | Each impl slice has its own `*-rollout` sibling for the prod env-flip + 1-week CI-green window. 8 OpenSpec changes total, but each is small (100–300 lines). |
 | **E2E per slice** | Each slice owns one Playwright spec with a clear end-to-end assertion (sidebar list, prefs recall, GDPR round-trip). No shared "huge e2e" surface. |
 
