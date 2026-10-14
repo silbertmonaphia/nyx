@@ -1,0 +1,29 @@
+name: stream-budget
+
+on:
+  push:
+    branches: [ main, mvp ]
+  pull_request:
+    branches: [ main, mvp ]
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+permissions:
+  contents: read
+
+jobs:
+  stream-budget-check:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+    - name: Set up Python
+      uses: actions/setup-python@e797f83bcb11b83ae66e0230d6156d7c80228e7c # v6.0.0
+      with:
+        python-version: '3.12'
+    - name: Check stream budget
+      run: python3 scripts/check_stream_budget.py
+    - name: Checker unit tests
+      run: |
+        python -m pip install -q pytest
+        python -m pytest scripts/tests/test_check_stream_budget.py -q

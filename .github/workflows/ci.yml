@@ -7,12 +7,13 @@
 # below).
 #
 # Pinning policy (kept in sync with this file's `actions:` lines):
-#   actions/checkout@v4.6.2       → ea165f8d65b6e75b540449e92b4886f43607fa02
-#   actions/setup-go@v5.6.0       → 40f1582b2485089dde7abd97c1529aa768e1baff
-#   actions/setup-node@v4.4.0     → 49933ea5288caeca8642d1e84afbd3f7d6820020
-#   actions/upload-artifact@v4.4. → 11d5960a326750d5838078e36cf38b85af677262
-# (last entry truncated for readability; SHAs match the comment
-# block below each `uses:` line)
+#   actions/checkout@v7.0.1        → 3d3c42e5aac5ba805825da76410c181273ba90b1
+#   actions/setup-go@v5.6.0        → 40f1582b2485089dde7abd97c1529aa768e1baff
+#   actions/setup-python@v6.0.0    → e797f83bcb11b83ae66e0230d6156d7c80228e7c
+#   actions/setup-node@v4.4.0      → 49933ea5288caeca8642d1e84afbd3f7d6820020
+#   actions/upload-artifact@v4.4.0 → 50769540e7f4bd5e21e526ee35c689e35e0d6874
+#   dorny/paths-filter@v3.0.2      → de90cc6fb38fc0963ad72b210f1f284cd68cea36
+# (SHAs match the comment block below each `uses:` line)
 name: CI
 
 on:
@@ -44,7 +45,7 @@ jobs:
     env:
       DB_URL: postgres://postgres:postgres@localhost:5432/nyx_test?sslmode=disable
     steps:
-    - uses: actions/checkout@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
     - name: Set up Go
       uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
       with:
@@ -105,13 +106,13 @@ jobs:
     env:
       PYTHON_AGENT_DATABASE_URL: postgres://postgres:postgres@localhost:5432/nyx_test?sslmode=disable&options=-c%20search_path%3Dlanggraph%2Cagent
     steps:
-    - uses: actions/checkout@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       with:
         # Need the merge base to diff against for the paths filter.
         fetch-depth: 0
     - name: Detect migration changes
       id: filter
-      uses: dorny/paths-filter@de90cc6fb38fc0963ad72b210f1b284cd68cea36 # v3.0.2
+      uses: dorny/paths-filter@de90cc6fb38fc0963ad72b210f1f284cd68cea36 # v3.0.2
       with:
         # Refs input is required to diff PRs against the merge base.
         # Without it `paths-filter` only sees the SHA of the push,
@@ -120,7 +121,7 @@ jobs:
         filter: 'backend/agent_py/migrations/**'
     - name: Set up Python
       if: steps.filter.outputs.changed == 'true'
-      uses: actions/setup-python@83679d7c7e7d3da7c51e1b3bd4458b9a8c44a478 # v6.0.0
+      uses: actions/setup-python@e797f83bcb11b83ae66e0230d6156d7c80228e7c # v6.0.0
       with:
         python-version: '3.12'
     - name: Install agent deps
@@ -152,10 +153,45 @@ jobs:
         # error here means a migration isn't safe to re-apply.
         .venv/bin/alembic upgrade head
 
+  no-new-comments:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      with:
+        fetch-depth: 0
+    - name: Set up Python
+      uses: actions/setup-python@e797f83bcb11b83ae66e0230d6156d7c80228e7c # v6.0.0
+      with:
+        python-version: '3.12'
+    - name: Check for new code comments
+      env:
+        BASE_REF: ${{ github.base_ref }}
+        BEFORE_SHA: ${{ github.event.before }}
+      run: |
+        if [ -n "$BASE_REF" ]; then
+          BASE="origin/$BASE_REF"
+          RANGE="origin/$BASE_REF...HEAD"
+        elif [ -n "$BEFORE_SHA" ] && [ "$BEFORE_SHA" != "0000000000000000000000000000000000000000" ]; then
+          BASE="$BEFORE_SHA"
+          RANGE="$BEFORE_SHA...HEAD"
+        else
+          BASE="HEAD^"
+          RANGE="HEAD^...HEAD"
+        fi
+        if ! git cat-file -e "$BASE:scripts/check_no_comments.py" 2>/dev/null; then
+          echo "check not present at base ($BASE); skipping (transition rule)"
+          exit 0
+        fi
+        python3 scripts/check_no_comments.py --range "$RANGE"
+    - name: Checker unit tests
+      run: |
+        python -m pip install -q pytest
+        python -m pytest scripts/tests -q
+
   frontend-test:
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
     - name: Set up Node
       uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
       with:
@@ -200,7 +236,7 @@ jobs:
       PORT: "8080"
       REDIS_ENABLED: "false"
     steps:
-    - uses: actions/checkout@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
     - name: Set up Go
       uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
       with:
@@ -272,14 +308,14 @@ jobs:
         exit $test_exit
     - name: Upload Playwright HTML report
       if: always()
-      uses: actions/upload-artifact@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      uses: actions/upload-artifact@50769540e7f4bd5e21e526ee35c689e35e0d6874 # v4.4.0
       with:
         name: playwright-report
         path: frontend/playwright-report/
         retention-days: 14
     - name: Upload Playwright test artifacts (traces, videos)
       if: failure() || cancelled()
-      uses: actions/upload-artifact@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      uses: actions/upload-artifact@50769540e7f4bd5e21e526ee35c689e35e0d6874 # v4.4.0
       with:
         name: playwright-test-results
         path: frontend/test-results/
@@ -295,7 +331,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - uses: actions/checkout@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Set up Go
         uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
         with:
@@ -316,7 +352,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 3
     steps:
-      - uses: actions/checkout@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Set up Node
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
@@ -352,10 +388,10 @@ jobs:
       issues: write     # semantic-release mentions PRs in release notes
       pull-requests: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0   # semantic-release needs full history
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: '22'
           cache: 'npm'
