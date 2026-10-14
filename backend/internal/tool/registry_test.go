@@ -3,6 +3,7 @@ package tool
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"sync"
@@ -472,4 +473,293 @@ func (s *spyFeed) CreateFeed(_ context.Context, m *feed.Feed) error {
 	s.createCalls++
 	s.lastCreateUID = m.UserID
 	return nil
+}
+
+// --- dispatch bodies: defaults, results, error pass-through ---
+
+// recordingFeed is the full-surface fake for the dispatch-body tests:
+// it records every call's arguments and returns programmable errors,
+// so one fake drives all five tools' success and failure paths (the
+// closures in feeds.go are otherwise only reached through the two
+// smoke tests above).
+type recordingFeed struct {
+	stubFeedService
+
+	listErr, getErr, createErr, updateErr, deleteErr error
+
+	lastQuery  string
+	lastPage   int
+	lastListSz int
+	lastOrder  feed.SortOrder
+
+	lastGetID    int
+	lastCreate   *feed.Feed
+	lastUpdateID int
+	lastUpdate   *feed.Feed
+	lastDeleteID int
+}
+
+func (f *recordingFeed) GetFeeds(_ context.Context, q string, page, size int, order feed.SortOrder) (*feed.Page, error) {
+	f.lastQuery, f.lastPage, f.lastListSz, f.lastOrder = q, page, size, order
+	if f.listErr != nil {
+		return nil, f.listErr
+	}
+	return &feed.Page{Items: []feed.Feed{{ID: 9, Title: "t"}}, Page: page, PageSize: size, Total: 1}, nil
+}
+
+func (f *recordingFeed) GetFeedByID(_ context.Context, id int) (*feed.Feed, error) {
+	f.lastGetID = id
+	if f.getErr != nil {
+		return nil, f.getErr
+	}
+	return &feed.Feed{ID: id, Title: "fetched"}, nil
+}
+
+func (f *recordingFeed) CreateFeed(_ context.Context, m *feed.Feed) error {
+	f.lastCreate = m
+	if f.createErr != nil {
+		return f.createErr
+	}
+	m.ID = 42 // server-generated id, as the real repository does
+	return nil
+}
+
+func (f *recordingFeed) UpdateFeed(_ context.Context, id int, m *feed.Feed) error {
+	f.lastUpdateID, f.lastUpdate = id, m
+	if f.updateErr != nil {
+		return f.updateErr
+	}
+	m.ID = id
+	return nil
+}
+
+func (f *recordingFeed) DeleteFeed(_ context.Context, id int) error {
+	f.lastDeleteID = id
+	return f.deleteErr
+}
+
+// TestFeedTools_ListDefaults pins the normalisation contract the doc
+// comment on ListFeedsArgs promises: zero AND negative page /
+// page_size fall back to 1 / 20 inside the tool body (they are
+// deliberately NOT `min` validation). The >100 clamp is pinned by
+// TestFeedTools_PageSizeClampedTo100.
+func TestFeedTools_ListDefaults(t *testing.T) {
+	for _, c := range []struct {
+		name     string
+		args     ListFeedsArgs
+		wantPage int
+		wantSize int
+	}{
+		{"zero", ListFeedsArgs{}, 1, 20},
+		{"negative", ListFeedsArgs{Page: -3, PageSize: -7}, 1, 20},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			feeds := &recordingFeed{}
+			r := New()
+			RegisterFeedTools(r, feeds)
+
+			got, err := r.Dispatch(ctxWithUser(1), ToolNameListFeeds, c.args)
+			require.NoError(t, err)
+			assert.Equal(t, c.wantPage, feeds.lastPage)
+			assert.Equal(t, c.wantSize, feeds.lastListSz)
+			assert.Equal(t, feed.SortDesc, feeds.lastOrder,
+				"empty / unknown order must normalise to desc at the tool body")
+
+			page, ok := got.(feed.FeedsPage)
+			require.True(t, ok, "list result must be the pagination envelope, got %T", got)
+			assert.Equal(t, c.wantPage, page.Page)
+			assert.Equal(t, c.wantSize, page.PageSize)
+		})
+	}
+}
+
+// TestFeedTools_ListForwardsQuery confirms the search string reaches
+// the service untouched (no trimming / no normalisation beyond page
+// bounds).
+func TestFeedTools_ListForwardsQuery(t *testing.T) {
+	feeds := &recordingFeed{}
+	r := New()
+	RegisterFeedTools(r, feeds)
+
+	_, err := r.Dispatch(ctxWithUser(1), ToolNameListFeeds, ListFeedsArgs{Query: "rust news", Order: "asc"})
+	require.NoError(t, err)
+	assert.Equal(t, "rust news", feeds.lastQuery)
+	assert.Equal(t, feed.SortAsc, feeds.lastOrder)
+}
+
+// TestFeedTools_ListServiceError — the list error branch: the
+// service's error reaches the caller through errors.Is unchanged.
+// (Dispatch logs it via ClassifyAndLog but preserves the chain — the
+// "log + return original" contract documented on Registry.Dispatch.)
+func TestFeedTools_ListServiceError(t *testing.T) {
+	captureLogger(t)
+	boom := errors.New("pgx: select boom")
+	feeds := &recordingFeed{listErr: boom}
+	r := New()
+	RegisterFeedTools(r, feeds)
+
+	got, err := r.Dispatch(ctxWithUser(1), ToolNameListFeeds, ListFeedsArgs{})
+	require.Error(t, err)
+	assert.Nil(t, got)
+	assert.True(t, errors.Is(err, boom), "list error chain must be preserved (got %v)", err)
+}
+
+// TestFeedTools_GetFeed pins the read path: id forwarded, result
+// returned as the service's *feed.Feed, and feed.ErrNotFound passes
+// through errors.Is so the caller's wire mapping keeps working.
+func TestFeedTools_GetFeed(t *testing.T) {
+	t.Run("success", func(t *testing.T) {
+		feeds := &recordingFeed{}
+		r := New()
+		RegisterFeedTools(r, feeds)
+
+		got, err := r.Dispatch(ctxWithUser(1), ToolNameGetFeed, GetFeedArgs{ID: 11})
+		require.NoError(t, err)
+		assert.Equal(t, 11, feeds.lastGetID)
+		feedRow, ok := got.(*feed.Feed)
+		require.True(t, ok, "get result must be *feed.Feed, got %T", got)
+		assert.Equal(t, 11, feedRow.ID)
+	})
+
+	t.Run("sentinel passes through", func(t *testing.T) {
+		captureLogger(t)
+		feeds := &recordingFeed{getErr: feed.ErrNotFound}
+		r := New()
+		RegisterFeedTools(r, feeds)
+
+		_, err := r.Dispatch(ctxWithUser(1), ToolNameGetFeed, GetFeedArgs{ID: 404})
+		require.Error(t, err)
+		assert.True(t, errors.Is(err, feed.ErrNotFound),
+			"domain sentinel must pass through errors.Is (got %v)", err)
+	})
+}
+
+// TestFeedTools_CreateFeed pins the owner stamp: the body reads the
+// user id from the context (NOT from args) and the returned value is
+// the service-mutated record (with its server-generated id).
+func TestFeedTools_CreateFeed(t *testing.T) {
+	t.Run("success", func(t *testing.T) {
+		feeds := &recordingFeed{}
+		r := New()
+		RegisterFeedTools(r, feeds)
+
+		got, err := r.Dispatch(ctxWithUser(7), ToolNameCreateFeed,
+			CreateFeedArgs{Title: "t", Description: "d"})
+		require.NoError(t, err)
+		require.NotNil(t, feeds.lastCreate)
+		assert.Equal(t, 7, feeds.lastCreate.UserID, "owner must come from the context")
+		assert.Equal(t, "t", feeds.lastCreate.Title)
+
+		created, ok := got.(feed.Feed)
+		require.True(t, ok, "create result must be feed.Feed, got %T", got)
+		assert.Equal(t, 42, created.ID, "result must carry the service-generated id")
+		assert.Equal(t, 7, created.UserID)
+	})
+
+	t.Run("service error", func(t *testing.T) {
+		captureLogger(t)
+		boom := errors.New("pgx: insert boom")
+		feeds := &recordingFeed{createErr: boom}
+		r := New()
+		RegisterFeedTools(r, feeds)
+
+		got, err := r.Dispatch(ctxWithUser(7), ToolNameCreateFeed, CreateFeedArgs{Title: "t"})
+		require.Error(t, err)
+		assert.Nil(t, got)
+		// Stricter than the older SafeErrorMapping test, deliberately:
+		// Registry.Dispatch's documented contract is "log via
+		// ClassifyAndLog, return the original chain", so pinning
+		// errors.Is here freezes the contract at the tool-body boundary.
+		assert.True(t, errors.Is(err, boom), "underlying error chain must be preserved")
+	})
+}
+
+// TestFeedTools_UpdateFeed — same owner-stamp + result contract as
+// create, plus the id forwarding shape (id is a separate argument).
+func TestFeedTools_UpdateFeed(t *testing.T) {
+	t.Run("success", func(t *testing.T) {
+		feeds := &recordingFeed{}
+		r := New()
+		RegisterFeedTools(r, feeds)
+
+		got, err := r.Dispatch(ctxWithUser(7), ToolNameUpdateFeed,
+			UpdateFeedArgs{ID: 5, Title: "new"})
+		require.NoError(t, err)
+		assert.Equal(t, 5, feeds.lastUpdateID)
+		require.NotNil(t, feeds.lastUpdate)
+		assert.Equal(t, 7, feeds.lastUpdate.UserID)
+		assert.Equal(t, "new", feeds.lastUpdate.Title)
+
+		updated, ok := got.(feed.Feed)
+		require.True(t, ok, "update result must be feed.Feed, got %T", got)
+		assert.Equal(t, 5, updated.ID)
+	})
+
+	t.Run("sentinel passes through", func(t *testing.T) {
+		captureLogger(t)
+		feeds := &recordingFeed{updateErr: feed.ErrNotFound}
+		r := New()
+		RegisterFeedTools(r, feeds)
+
+		_, err := r.Dispatch(ctxWithUser(7), ToolNameUpdateFeed, UpdateFeedArgs{ID: 404, Title: "x"})
+		require.Error(t, err)
+		assert.True(t, errors.Is(err, feed.ErrNotFound), "got %v", err)
+	})
+}
+
+// TestFeedTools_DeleteFeed pins the wire shape of the delete result
+// ({deleted, id}) via JSON — the envelope is an anonymous struct, so
+// marshalling is the contract-faithful assertion.
+func TestFeedTools_DeleteFeed(t *testing.T) {
+	t.Run("success", func(t *testing.T) {
+		feeds := &recordingFeed{}
+		r := New()
+		RegisterFeedTools(r, feeds)
+
+		got, err := r.Dispatch(ctxWithUser(1), ToolNameDeleteFeed, DeleteFeedArgs{ID: 5})
+		require.NoError(t, err)
+		assert.Equal(t, 5, feeds.lastDeleteID)
+
+		raw, err := json.Marshal(got)
+		require.NoError(t, err)
+		assert.JSONEq(t, `{"deleted": true, "id": 5}`, string(raw))
+	})
+
+	t.Run("sentinel passes through", func(t *testing.T) {
+		captureLogger(t)
+		feeds := &recordingFeed{deleteErr: feed.ErrNotFound}
+		r := New()
+		RegisterFeedTools(r, feeds)
+
+		_, err := r.Dispatch(ctxWithUser(1), ToolNameDeleteFeed, DeleteFeedArgs{ID: 404})
+		require.Error(t, err)
+		assert.True(t, errors.Is(err, feed.ErrNotFound), "got %v", err)
+	})
+}
+
+// TestIsKnownSentinel pins the exported classifier for
+// registry-internal sentinels (the MCP shim currently keeps its own
+// switch instead of calling this, so the test pins the exported
+// contract directly). All five sentinels match — including when
+// wrapped; domain sentinels and unrelated errors do not.
+func TestIsKnownSentinel(t *testing.T) {
+	for _, c := range []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{"nil", nil, false},
+		{"missing owner", ErrMissingOwner, true},
+		{"invalid args", ErrInvalidArgs, true},
+		{"tool not found", ErrToolNotFound, true},
+		{"panic", ErrPanic, true},
+		{"internal", ErrInternal, true},
+		{"wrapped sentinel", fmt.Errorf("outer: %w", ErrInvalidArgs), true},
+		{"domain sentinel", feed.ErrNotFound, false},
+		{"unrelated error", errors.New("boom"), false},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			assert.Equal(t, c.want, IsKnownSentinel(c.err))
+		})
+	}
 }
