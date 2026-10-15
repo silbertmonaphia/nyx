@@ -5,6 +5,20 @@
 
 最开始的最Naive的想法：LangChain[编排] + WebShaper[搜索] + Mem0[记忆] + Milvus[RAG]  
 然后的想法: LangGraph[编排] + Pgvector/Milvus[RAG] + MCP&Tool + Langfuse[OTel&Eval] + Tavily[搜索] + Mem0[记忆]  
+最新的想法202610 agent(p0):[Security, Data, Performance]
+0、LLM: vllm
+1、RAG: vector db(Pgvector, Milvus)
+2、MCP
+
+3、Ochestration: LangGraph(Planner-and-Executer[reAct] loop)
+?4、Eval: Goden Set: promptfoo(mvp) => Inspect AI
+?5、Security: Prompt Injection
+6、Otel: Langfuse(langfuse+langfus-worker+ClickHouse+MinIO+PostgreSQL+Redis) 开发默认关闭,可以make up-langfuse起。线上agent不用docker compose这个langfuse，直接配置langfuse集群的url，docker compose的langfuse只对开发本地有用
+7、Memory: Mem0
+
+8、Tool: web_serach(Tavily),web_fetch,feed tools...
+9、GuardRail: HITL(Human-in-the-loop)
+
 
 ## P0 核心骨架: 从单向 DAG 转为 Loop 与 Tool Routing
 1、工具调用 Tool Calling & Structured Output ✅
