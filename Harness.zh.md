@@ -9,7 +9,7 @@
 - 入口安全：`.claude/settings` allow/deny + `gitleaks` pre-commit
 - AI 上下文过滤：`.claudeignore`（扩展方向：屏蔽 `.env*`、`node_modules`、`playwright-report`、`coverage.html` 等不该进 prompt 上下文的产物）
 - 流程：`CLAUDE.md` 强制 Plan 模式 + 显式 review 子 agent
-- 质量门：golangci-lint / vitest / coverage gate（`make coverage-check`）/ sqlc drift（`make sqlc-diff`）/ OpenAPI drift（`make openapi-diff`）/ commitlint / Conventional Commits
+- 质量门：golangci-lint / vitest / coverage gate（`make coverage-check`）/ sqlc drift（`make sqlc-diff`）/ OpenAPI drift（后端 `make openapi-diff`，前端 `npm run openapi:check`）/ commitlint / Conventional Commits
 - Pre-commit：husky + lint-staged（eslint --fix + vitest related + gitleaks）
 - CI：semantic-release monorepo、GitHub Actions、`make sqlc-diff`、`make openapi-diff`、`make coverage-check`
 - 运行时观测：后端 OTel→Jaeger，前端 Sentry

@@ -205,6 +205,8 @@ per-operation duplication.
 ```bash
 cd backend && make openapi        # writes ../api/openapi.json
 cd backend && make openapi-diff   # fails if the committed copy is stale
+cd frontend && npm run openapi:gen    # regenerates src/api/openapi/schema.d.ts
+cd frontend && npm run openapi:check  # fails if the committed copy is stale
 ```
 
 `cmd/openapi` needs no database, Redis, or network: it calls
@@ -258,6 +260,10 @@ tests against the real chi + huma stack. On top of that, the
 `backend-test` job runs `make openapi-diff` (right after `make
 sqlc-diff`): if you changed an operation without re-running `make
 openapi`, the committed `api/openapi.json` is stale and the job fails.
+The frontend half of the same contract is gated in `frontend-test` by
+`npm run openapi:check`: a spec change that lands without
+`cd frontend && npm run openapi:gen` and a committed
+`src/api/openapi/schema.d.ts` fails that job.
 
 ## Troubleshooting
 

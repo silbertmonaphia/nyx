@@ -206,6 +206,19 @@ jobs:
       # check — it can't be reduced to "staged files only". Runs after
       # eslint so syntactic issues are caught first.
       run: cd frontend && npm run lint:arch
+    - name: Frontend OpenAPI type drift check
+      # The SPA's generated types must match api/openapi.json. The backend
+      # half is gated by `make openapi-diff` in backend-test; this is the
+      # frontend half, whose absence let schema.d.ts fall behind the spec.
+      # Same generator as `npm run openapi:gen`, so a locally regenerated
+      # and committed file always satisfies it.
+      run: |
+        cd frontend
+        if ! npm run openapi:check; then
+          echo "::error::src/api/openapi/schema.d.ts has drifted from api/openapi.json"
+          echo "Fix: cd frontend && npm run openapi:gen — then commit src/api/openapi/schema.d.ts."
+          exit 1
+        fi
     - name: Test
       run: cd frontend && npm test
     - name: Build
