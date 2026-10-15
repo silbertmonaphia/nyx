@@ -15,4 +15,4 @@
 ## 3. Verification
 
 - [x] 3.1 Run `cd backend && go test ./...` locally with Docker and no `DB_URL` and confirm `internal/feed` and `internal/user` both pass (previously the two red packages) (2026-10-15: five consecutive full runs green after 1.4 — `internal/feed` 10.2s, `internal/user` 5.9s, cache suite 16.2s)
-- [ ] 3.2 Push and verify the CI run: `backend-test` unchanged-green (it uses `DB_URL`), `release` still creates its release (job-level permissions intact), every other job unchanged; record the run URL
+- [x] 3.2 Push and verify the CI run: `backend-test` unchanged-green (it uses `DB_URL`), `release` still creates its release (job-level permissions intact), every other job unchanged; record the run URL (2026-10-15: https://github.com/silbertmonaphia/nyx/actions/runs/38732575566 — run `success`; `backend-test`, `frontend-test` and `release` all green, so the workflow-level `contents: read` default did not break tag/release creation)
