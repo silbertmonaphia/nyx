@@ -65,7 +65,7 @@ module.exports = {
     // `frontend/package.json` is actually staged.
     if (!files || files.length === 0) return [];
     execSync(
-      'npm install --workspaces=false --package-lock-only --no-audit --no-fund',
+      'npx -y npm@10 install --workspaces=false --package-lock-only --no-audit --no-fund',
       { cwd: frontendDir, stdio: 'inherit' },
     );
     // Re-stage the regenerated lockfile with an absolute path so the
