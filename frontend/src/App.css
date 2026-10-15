@@ -63,7 +63,7 @@
   margin-left: 4px;
 }
 
-.add-movie-form {
+.add-feed-form {
   display: flex;
   flex-direction: column;
   gap: 12px;
@@ -88,23 +88,6 @@
     resize: vertical;
   }
 
-  .rating-input {
-    display: flex;
-    flex-direction: column;
-    gap: 8px;
-    margin: 8px 0;
-
-    label {
-      font-size: 14px;
-      color: var(--accent);
-      font-weight: bold;
-    }
-
-    input[type="range"] {
-      width: 100%;
-    }
-  }
-
   .submit-button {
     background: var(--accent);
     color: white;
@@ -116,7 +99,7 @@
   }
 }
 
-.movie-list {
+.feed-list {
   display: flex;
   flex-direction: column;
   gap: 20px;
@@ -126,7 +109,7 @@
   text-align: left;
 }
 
-.movie-item {
+.feed-item {
   background: var(--social-bg);
   padding: 20px;
   border-radius: 12px;
@@ -141,11 +124,11 @@
     box-shadow: var(--shadow);
   }
 
-  .movie-content {
+  .feed-content {
     flex-grow: 1;
   }
 
-  .movie-actions {
+  .feed-actions {
     display: flex;
     gap: 8px;
     margin-left: 16px;
@@ -188,15 +171,6 @@
     font-size: 15px;
     margin-bottom: 12px;
   }
-
-  .rating {
-    font-weight: bold;
-    color: var(--accent);
-    background: var(--accent-bg);
-    padding: 4px 10px;
-    border-radius: 20px;
-    font-size: 14px;
-  }
 }
 
 .edit-form {
@@ -238,8 +212,6 @@
   display: flex;
   flex-direction: column;
   gap: 25px;
-  place-content: center;
-  place-items: center;
   flex-grow: 1;
 
   @media (max-width: 1024px) {

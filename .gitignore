@@ -1,4 +1,9 @@
+doc/
+minimax_*.png
+tmp_learn_agent.md
+
 # Node.js
+node_modules/
 frontend/node_modules/
 frontend/dist/
 frontend/build/
@@ -18,6 +23,7 @@ backend/*.out
 backend/vendor/
 backend/.env
 backend/coverage.out
+backend/coverage.html
 
 # OS/IDEs
 .DS_Store
@@ -37,11 +43,35 @@ k8s/secrets.yaml
 .env
 
 # AI Agents
+.claude/worktrees/
 .gemini/
-.qwen/
 .geminiignore
-.qwenignore
 GEMINI.md
+
+.qwen/
+.qwenignore
 QWEN.md
+
 commit_message.txt
 .claude/settings.local.json
+
+# Dat file
+posts_douban/
+
+# Python (check-migrations.py + future scripts/check-*.py)
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+*.egg-info/
+
+# Python agent service (backend/agent_py/)
+backend/agent_py/.venv/
+backend/agent_py/__pycache__/
+backend/agent_py/**/__pycache__/
+backend/agent_py/.pytest_cache/
+backend/agent_py/*.egg-info/
+backend/agent_py/**/*.egg-info/
+backend/agent_py/.mypy_cache/
+backend/agent_py/.ruff_cache/

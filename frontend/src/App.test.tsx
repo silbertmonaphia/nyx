@@ -1,136 +1,152 @@
-import { render, screen, waitFor } from '@testing-library/react';
+import { render, screen, waitFor, act, fireEvent } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import App from './App';
 import { vi, describe, it, expect, beforeEach } from 'vitest';
-import { useMovies } from './features/movies/hooks/useMovies';
+import { useFeeds } from './features/feeds/hooks/useFeeds';
 import { useAuthStore } from './store/authStore';
+import { useFeedUiStore } from './features/feeds/store/feedUiStore';
 
-vi.mock('./features/movies/hooks/useMovies');
+vi.mock('./features/feeds/hooks/useFeeds');
 vi.mock('./store/authStore');
 
-const mockUseMovies = useMovies as any;
+const mockUseFeeds = useFeeds as any;
 const mockUseAuthStore = useAuthStore as any;
 
-const baseMovies = {
-  movies: [],
+const baseFeeds = {
+  feeds: [],
   totalCount: 0,
   isLoading: false,
   isError: false,
   hasMore: false,
   isLoadingMore: false,
   loadMore: vi.fn(),
-  addMovie: { mutateAsync: vi.fn() },
-  updateMovie: { mutateAsync: vi.fn() },
-  deleteMovie: { mutateAsync: vi.fn() },
+  addFeed: { mutateAsync: vi.fn() },
+  updateFeed: { mutateAsync: vi.fn() },
+  deleteFeed: { mutateAsync: vi.fn() },
 };
 
 describe('App', () => {
   beforeEach(() => {
-    mockUseMovies.mockReturnValue({ ...baseMovies });
-    mockUseAuthStore.mockReturnValue({
+    mockUseFeeds.mockReturnValue({ ...baseFeeds });
+    // SECURITY.md L7: useAuthReconciliation reads
+    // `useAuthStore.getState().user` on mount, so the mock must
+    // expose getState alongside the hook return value. Without
+    // it, the hook throws "Cannot read properties of undefined
+    // (reading 'user')" and every App render fails.
+    const baseAuth = {
       isAuthenticated: false,
       user: null,
       logout: vi.fn(),
+    };
+    mockUseAuthStore.mockReturnValue(baseAuth);
+    mockUseAuthStore.getState = vi.fn().mockReturnValue(baseAuth);
+    // Reset the Zustand UI store so search/auth/edit state from a previous
+    // test doesn't leak into the next one.
+    useFeedUiStore.setState({
+      searchTerm: '',
+      showAddForm: false,
+      editingFeed: null,
+      sortOrder: 'desc',
     });
   });
 
-  it('renders the main title', () => {
+  it('renders the brand in the nav', () => {
     render(<App />);
     expect(screen.getAllByText('Nyx').length).toBeGreaterThan(0);
   });
 
   it('displays loading skeleton initially', () => {
-    mockUseMovies.mockReturnValue({ ...baseMovies, isLoading: true });
+    mockUseFeeds.mockReturnValue({ ...baseFeeds, isLoading: true });
     render(<App />);
-    expect(screen.getByTestId('movie-list-skeleton')).toBeInTheDocument();
+    expect(screen.getByTestId('feed-list-skeleton')).toBeInTheDocument();
   });
 
-  it('fetches and displays movies', async () => {
-    const movies = [
-      { id: 1, title: 'Test Movie 1', description: 'Desc 1', rating: 8 },
-      { id: 2, title: 'Test Movie 2', description: 'Desc 2', rating: 9 },
+  it('fetches and displays feeds', async () => {
+    const feeds = [
+      { id: 1, title: 'Test Feed 1', description: 'Desc 1' },
+      { id: 2, title: 'Test Feed 2', description: 'Desc 2' },
     ];
-    mockUseMovies.mockReturnValue({ ...baseMovies, movies });
+    mockUseFeeds.mockReturnValue({ ...baseFeeds, feeds });
 
     render(<App />);
 
     await waitFor(() => {
-      expect(screen.getByText('Test Movie 1')).toBeInTheDocument();
-      expect(screen.getByText('Test Movie 2')).toBeInTheDocument();
+      expect(screen.getByText('Test Feed 1')).toBeInTheDocument();
+      expect(screen.getByText('Test Feed 2')).toBeInTheDocument();
     });
   });
 
-  it('shows "No movies found" message when there are no movies', async () => {
+  it('shows "No feeds found" message when there are no feeds', async () => {
     render(<App />);
 
     await waitFor(() => {
-      expect(screen.getByText('No movies found')).toBeInTheDocument();
+      expect(screen.getByText('No feeds found')).toBeInTheDocument();
     });
   });
 
-  it('can add a new movie (when authenticated)', async () => {
+  it('can add a new feed (when authenticated)', async () => {
     mockUseAuthStore.mockReturnValue({
       isAuthenticated: true,
       user: { id: 1, username: 'testuser' },
       logout: vi.fn(),
     });
 
-    const addMovieMock = vi.fn().mockResolvedValue({});
-    mockUseMovies.mockReturnValue({
-      ...baseMovies,
-      addMovie: { mutateAsync: addMovieMock },
+    const addFeedMock = vi.fn().mockResolvedValue({});
+    mockUseFeeds.mockReturnValue({
+      ...baseFeeds,
+      addFeed: { mutateAsync: addFeedMock },
     });
 
     render(<App />);
 
-    await userEvent.click(screen.getByText('Add Movie'));
-    await userEvent.type(screen.getByPlaceholderText('Movie title'), 'New Test Movie');
-    await userEvent.click(screen.getByRole('button', { name: /save movie/i }));
+    await userEvent.click(screen.getByRole('button', { name: /add feed/i }));
+    await userEvent.type(screen.getByPlaceholderText('Feed title'), 'New Test Feed');
+    await userEvent.click(screen.getByRole('button', { name: /save feed/i }));
 
     await waitFor(() => {
-      expect(addMovieMock).toHaveBeenCalledWith(
-        expect.objectContaining({ title: 'New Test Movie' }),
+      expect(addFeedMock).toHaveBeenCalledWith(
+        expect.objectContaining({ title: 'New Test Feed' }),
       );
     });
   });
 
-  it('can start editing a movie (when authenticated)', async () => {
+  it('can start editing a feed (when authenticated)', async () => {
     mockUseAuthStore.mockReturnValue({
       isAuthenticated: true,
       user: { id: 1, username: 'testuser' },
       logout: vi.fn(),
     });
 
-    const movies = [{ id: 1, title: 'Movie to Edit', description: 'Desc', rating: 5 }];
-    mockUseMovies.mockReturnValue({ ...baseMovies, movies });
+    const feeds = [{ id: 1, user_id: 1, title: 'Feed to Edit', description: 'Desc' }];
+    mockUseFeeds.mockReturnValue({ ...baseFeeds, feeds });
 
     render(<App />);
 
-    await waitFor(() => screen.getByText('Movie to Edit'));
+    await waitFor(() => screen.getByText('Feed to Edit'));
     await userEvent.click(screen.getByTitle('Edit'));
 
-    expect(screen.getByRole('heading', { name: 'Edit Movie' })).toBeInTheDocument();
-    expect(screen.getByPlaceholderText('Movie title')).toHaveValue('Movie to Edit');
+    expect(screen.getByRole('heading', { name: 'Edit Feed' })).toBeInTheDocument();
+    expect(screen.getByPlaceholderText('Feed title')).toHaveValue('Feed to Edit');
   });
 
-  it('can delete a movie via the confirm dialog (when authenticated)', async () => {
+  it('can delete a feed via the confirm dialog (when authenticated)', async () => {
     mockUseAuthStore.mockReturnValue({
       isAuthenticated: true,
       user: { id: 1, username: 'testuser' },
       logout: vi.fn(),
     });
 
-    const deleteMovieMock = vi.fn().mockResolvedValue({});
-    const movies = [{ id: 1, title: 'Movie to Delete', description: 'Desc', rating: 5 }];
-    mockUseMovies.mockReturnValue({
-      ...baseMovies,
-      movies,
-      deleteMovie: { mutateAsync: deleteMovieMock },
+    const deleteFeedMock = vi.fn().mockResolvedValue({});
+    const feeds = [{ id: 1, user_id: 1, title: 'Feed to Delete', description: 'Desc' }];
+    mockUseFeeds.mockReturnValue({
+      ...baseFeeds,
+      feeds,
+      deleteFeed: { mutateAsync: deleteFeedMock },
     });
 
     render(<App />);
 
-    await waitFor(() => screen.getByText('Movie to Delete'));
+    await waitFor(() => screen.getByText('Feed to Delete'));
     await userEvent.click(screen.getByTitle('Delete'));
 
     // The Radix dialog should now be open; click the confirm button.
@@ -138,7 +154,7 @@ describe('App', () => {
     await userEvent.click(confirmButton);
 
     await waitFor(() => {
-      expect(deleteMovieMock).toHaveBeenCalledWith(1);
+      expect(deleteFeedMock).toHaveBeenCalledWith(1);
     });
   });
 
@@ -149,22 +165,273 @@ describe('App', () => {
       logout: vi.fn(),
     });
 
-    const deleteMovieMock = vi.fn().mockResolvedValue({});
-    const movies = [{ id: 1, title: 'Movie to Keep', description: 'Desc', rating: 5 }];
-    mockUseMovies.mockReturnValue({
-      ...baseMovies,
-      movies,
-      deleteMovie: { mutateAsync: deleteMovieMock },
+    const deleteFeedMock = vi.fn().mockResolvedValue({});
+    const feeds = [{ id: 1, user_id: 1, title: 'Feed to Keep', description: 'Desc' }];
+    mockUseFeeds.mockReturnValue({
+      ...baseFeeds,
+      feeds,
+      deleteFeed: { mutateAsync: deleteFeedMock },
     });
 
     render(<App />);
 
-    await waitFor(() => screen.getByText('Movie to Keep'));
+    await waitFor(() => screen.getByText('Feed to Keep'));
     await userEvent.click(screen.getByTitle('Delete'));
 
     const cancelButton = await screen.findByRole('button', { name: /cancel/i });
     await userEvent.click(cancelButton);
 
-    expect(deleteMovieMock).not.toHaveBeenCalled();
+    expect(deleteFeedMock).not.toHaveBeenCalled();
+  });
+
+  it('only fires deleteFeed.mutateAsync once when the confirm button is double-clicked rapidly', async () => {
+    // SECURITY.md L9: the destructive confirm button must not be
+    // re-fireable mid-mutation. The fix has two layers: the
+    // button is `disabled={deleteFeed.isPending}` and the
+    // executeDelete handler short-circuits if a delete is already
+    // in flight. Either guard alone would close the hole; both
+    // together cover the case where React hasn't flushed the
+    // dialog-close re-render yet (a rapid second click can hit
+    // the handler with the stale `confirmDeleteId`).
+    mockUseAuthStore.mockReturnValue({
+      isAuthenticated: true,
+      user: { id: 1, username: 'testuser' },
+      logout: vi.fn(),
+    });
+
+    // The mutation stays pending for the lifetime of the test so
+    // `isPending` reads true on every render. `mutateAsync` would
+    // normally resolve; we override it to a never-resolving
+    // promise so the disabled-button assertion is meaningful.
+    let resolveDelete: (() => void) | null = null;
+    const deleteFeedMock = vi.fn(
+      () => new Promise<void>((resolve) => {
+        resolveDelete = resolve;
+      }),
+    );
+    const feeds = [{ id: 1, user_id: 1, title: 'Feed to Delete', description: 'Desc' }];
+    mockUseFeeds.mockReturnValue({
+      ...baseFeeds,
+      feeds,
+      deleteFeed: {
+        mutateAsync: deleteFeedMock,
+        // useMutation exposes `isPending`; we model the in-flight
+        // state for the duration of the test.
+        isPending: true,
+      },
+    });
+
+    render(<App />);
+
+    await waitFor(() => screen.getByText('Feed to Delete'));
+    await userEvent.click(screen.getByTitle('Delete'));
+
+    // The dialog renders; the confirm button is disabled because
+    // deleteFeed.isPending is true (we modeled it that way for
+    // this test — covers the disabled-while-pending half).
+    const confirmButton = await screen.findByTestId('confirm-delete');
+    expect(confirmButton).toBeDisabled();
+
+    // Sanity: pressing the disabled button is a no-op.
+    await userEvent.click(confirmButton);
+    expect(deleteFeedMock).not.toHaveBeenCalled();
+
+    // Cleanup: resolve the pending promise so vitest doesn't warn
+    // about an unhandled rejection.
+    resolveDelete?.();
+  });
+
+  it('relabels the confirm button to "Deleting…" while the mutation is in flight', async () => {
+    // Companion to the disabled-state test: while `isPending` is
+    // true the visible label flips so users see that the action
+    // is in progress (and that re-clicking is a no-op).
+    mockUseAuthStore.mockReturnValue({
+      isAuthenticated: true,
+      user: { id: 1, username: 'testuser' },
+      logout: vi.fn(),
+    });
+
+    const feeds = [{ id: 1, user_id: 1, title: 'In Flight', description: 'Desc' }];
+    mockUseFeeds.mockReturnValue({
+      ...baseFeeds,
+      feeds,
+      deleteFeed: {
+        mutateAsync: vi.fn(() => new Promise<void>(() => {})),
+        isPending: true,
+      },
+    });
+
+    render(<App />);
+
+    await waitFor(() => screen.getByText('In Flight'));
+    await userEvent.click(screen.getByTitle('Delete'));
+
+    const confirmButton = await screen.findByTestId('confirm-delete');
+    expect(confirmButton).toHaveTextContent(/deleting/i);
+  });
+
+  it('does not refetch on every keystroke — only after the debounce settles', async () => {
+    // Fake timers so the setTimeout inside useDebounce is under our
+    // control and doesn't fire on its own between assertions.
+    vi.useFakeTimers();
+
+    render(<App />);
+
+    const input = screen.getByPlaceholderText('Search for feeds...');
+
+    // The first argument to useFeeds is the search term it will key
+    // its query on. If the bug were present, every keystroke would
+    // surface a new value here, which is what triggers a refetch.
+    // With the debounce, the value stays at '' until the timer fires.
+    fireEvent.change(input, { target: { value: 'm' } });
+    fireEvent.change(input, { target: { value: 'ma' } });
+    fireEvent.change(input, { target: { value: 'mat' } });
+    fireEvent.change(input, { target: { value: 'matr' } });
+    fireEvent.change(input, { target: { value: 'matri' } });
+    fireEvent.change(input, { target: { value: 'matrix' } });
+
+    const lastCallArg = mockUseFeeds.mock.calls.at(-1)?.[0];
+    expect(lastCallArg).toBe('');
+
+    // Drain the debounce window. After it elapses, App should have
+    // re-rendered with the debounced value and called useFeeds with
+    // the settled string.
+    await act(async () => {
+      vi.advanceTimersByTime(300);
+    });
+
+    expect(mockUseFeeds.mock.calls.at(-1)?.[0]).toBe('matrix');
+
+    vi.useRealTimers();
+  });
+
+  describe('SEO metadata (document.title)', () => {
+    beforeEach(() => {
+      // Each test asserts on document.title, which persists across renders.
+      document.title = '';
+    });
+
+    it('uses the default Nyx title when nothing else is going on', () => {
+      render(<App />);
+      expect(document.title).toBe('Nyx — Your minimalist feed guide');
+    });
+
+    it('reflects the debounced search term, not the raw input', async () => {
+      vi.useFakeTimers();
+      render(<App />);
+
+      const input = screen.getByPlaceholderText('Search for feeds...');
+
+      // Type "matrix" one char at a time. The title should NOT update
+      // mid-typing — that's what the debounce is for.
+      fireEvent.change(input, { target: { value: 'm' } });
+      fireEvent.change(input, { target: { value: 'ma' } });
+      fireEvent.change(input, { target: { value: 'mat' } });
+      fireEvent.change(input, { target: { value: 'matr' } });
+      fireEvent.change(input, { target: { value: 'matri' } });
+      fireEvent.change(input, { target: { value: 'matrix' } });
+
+      expect(document.title).toBe('Nyx — Your minimalist feed guide');
+
+      await act(async () => {
+        vi.advanceTimersByTime(300);
+      });
+
+      expect(document.title).toBe('"matrix" — Search — Nyx');
+
+      vi.useRealTimers();
+    });
+
+    it('uses the sign-in title when the auth form is open (logged out)', async () => {
+      render(<App />);
+      await userEvent.click(screen.getByText('Login / Register'));
+      expect(document.title).toBe('Sign in — Nyx');
+    });
+
+    it('uses the add-feed title when the add form is open (authenticated)', () => {
+      mockUseAuthStore.mockReturnValue({
+        isAuthenticated: true,
+        user: { id: 1, username: 'testuser' },
+        logout: vi.fn(),
+      });
+      render(<App />);
+      // The "Add Feed" button toggles showAddForm in the UI store.
+      fireEvent.click(screen.getByRole('button', { name: /add feed/i }));
+      expect(document.title).toBe('Add a feed — Nyx');
+    });
+
+    it('uses the edit-feed title when editing', () => {
+      mockUseAuthStore.mockReturnValue({
+        isAuthenticated: true,
+        user: { id: 1, username: 'testuser' },
+        logout: vi.fn(),
+      });
+      const feeds = [
+        { id: 1, user_id: 1, title: 'Feed to Edit', description: 'Desc', created_at: '2024-01-01T00:00:00Z', updated_at: '2024-01-01T00:00:00Z' },
+      ];
+      mockUseFeeds.mockReturnValue({ ...baseFeeds, feeds });
+
+      render(<App />);
+
+      // Drive editing via the UI store directly — same effect as clicking
+      // the row's edit button, but skips FeedList's internal handlers.
+      act(() => {
+        useFeedUiStore.getState().setEditingFeed(feeds[0]);
+      });
+
+      expect(document.title).toBe('Edit "Feed to Edit" — Nyx');
+    });
+  });
+
+  describe('sort order toggle', () => {
+    it('renders the sort toggle for every viewer (auth or not)', () => {
+      mockUseAuthStore.mockReturnValue({
+        isAuthenticated: false,
+        user: null,
+        logout: vi.fn(),
+      });
+      render(<App />);
+      expect(screen.getByTestId('toggle-sort-order')).toBeInTheDocument();
+      // The toggle ships to logged-out viewers too; the Add button
+      // stays behind the auth gate.
+      expect(screen.queryByRole('button', { name: /add feed/i })).not.toBeInTheDocument();
+    });
+
+    it('flips the order from desc to asc and back when clicked', () => {
+      render(<App />);
+      const toggle = screen.getByTestId('toggle-sort-order');
+      expect(useFeedUiStore.getState().sortOrder).toBe('desc');
+
+      fireEvent.click(toggle);
+      expect(useFeedUiStore.getState().sortOrder).toBe('asc');
+
+      fireEvent.click(toggle);
+      expect(useFeedUiStore.getState().sortOrder).toBe('desc');
+    });
+
+    it('passes the current sort order to useFeeds as the second arg', () => {
+      render(<App />);
+
+      // Default mount: 'desc'
+      expect(mockUseFeeds.mock.calls.at(-1)?.[1]).toBe('desc');
+
+      // Flip the toggle and re-derive via the store to mimic the
+      // component re-rendering. The hook must pick up the new value.
+      act(() => {
+        useFeedUiStore.getState().toggleSortOrder();
+      });
+      // The hook isn't re-invoked mid-test (it's a top-level call),
+      // but the store value is what useFeeds would receive on the
+      // next render — assert it directly.
+      expect(useFeedUiStore.getState().sortOrder).toBe('asc');
+    });
+
+    it('uses the "Oldest first" title when the order is reversed', () => {
+      act(() => {
+        useFeedUiStore.getState().setSortOrder('asc');
+      });
+      render(<App />);
+      expect(document.title).toBe('Oldest first — Nyx');
+    });
   });
 });

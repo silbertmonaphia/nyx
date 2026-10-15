@@ -1,8 +1,15 @@
 // Package api holds cross-cutting HTTP response shapes. The ErrorResponse
 // envelope is the canonical JSON shape for every error returned by the
 // Nyx API. Handlers, middleware, and huma operations all funnel their
-// errors through WriteError or by returning *ErrorResponse directly so
-// the envelope stays identical across the codebase.
+// errors through WriteError, MapError, or by returning *ErrorResponse
+// directly so the envelope stays identical across the codebase.
+//
+// MapError is the standard funnel for handler-layer errors: callers
+// register their domain sentinels once (typically from each domain's
+// init() block) and every handler shrinks to a single
+// `return nil, api.MapError(ctx, err, "safe detail")` line. The
+// unknown-error path reuses ClassifyAndLog so internal error text
+// never reaches the wire.
 //
 // ErrorResponse also implements huma.StatusError, so huma operations
 // can `return nil, &api.ErrorResponse{...}` and huma will write the
@@ -17,8 +24,29 @@ import (
 	"io"
 	"net/http"
 
+	"github.com/rs/zerolog/log"
+
 	"nyx/internal/reqctx"
 )
+
+// ClassifyAndLog returns safeDetail for inclusion in the API response
+// `details` field, and logs the underlying err with the request ID at
+// Warn level so operators can correlate. Callers MUST pass a static
+// safeDetail — never err.Error() — to avoid leaking SQL, connection
+// strings, or library internals to clients.
+//
+// nil-safe: when err is nil, safeDetail is returned unchanged.
+func ClassifyAndLog(ctx context.Context, err error, safeDetail any) any {
+	if err == nil {
+		return safeDetail
+	}
+	reqID := reqctx.RequestIDFromContext(ctx)
+	log.Warn().
+		Str("request_id", reqID).
+		Err(err).
+		Msg("internal error suppressed from response details")
+	return safeDetail
+}
 
 // ErrorResponse defines the standard JSON structure for all API errors.
 // It also implements huma.StatusError, so handlers can return a

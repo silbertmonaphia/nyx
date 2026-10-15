@@ -1,0 +1,2 @@
+ALTER TABLE users ALTER COLUMN email DROP NOT NULL;
+ALTER TABLE users DROP CONSTRAINT users_email_key;

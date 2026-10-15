@@ -1,0 +1,50 @@
+event: run_id
+data: {"run_id":"00000000-0000-4000-8000-000000000007"}
+
+event: note
+data: {"text":"fresh_run","provider":null,"kind":"fresh_run","last_step_id":null,"run_id":"00000000-0000-4000-8000-000000000007","failed_steps":[]}
+
+event: plan
+data: {"steps":[{"id":"step_1","kind":"tool","tool":"web_search","args":{"query":"nyx agent"},"prompt":null,"query":null,"max_iterations":null},{"id":"step_2","kind":"tool","tool":"web_fetch","args":{"url":"https://docs.nyx.test/agent"},"prompt":null,"query":null,"max_iterations":null},{"id":"step_3","kind":"llm","tool":null,"args":null,"prompt":"Answer using the gathered web data.","query":null,"max_iterations":null}]}
+
+event: step_start
+data: {"step_id":"step_1","kind":"tool"}
+
+event: tool_call
+data: {"step_id":"step_1","call_id":"00000000-0000-4000-8000-000000000001","name":"web_search","args":{"query":"nyx agent"}}
+
+event: tool_result
+data: {"step_id":"step_1","call_id":"00000000-0000-4000-8000-000000000001","ok":true,"result":{"query":"nyx agent","results":[{"title":"<untrusted_web_content source=\"https://docs.nyx.test/agent\">\nNyx agent docs\n</untrusted_web_content>","url":"https://docs.nyx.test/agent","description":"<untrusted_web_content source=\"https://docs.nyx.test/agent\">\nPlan-and-execute orchestrator.\n</untrusted_web_content>"}]},"error":null,"retry_count":0}
+
+event: step_end
+data: {"step_id":"step_1","status":"ok","reason":null}
+
+event: step_start
+data: {"step_id":"step_2","kind":"tool"}
+
+event: tool_call
+data: {"step_id":"step_2","call_id":"00000000-0000-4000-8000-000000000002","name":"web_fetch","args":{"url":"https://docs.nyx.test/agent"}}
+
+event: tool_result
+data: {"step_id":"step_2","call_id":"00000000-0000-4000-8000-000000000002","ok":true,"result":{"url":"https://docs.nyx.test/agent","status":200,"content_type":"text/html","text":"<untrusted_web_content source=\"https://docs.nyx.test/agent\">\nThe Nyx agent runs a planner, then an executor.\n</untrusted_web_content>"},"error":null,"retry_count":0}
+
+event: step_end
+data: {"step_id":"step_2","status":"ok","reason":null}
+
+event: step_start
+data: {"step_id":"step_3","kind":"llm"}
+
+event: delta
+data: {"delta":"The Nyx agent decomposes a request into ordered steps and can search the web."}
+
+event: step_end
+data: {"step_id":"step_3","status":"ok","reason":null}
+
+event: done
+data: {"usage":{"prompt_tokens":0,"completion_tokens":0,"total_tokens":0}}
+
+event: terminator
+data: {"reason":null}
+
+data: [DONE]
+

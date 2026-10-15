@@ -1,3 +1,19 @@
+# SECURITY.md L11: all third-party actions are pinned to a commit SHA,
+# not a mutable tag like @v4 / @v5. A tag can be re-pointed by the
+# upstream maintainer (or by an attacker who compromises the
+# upstream) to a different commit; a SHA is immutable. Bumping a
+# SHA is a deliberate code review step (look up the new SHA on the
+# upstream release page, update the comment + the version comment
+# below).
+#
+# Pinning policy (kept in sync with this file's `actions:` lines):
+#   actions/checkout@v7.0.1        → 3d3c42e5aac5ba805825da76410c181273ba90b1
+#   actions/setup-go@v5.6.0        → 40f1582b2485089dde7abd97c1529aa768e1baff
+#   actions/setup-python@v6.0.0    → e797f83bcb11b83ae66e0230d6156d7c80228e7c
+#   actions/setup-node@v4.4.0      → 49933ea5288caeca8642d1e84afbd3f7d6820020
+#   actions/upload-artifact@v4.4.0 → 50769540e7f4bd5e21e526ee35c689e35e0d6874
+#   dorny/paths-filter@v3.0.2      → de90cc6fb38fc0963ad72b210f1f284cd68cea36
+# (SHAs match the comment block below each `uses:` line)
 name: CI
 
 on:
@@ -14,7 +30,7 @@ jobs:
     runs-on: ubuntu-latest
     services:
       postgres:
-        image: postgres:17-alpine
+        image: pgvector/pgvector:pg17
         env:
           POSTGRES_USER: postgres
           POSTGRES_PASSWORD: postgres
@@ -29,11 +45,11 @@ jobs:
     env:
       DB_URL: postgres://postgres:postgres@localhost:5432/nyx_test?sslmode=disable
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
     - name: Set up Go
-      uses: actions/setup-go@v5
+      uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
       with:
-        go-version: '1.26.1'
+        go-version: '1.26.9'
         cache-dependency-path: backend/go.sum
     - name: Install golangci-lint
       run: go install github.com/golangci/golangci-lint/cmd/golangci-lint@v1.64.8
@@ -46,34 +62,161 @@ jobs:
     - name: Verify sqlc generated code is up to date
       working-directory: backend
       run: make sqlc-diff
+    - name: Verify committed OpenAPI spec is up to date
+      working-directory: backend
+      run: make openapi-diff
+    - name: Migration safety check
+      working-directory: backend
+      # Fail if any new migration under backend/migrations/*.up.sql is a
+      # single-step destructive op (DROP COLUMN / DROP TABLE / SET NOT NULL
+      # on a populated column / ALTER COLUMN TYPE). Pre-shipped migrations
+      # are grandfathered in scripts/migrations-baseline.txt; new ones
+      # must follow the rules or carry a `-- safe-migration: <reason>`
+      # annotation. See Harness.zh.md #1.
+      run: make migration-check
     - name: Test
       run: cd backend && go test -v ./...
+    - name: Coverage gate
+      working-directory: backend
+      run: make coverage-check
+
+  agent-alembic-check:
+    # Fails the build if a PR under backend/agent_py/migrations/**
+    # adds a revision that doesn't reproduce cleanly from a fresh
+    # DB. `alembic check` (alembic >= 1.13) compares the live schema
+    # to the migration history and reports drift. Gated on the
+    # paths-filter so PRs that don't touch the migration chain
+    # (e.g. a tool-stub change) don't pay the Python setup cost.
+    runs-on: ubuntu-latest
+    needs: [backend-test]
+    services:
+      postgres:
+        image: pgvector/pgvector:pg17
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: nyx_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d nyx_test"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      PYTHON_AGENT_DATABASE_URL: postgresql+asyncpg://postgres:postgres@localhost:5432/nyx_test
+    steps:
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      with:
+        # Need the merge base to diff against for the paths filter.
+        fetch-depth: 0
+    - name: Detect migration changes
+      id: filter
+      uses: dorny/paths-filter@de90cc6fb38fc0963ad72b210f1f284cd68cea36 # v3.0.2
+      with:
+        filters: |
+          migrations:
+            - 'backend/agent_py/migrations/**'
+    - name: Set up Python
+      if: steps.filter.outputs.migrations == 'true'
+      uses: actions/setup-python@e797f83bcb11b83ae66e0230d6156d7c80228e7c # v6.0.0
+      with:
+        python-version: '3.12'
+    - name: Install agent deps
+      if: steps.filter.outputs.migrations == 'true'
+      working-directory: backend/agent_py
+      run: |
+        python -m venv .venv
+        .venv/bin/pip install --upgrade pip
+        .venv/bin/pip install -e .
+    - name: alembic check
+      if: steps.filter.outputs.migrations == 'true'
+      working-directory: backend/agent_py
+      # Drop both schemas, run `alembic upgrade head` from scratch,
+      # then re-run it (no-op) and confirm exit 0. Catches:
+      #  - broken SQL in any migration
+      #  - missing or misordered revisions
+      #  - non-idempotent DDL
+      # `alembic check` (alembic 1.13+) needs a SQLAlchemy MetaData
+      # object registered in env.py; our chain uses raw
+      # `op.execute()` so we can't use it. A clean upgrade against
+      # a fresh DB is the closest equivalent for our setup; the
+      # end-to-end schema state is covered by
+      # tests/test_smoke_run_state.py.
+      run: |
+        PGPASSWORD=postgres psql -h localhost -U postgres -d nyx_test \
+          -c "DROP SCHEMA IF EXISTS agent CASCADE; DROP SCHEMA IF EXISTS langgraph CASCADE"
+        .venv/bin/alembic upgrade head
+        # Second run is a no-op if migrations are idempotent; any
+        # error here means a migration isn't safe to re-apply.
+        .venv/bin/alembic upgrade head
+
+  no-new-comments:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      with:
+        fetch-depth: 0
+    - name: Set up Python
+      uses: actions/setup-python@e797f83bcb11b83ae66e0230d6156d7c80228e7c # v6.0.0
+      with:
+        python-version: '3.12'
+    - name: Check for new code comments
+      env:
+        BASE_REF: ${{ github.base_ref }}
+        BEFORE_SHA: ${{ github.event.before }}
+      run: |
+        if [ -n "$BASE_REF" ]; then
+          BASE="origin/$BASE_REF"
+          RANGE="origin/$BASE_REF...HEAD"
+        elif [ -n "$BEFORE_SHA" ] && [ "$BEFORE_SHA" != "0000000000000000000000000000000000000000" ]; then
+          BASE="$BEFORE_SHA"
+          RANGE="$BEFORE_SHA...HEAD"
+        else
+          BASE="HEAD^"
+          RANGE="HEAD^...HEAD"
+        fi
+        if ! git cat-file -e "$BASE:scripts/check_no_comments.py" 2>/dev/null; then
+          echo "check not present at base ($BASE); skipping (transition rule)"
+          exit 0
+        fi
+        python3 scripts/check_no_comments.py --range "$RANGE"
+    - name: Checker unit tests
+      run: |
+        python -m pip install -q pytest
+        python -m pytest scripts/tests -q
 
   frontend-test:
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
     - name: Set up Node
-      uses: actions/setup-node@v4
+      uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
       with:
         node-version: '22'
         cache: 'npm'
         cache-dependency-path: frontend/package-lock.json
     - name: Install dependencies
-      run: cd frontend && npm ci
+      run: cd frontend && npm ci --workspaces=false
     - name: Lint
       run: cd frontend && npm run lint
+    - name: Architecture boundary check
+      # Enforces the src/features/* + shared/ boundaries (see Harness.zh.md
+      # #2). depcruise resolves the whole dep graph, so this is a global
+      # check — it can't be reduced to "staged files only". Runs after
+      # eslint so syntactic issues are caught first.
+      run: cd frontend && npm run lint:arch
     - name: Test
       run: cd frontend && npm test
     - name: Build
       run: cd frontend && npm run build
 
   e2e-test:
-    needs: [backend-test, frontend-test]
+    needs: [backend-test, frontend-test, govulncheck, npm-audit]
     runs-on: ubuntu-latest
     services:
       postgres:
-        image: postgres:17-alpine
+        image: pgvector/pgvector:pg17
         env:
           POSTGRES_USER: postgres
           POSTGRES_PASSWORD: postgres
@@ -87,19 +230,19 @@ jobs:
           --health-retries 5
     env:
       DB_URL: "postgres://postgres:postgres@localhost:5432/nyx?sslmode=disable"
-      JWT_SECRET: "ci-secret"
+      JWT_SECRET: "ci-secret-0123456789-0123456789-abcdef"
+      CORS_ALLOWED_ORIGINS: "http://localhost:5173"
       PORT: "8080"
-      GIN_MODE: "release"
       REDIS_ENABLED: "false"
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
     - name: Set up Go
-      uses: actions/setup-go@v5
+      uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
       with:
-        go-version: '1.26.1'
+        go-version: '1.26.9'
         cache-dependency-path: backend/go.sum
     - name: Set up Node
-      uses: actions/setup-node@v4
+      uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
       with:
         node-version: '22'
         cache: 'npm'
@@ -109,7 +252,7 @@ jobs:
     - name: Build backend
       run: cd backend && go build -o /tmp/nyx-api ./cmd/api
     - name: Install Frontend deps
-      run: cd frontend && npm install
+      run: cd frontend && npm install --workspaces=false
     - name: Install Playwright Browsers
       run: cd frontend && npx playwright install --with-deps chromium
     - name: Run E2E Tests
@@ -158,21 +301,120 @@ jobs:
         # Playwright auto-starts Vite via frontend/playwright.config.ts webServer block
         cd frontend
         set +e
-        npm run test:e2e
+        npm run test:e2e -- --workers=1
         test_exit=$?
         set -e
         exit $test_exit
     - name: Upload Playwright HTML report
       if: always()
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@50769540e7f4bd5e21e526ee35c689e35e0d6874 # v4.4.0
       with:
         name: playwright-report
         path: frontend/playwright-report/
         retention-days: 14
     - name: Upload Playwright test artifacts (traces, videos)
       if: failure() || cancelled()
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@50769540e7f4bd5e21e526ee35c689e35e0d6874 # v4.4.0
       with:
         name: playwright-test-results
         path: frontend/test-results/
         retention-days: 14
+
+  # Supply-chain vuln scans — run alongside backend-test / frontend-test
+  # so a known-CVE dep blocks the merge before e2e-test (and release) get
+  # to spend a long build. govulncheck is govulncheck default (source mode
+  # = "vulns reachable from the project's source code"), npm audit uses
+  # --audit-level=high so moderate vulns don't noise the gate.
+  govulncheck:
+    name: Go vulnerability scan (govulncheck)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Set up Go
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
+        with:
+          go-version: '1.26.9'
+          cache-dependency-path: backend/go.sum
+      - name: Install govulncheck
+        run: go install golang.org/x/vuln/cmd/govulncheck@v1.1.4
+      - name: Scan backend
+        working-directory: backend
+        run: |
+          set -o pipefail
+          if govulncheck ./... > /tmp/govulncheck.txt 2>&1; then
+            cat /tmp/govulncheck.txt
+            exit 0
+          fi
+          cat /tmp/govulncheck.txt
+          ids=$(grep -oE 'GO-[0-9]{4}-[0-9]+' /tmp/govulncheck.txt | sort -u)
+          allowed=$(printf '%s\n' GO-2026-4883 GO-2026-4887)
+          unexpected=$(comm -23 <(printf '%s\n' "$ids") <(printf '%s\n' "$allowed"))
+          if [ -n "$unexpected" ]; then
+            echo "unexpected reachable vulnerabilities: $unexpected"
+            exit 1
+          fi
+          echo "only documented no-fix exceptions found (docker/docker GO-2026-4883/4887; reachable solely from the testcontainers test helper; revisit when upstream ships a fixed release)"
+          exit 0
+
+  npm-audit:
+    name: npm audit (frontend)
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Set up Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '22'
+          cache: 'npm'
+          cache-dependency-path: frontend/package-lock.json
+      - name: Install dependencies
+        run: cd frontend && npm ci --workspaces=false
+      - name: Audit
+        # --audit-level=high fails on high/critical only; moderate vulns
+        # are reported in the log but don't gate the merge. Pin to a
+        # specific audit-signatures version is not possible — npm pulls
+        # the registry data fresh; CI just records what npm saw at run
+        # time.
+        run: cd frontend && npm audit --workspaces=false --audit-level=high
+
+  # Release job — only runs on push (not on PRs), and only after CI
+  # is green. Drives semantic-release which:
+  #   - analyzes Conventional Commits since the last tag per package
+  #   - computes the next semver for backend / frontend independently
+  #   - writes per-package CHANGELOG.md (backend/CHANGELOG.md,
+  #     frontend/CHANGELOG.md)
+  #   - stamps the new version into ServiceVersion + frontend/package.json
+  #     via scripts/bump-version.sh
+  #   - tags (e.g. backend@0.4.1) and publishes GitHub Releases
+  release:
+    needs: [e2e-test, govulncheck, npm-audit]
+    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/mvp')
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write   # push tags + release commits
+      issues: write     # semantic-release mentions PRs in release notes
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0   # semantic-release needs full history
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '22'
+          cache: 'npm'
+          cache-dependency-path: |
+            package-lock.json
+            frontend/package-lock.json
+      - name: Install dependencies
+        run: npm ci
+      - name: Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GIT_AUTHOR_NAME: 'github-actions[bot]'
+          GIT_AUTHOR_EMAIL: 'github-actions[bot]@users.noreply.github.com'
+          GIT_COMMITTER_NAME: 'github-actions[bot]'
+          GIT_COMMITTER_EMAIL: 'github-actions[bot]@users.noreply.github.com'
+        run: npx semantic-release

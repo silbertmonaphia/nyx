@@ -1,0 +1,28 @@
+# SECURITY.md M10: keep the build context small and stop secrets,
+# dev artefacts, and tests from being copied into the image. The
+# Dockerfile uses `COPY . .` so this file is the only thing standing
+# between a stray `.env` and the production image.
+#
+# Excludes tests, .env*, build output, docs, IDE config, Playwright,
+# and the husky pre-commit hooks.
+
+node_modules
+npm-debug.log
+.env
+.env.*
+.git
+.gitignore
+.husky
+.vscode
+.idea
+coverage
+*.log
+README.md
+docs
+e2e
+playwright.config.*
+*.test.*
+*.spec.*
+src/**/*.test.*
+src/**/*.spec.*
+test-results

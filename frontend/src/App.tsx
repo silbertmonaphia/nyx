@@ -1,11 +1,13 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import './App.css';
-import { Movie, NewMovie } from './features/movies/types/movie';
-import { useMovies } from './features/movies/hooks/useMovies';
-import { MovieList } from './features/movies/components/MovieList';
-import { MovieForm } from './features/movies/components/MovieForm';
-import { useMovieUiStore } from './features/movies/store/movieUiStore';
-import { ToastContainer } from './components/ui/ToastContainer';
+import { Feed, NewFeed } from './features/feeds/types/feed';
+import { useFeeds } from './features/feeds/hooks/useFeeds';
+import { FeedList } from './features/feeds/components/FeedList';
+import { FeedForm } from './features/feeds/components/FeedForm';
+import { useFeedUiStore } from './features/feeds/store/feedUiStore';
+import { useDebounce } from './hooks/useDebounce';
+import { useAuthReconciliation } from './hooks/useAuthReconciliation';
+import { ToastContainer } from './components/app/ToastContainer';
 import { useUiStore } from './store/uiStore';
 import { useAuthStore } from './store/authStore';
 import { AuthForm } from './features/auth/components/AuthForm';
@@ -19,7 +21,15 @@ import {
   DialogHeader,
   DialogTitle,
 } from './components/ui/Dialog';
-import { Plus, X, Search, LogOut, User as UserIcon } from 'lucide-react';
+import { Plus, X, Search, LogOut, User as UserIcon, MessageSquare, ArrowDownNarrowWide, ArrowUpNarrowWide } from 'lucide-react';
+import { PageMeta } from './components/app/PageMeta';
+import { logger } from './services/logger';
+import { ChatPanel } from './features/chat/components/ChatPanel';
+import { resetFeedStateForNewUser } from './features/feeds/services/resetFeedState';
+
+const DEFAULT_TITLE = 'Nyx — Your minimalist feed guide';
+const DEFAULT_DESCRIPTION =
+  'A minimalist feed for discovering, tracking, and curating the films you love.';
 
 function App() {
   const {
@@ -27,36 +37,63 @@ function App() {
     setSearchTerm,
     showAddForm,
     setShowAddForm,
-    editingMovie,
-    setEditingMovie,
+    editingFeed,
+    setEditingFeed,
+    sortOrder,
+    toggleSortOrder,
     resetFormState,
-  } = useMovieUiStore();
+  } = useFeedUiStore();
 
   const { isAuthenticated, user, logout } = useAuthStore();
   const [showAuthForm, setShowAuthForm] = useState(false);
   const [confirmDeleteId, setConfirmDeleteId] = useState<number | null>(null);
+  const [chatOpen, setChatOpen] = useState(false);
+
+  // Boot-time round-trip: if localStorage has a persisted user,
+  // reconcile it against the server. SECURITY.md L7.
+  useAuthReconciliation();
+
+  // Drop every cached feed page + UI state when the authenticated
+  // user changes (login / logout / user swap). The query key inside
+  // `useFeeds` already includes `userId`, so this is belt-and-suspenders:
+  // it guarantees no in-flight stale snapshot serves to a freshly
+  // authenticated viewer even if TanStack Query hasn't garbage-collected
+  // the old key yet. Fires on logout (user becomes null) too — the
+  // UI store reset clears any leftover search / edit modals from the
+  // previous user.
+  useEffect(() => {
+    resetFeedStateForNewUser();
+  }, [user?.id]);
+
+  // The input stays fully controlled by `searchTerm` (instant typing),
+  // but the network query only fires once the user has paused for
+  // 300ms. Driving `useFeeds` off the debounced value keeps the
+  // query key in sync with what we actually fetched, so the empty-state
+  // qualifier and the loaded list agree.
+  const debouncedSearchTerm = useDebounce(searchTerm, 300);
 
   const {
-    movies,
+    feeds,
+    totalCount,
     isLoading,
     hasMore,
     isLoadingMore,
     loadMore,
-    addMovie,
-    updateMovie,
-    deleteMovie,
-  } = useMovies(searchTerm);
+    addFeed,
+    updateFeed,
+    deleteFeed,
+  } = useFeeds(debouncedSearchTerm, sortOrder);
 
-  const handleAddOrUpdateMovie = async (movieData: NewMovie | Movie) => {
+  const handleAddOrUpdateFeed = async (feedData: NewFeed | Feed) => {
     try {
-      if ('id' in movieData) {
-        await updateMovie.mutateAsync(movieData);
+      if ('id' in feedData) {
+        await updateFeed.mutateAsync(feedData);
       } else {
-        await addMovie.mutateAsync(movieData);
+        await addFeed.mutateAsync(feedData);
       }
       resetFormState();
     } catch (err) {
-      console.error('Error saving movie:', err);
+      logger.error('Error saving feed', { error: String(err) });
     }
   };
 
@@ -66,24 +103,86 @@ function App() {
 
   const executeDelete = async () => {
     if (confirmDeleteId === null) return;
+    // Guard against double-fire: the synchronous setState below
+    // closes the dialog, but the React re-render is async, so a
+    // second click on the same tick can still reach this handler
+    // with the stale `confirmDeleteId`. The disabled prop on the
+    // confirm button (`deleteFeed.isPending`) is the primary
+    // defense — this branch is the belt-and-suspenders backstop.
+    // SECURITY.md L9.
+    if (deleteFeed.isPending) return;
     const id = confirmDeleteId;
     setConfirmDeleteId(null);
     try {
-      await deleteMovie.mutateAsync(id);
+      await deleteFeed.mutateAsync(id);
     } catch (err) {
-      console.error('Error deleting movie:', err);
+      logger.error('Error deleting feed', { error: String(err) });
     }
   };
 
+  // Per-view SEO metadata. Driven by `debouncedSearchTerm` (not the raw
+  // input) so the title doesn't churn on every keystroke. Priority order:
+  // edit > add > auth > search > default — a modal that opens over a search
+  // should still announce itself in the title.
+  const trimmedSearch = debouncedSearchTerm.trim();
+  const pageTitle = editingFeed
+    ? `Edit "${editingFeed.title}" — Nyx`
+    : showAddForm && isAuthenticated
+    ? 'Add a feed — Nyx'
+    : showAuthForm && !isAuthenticated
+    ? 'Sign in — Nyx'
+    : chatOpen && isAuthenticated
+    ? 'Chat — Nyx'
+    : sortOrder === 'asc' && !trimmedSearch
+    ? 'Oldest first — Nyx'
+    : trimmedSearch
+    ? `"${trimmedSearch}" — Search — Nyx`
+    : DEFAULT_TITLE;
+  const pageDescription = editingFeed
+    ? `Edit the details of "${editingFeed.title}" in your Nyx feed.`
+    : showAddForm && isAuthenticated
+    ? 'Add a new entry to your Nyx feed.'
+    : showAuthForm && !isAuthenticated
+    ? 'Sign in or create a Nyx account to curate your feed.'
+    : chatOpen && isAuthenticated
+    ? 'Stream a chat with the Nyx assistant.'
+    : trimmedSearch
+    ? `Search Nyx for "${trimmedSearch}".`
+    : DEFAULT_DESCRIPTION;
+
   return (
-    <>
+    <div className="app-root">
+      <PageMeta title={pageTitle} description={pageDescription} />
       <ToastContainer />
-      <nav className="sticky top-0 z-50 w-full border-b bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60">
-        <div className="container mx-auto px-4 h-16 flex items-center justify-between">
-          <div className="text-2xl font-bold bg-gradient-to-r from-primary to-accent bg-clip-text text-transparent">Nyx</div>
-          <div className="flex items-center gap-4">
+      <nav className="sticky top-0 z-50 w-full border-b bg-black">
+        <div className="w-full px-6 h-16 grid grid-cols-[1fr_auto_1fr] items-center gap-4">
+          <div className="text-2xl font-bold bg-gradient-to-r from-primary to-accent bg-clip-text text-transparent justify-self-start">
+            Nyx
+          </div>
+          <div className="relative w-full max-w-3xl">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+            <Input
+              type="text"
+              placeholder="Search for feeds..."
+              value={searchTerm}
+              maxLength={200}
+              onChange={(e) => setSearchTerm(e.target.value)}
+              className="pl-10 h-10"
+            />
+          </div>
+          <div className="flex items-center gap-4 justify-self-end">
             {isAuthenticated ? (
               <>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setChatOpen(true)}
+                  aria-label="Open chat"
+                  className="gap-2"
+                >
+                  <MessageSquare className="h-4 w-4" />
+                  Chat
+                </Button>
                 <div className="hidden md:flex items-center gap-2 text-sm font-medium text-muted-foreground">
                   <UserIcon className="h-4 w-4" />
                   <span>{user?.username}</span>
@@ -100,91 +199,104 @@ function App() {
         </div>
       </nav>
 
-      <section id="center" className="container mx-auto px-4 py-8">
-        <div className="max-w-2xl mx-auto text-center mb-12">
-          <h1 className="text-5xl md:text-7xl font-extrabold tracking-tight mb-4">Nyx</h1>
-          <p className="text-xl text-muted-foreground">Your minimalist movie guide</p>
-        </div>
-
-        <div className="w-full max-w-2xl mx-auto flex flex-col md:flex-row gap-4 items-center mb-8">
-          <div className="relative w-full">
-            <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-            <Input
-              type="text"
-              placeholder="Search for movies..."
-              value={searchTerm}
-              onChange={(e) => setSearchTerm(e.target.value)}
-              className="pl-10 h-12 text-lg rounded-xl"
-            />
-          </div>
-          {isAuthenticated && (
-            <Button 
-              size="lg"
-              variant={showAddForm ? "outline" : "default"}
-              onClick={() => setShowAddForm(!showAddForm)}
-              className="w-full md:w-auto h-12 gap-2 rounded-xl"
-            >
-              {showAddForm ? (
-                <><X className="h-5 w-5" /> Cancel</>
-              ) : (
-                <><Plus className="h-5 w-5" /> Add Movie</>
-              )}
-            </Button>
-          )}
-        </div>
-
-        <div className="w-full max-w-2xl mx-auto flex flex-col items-center">
-          {showAuthForm && !isAuthenticated && (
-            <AuthForm 
-              onSuccess={() => setShowAuthForm(false)}
-              onCancel={() => setShowAuthForm(false)}
-            />
-          )}
-
-          {isAuthenticated && showAddForm && (
-            <MovieForm 
-              title="New Movie"
-              onSubmit={handleAddOrUpdateMovie}
-              onCancel={resetFormState}
-            />
-          )}
-
-          {isAuthenticated && editingMovie && (
-            <MovieForm 
-              title="Edit Movie"
-              movie={editingMovie}
-              onSubmit={handleAddOrUpdateMovie}
-              onCancel={resetFormState}
-            />
-          )}
-
-          <MovieList
-            movies={movies}
+      <section id="center" className="container mx-auto px-4 pb-8 flex flex-1 min-h-0 flex-col place-content-start items-stretch">
+        <div className="w-full max-w-2xl mx-auto flex flex-1 min-h-0 flex-col items-center">
+          <FeedList
+            feeds={feeds}
+            totalCount={totalCount}
             loading={isLoading}
             searchTerm={searchTerm}
             hasMore={hasMore}
             isLoadingMore={isLoadingMore}
             onLoadMore={loadMore}
-            onEdit={(movie) => {
+            editingFeed={editingFeed}
+            currentUserId={user?.id}
+            onUpdate={handleAddOrUpdateFeed}
+            onCancelEdit={resetFormState}
+            onEdit={(feed) => {
               if (!isAuthenticated) {
-                useUiStore.getState().addToast('Please login to edit movies', 'info');
+                useUiStore.getState().addToast('Please login to edit feeds', 'info');
                 setShowAuthForm(true);
                 return;
               }
-              setEditingMovie(movie);
-              window.scrollTo({ top: 0, behavior: 'smooth' });
+              // Defense-in-depth: the backend will 404 (not 403) on
+              // a non-owner, but surface a friendlier message before
+              // the request fires. The list is owner-scoped on the
+              // server, so this branch only fires if a stale feed
+              // somehow lingers (e.g. optimistic row before cache
+              // eviction) — better UX than a silent failure.
+              if (feed.user_id !== user?.id) {
+                useUiStore.getState().addToast('You can only edit feeds you created', 'info');
+                return;
+              }
+              setEditingFeed(feed);
             }}
             onDelete={(id) => {
               if (!isAuthenticated) {
-                useUiStore.getState().addToast('Please login to delete movies', 'info');
+                useUiStore.getState().addToast('Please login to delete feeds', 'info');
                 setShowAuthForm(true);
                 return;
               }
               confirmDelete(id);
             }}
           />
+
+          {isAuthenticated && showAddForm && (
+            <FeedForm
+              title="New Feed"
+              onSubmit={handleAddOrUpdateFeed}
+              onCancel={resetFormState}
+            />
+          )}
+
+          <div className="self-end mt-4 flex items-center gap-3">
+            <Button
+              size="icon"
+              variant="outline"
+              onClick={toggleSortOrder}
+              aria-label={
+                sortOrder === 'desc'
+                  ? 'Sorted newest first; click to show oldest first'
+                  : 'Sorted oldest first; click to show newest first'
+              }
+              title={sortOrder === 'desc' ? 'Newest first' : 'Oldest first'}
+              className="h-14 w-14 rounded-full shadow-lg"
+              data-testid="toggle-sort-order"
+            >
+              {sortOrder === 'desc' ? (
+                <ArrowDownNarrowWide className="h-6 w-6" />
+              ) : (
+                <ArrowUpNarrowWide className="h-6 w-6" />
+              )}
+            </Button>
+            {isAuthenticated && (
+              <Button
+                size="icon"
+                onClick={() => setShowAddForm(!showAddForm)}
+                aria-label={showAddForm ? 'Cancel adding feed' : 'Add feed'}
+                className="h-14 w-14 rounded-full shadow-lg"
+              >
+                {showAddForm ? <X className="h-6 w-6" /> : <Plus className="h-6 w-6" />}
+              </Button>
+            )}
+          </div>
         </div>
       </section>
+
+      <Dialog open={showAuthForm && !isAuthenticated} onOpenChange={setShowAuthForm}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Login or Register</DialogTitle>
+            <DialogDescription>
+              Sign in to your account, or create a new one to start curating.
+            </DialogDescription>
+          </DialogHeader>
+          <AuthForm
+            onSuccess={() => setShowAuthForm(false)}
+            onCancel={() => setShowAuthForm(false)}
+          />
+        </DialogContent>
+      </Dialog>
 
       <Dialog
         open={confirmDeleteId !== null}
@@ -194,24 +306,31 @@ function App() {
       >
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>Delete movie</DialogTitle>
+            <DialogTitle>Delete feed</DialogTitle>
             <DialogDescription>
-              This will remove the movie from your list. This action cannot be undone.
+              This will remove the feed from your list. This action cannot be undone.
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>
             <Button variant="outline" onClick={() => setConfirmDeleteId(null)}>
               Cancel
             </Button>
-            <Button variant="destructive" onClick={executeDelete} data-testid="confirm-delete">
-              Delete
+            <Button
+              variant="destructive"
+              onClick={executeDelete}
+              disabled={deleteFeed.isPending}
+              data-testid="confirm-delete"
+            >
+              {deleteFeed.isPending ? 'Deleting…' : 'Delete'}
             </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
 
+      <ChatPanel open={chatOpen} onOpenChange={setChatOpen} />
+
       <section id="spacer"></section>
-    </>
+    </div>
   );
 }
 

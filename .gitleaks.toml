@@ -1,0 +1,22 @@
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "CI e2e JWT fixture; throwaway value for an ephemeral runner and database"
+paths = ['''\.github/workflows/ci\.yml''']
+regexes = ['''ci-secret-0123456789-0123456789-abcdef''']
+condition = "AND"
+
+[[allowlists]]
+description = "Historical dev-placeholder Secret (postgres/postgres, nyx, compose DSNs, dev JWT); tree-removed at f483125, blob remains in history at cf51b14 on all branches; values re-verified as placeholders 2026-10-15, no rotation needed (SECURITY.md L12)"
+paths = ['''^k8s/secrets\.yaml$''']
+
+[[allowlists]]
+description = "k8s Secret example file; base64 placeholders by construction"
+paths = ['''^k8s/secrets\.yaml\.example$''']
+
+[[allowlists]]
+description = "Fake foobarbaz-signed JWT literal in the redaction-test fixture"
+paths = ['''^backend/agent_py/tests/test_langfuse_tracing\.py$''']
+regexes = ['''eyJhbGciOiJIUzI1NiJ9\.eyJzdWIiOiIxIn0\.Zm9vYmFyYmF6''']
+condition = "AND"

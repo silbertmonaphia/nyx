@@ -1,0 +1,4 @@
+schema: spec-driven
+created: 2026-10-13
+goal: "Track the rollout gates for agent-tool-dispatch-retry (dev-stack live smokes, Playwright e2e run, production env flip, 1-week CI-green wait, rollback drill) so the implementation change can archive after its dev/CI-completable work lands. PM-owned: do not rank as dev work, never archive from a dev session."
+skip_specs: true

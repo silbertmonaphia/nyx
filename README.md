@@ -1,128 +1,148 @@
 # Nyx
 
-A minimalist media rating application with a Go backend and a React frontend.
+> 🌐 **中文版 / Chinese**: [`README.zh.md`](README.zh.md)
+>
+> 🤖 **Only here for the agent?** Jump straight to
+> [`backend/agent_py/README.md`](backend/agent_py/README.md).
 
-## Project Structure
+**A feed app with a Plan-and-Execute AI agent growing on top of it.**
 
-- `backend/`: Go 1.26.1 API server (chi + huma)
-- `frontend/`: React 19 + Vite 8 SPA (TanStack Query + Tailwind CSS)
-- `docker-compose.yml`: General service orchestration
-- `docker-compose.prod.yml`: Production-specific configuration
+The feed app is small and complete: register, log in, manage your own entries — search, sort,
+paginate. The agent is where the project is headed at full speed: a Python service that reads
+your feed through tools, plans multi-step tasks, executes them step by step, and streams every
+plan, tool call, and result into the chat panel.
 
-## Features
+The app underneath is deliberately built like a production system — typed SQL, rotating auth
+tokens, migrations, tracing — because the agent needs an honest substrate to run against: real
+data, real auth boundaries, real failure modes.
 
-- **Advanced UI**: Modern React frontend with Tailwind CSS and TanStack Query.
-- **Search**: Case-insensitive search by movie title.
-- **Backend API**: Robust Go backend with PostgreSQL and auto-migrations.
-- **Cache**: Redis-backed cache-aside layer for the read-heavy `GET /movies` endpoint (opt-in via `REDIS_ENABLED=true`).
-- **Pagination**: `GET /movies` returns a paginated envelope (`page`, `page_size`, `total`, `has_more`); defaults to 20 items per page, max 100.
-- **TypeScript**: Full-stack type safety with TypeScript in the frontend.
-- **Validation**: Runtime validation with Zod (frontend) and Go structs (backend).
-- **Containerized**: Production-ready Docker builds with pre-compiled binaries.
+## Architecture
 
-## Getting Started
+```mermaid
+flowchart TB
+    subgraph Client["Browser"]
+        SPA["React 19 SPA<br/>feeds · auth · chat"]
+    end
 
-### Prerequisites
+    subgraph API["Go API :8080"]
+        H["chi + huma<br/>OpenAPI 3.1<br/>REST · chat SSE<br/>MCP tool surface"]
+    end
 
-- [Docker](https://www.docker.com/)
-- [Docker Compose](https://docs.docker.com/compose/)
-- [Go 1.26+](https://go.dev/dl/)
-- [Node.js 22+](https://nodejs.org/)
+    subgraph Agent["Python agent :9000 (optional)"]
+        A["FastAPI + LangGraph<br/>planner → executor → tools"]
+    end
 
-> **Tip:** To avoid using `sudo` with Docker, add your user to the docker group:
-> ```bash
-> sudo usermod -aG docker $USER && newgrp docker
-> ```
+    subgraph Data["Data"]
+        PG[("PostgreSQL<br/>source of truth")]
+        RD["Redis<br/>optional cache"]
+    end
 
-### Development
+    LLM["LLM<br/>vLLM or OpenAI<br/>(optional)"]
+    OBS["Jaeger · Sentry<br/>(optional)"]
 
-1. Clone the repository:
-   ```bash
-   git clone git@github.com:silbertmonaphia/nyx.git
-   cd nyx
-   ```
-
-2. Configure environment variables:
-   ```bash
-   cp .env.example .env
-   # Edit .env if you want to change default credentials
-   ```
-
-3. Build and start the services:
-   ```bash
-   # Build backend binary (Alpine requires static binary)
-   (cd backend && CGO_ENABLED=0 go build -o main ./cmd/api)
-   
-   # Start all services
-   sudo docker compose up --build -d
-   ```
-
-4. Access the application:
-   - Frontend: `http://localhost:5173` (with HMR)
-   - API: `http://localhost:8080/api/movies`
-   - Swagger UI: `http://localhost:8080/api/swagger`
-
-5. Access the database:
-   ```bash
-   # Connect to PostgreSQL (default credentials: postgres/postgres)
-   PGPASSWORD=postgres psql -h localhost -p 5433 -U postgres -d nyx
-   
-   # Or via Docker container
-   sudo docker compose exec db psql -U postgres -d nyx
-   ```
-
-6. (Optional) Inspect the cache:
-   ```bash
-   sudo docker compose exec redis redis-cli KEYS 'movies:*'
-   ```
-
-### Production Deployment
-
-To deploy Nyx in a production environment:
-
-1. Build and run with the production configuration:
-   ```bash
-   # Make sure to set VITE_API_URL to your production domain if different
-   VITE_API_URL=http://your-production-ip/api sudo docker compose -f docker-compose.prod.yml up -d --build
-   ```
-
-2. The application will be accessible on port 80:
-   - Frontend: `http://your-production-ip`
-   - API: `http://your-production-ip/api` (internal communication)
-
-## Testing
-
-### Backend (Go)
-```bash
-cd backend
-go test -v ./...
+    SPA -->|"REST · Bearer JWT<br/>chat over SSE"| H
+    H -->|"chat proxy<br/>(AGENT_ENABLED=true)"| A
+    A -->|"MCP tools · RAG retrieve"| H
+    H --> PG
+    H -.-> RD
+    H -->|"chat completions<br/>(agent off)"| LLM
+    A -->|"chat completions"| LLM
+    A -->|"run state"| PG
+    SPA -.->|"OTel · errors"| OBS
+    H -.-> OBS
 ```
 
-### Frontend (Vitest)
+Solid arrows are request paths, dashed are telemetry / optional extras — the optional pieces are
+off by default. Full production topology → [`README_FULL.md` § Architecture](README_FULL.md#architecture).
+
+## The agent
+
+- **Plan-and-Execute loop** — a planner turns your request into typed steps, the executor runs
+  them, and the chat UI renders each one as it happens (`plan` → `step_start` → `tool_call` →
+  `tool_result` → …) over SSE.
+- **Tools** — your feed entries (list / get / create / update / delete via the MCP tool surface),
+  semantic search over your own entries (RAG, pgvector), web search, and SSRF-guarded web fetch
+  with untrusted-content framing.
+- **Built for production** — runs persisted in Postgres (with a stale-run sweeper and retention
+  GC), per-user token budget, rate limiting, bounded retries with a partial-failure banner in
+  the UI, structured planner output with re-prompts.
+- **Observable** — OpenTelemetry spans end-to-end, Prometheus counters, optional Langfuse LLM
+  tracing.
+- **Any OpenAI-compatible model** — the dev default is a self-hosted vLLM (Qwen3-4B-Instruct);
+  OpenAI is a config change away.
+
+## The app underneath
+
+- **Accounts** — JWT access tokens plus rotated refresh tokens with reuse detection.
+- **Your feed** — create, edit, delete, search, paginate; every query scoped to your account.
+- **Optional infrastructure**, off by default — Redis cache, Jaeger tracing, Sentry, MCP server.
+  (Prometheus `/metrics` is always on.)
+
+## Stack
+
+| Layer | Tech |
+|---|---|
+| Agent | Python · FastAPI · LangGraph · Postgres checkpointer · pgvector RAG |
+| LLM | OpenAI or self-hosted vLLM (identical wire contract) |
+| Backend | Go 1.26 · `chi` + `huma` (OpenAPI 3.1) · `sqlc` + `pgx` |
+| Frontend | React 19 · Vite · TypeScript · Tailwind v4 · TanStack Query · Zustand |
+| Data | PostgreSQL (source of truth) · Redis (optional cache) |
+| Ops | Docker Compose (dev) · Kubernetes (prod) · GitHub Actions CI |
+
+## Run it
+
 ```bash
-cd frontend
-npm test
+cp .env.example .env                      # infra
+cp backend/.env.example backend/.env      # backend (set AGENT_ENABLED=true for the agent path)
+cp frontend/.env.example frontend/.env    # frontend
+
+make up    # Postgres + Redis + Jaeger
+make dev   # backend + frontend + agent, one Ctrl+C stops all
 ```
 
-## Kubernetes Deployment
+For real answers the agent needs an LLM — self-host vLLM on a GPU box with:
 
-For Kubernetes environments, manifests are provided in the `k8s/` directory.
+```bash
+make dev-vllm-main    # chat model  (Qwen3-4B-Instruct-2507-FP8, :8000, hermes tool parser)
+make dev-vllm-embed   # embeddings  (Qwen3-Embedding-0.6B, :8001, powers RAG)
+```
 
-1. **Configure Secrets**:
-   ```bash
-   cp k8s/secrets.yaml.example k8s/secrets.yaml
-   # Edit k8s/secrets.yaml with your base64-encoded production secrets
-   ```
+Then open:
 
-2. **Apply Manifests**:
-   ```bash
-   kubectl apply -f k8s/
-   ```
+- App + chat — <http://localhost:5173>
+- API docs — <http://localhost:8080/api/swagger>
+- Traces — <http://localhost:16686> (Jaeger) · Langfuse on :3000 via `make up-langfuse`
 
-See individual `.yaml` files in `k8s/` for detailed configuration.
+Chat is gated by `LLM_ENABLED=true`; adding `AGENT_ENABLED=true` routes it through the agent
+instead of the plain single-turn RAG chat. Everything else works the same either way.
+
+## Common commands
+
+| Task | Command |
+|---|---|
+| Backend tests (no Docker) | `cd backend && SKIP_CONTAINERS=true go test ./...` |
+| Backend tests (full) | `cd backend && go test ./...` |
+| Agent tests | `cd backend/agent_py && .venv/bin/python -m pytest` |
+| Frontend tests | `cd frontend && npm test` |
+| End-to-end tests | `cd frontend && npm run test:e2e` |
+| Stop dev processes | `make stop` |
+| Stop infra | `make down` |
+
+## Learn more
+
+- **[`README_FULL.md`](README_FULL.md)** — the full technical README: architecture diagram, auth
+  internals, API reference, testing matrix.
+- [`FUTURE_AGENT.md`](FUTURE_AGENT.md) — the agent roadmap: what's landed, what's next.
+- [`AgentArchitecture.md`](AgentArchitecture.md) — how the agent is put together.
+- [`AgentFaultTolerance.md`](AgentFaultTolerance.md) — every failure mode, and what covers it.
+- [`backend/agent_py/README.md`](backend/agent_py/README.md) — the Python service in detail.
+- [`docs/agent-deployment.md`](docs/agent-deployment.md) — production rollout for the agent.
+- [`CLAUDE.md`](CLAUDE.md) · [`SECURITY.md`](SECURITY.md) · [`FUTURE.md`](FUTURE.md) · [`openspec/`](openspec/)
 
 ## License
 
-[PolyForm Noncommercial License 1.0.0](LICENSE), adapted with an additional restriction prohibiting use of this software for training, fine-tuning, evaluating, or developing any artificial intelligence / machine learning model or system.
+[PolyForm Noncommercial 1.0.0](LICENSE), with an additional restriction: no use for training,
+fine-tuning, evaluating, or developing AI/ML models or systems.
 
-In short: free for personal, academic, educational, and evaluation use. **Commercial use and AI training use are not permitted.** See [`LICENSE`](LICENSE) for the full terms.
+Free for personal, academic, educational, and evaluation use. **Commercial use and AI-training
+use are not permitted.** See [`LICENSE`](LICENSE) for the full terms.

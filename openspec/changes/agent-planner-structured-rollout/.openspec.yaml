@@ -1,0 +1,6 @@
+schema: spec-driven
+created: 2026-10-13
+goal: Track the rollout gates for agent-planner-structured (live-provider probe,
+  live smokes, browser e2e run) so the implementation change can archive after
+  its dev/CI-completable work lands
+skip_specs: true

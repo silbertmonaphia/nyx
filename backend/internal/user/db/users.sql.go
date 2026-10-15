@@ -7,10 +7,54 @@ package db
 
 import (
 	"context"
+
+	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const countActiveRefreshTokensByUser = `-- name: CountActiveRefreshTokensByUser :one
+SELECT COUNT(*)::bigint
+FROM refresh_tokens
+WHERE user_id = $1
+  AND revoked_at IS NULL
+  AND expires_at > now()
+`
+
+// Counts non-revoked, non-expired rows for a user. Used by the
+// service layer on every mint to enforce the per-user family cap
+// (see SECURITY.md M2). Excludes already-revoked rows because
+// those are being pruned in the background goroutine — counting
+// them would inflate the result and trigger spurious revokes.
+func (q *Queries) CountActiveRefreshTokensByUser(ctx context.Context, userID int32) (int64, error) {
+	row := q.db.QueryRow(ctx, countActiveRefreshTokensByUser, userID)
+	var column_1 int64
+	err := row.Scan(&column_1)
+	return column_1, err
+}
+
+const getRefreshTokenByHash = `-- name: GetRefreshTokenByHash :one
+SELECT id, user_id, token_hash, family_id, replaced_by_id, expires_at, revoked_at, created_at
+FROM refresh_tokens
+WHERE token_hash = $1
+`
+
+func (q *Queries) GetRefreshTokenByHash(ctx context.Context, tokenHash []byte) (RefreshToken, error) {
+	row := q.db.QueryRow(ctx, getRefreshTokenByHash, tokenHash)
+	var i RefreshToken
+	err := row.Scan(
+		&i.ID,
+		&i.UserID,
+		&i.TokenHash,
+		&i.FamilyID,
+		&i.ReplacedByID,
+		&i.ExpiresAt,
+		&i.RevokedAt,
+		&i.CreatedAt,
+	)
+	return i, err
+}
+
 const getUserByID = `-- name: GetUserByID :one
-SELECT id, username, email, password_hash, created_at, updated_at, deleted_at
+SELECT id, username, password_hash, created_at, updated_at, deleted_at
 FROM users
 WHERE id = $1 AND deleted_at IS NULL
 `
@@ -21,7 +65,6 @@ func (q *Queries) GetUserByID(ctx context.Context, id int32) (User, error) {
 	err := row.Scan(
 		&i.ID,
 		&i.Username,
-		&i.Email,
 		&i.PasswordHash,
 		&i.CreatedAt,
 		&i.UpdatedAt,
@@ -31,7 +74,7 @@ func (q *Queries) GetUserByID(ctx context.Context, id int32) (User, error) {
 }
 
 const getUserByUsername = `-- name: GetUserByUsername :one
-SELECT id, username, email, password_hash, created_at, updated_at, deleted_at
+SELECT id, username, password_hash, created_at, updated_at, deleted_at
 FROM users
 WHERE username = $1 AND deleted_at IS NULL
 `
@@ -42,7 +85,6 @@ func (q *Queries) GetUserByUsername(ctx context.Context, username string) (User,
 	err := row.Scan(
 		&i.ID,
 		&i.Username,
-		&i.Email,
 		&i.PasswordHash,
 		&i.CreatedAt,
 		&i.UpdatedAt,
@@ -51,16 +93,42 @@ func (q *Queries) GetUserByUsername(ctx context.Context, username string) (User,
 	return i, err
 }
 
+const insertRefreshToken = `-- name: InsertRefreshToken :one
+INSERT INTO refresh_tokens (user_id, token_hash, family_id, expires_at)
+VALUES ($1, $2, 0, $3)
+RETURNING id
+`
+
+type InsertRefreshTokenParams struct {
+	UserID    int32
+	TokenHash []byte
+	ExpiresAt pgtype.Timestamptz
+}
+
+// Step 1 of the self-stamp: insert with family_id = 0 as a placeholder.
+// The Repository runs this inside a transaction with
+// StampRefreshTokenFamily so the freshly assigned id is visible to
+// the second statement. Splitting the work across two statements
+// avoids the PostgreSQL data-modifying CTE snapshot limitation
+// (a sibling CTE's UPDATE cannot see its sibling CTE's INSERT
+// because both share one statement-level snapshot) — the previous
+// two-CTE shape returned zero rows under real Postgres.
+func (q *Queries) InsertRefreshToken(ctx context.Context, arg InsertRefreshTokenParams) (int64, error) {
+	row := q.db.QueryRow(ctx, insertRefreshToken, arg.UserID, arg.TokenHash, arg.ExpiresAt)
+	var id int64
+	err := row.Scan(&id)
+	return id, err
+}
+
 const insertUser = `-- name: InsertUser :one
 
-INSERT INTO users (username, email, password_hash)
-VALUES ($1, $2, $3)
-RETURNING id, username, email, password_hash, created_at, updated_at, deleted_at
+INSERT INTO users (username, password_hash)
+VALUES ($1, $2)
+RETURNING id, username, password_hash, created_at, updated_at, deleted_at
 `
 
 type InsertUserParams struct {
 	Username     string
-	Email        string
 	PasswordHash string
 }
 
@@ -69,16 +137,199 @@ type InsertUserParams struct {
 // block is the @name annotation (which becomes the method name) and the
 // query type (`:one`, `:many`, `:exec`, `:execrows`).
 func (q *Queries) InsertUser(ctx context.Context, arg InsertUserParams) (User, error) {
-	row := q.db.QueryRow(ctx, insertUser, arg.Username, arg.Email, arg.PasswordHash)
+	row := q.db.QueryRow(ctx, insertUser, arg.Username, arg.PasswordHash)
 	var i User
 	err := row.Scan(
 		&i.ID,
 		&i.Username,
-		&i.Email,
 		&i.PasswordHash,
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.DeletedAt,
+	)
+	return i, err
+}
+
+const listOldestActiveRefreshTokensByUser = `-- name: ListOldestActiveRefreshTokensByUser :many
+SELECT id
+FROM refresh_tokens
+WHERE user_id = $1
+  AND revoked_at IS NULL
+  AND expires_at > now()
+ORDER BY created_at ASC
+LIMIT $2
+`
+
+type ListOldestActiveRefreshTokensByUserParams struct {
+	UserID int32
+	Lim    int32
+}
+
+// Returns up to `limit` rows for a user, oldest first. Used when
+// the active-row count exceeds the cap: the service revokes the
+// surplus oldest rows to make room for the new mint. The mint
+// itself races only on this user's existing rows, so the index on
+// (user_id) WHERE revoked_at IS NULL covers it efficiently.
+func (q *Queries) ListOldestActiveRefreshTokensByUser(ctx context.Context, arg ListOldestActiveRefreshTokensByUserParams) ([]int64, error) {
+	rows, err := q.db.Query(ctx, listOldestActiveRefreshTokensByUser, arg.UserID, arg.Lim)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []int64{}
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		items = append(items, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const purgeRefreshTokensOlderThan = `-- name: PurgeRefreshTokensOlderThan :execrows
+DELETE FROM refresh_tokens
+WHERE created_at < $1
+  AND (revoked_at IS NOT NULL OR expires_at < now())
+`
+
+// Bulk-delete rows older than the supplied cutoff that are also
+// revoked OR expired. The cutoff exists so we never delete a row
+// an active session could still reach: even a revoked row is
+// useful to operators for the first few days after revocation
+// when investigating an incident. Used by the background cleanup
+// goroutine (see SECURITY.md M2).
+func (q *Queries) PurgeRefreshTokensOlderThan(ctx context.Context, cutoff pgtype.Timestamptz) (int64, error) {
+	result, err := q.db.Exec(ctx, purgeRefreshTokensOlderThan, cutoff)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const revokeRefreshTokenByID = `-- name: RevokeRefreshTokenByID :exec
+UPDATE refresh_tokens
+SET revoked_at = COALESCE(revoked_at, now())
+WHERE id = $1 AND revoked_at IS NULL
+`
+
+func (q *Queries) RevokeRefreshTokenByID(ctx context.Context, id int64) error {
+	_, err := q.db.Exec(ctx, revokeRefreshTokenByID, id)
+	return err
+}
+
+const revokeRefreshTokenFamily = `-- name: RevokeRefreshTokenFamily :execrows
+UPDATE refresh_tokens
+SET revoked_at = COALESCE(revoked_at, now())
+WHERE family_id = $1 AND revoked_at IS NULL
+`
+
+func (q *Queries) RevokeRefreshTokenFamily(ctx context.Context, familyID int64) (int64, error) {
+	result, err := q.db.Exec(ctx, revokeRefreshTokenFamily, familyID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const rotateRefreshToken = `-- name: RotateRefreshToken :one
+WITH new_row AS (
+    INSERT INTO refresh_tokens (user_id, token_hash, family_id, replaced_by_id, expires_at)
+    VALUES (
+        $2,
+        $3,
+        $4,
+        $1,
+        $5
+    )
+    RETURNING id, user_id, token_hash, family_id, replaced_by_id, expires_at, revoked_at, created_at
+)
+UPDATE refresh_tokens
+SET replaced_by_id = new_row.id,
+    revoked_at     = COALESCE(refresh_tokens.revoked_at, now())
+FROM new_row
+WHERE refresh_tokens.id = $1
+RETURNING new_row.id, new_row.user_id, new_row.token_hash, new_row.family_id, new_row.replaced_by_id, new_row.expires_at, new_row.revoked_at, new_row.created_at
+`
+
+type RotateRefreshTokenParams struct {
+	OldID     int64
+	UserID    int32
+	TokenHash []byte
+	FamilyID  int64
+	ExpiresAt pgtype.Timestamptz
+}
+
+type RotateRefreshTokenRow struct {
+	ID           int64
+	UserID       int32
+	TokenHash    []byte
+	FamilyID     int64
+	ReplacedByID pgtype.Int8
+	ExpiresAt    pgtype.Timestamptz
+	RevokedAt    pgtype.Timestamptz
+	CreatedAt    pgtype.Timestamptz
+}
+
+// Single CTE: insert new row tied to old via replaced_by_id, then mark
+// the old row revoked and link it back. Atomic — concurrent rotations
+// will see the second one with revoked_at NOT NULL and trigger reuse
+// detection at the service layer.
+func (q *Queries) RotateRefreshToken(ctx context.Context, arg RotateRefreshTokenParams) (RotateRefreshTokenRow, error) {
+	row := q.db.QueryRow(ctx, rotateRefreshToken,
+		arg.OldID,
+		arg.UserID,
+		arg.TokenHash,
+		arg.FamilyID,
+		arg.ExpiresAt,
+	)
+	var i RotateRefreshTokenRow
+	err := row.Scan(
+		&i.ID,
+		&i.UserID,
+		&i.TokenHash,
+		&i.FamilyID,
+		&i.ReplacedByID,
+		&i.ExpiresAt,
+		&i.RevokedAt,
+		&i.CreatedAt,
+	)
+	return i, err
+}
+
+const stampRefreshTokenFamily = `-- name: StampRefreshTokenFamily :one
+UPDATE refresh_tokens
+SET family_id = $1
+WHERE id = $1
+RETURNING id, user_id, family_id, replaced_by_id, expires_at, revoked_at, created_at
+`
+
+type StampRefreshTokenFamilyRow struct {
+	ID           int64
+	UserID       int32
+	FamilyID     int64
+	ReplacedByID pgtype.Int8
+	ExpiresAt    pgtype.Timestamptz
+	RevokedAt    pgtype.Timestamptz
+	CreatedAt    pgtype.Timestamptz
+}
+
+// Step 2: set family_id to the row's own id. RETURNING gives back
+// the full row so the caller doesn't need a second SELECT.
+func (q *Queries) StampRefreshTokenFamily(ctx context.Context, id int64) (StampRefreshTokenFamilyRow, error) {
+	row := q.db.QueryRow(ctx, stampRefreshTokenFamily, id)
+	var i StampRefreshTokenFamilyRow
+	err := row.Scan(
+		&i.ID,
+		&i.UserID,
+		&i.FamilyID,
+		&i.ReplacedByID,
+		&i.ExpiresAt,
+		&i.RevokedAt,
+		&i.CreatedAt,
 	)
 	return i, err
 }

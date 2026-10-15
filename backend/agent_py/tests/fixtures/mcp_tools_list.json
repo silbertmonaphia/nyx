@@ -1,0 +1,151 @@
+[
+  {
+    "annotations": {
+      "readOnlyHint": false,
+      "destructiveHint": true,
+      "idempotentHint": false,
+      "openWorldHint": true
+    },
+    "description": "Create a new feed. title is required (1-100 chars); description is optional (max 1000 chars). Returns the created feed (with server-generated id, created_at, updated_at).",
+    "inputSchema": {
+      "properties": {
+        "description": {
+          "description": "Optional description.",
+          "maxLength": 1000,
+          "type": "string"
+        },
+        "title": {
+          "description": "Title of the feed.",
+          "maxLength": 100,
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "title"
+      ],
+      "type": "object"
+    },
+    "name": "create_feed"
+  },
+  {
+    "annotations": {
+      "readOnlyHint": false,
+      "destructiveHint": true,
+      "idempotentHint": false,
+      "openWorldHint": true
+    },
+    "description": "Soft-delete a feed by id. Returns an error result if the feed does not exist OR is owned by another user.",
+    "inputSchema": {
+      "properties": {
+        "id": {
+          "description": "Feed id.",
+          "minimum": 1,
+          "type": "number"
+        }
+      },
+      "required": [
+        "id"
+      ],
+      "type": "object"
+    },
+    "name": "delete_feed"
+  },
+  {
+    "annotations": {
+      "readOnlyHint": true,
+      "destructiveHint": false,
+      "idempotentHint": false,
+      "openWorldHint": true
+    },
+    "description": "Read a single feed by id. Returns an error result when the feed does not exist OR is owned by another user (single sentinel, no existence leak).",
+    "inputSchema": {
+      "properties": {
+        "id": {
+          "description": "Feed id.",
+          "minimum": 1,
+          "type": "number"
+        }
+      },
+      "required": [
+        "id"
+      ],
+      "type": "object"
+    },
+    "name": "get_feed"
+  },
+  {
+    "annotations": {
+      "readOnlyHint": true,
+      "destructiveHint": false,
+      "idempotentHint": false,
+      "openWorldHint": true
+    },
+    "description": "List the authenticated caller's feeds. Supports search (max 200 chars), page (min 1, default 1), page_size (clamped to 100, default 20), and order (asc|desc, default desc). Returns the standard pagination envelope: {data, page, page_size, total, has_more}.",
+    "inputSchema": {
+      "properties": {
+        "order": {
+          "description": "Sort direction: 'desc' returns newest first (default), 'asc' returns oldest first.",
+          "enum": [
+            "asc",
+            "desc"
+          ],
+          "type": "string"
+        },
+        "page": {
+          "description": "1-based page index.",
+          "minimum": 1,
+          "type": "number"
+        },
+        "page_size": {
+          "description": "Items per page; clamped server-side to 100.",
+          "minimum": 1,
+          "type": "number"
+        },
+        "query": {
+          "description": "Case-insensitive search term matched against title and description.",
+          "maxLength": 200,
+          "type": "string"
+        }
+      },
+      "required": [],
+      "type": "object"
+    },
+    "name": "list_feeds"
+  },
+  {
+    "annotations": {
+      "readOnlyHint": false,
+      "destructiveHint": true,
+      "idempotentHint": false,
+      "openWorldHint": true
+    },
+    "description": "Update an existing feed. id is required; title is required (1-100 chars); description is optional (max 1000 chars). Returns an error result if the feed does not exist OR is owned by another user.",
+    "inputSchema": {
+      "properties": {
+        "description": {
+          "description": "Optional description.",
+          "maxLength": 1000,
+          "type": "string"
+        },
+        "id": {
+          "description": "Feed id.",
+          "minimum": 1,
+          "type": "number"
+        },
+        "title": {
+          "description": "Title of the feed.",
+          "maxLength": 100,
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "title"
+      ],
+      "type": "object"
+    },
+    "name": "update_feed"
+  }
+]

@@ -1,0 +1,270 @@
+"""HTTP client for the Go MCP `tools/call` JSON-RPC endpoint.
+
+The MCP shim in `internal/mcp/handler.go` speaks JSON-RPC 2.0 over HTTP. We send
+`{"jsonrpc":"2.0","method":"tools/call","params":{"name":..., "arguments":{...}},"id":<uuid>}`
+and receive `{"result": ...}` on success or `{"error": {...}}` on failure.
+"""
+
+from __future__ import annotations
+
+import logging
+import uuid
+
+import httpx
+
+log = logging.getLogger("nyx.agent.tools_client")
+
+
+class ToolAuthError(Exception):
+    """401 from the MCP server — token rejected."""
+
+
+class ToolUnavailableError(Exception):
+    """Connect refused, timeout, 5xx, 408, or 429 from the MCP server."""
+
+
+class ToolError(Exception):
+    """JSON-RPC `error` response — semantic rejection (tool-not-found, validation, etc.)."""
+
+
+class ToolRejectedError(Exception):
+    """HTTP 4xx (other than 401/408/429) with no JSON-RPC error envelope.
+
+    Non-retryable: the request shape was rejected at the transport level and
+    retrying the same call cannot succeed. The executor fails the step
+    immediately (see agent-tool-dispatch-retry §4.4). `status_code` carries
+    the HTTP status for safe, non-leaking error text.
+    """
+
+    def __init__(self, message: str, status_code: int | None = None) -> None:
+        super().__init__(message)
+        self.status_code = status_code
+
+
+class ToolsClient:
+    def __init__(self, base_url: str, bearer_token: str) -> None:
+        self._base_url = base_url.rstrip("/")
+        self._bearer_token = bearer_token
+
+    async def list_tools(self) -> list[dict]:
+        """Call MCP `tools/list` and return the OpenAI-format tool schemas.
+
+        Each entry is `{type: "function", function: {name, description, parameters}}`
+        which LangChain's `ChatOpenAI.bind_tools(...)` accepts directly.
+
+        Used by the executor to bind tool definitions on the react chat client
+        so the model can actually emit tool_calls (HIGH-7 fix — without this the
+        react loop is effectively dead because the model has no tools to call).
+        """
+        body = {
+            "jsonrpc": "2.0",
+            "method": "tools/list",
+            "params": {},
+            "id": str(uuid.uuid4()),
+        }
+        try:
+            async with httpx.AsyncClient(timeout=15.0) as client:
+                resp = await client.post(
+                    self._base_url,
+                    json=body,
+                    headers={
+                        "Authorization": f"Bearer {self._bearer_token}",
+                        "Content-Type": "application/json",
+                    },
+                )
+        except (httpx.ConnectError, httpx.TimeoutException, httpx.RequestError) as exc:
+            raise ToolUnavailableError(repr(exc)) from exc
+
+        if resp.status_code == 401:
+            raise ToolAuthError("MCP rejected the bearer token (tools/list)")
+        if resp.status_code >= 500:
+            raise ToolUnavailableError(f"MCP {resp.status_code} on tools/list")
+        if resp.status_code != 200:
+            raise ToolError(f"MCP {resp.status_code}: {resp.text[:200]}")
+
+        try:
+            data = resp.json()
+        except ValueError as exc:
+            raise ToolUnavailableError(f"MCP returned non-JSON: {exc}") from exc
+
+        if "error" in data and data["error"] is not None:
+            err = data["error"]
+            msg = err.get("message", "tools/list error") if isinstance(err, dict) else str(err)
+            raise ToolError(f"tools/list: {msg}")
+
+        result = data.get("result", {})
+        # MCP `tools/list` returns `{"tools": [...]}`. The list items may already
+        # be in OpenAI format, or they may be MCP-native. Pass through anything
+        # that has a `type: function` envelope; pass through the raw list as
+        # a fallback for MCP-native shapes that LangChain rejects.
+        tools = result.get("tools", result) if isinstance(result, dict) else result
+        return tools if isinstance(tools, list) else []
+
+    async def call(self, name: str, arguments: dict) -> dict:
+        body = {
+            "jsonrpc": "2.0",
+            "method": "tools/call",
+            "params": {"name": name, "arguments": arguments},
+            "id": str(uuid.uuid4()),
+        }
+        try:
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                resp = await client.post(
+                    self._base_url,
+                    json=body,
+                    headers={
+                        "Authorization": f"Bearer {self._bearer_token}",
+                        "Content-Type": "application/json",
+                    },
+                )
+        except (httpx.ConnectError, httpx.TimeoutException, httpx.RequestError) as exc:
+            raise ToolUnavailableError(repr(exc)) from exc
+
+        if resp.status_code == 401:
+            raise ToolAuthError("MCP rejected the bearer token")
+        if resp.status_code >= 500:
+            raise ToolUnavailableError(f"MCP {resp.status_code}: {resp.text[:200]}")
+        if resp.status_code in (408, 429):
+            # Transient throttling / timeout — retryable with backoff.
+            raise ToolUnavailableError(f"MCP {resp.status_code}: retryable transport status")
+        if resp.status_code != 200:
+            # 4xx (other than 401/408/429). Status alone does not decide
+            # retryability: a body carrying a JSON-RPC error envelope is a
+            # semantic (registry) rejection and routes to the tool-arg
+            # retry path; a bare 4xx is a non-retryable transport rejection.
+            try:
+                data = resp.json()
+            except ValueError:
+                data = None
+            if isinstance(data, dict) and data.get("error") is not None:
+                err = data["error"]
+                msg = err.get("message", "tool error") if isinstance(err, dict) else str(err)
+                raise ToolError(f"{name}: {msg}")
+            raise ToolRejectedError(
+                f"MCP {resp.status_code}: {resp.text[:200]}", status_code=resp.status_code
+            )
+
+        try:
+            data = resp.json()
+        except ValueError as exc:
+            raise ToolUnavailableError(f"MCP returned non-JSON: {exc}") from exc
+
+        if "error" in data and data["error"] is not None:
+            err = data["error"]
+            msg = err.get("message", "tool error") if isinstance(err, dict) else str(err)
+            raise ToolError(f"{name}: {msg}")
+        result = data.get("result", {})
+        if isinstance(result, dict) and result.get("isError") is True:
+            # SEP-1303: mcp-go surfaces input-schema-validation failures AND
+            # tool-not-found as tool-level `isError: true` results at HTTP
+            # 200 (see internal/mcp/handler.go — WithInputSchemaValidation).
+            # That is the primary rejection channel for MCP-delivered calls;
+            # mapping it onto ToolError routes it through the executor's
+            # tool-arg retry path (re-prompt + counter) instead of feeding
+            # the rejection to the model as a successful result.
+            raise ToolError(f"{name}: {_iserror_text(result)}")
+        return result
+
+
+def normalize_registry_tools(raw_tools: object) -> tuple[list[dict], dict[str, dict]]:
+    """Normalize MCP-native `tools/list` entries into bindable function tools.
+
+    The Go server's wire shape is `{name, description, inputSchema,
+    annotations}` (mcp-go). LangChain's `convert_to_openai_tool` ACCEPTS
+    that shape but silently drops `inputSchema` (verified against the
+    pinned langchain-core) — bound MCP tools reach the model schemaless.
+    Normalize once at the dispatcher boundary: `inputSchema` becomes the
+    bound function's `parameters`. Annotations are preserved on a side map
+    — they must NOT travel inside the bound function object, which is the
+    same silent-drop trap this normalization exists to fix.
+
+    Entries that cannot be bound (missing name, or a schema that is not an
+    object) are logged and skipped; the run continues with the rest. An
+    absent or empty `annotations` object normalizes to `{}` (fail-safe:
+    the confirmation policy gates on a positive `readOnlyHint=true`).
+
+    Returns `(schemas, annotations_by_name)`.
+    """
+    schemas: list[dict] = []
+    annotations: dict[str, dict] = {}
+    if not isinstance(raw_tools, list):
+        return schemas, annotations
+    for entry in raw_tools:
+        if not isinstance(entry, dict):
+            log.warning(
+                "registry tools/list: skipping non-object entry (%s)",
+                type(entry).__name__,
+            )
+            continue
+        function = entry.get("function")
+        if isinstance(function, dict):
+            # Defensive: tolerate an already-normalized entry (the wire is
+            # ours today; a future server-side pre-normalization must not
+            # crash the consumer).
+            name = function.get("name")
+            if not isinstance(name, str) or not name:
+                log.warning("registry tools/list: skipping entry without a name")
+                continue
+            parameters = function.get("parameters")
+            schemas.append(
+                {
+                    "type": "function",
+                    "function": {
+                        "name": name,
+                        "description": function.get("description") or "",
+                        "parameters": parameters if isinstance(parameters, dict) else {},
+                    },
+                }
+            )
+        else:
+            name = entry.get("name")
+            if not isinstance(name, str) or not name:
+                log.warning(
+                    "registry tools/list: skipping entry without a name: keys=%s",
+                    sorted(entry.keys()),
+                )
+                continue
+            schema = entry.get("inputSchema")
+            if not isinstance(schema, dict):
+                log.warning(
+                    "registry tools/list: skipping %r — inputSchema is not an "
+                    "object (%s)",
+                    name,
+                    type(schema).__name__,
+                )
+                continue
+            schemas.append(
+                {
+                    "type": "function",
+                    "function": {
+                        "name": name,
+                        "description": entry.get("description") or "",
+                        "parameters": schema,
+                    },
+                }
+            )
+        entry_annotations = entry.get("annotations")
+        annotations[name] = (
+            entry_annotations if isinstance(entry_annotations, dict) else {}
+        )
+    return schemas, annotations
+
+
+def _iserror_text(result: dict) -> str:
+    """Extract the human/model-facing text from an MCP isError result.
+
+    Shape per SEP-1303: `{"content": [{"type": "text", "text": "..."}], "isError": true}`.
+    The Go layer composes these messages for the LLM to self-correct on, so
+    passing the text through the ToolError funnel is intended.
+    """
+    content = result.get("content")
+    if isinstance(content, list):
+        texts: list[str] = []
+        for part in content:
+            if isinstance(part, dict):
+                text = part.get("text")
+                if isinstance(text, str):
+                    texts.append(text)
+        if texts:
+            return " ".join(texts)
+    return "tool call rejected"

@@ -1,8 +1,11 @@
 package config
 
 import (
+	"strings"
 	"testing"
 	"time"
+
+	"nyx/internal/platform/auth"
 )
 
 // TestLoadFromEnv verifies that Load() reads every required env var.
@@ -12,7 +15,7 @@ import (
 // vars are dropped on the floor.
 func TestLoadFromEnv(t *testing.T) {
 	t.Setenv("DB_URL", "postgres://user:pass@db:5432/nyx?sslmode=disable")
-	t.Setenv("JWT_SECRET", "test-secret")
+	t.Setenv("JWT_SECRET", auth.TestSecret)
 	t.Setenv("REDIS_ENABLED", "true")
 	t.Setenv("REDIS_URL", "redis://redis:6379")
 	t.Setenv("CACHE_TTL", "10m")
@@ -27,8 +30,8 @@ func TestLoadFromEnv(t *testing.T) {
 	if cfg.DBURL != "postgres://user:pass@db:5432/nyx?sslmode=disable" {
 		t.Errorf("DBURL = %q, want from env", cfg.DBURL)
 	}
-	if cfg.JWTSecret != "test-secret" {
-		t.Errorf("JWTSecret = %q, want %q", cfg.JWTSecret, "test-secret")
+	if cfg.JWTSecret != auth.TestSecret {
+		t.Errorf("JWTSecret = %q, want %q", cfg.JWTSecret, auth.TestSecret)
 	}
 	if !cfg.RedisEnabled {
 		t.Error("RedisEnabled = false, want true from env")
@@ -50,7 +53,7 @@ func TestLoadFromEnv(t *testing.T) {
 func TestLoadAppliesDefaults(t *testing.T) {
 	// Isolate the test from any ambient env vars.
 	t.Setenv("DB_URL", "postgres://x")
-	t.Setenv("JWT_SECRET", "x")
+	t.Setenv("JWT_SECRET", auth.TestSecret)
 	t.Setenv("REDIS_ENABLED", "")
 	t.Setenv("PORT", "")
 	t.Setenv("DB_MAX_OPEN_CONNS", "")
@@ -84,7 +87,7 @@ func TestLoadAppliesDefaults(t *testing.T) {
 
 func TestLoadRejectsRedisEnabledWithoutURL(t *testing.T) {
 	t.Setenv("DB_URL", "postgres://x")
-	t.Setenv("JWT_SECRET", "x")
+	t.Setenv("JWT_SECRET", auth.TestSecret)
 	t.Setenv("REDIS_ENABLED", "true")
 	t.Setenv("REDIS_URL", "")
 
@@ -96,7 +99,7 @@ func TestLoadRejectsRedisEnabledWithoutURL(t *testing.T) {
 
 func TestLoadRejectsBadDurations(t *testing.T) {
 	t.Setenv("DB_URL", "postgres://x")
-	t.Setenv("JWT_SECRET", "x")
+	t.Setenv("JWT_SECRET", auth.TestSecret)
 	t.Setenv("DB_CONN_MAX_LIFETIME", "not-a-duration")
 
 	_, err := Load()
@@ -110,7 +113,7 @@ func TestLoadRejectsBadDurations(t *testing.T) {
 // instead of a runtime DB connection tuning surprise.
 func TestLoadDurationsAreValid(t *testing.T) {
 	t.Setenv("DB_URL", "postgres://x")
-	t.Setenv("JWT_SECRET", "x")
+	t.Setenv("JWT_SECRET", auth.TestSecret)
 
 	cfg, err := Load()
 	if err != nil {
@@ -120,5 +123,711 @@ func TestLoadDurationsAreValid(t *testing.T) {
 		if _, err := time.ParseDuration(d); err != nil {
 			t.Errorf("duration %q failed to parse: %v", d, err)
 		}
+	}
+}
+
+func TestLoadRejectsDefaultJWTSecret(t *testing.T) {
+	t.Setenv("DB_URL", "postgres://x")
+	t.Setenv("JWT_SECRET", "your-default-secret-key-change-it-in-prod")
+
+	_, err := Load()
+	if err == nil {
+		t.Fatal("Load() error = nil, want JWT_SECRET default-placeholder rejection")
+	}
+	if !strings.Contains(err.Error(), "JWT_SECRET") {
+		t.Errorf("Load() error = %v, want it to mention JWT_SECRET", err)
+	}
+}
+
+func TestLoadRejectsShortJWTSecret(t *testing.T) {
+	t.Setenv("DB_URL", "postgres://x")
+	t.Setenv("JWT_SECRET", "tooshort")
+
+	_, err := Load()
+	if err == nil {
+		t.Fatal("Load() error = nil, want short-JWT_SECRET rejection")
+	}
+	if !strings.Contains(err.Error(), "JWT_SECRET") {
+		t.Errorf("Load() error = %v, want it to mention JWT_SECRET", err)
+	}
+}
+
+// TestLoadRejectsEmptyDBURL pins the SECURITY.md M9 fail-closed
+// contract: the prod compose ships with `DB_URL=` (empty literal)
+// in environment: and relies on docker-entrypoint.sh to fill it
+// in from the mounted secret. If the shim is bypassed or the
+// secret file is missing, the backend MUST refuse to start —
+// starting with DB_URL="" would let pgxpool.ParseConfig("") silently
+// open an unusable pool and the first request would 500. This test
+// pins that the load step itself errors before any network call.
+func TestLoadRejectsEmptyDBURL(t *testing.T) {
+	// Isolate from any ambient DB_URL.
+	t.Setenv("DB_URL", "")
+	t.Setenv("JWT_SECRET", auth.TestSecret)
+
+	_, err := Load()
+	if err == nil {
+		t.Fatal("Load() error = nil, want empty-DB_URL rejection")
+	}
+	if !strings.Contains(err.Error(), "DB_URL") {
+		t.Errorf("Load() error = %v, want it to mention DB_URL", err)
+	}
+}
+
+// TestLoadRejectsEmptyJWTSecret is the M9 mirror of the test above
+// for JWT_SECRET. The shim only exports JWT_SECRET if the secret
+// file is non-empty — an empty or missing secret leaves the env
+// var empty. The placeholder default would otherwise kick in via
+// viper.SetDefault and pass IsDefault, but the empty string is NOT
+// the placeholder literal, so we need a dedicated check. viper
+// falls through to the empty string, then this test pins that the
+// length check still fires.
+func TestLoadRejectsEmptyJWTSecret(t *testing.T) {
+	t.Setenv("DB_URL", "postgres://x")
+	t.Setenv("JWT_SECRET", "")
+
+	_, err := Load()
+	if err == nil {
+		t.Fatal("Load() error = nil, want empty-JWT_SECRET rejection")
+	}
+	if !strings.Contains(err.Error(), "JWT_SECRET") {
+		t.Errorf("Load() error = %v, want it to mention JWT_SECRET", err)
+	}
+}
+
+// TestLoad_AcceptsLLMDisabled_ByDefault is the common path: no LLM_*
+// env vars set, LLM_ENABLED defaults to false, Load returns a
+// valid Config with the LLM zero values. Without this baseline the
+// LLM-enabled tests would mask a regression where LLM_ENABLED
+// defaults to true.
+func TestLoad_AcceptsLLMDisabled_ByDefault(t *testing.T) {
+	t.Setenv("DB_URL", "postgres://x")
+	t.Setenv("JWT_SECRET", auth.TestSecret)
+	t.Setenv("LLM_ENABLED", "")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v, want nil (LLM off by default)", err)
+	}
+	if cfg.LLMEnabled {
+		t.Error("LLMEnabled default = true, want false")
+	}
+}
+
+// TestLoad_RejectsLLMEnabledWithoutBaseURL pins the fail-closed
+// contract: turning LLM on without a base URL is operator
+// misconfiguration; the backend must refuse to start so a missing
+// env var doesn't silently default to OpenAI's hosted endpoint.
+func TestLoad_RejectsLLMEnabledWithoutBaseURL(t *testing.T) {
+	t.Setenv("DB_URL", "postgres://x")
+	t.Setenv("JWT_SECRET", auth.TestSecret)
+	t.Setenv("LLM_ENABLED", "true")
+	t.Setenv("LLM_BASE_URL", "")
+	t.Setenv("LLM_API_KEY", "sk-prod-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+	t.Setenv("LLM_MODEL", "gpt-4o-mini")
+
+	_, err := Load()
+	if err == nil {
+		t.Fatal("Load() error = nil, want LLM_BASE_URL-required rejection")
+	}
+	if !strings.Contains(err.Error(), "LLM_BASE_URL") {
+		t.Errorf("Load() error = %v, want it to mention LLM_BASE_URL", err)
+	}
+}
+
+// TestLoad_RejectsLLMEnabledWithPlaceholderKey catches the
+// "I committed my .env with 'your-key'" foot-gun. The placeholder
+// list is intentionally narrow — it only blocks the patterns a
+// careless operator is likely to leave in, not a determined
+// attacker (who would just type a real-looking key).
+func TestLoad_RejectsLLMEnabledWithPlaceholderKey(t *testing.T) {
+	t.Setenv("DB_URL", "postgres://x")
+	t.Setenv("JWT_SECRET", auth.TestSecret)
+	t.Setenv("LLM_ENABLED", "true")
+	t.Setenv("LLM_BASE_URL", "https://api.openai.com/v1")
+	t.Setenv("LLM_API_KEY", "your-key-here-replace-me")
+	t.Setenv("LLM_MODEL", "gpt-4o-mini")
+
+	_, err := Load()
+	if err == nil {
+		t.Fatal("Load() error = nil, want placeholder-LLM_API_KEY rejection")
+	}
+	if !strings.Contains(err.Error(), "LLM_API_KEY") {
+		t.Errorf("Load() error = %v, want it to mention LLM_API_KEY", err)
+	}
+}
+
+// TestLoad_RejectsLLMEnabledWithoutModel asserts the third
+// cross-field requirement. Sk-anything-without-a-model would
+// otherwise default to a 404 on every call.
+func TestLoad_RejectsLLMEnabledWithoutModel(t *testing.T) {
+	t.Setenv("DB_URL", "postgres://x")
+	t.Setenv("JWT_SECRET", auth.TestSecret)
+	t.Setenv("LLM_ENABLED", "true")
+	t.Setenv("LLM_BASE_URL", "https://api.openai.com/v1")
+	t.Setenv("LLM_API_KEY", "sk-prod-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+	t.Setenv("LLM_MODEL", "")
+
+	_, err := Load()
+	if err == nil {
+		t.Fatal("Load() error = nil, want LLM_MODEL-required rejection")
+	}
+	if !strings.Contains(err.Error(), "LLM_MODEL") {
+		t.Errorf("Load() error = %v, want it to mention LLM_MODEL", err)
+	}
+}
+
+// TestLoad_AcceptsValidLLMConfig pins the happy path: every
+// required field set, durations valid, system prompt present.
+// Without this the failure-mode tests above could mask a regression
+// where every LLM_ENABLED=true case errors.
+func TestLoad_AcceptsValidLLMConfig(t *testing.T) {
+	t.Setenv("DB_URL", "postgres://x")
+	t.Setenv("JWT_SECRET", auth.TestSecret)
+	t.Setenv("LLM_ENABLED", "true")
+	t.Setenv("LLM_BASE_URL", "https://api.openai.com/v1")
+	t.Setenv("LLM_API_KEY", "sk-prod-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+	t.Setenv("LLM_MODEL", "gpt-4o-mini")
+	t.Setenv("LLM_TIMEOUT", "30s")
+	t.Setenv("LLM_MAX_STREAM_DURATION", "5m")
+	t.Setenv("LLM_SYSTEM_PROMPT", "You are a helpful movie catalog assistant.")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v, want nil for valid LLM config", err)
+	}
+	if !cfg.LLMEnabled {
+		t.Error("LLMEnabled = false, want true")
+	}
+	if cfg.LLMProvider != LLMProviderOpenAI {
+		t.Errorf("LLMProvider default = %q, want %q", cfg.LLMProvider, LLMProviderOpenAI)
+	}
+	if cfg.LLMAllowPrivateURL {
+		t.Error("LLMAllowPrivateURL default = true, want false")
+	}
+	if cfg.LLMMaxTokens != 1024 {
+		t.Errorf("LLMMaxTokens default = %d, want 1024", cfg.LLMMaxTokens)
+	}
+	if cfg.LLMMaxHistoryMessages != 50 {
+		t.Errorf("LLMMaxHistoryMessages default = %d, want 50", cfg.LLMMaxHistoryMessages)
+	}
+}
+
+// TestLoad_RejectsInvalidLLMProvider pins the LLM_PROVIDER
+// allowlist — anything outside {openai, vllm} must refuse to
+// start so a typo doesn't silently fall back to OpenAI.
+func TestLoad_RejectsInvalidLLMProvider(t *testing.T) {
+	t.Setenv("DB_URL", "postgres://x")
+	t.Setenv("JWT_SECRET", auth.TestSecret)
+	t.Setenv("LLM_ENABLED", "true")
+	t.Setenv("LLM_PROVIDER", "anthropic")
+	t.Setenv("LLM_BASE_URL", "https://api.openai.com/v1")
+	t.Setenv("LLM_API_KEY", "sk-prod-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+	t.Setenv("LLM_MODEL", "gpt-4o-mini")
+
+	_, err := Load()
+	if err == nil {
+		t.Fatal("Load() error = nil, want LLM_PROVIDER rejection")
+	}
+	if !strings.Contains(err.Error(), "LLM_PROVIDER") {
+		t.Errorf("Load() error = %v, want it to mention LLM_PROVIDER", err)
+	}
+}
+
+// TestLoad_AcceptsVLLMProviderWithEmptyAPIKey pins the vLLM happy
+// path: LLM_PROVIDER=vllm allows an empty LLM_API_KEY (vLLM
+// started without --api-key accepts any Authorization header).
+// The OpenAI provider would reject the same configuration.
+func TestLoad_AcceptsVLLMProviderWithEmptyAPIKey(t *testing.T) {
+	t.Setenv("DB_URL", "postgres://x")
+	t.Setenv("JWT_SECRET", auth.TestSecret)
+	t.Setenv("LLM_ENABLED", "true")
+	t.Setenv("LLM_PROVIDER", "vllm")
+	t.Setenv("LLM_BASE_URL", "http://vllm:8000/v1")
+	t.Setenv("LLM_API_KEY", "")
+	t.Setenv("LLM_MODEL", "Qwen/Qwen2.5-3B-Instruct")
+	t.Setenv("LLM_ALLOW_PRIVATE_URL", "true")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v, want nil for valid vLLM config", err)
+	}
+	if cfg.LLMProvider != "vllm" {
+		t.Errorf("LLMProvider = %q, want vllm", cfg.LLMProvider)
+	}
+}
+
+// TestLoad_RejectsVLLMWithInvalidBaseURLScheme covers the SSRF
+// scheme allowlist.
+func TestLoad_RejectsVLLMWithInvalidBaseURLScheme(t *testing.T) {
+	t.Setenv("DB_URL", "postgres://x")
+	t.Setenv("JWT_SECRET", auth.TestSecret)
+	t.Setenv("LLM_ENABLED", "true")
+	t.Setenv("LLM_PROVIDER", "vllm")
+	t.Setenv("LLM_BASE_URL", "file:///etc/passwd")
+	t.Setenv("LLM_API_KEY", "")
+	t.Setenv("LLM_MODEL", "test")
+	t.Setenv("LLM_ALLOW_PRIVATE_URL", "true")
+
+	_, err := Load()
+	if err == nil {
+		t.Fatal("Load() error = nil, want scheme rejection")
+	}
+	if !strings.Contains(err.Error(), "scheme") {
+		t.Errorf("Load() error = %v, want it to mention scheme", err)
+	}
+}
+
+// TestLoad_RejectsVLLMWithPrivateHost confirms the IP-class
+// allowlist at startup.
+func TestLoad_RejectsVLLMWithPrivateHost(t *testing.T) {
+	t.Setenv("DB_URL", "postgres://x")
+	t.Setenv("JWT_SECRET", auth.TestSecret)
+	t.Setenv("LLM_ENABLED", "true")
+	t.Setenv("LLM_PROVIDER", "vllm")
+	t.Setenv("LLM_BASE_URL", "http://127.0.0.1:8000/v1")
+	t.Setenv("LLM_API_KEY", "")
+	t.Setenv("LLM_MODEL", "test")
+	// LLM_ALLOW_PRIVATE_URL intentionally unset.
+
+	_, err := Load()
+	if err == nil {
+		t.Fatal("Load() error = nil, want private-host rejection")
+	}
+	if !strings.Contains(err.Error(), "LLM_ALLOW_PRIVATE_URL") {
+		t.Errorf("Load() error = %v, want it to mention the escape hatch", err)
+	}
+}
+
+// TestLoad_RejectsVLLMWithUserinfo confirms URLs with embedded
+// userinfo are refused.
+func TestLoad_RejectsVLLMWithUserinfo(t *testing.T) {
+	t.Setenv("DB_URL", "postgres://x")
+	t.Setenv("JWT_SECRET", auth.TestSecret)
+	t.Setenv("LLM_ENABLED", "true")
+	t.Setenv("LLM_PROVIDER", "vllm")
+	t.Setenv("LLM_BASE_URL", "http://attacker:pw@vllm.example.com/v1")
+	t.Setenv("LLM_API_KEY", "")
+	t.Setenv("LLM_MODEL", "test")
+	t.Setenv("LLM_ALLOW_PRIVATE_URL", "true")
+
+	_, err := Load()
+	if err == nil {
+		t.Fatal("Load() error = nil, want userinfo rejection")
+	}
+	if !strings.Contains(err.Error(), "userinfo") {
+		t.Errorf("Load() error = %v, want it to mention userinfo", err)
+	}
+}
+
+// TestLoad_RejectsOpenAIWithoutAPIKey pins that the OpenAI provider
+// still requires a non-empty LLM_API_KEY — only vLLM is allowed to
+// run keyless.
+func TestLoad_RejectsOpenAIWithoutAPIKey(t *testing.T) {
+	t.Setenv("DB_URL", "postgres://x")
+	t.Setenv("JWT_SECRET", auth.TestSecret)
+	t.Setenv("LLM_ENABLED", "true")
+	t.Setenv("LLM_PROVIDER", "openai")
+	t.Setenv("LLM_BASE_URL", "https://api.openai.com/v1")
+	t.Setenv("LLM_API_KEY", "")
+	t.Setenv("LLM_MODEL", "gpt-4o-mini")
+
+	_, err := Load()
+	if err == nil {
+		t.Fatal("Load() error = nil, want OpenAI-without-API-key rejection")
+	}
+	if !strings.Contains(err.Error(), "LLM_API_KEY") {
+		t.Errorf("Load() error = %v, want it to mention LLM_API_KEY", err)
+	}
+}
+
+// TestLoad_RejectsInvalidLLMTimeout pins duration parsing for
+// LLM_TIMEOUT. A typo in the env file would otherwise crash on
+// the first chat request; better to fail at startup.
+func TestLoad_RejectsInvalidLLMTimeout(t *testing.T) {
+	t.Setenv("DB_URL", "postgres://x")
+	t.Setenv("JWT_SECRET", auth.TestSecret)
+	t.Setenv("LLM_ENABLED", "true")
+	t.Setenv("LLM_BASE_URL", "https://api.openai.com/v1")
+	t.Setenv("LLM_API_KEY", "sk-prod-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+	t.Setenv("LLM_MODEL", "gpt-4o-mini")
+	t.Setenv("LLM_TIMEOUT", "not-a-duration")
+
+	_, err := Load()
+	if err == nil {
+		t.Fatal("Load() error = nil, want LLM_TIMEOUT parse error")
+	}
+	if !strings.Contains(err.Error(), "LLM_TIMEOUT") {
+		t.Errorf("Load() error = %v, want it to mention LLM_TIMEOUT", err)
+	}
+}
+
+// TestLoad_AcceptsPrimaryOnly pins case 12: primary-only (no
+// fallback configured) loads cleanly. The Router is skipped, so
+// the env vars it consumes are simply unused.
+func TestLoad_AcceptsPrimaryOnly(t *testing.T) {
+	t.Setenv("DB_URL", "postgres://x")
+	t.Setenv("JWT_SECRET", auth.TestSecret)
+	t.Setenv("LLM_ENABLED", "true")
+	t.Setenv("LLM_PROVIDER", "openai")
+	t.Setenv("LLM_BASE_URL", "https://api.openai.com/v1")
+	t.Setenv("LLM_API_KEY", "sk-prod-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+	t.Setenv("LLM_MODEL", "gpt-4o-mini")
+	// LLM_FALLBACK_BASE_URL intentionally unset.
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v, want nil for primary-only", err)
+	}
+	if cfg.LLMFallbackBaseURL != "" {
+		t.Errorf("LLMFallbackBaseURL = %q, want empty", cfg.LLMFallbackBaseURL)
+	}
+}
+
+// TestLoad_RejectsVLLMFallbackMissingAPIKey pins case 13: primary
+// vLLM with an OpenAI fallback URL but no fallback API key — the
+// OpenAI client requires a non-empty bearer, so boot must fail
+// closed with a clear LLM_FALLBACK_API_KEY error.
+func TestLoad_RejectsVLLMFallbackMissingAPIKey(t *testing.T) {
+	t.Setenv("DB_URL", "postgres://x")
+	t.Setenv("JWT_SECRET", auth.TestSecret)
+	t.Setenv("LLM_ENABLED", "true")
+	t.Setenv("LLM_PROVIDER", "vllm")
+	t.Setenv("LLM_BASE_URL", "http://vllm:8000/v1")
+	t.Setenv("LLM_API_KEY", "")
+	t.Setenv("LLM_MODEL", "test")
+	t.Setenv("LLM_ALLOW_PRIVATE_URL", "true")
+	t.Setenv("LLM_FALLBACK_BASE_URL", "https://api.openai.com/v1")
+	t.Setenv("LLM_FALLBACK_API_KEY", "")
+	t.Setenv("LLM_ALLOW_PRIVATE_URL", "true")
+
+	_, err := Load()
+	if err == nil {
+		t.Fatal("Load() error = nil, want LLM_FALLBACK_API_KEY rejection")
+	}
+	if !strings.Contains(err.Error(), "LLM_FALLBACK_API_KEY") {
+		t.Errorf("Load() error = %v, want it to mention LLM_FALLBACK_API_KEY", err)
+	}
+}
+
+// TestLoad_AcceptsOpenAIFallbackToVLLMWithEmptyKey pins case 14:
+// primary is OpenAI, fallback is a vLLM endpoint with no fallback
+// key — vLLM accepts an empty Authorization header, so boot must
+// succeed. The fallback type is implicit (the opposite of the
+// primary).
+func TestLoad_AcceptsOpenAIFallbackToVLLMWithEmptyKey(t *testing.T) {
+	t.Setenv("DB_URL", "postgres://x")
+	t.Setenv("JWT_SECRET", auth.TestSecret)
+	t.Setenv("LLM_ENABLED", "true")
+	t.Setenv("LLM_PROVIDER", "openai")
+	t.Setenv("LLM_BASE_URL", "https://api.openai.com/v1")
+	t.Setenv("LLM_API_KEY", "sk-prod-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+	t.Setenv("LLM_MODEL", "gpt-4o-mini")
+	t.Setenv("LLM_FALLBACK_BASE_URL", "http://vllm:8000/v1")
+	t.Setenv("LLM_FALLBACK_API_KEY", "")
+	t.Setenv("LLM_ALLOW_PRIVATE_URL", "true")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v, want nil for OpenAI→vLLM failover", err)
+	}
+	if cfg.LLMFallbackBaseURL != "http://vllm:8000/v1" {
+		t.Errorf("LLMFallbackBaseURL = %q, want %q", cfg.LLMFallbackBaseURL, "http://vllm:8000/v1")
+	}
+}
+
+// TestLoad_RejectsFallbackPrivateHost pins case 15: SSRF guard
+// must apply to the fallback URL too — the dev escape hatch
+// LLM_ALLOW_PRIVATE_URL=false refuses the fallback URL the same
+// way it refuses the primary.
+func TestLoad_RejectsFallbackPrivateHost(t *testing.T) {
+	t.Setenv("DB_URL", "postgres://x")
+	t.Setenv("JWT_SECRET", auth.TestSecret)
+	t.Setenv("LLM_ENABLED", "true")
+	t.Setenv("LLM_PROVIDER", "openai")
+	t.Setenv("LLM_BASE_URL", "https://api.openai.com/v1")
+	t.Setenv("LLM_API_KEY", "sk-prod-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+	t.Setenv("LLM_MODEL", "gpt-4o-mini")
+	t.Setenv("LLM_FALLBACK_BASE_URL", "http://127.0.0.1:8000/v1")
+	t.Setenv("LLM_FALLBACK_API_KEY", "")
+	// LLM_ALLOW_PRIVATE_URL intentionally false.
+
+	_, err := Load()
+	if err == nil {
+		t.Fatal("Load() error = nil, want fallback private-host rejection")
+	}
+	if !strings.Contains(err.Error(), "LLM_FALLBACK_BASE_URL") && !strings.Contains(err.Error(), "LLM_ALLOW_PRIVATE_URL") {
+		t.Errorf("Load() error = %v, want it to mention fallback URL or escape hatch", err)
+	}
+}
+
+// TestLoad_AcceptsEmbedBaseURLEmpty pins the default-off path for
+// the separate embedding endpoint slot: LLM_EMBEDDING_BASE_URL
+// unset means the embedder reuses the chat provider (single-model
+// deployments pay nothing). All other LLM_EMBEDDING_* fields are
+// ignored in this mode.
+func TestLoad_AcceptsEmbedBaseURLEmpty(t *testing.T) {
+	t.Setenv("DB_URL", "postgres://x")
+	t.Setenv("JWT_SECRET", auth.TestSecret)
+	t.Setenv("LLM_ENABLED", "true")
+	t.Setenv("LLM_PROVIDER", "vllm")
+	t.Setenv("LLM_BASE_URL", "http://vllm:8000/v1")
+	t.Setenv("LLM_API_KEY", "")
+	t.Setenv("LLM_MODEL", "Qwen/Qwen3-4B-Instruct-2507")
+	t.Setenv("LLM_ALLOW_PRIVATE_URL", "true")
+	// LLM_EMBEDDING_* intentionally unset.
+	t.Setenv("LLM_EMBEDDING_BASE_URL", "")
+	t.Setenv("LLM_EMBEDDING_PROVIDER", "")
+	t.Setenv("LLM_EMBEDDING_MODEL", "")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v, want nil for default embed-off path", err)
+	}
+	if cfg.LLMEmbeddingBaseURL != "" {
+		t.Errorf("LLMEmbeddingBaseURL = %q, want empty", cfg.LLMEmbeddingBaseURL)
+	}
+}
+
+// TestLoad_AcceptsValidEmbedConfig pins the happy path for the
+// separate embedding endpoint: LLM_EMBEDDING_BASE_URL set, model
+// explicit, provider / api key fall back to the chat fields. The
+// embed endpoint reuses the chat provider (vllm) and the chat
+// api-key policy (vLLM allows empty).
+func TestLoad_AcceptsValidEmbedConfig(t *testing.T) {
+	t.Setenv("DB_URL", "postgres://x")
+	t.Setenv("JWT_SECRET", auth.TestSecret)
+	t.Setenv("LLM_ENABLED", "true")
+	t.Setenv("LLM_PROVIDER", "vllm")
+	t.Setenv("LLM_BASE_URL", "http://vllm:8000/v1")
+	t.Setenv("LLM_API_KEY", "")
+	t.Setenv("LLM_MODEL", "Qwen/Qwen3-4B-Instruct-2507")
+	t.Setenv("LLM_ALLOW_PRIVATE_URL", "true")
+	t.Setenv("LLM_EMBEDDING_BASE_URL", "http://vllm-embed:8000/v1")
+	t.Setenv("LLM_EMBEDDING_MODEL", "Qwen/Qwen3-Embedding-0.6B")
+	// LLM_EMBEDDING_PROVIDER / LLM_EMBEDDING_API_KEY intentionally
+	// unset — must fall back to chat's vllm + empty key.
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v, want nil for valid embed config", err)
+	}
+	if cfg.LLMEmbeddingBaseURL != "http://vllm-embed:8000/v1" {
+		t.Errorf("LLMEmbeddingBaseURL = %q, want %q", cfg.LLMEmbeddingBaseURL, "http://vllm-embed:8000/v1")
+	}
+	if cfg.LLMEmbeddingModel != "Qwen/Qwen3-Embedding-0.6B" {
+		t.Errorf("LLMEmbeddingModel = %q, want %q", cfg.LLMEmbeddingModel, "Qwen/Qwen3-Embedding-0.6B")
+	}
+}
+
+// TestLoad_RejectsEmbedConfigWithoutModel pins the resolution-rule
+// change: when LLM_EMBEDDING_BASE_URL is set, the embed model must
+// be explicit. Falling back to LLM_MODEL would 404 on the embed
+// endpoint because the embed server serves a different model id.
+func TestLoad_RejectsEmbedConfigWithoutModel(t *testing.T) {
+	t.Setenv("DB_URL", "postgres://x")
+	t.Setenv("JWT_SECRET", auth.TestSecret)
+	t.Setenv("LLM_ENABLED", "true")
+	t.Setenv("LLM_PROVIDER", "vllm")
+	t.Setenv("LLM_BASE_URL", "http://vllm:8000/v1")
+	t.Setenv("LLM_API_KEY", "")
+	t.Setenv("LLM_MODEL", "Qwen/Qwen3-4B-Instruct-2507")
+	t.Setenv("LLM_ALLOW_PRIVATE_URL", "true")
+	t.Setenv("LLM_EMBEDDING_BASE_URL", "http://vllm-embed:8000/v1")
+	t.Setenv("LLM_EMBEDDING_MODEL", "")
+
+	_, err := Load()
+	if err == nil {
+		t.Fatal("Load() error = nil, want LLM_EMBEDDING_MODEL-required rejection")
+	}
+	if !strings.Contains(err.Error(), "LLM_EMBEDDING_MODEL") {
+		t.Errorf("Load() error = %v, want it to mention LLM_EMBEDDING_MODEL", err)
+	}
+}
+
+// TestLoad_RejectsEmbedConfigInvalidProvider pins the embed-side
+// provider allowlist — same rules as LLM_PROVIDER but a separate
+// field so embed and chat can target different backends.
+func TestLoad_RejectsEmbedConfigInvalidProvider(t *testing.T) {
+	t.Setenv("DB_URL", "postgres://x")
+	t.Setenv("JWT_SECRET", auth.TestSecret)
+	t.Setenv("LLM_ENABLED", "true")
+	t.Setenv("LLM_PROVIDER", "vllm")
+	t.Setenv("LLM_BASE_URL", "http://vllm:8000/v1")
+	t.Setenv("LLM_API_KEY", "")
+	t.Setenv("LLM_MODEL", "Qwen/Qwen3-4B-Instruct-2507")
+	t.Setenv("LLM_ALLOW_PRIVATE_URL", "true")
+	t.Setenv("LLM_EMBEDDING_BASE_URL", "http://vllm-embed:8000/v1")
+	t.Setenv("LLM_EMBEDDING_MODEL", "Qwen/Qwen3-Embedding-0.6B")
+	t.Setenv("LLM_EMBEDDING_PROVIDER", "anthropic")
+
+	_, err := Load()
+	if err == nil {
+		t.Fatal("Load() error = nil, want LLM_EMBEDDING_PROVIDER rejection")
+	}
+	if !strings.Contains(err.Error(), "LLM_EMBEDDING_PROVIDER") {
+		t.Errorf("Load() error = %v, want it to mention LLM_EMBEDDING_PROVIDER", err)
+	}
+}
+
+// TestLoad_RejectsEmbedConfigOpenAIWithoutAPIKey pins the OpenAI
+// embed path: when the embed provider is OpenAI, the resolved
+// api key (LLM_EMBEDDING_API_KEY or fall-back LLM_API_KEY) must
+// be non-empty.
+func TestLoad_RejectsEmbedConfigOpenAIWithoutAPIKey(t *testing.T) {
+	t.Setenv("DB_URL", "postgres://x")
+	t.Setenv("JWT_SECRET", auth.TestSecret)
+	t.Setenv("LLM_ENABLED", "true")
+	t.Setenv("LLM_PROVIDER", "vllm")
+	t.Setenv("LLM_BASE_URL", "http://vllm:8000/v1")
+	t.Setenv("LLM_API_KEY", "")
+	t.Setenv("LLM_MODEL", "Qwen/Qwen3-4B-Instruct-2507")
+	t.Setenv("LLM_ALLOW_PRIVATE_URL", "true")
+	t.Setenv("LLM_EMBEDDING_BASE_URL", "https://api.openai.com/v1")
+	t.Setenv("LLM_EMBEDDING_MODEL", "text-embedding-3-small")
+	t.Setenv("LLM_EMBEDDING_PROVIDER", "openai")
+	// LLM_EMBEDDING_API_KEY intentionally unset; LLM_API_KEY is empty.
+
+	_, err := Load()
+	if err == nil {
+		t.Fatal("Load() error = nil, want embed-OpenAI-without-API-key rejection")
+	}
+	if !strings.Contains(err.Error(), "LLM_EMBEDDING_API_KEY") {
+		t.Errorf("Load() error = %v, want it to mention LLM_EMBEDDING_API_KEY", err)
+	}
+}
+
+// TestLoad_RejectsEmbedConfigPrivateHost pins the SSRF guard for
+// the embed URL. The escape hatch is LLM_EMBEDDING_ALLOW_PRIVATE_URL
+// OR LLM_ALLOW_PRIVATE_URL — either flips the guard off. Here
+// BOTH are false to confirm the embed URL is checked independently
+// of the chat URL (a private embed endpoint requires explicit opt-in).
+func TestLoad_RejectsEmbedConfigPrivateHost(t *testing.T) {
+	t.Setenv("DB_URL", "postgres://x")
+	t.Setenv("JWT_SECRET", auth.TestSecret)
+	t.Setenv("LLM_ENABLED", "true")
+	t.Setenv("LLM_PROVIDER", "vllm")
+	t.Setenv("LLM_BASE_URL", "http://vllm:8000/v1")
+	t.Setenv("LLM_API_KEY", "")
+	t.Setenv("LLM_MODEL", "Qwen/Qwen3-4B-Instruct-2507")
+	t.Setenv("LLM_ALLOW_PRIVATE_URL", "true")
+	t.Setenv("LLM_EMBEDDING_BASE_URL", "http://127.0.0.1:8001/v1")
+	t.Setenv("LLM_EMBEDDING_MODEL", "Qwen/Qwen3-Embedding-0.6B")
+	// LLM_EMBEDDING_ALLOW_PRIVATE_URL intentionally false. The chat
+	// flag alone does NOT cover the embed URL (it must propagate
+	// via the OR at validation time). To get a clean rejection
+	// here, both flags need to be off — but LLM_BASE_URL also
+	// needs to pass the chat-side SSRF guard, so the chat URL
+	// must use LLM_ALLOW_PRIVATE_URL=true. The embed URL gets
+	// validated separately: LLM_EMBEDDING_ALLOW_PRIVATE_URL=false
+	// (this field), LLM_ALLOW_PRIVATE_URL=true → resolved = true
+	// → still passes. So instead we assert the field is read and
+	// resolved correctly by setting both flags to false and
+	// pointing the chat URL at a public domain.
+
+	// Reset to the test that actually exercises rejection: both
+	// allow-private flags false, chat URL public, embed URL private.
+	t.Setenv("LLM_ALLOW_PRIVATE_URL", "false")
+	t.Setenv("LLM_BASE_URL", "https://api.openai.com/v1")
+	t.Setenv("LLM_API_KEY", "sk-prod-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+	t.Setenv("LLM_EMBEDDING_BASE_URL", "http://127.0.0.1:8001/v1")
+
+	_, err := Load()
+	if err == nil {
+		t.Fatal("Load() error = nil, want embed private-host rejection")
+	}
+	if !strings.Contains(err.Error(), "ALLOW_PRIVATE_URL") {
+		t.Errorf("Load() error = %v, want it to mention the escape hatch", err)
+	}
+}
+
+// TestLoad_EmbedConfigAllowPrivateHonoured pins the OR semantics:
+// when LLM_EMBEDDING_ALLOW_PRIVATE_URL=true (and the chat flag is
+// false), the embed URL's private host is allowed.
+func TestLoad_EmbedConfigAllowPrivateHonoured(t *testing.T) {
+	t.Setenv("DB_URL", "postgres://x")
+	t.Setenv("JWT_SECRET", auth.TestSecret)
+	t.Setenv("LLM_ENABLED", "true")
+	t.Setenv("LLM_PROVIDER", "openai")
+	t.Setenv("LLM_BASE_URL", "https://api.openai.com/v1")
+	t.Setenv("LLM_API_KEY", "sk-prod-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+	t.Setenv("LLM_MODEL", "gpt-4o-mini")
+	t.Setenv("LLM_ALLOW_PRIVATE_URL", "false")
+	t.Setenv("LLM_EMBEDDING_BASE_URL", "http://127.0.0.1:8001/v1")
+	t.Setenv("LLM_EMBEDDING_MODEL", "Qwen/Qwen3-Embedding-0.6B")
+	t.Setenv("LLM_EMBEDDING_ALLOW_PRIVATE_URL", "true")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v, want nil for embed-allow-private override", err)
+	}
+	if !cfg.LLMEmbeddingAllowPrivateURL {
+		t.Error("LLMEmbeddingAllowPrivateURL = false, want true")
+	}
+}
+
+// TestLoad_AgentEnabledDefaultsFalse pins the default for the
+// agent-path master switch: AGENT_ENABLED must default to false so
+// the legacy single-turn chat handler keeps running on every
+// deployment that has not explicitly opted into the Python
+// LangGraph orchestrator. The agent-langgraph swap keeps the legacy
+// wire shape byte-identical when this flag is off; flipping it on
+// without setting PYTHON_AGENT_URL is a misconfiguration the
+// cmd/api/main.go fail-closed check catches at startup.
+func TestLoad_AgentEnabledDefaultsFalse(t *testing.T) {
+	t.Setenv("DB_URL", "postgres://x")
+	t.Setenv("JWT_SECRET", auth.TestSecret)
+	t.Setenv("AGENT_ENABLED", "")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg.AgentEnabled {
+		t.Error("AgentEnabled default = true, want false (single-turn chat path)")
+	}
+}
+
+// TestLoad_PythonAgentURLDefaultsEmpty pins the default for the
+// Python orchestrator endpoint: PYTHON_AGENT_URL must default to
+// empty so the agent path is opt-in. With both flags at their
+// defaults the chat handler is the legacy single-turn path with
+// zero proxy construction.
+func TestLoad_PythonAgentURLDefaultsEmpty(t *testing.T) {
+	t.Setenv("DB_URL", "postgres://x")
+	t.Setenv("JWT_SECRET", auth.TestSecret)
+	t.Setenv("PYTHON_AGENT_URL", "")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg.PythonAgentURL != "" {
+		t.Errorf("PythonAgentURL default = %q, want empty (no proxy wired)", cfg.PythonAgentURL)
+	}
+}
+
+// TestLoad_AgentEnabledTrueHonoured pins the env-driven flip:
+// setting AGENT_ENABLED=true in the environment is reflected in
+// the parsed Config. cmd/api/main.go reads cfg.AgentEnabled and,
+// when true + PYTHON_AGENT_URL non-empty, wires AgentProxy. This
+// test pins only the config-load layer; the wiring logic lives in
+// cmd/api/main.go's mountChatRoute (where it's the same shape as
+// MCP_ENABLED / LLM_ENABLED gates).
+func TestLoad_AgentEnabledTrueHonoured(t *testing.T) {
+	t.Setenv("DB_URL", "postgres://x")
+	t.Setenv("JWT_SECRET", auth.TestSecret)
+	t.Setenv("AGENT_ENABLED", "true")
+	t.Setenv("PYTHON_AGENT_URL", "http://agent:9000")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if !cfg.AgentEnabled {
+		t.Error("AgentEnabled = false, want true from env")
+	}
+	if cfg.PythonAgentURL != "http://agent:9000" {
+		t.Errorf("PythonAgentURL = %q, want %q", cfg.PythonAgentURL, "http://agent:9000")
 	}
 }

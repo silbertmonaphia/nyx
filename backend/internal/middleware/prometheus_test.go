@@ -20,10 +20,10 @@ func resetMetrics() {
 }
 
 // TestPrometheus_RouteTemplateLabelUsesChiPattern is the cardinality
-// guard. With a router that has `/api/movies/{id}`, hitting
-// `/api/movies/1` and `/api/movies/2` must record the SAME route
-// label (`/api/movies/{id}`), not the literal URL — otherwise every
-// distinct movie ID creates a new time series and the Prometheus
+// guard. With a router that has `/api/feeds/{id}`, hitting
+// `/api/feeds/1` and `/api/feeds/2` must record the SAME route
+// label (`/api/feeds/{id}`), not the literal URL — otherwise every
+// distinct feed ID creates a new time series and the Prometheus
 // server eventually OOMs.
 //
 // Note: the middleware must be registered via router.Use so it lives
@@ -34,13 +34,13 @@ func TestPrometheus_RouteTemplateLabelUsesChiPattern(t *testing.T) {
 
 	router := chi.NewMux()
 	router.Use(Prometheus)
-	router.Get("/api/movies/{id}", func(w http.ResponseWriter, _ *http.Request) {
+	router.Get("/api/feeds/{id}", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	})
 
 	for _, id := range []string{"1", "42", "9999"} {
 		router.ServeHTTP(httptest.NewRecorder(),
-			httptest.NewRequest(http.MethodGet, "/api/movies/"+id, nil))
+			httptest.NewRequest(http.MethodGet, "/api/feeds/"+id, nil))
 	}
 
 	gathered := gatherMetric(t, "http_requests_total")
@@ -49,11 +49,11 @@ func TestPrometheus_RouteTemplateLabelUsesChiPattern(t *testing.T) {
 	if got != 1 {
 		t.Errorf("route-template cardinality = %d, want 1; literal URL leaked into the label", got)
 	}
-	const want = `route="/api/movies/{id}"`
+	const want = `route="/api/feeds/{id}"`
 	if !strings.Contains(gathered, want) {
 		t.Errorf("expected route label %q in metrics; got:\n%s", want, gathered)
 	}
-	for _, leak := range []string{`route="/api/movies/1"`, `route="/api/movies/42"`} {
+	for _, leak := range []string{`route="/api/feeds/1"`, `route="/api/feeds/42"`} {
 		if strings.Contains(gathered, leak) {
 			t.Errorf("literal URL leaked into route label — cardinality explosion:\n%s", gathered)
 		}

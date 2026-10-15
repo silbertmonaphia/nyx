@@ -1,8 +1,23 @@
-version: '3.8'
-
 services:
   db:
-    image: postgres:17-alpine
+    # pgvector community image: drop-in for postgres:17 with the
+    # pgvector extension pre-built. Required for the RAG feature
+    # (the feed_embeddings.embedding column uses vector(N)).
+    # Available tags: pg17, pg17-trixie, pg17-bookworm. There is
+    # NO pg17-alpine tag — the pgvector project only ships the
+    # Debian-slim variants. The default postgres:17 image this
+    # replaces was also Debian-slim, so the swap is in-family.
+    # If you're upgrading from a pre-pgvector volume and the new
+    # container refuses to start, run `docker compose down -v` once
+    # to recreate the named volume — on-disk WAL format versions
+    # can differ across minor releases.
+    image: pgvector/pgvector:pg17
+    # Local-dev resource caps. Generous enough that the dev stack
+    # stays healthy on a 16 GB laptop; tight enough to prevent a
+    # runaway query from starving the host. Override per-run with
+    # `docker compose up -d --scale <svc>=1 -m 2g <svc>`.
+    mem_limit: 1g
+    cpus: "1.00"
     restart: always
     env_file:
       - .env
@@ -10,61 +25,883 @@ services:
       - POSTGRES_USER=${POSTGRES_USER}
       - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
       - POSTGRES_DB=${POSTGRES_DB}
+    # SECURITY.md H12: dev DB is bound to loopback only — exposing the
+    # default `postgres/postgres` credentials on the LAN is a free
+    # admin cred. Developers who need LAN access can flip this back
+    # to "5433:5432" temporarily, but the safe default is 127.0.0.1.
     ports:
-      - "5433:5432"
+      - "127.0.0.1:5433:5432"
     volumes:
       - db_data:/var/lib/postgresql/data
+    # SECURITY.md M12: drop all caps by default, then add back only
+    # what postgres needs to run as a non-root user inside the
+    # container (CHOWN the data dir, SETUID/SETGID to drop to the
+    # `postgres` user, DAC_OVERRIDE/FOWNER for the postmaster pid
+    # file + socket). no-new-privileges blocks setuid binaries.
+    # read_only is intentionally NOT set — postgres writes to the
+    # data volume.
+    cap_drop: [ALL]
+    cap_add: [CHOWN, SETUID, SETGID, DAC_OVERRIDE, FOWNER]
+    security_opt: ["no-new-privileges:true"]
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
       interval: 5s
       timeout: 3s
       retries: 10
+    # Default network only. Only the Go backend reaches the DB;
+    # the Python agent goes through backend's /mcp + /internal/rag/retrieve.
+    networks: [default]
 
   redis:
     image: redis:7-alpine
+    mem_limit: 256m
+    cpus: "0.50"
     restart: always
+    # SECURITY.md H12: same reasoning as the DB — loopback only.
+    # Host port 6380 (not the default 6379) so this doesn't collide
+    # with a native redis-server installed on the developer host.
     ports:
-      - "6379:6379"
+      - "127.0.0.1:6380:6379"
+    # SECURITY.md M12: redis is intentionally read-only rootfs
+    # because no persistence is enabled (no --save, no AOF). tmpfs
+    # gives /data a scratch space for runtime bookkeeping. caps
+    # trimmed to the bare minimum.
+    cap_drop: [ALL]
+    cap_add: [CHOWN, SETUID, SETGID]
+    security_opt: ["no-new-privileges:true"]
+    read_only: true
+    tmpfs:
+      - /data
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
       timeout: 3s
       retries: 10
+    # Both networks: backend's cache layer uses the default side;
+    # the Python agent's per-user budget guard uses the internal side.
+    networks: [default, internal]
+
+  # OpenTelemetry tracing — Jaeger v2 (single OTel Collector binary,
+  # image `jaegertracing/jaeger`). The default config enables the OTLP
+  # receivers (4317 gRPC / 4318 HTTP) and the `healthcheckv2`
+  # extension on :13133/status; no `--set` flags needed.
+  # SECURITY.md M12: minimal hardening — Jaeger v2 is a Go binary
+  # that needs almost nothing. We keep the dev ports (16686 UI, 4318
+  # OTLP) bound on 0.0.0.0 because they're meant for host access; only
+  # DB/Redis got loopback-bound (H12).
+  jaeger:
+    image: jaegertracing/jaeger:2.18.0
+    mem_limit: 512m
+    cpus: "0.50"
+    restart: always
+    ports:
+      - "16686:16686" # UI (dev-only access — see H12 comment)
+      - "4318:4318"   # OTLP HTTP (used by backend & SPA via compose network)
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    tmpfs:
+      - /tmp
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:13133/status"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    # Both networks: backend exports spans here on the default side;
+    # the Python agent exports on the internal side (OTLP goes over
+    # the in-network hostname).
+    networks: [default, internal]
+
+  # ─── Self-hosted Langfuse (opt-in profile) ─────────────────────────────
+  # LLM-level tracing for the Python agent — prompts, replies, token
+  # usage, and step/tool structure per run. See OpenSpec change
+  # `agent-langfuse-tracing`. Opt-in via `--profile langfuse` /
+  # `make up-langfuse`: the six containers below cost ~6 GB RAM (web
+  # alone needs >1g to boot) and are only useful while working on the
+  # agent, so they stay OUT of the default `make up` set (same rationale
+  # as the vllm profile).
+  #
+  # Adapted from the upstream compose at
+  # https://github.com/langfuse/langfuse/blob/v4.58.0/docker-compose.yml
+  # with three deliberate divergences:
+  #   1. Service names are prefixed (`langfuse-db`, `langfuse-redis`,
+  #      ...) — upstream's bare `postgres` / `redis` names would
+  #      collide with this project's `db` / `redis` services in the
+  #      same compose project.
+  #   2. Port policy: ONLY the UI/API port is published, and loopback
+  #      only. Upstream additionally publishes every stateful
+  #      component on loopback for debugging; nothing outside this
+  #      compose project needs them, so they stay unpublished here
+  #      (same deny-by-default posture as SECURITY.md H12).
+  #   3. TELEMETRY_ENABLED=false — upstream phones home by default.
+  #   4. Images come from Docker Hub (`langfuse/langfuse*`) instead of
+  #      `docker.langfuse.com`: on this dev network the vendor registry's
+  #      layer downloads redirect through registry-1.docker.io and time
+  #      out, while the Hub images pull fine through the configured
+  #      registry mirrors. Digests verified identical across both
+  #      registries at 4.58.0 (`docker buildx imagetools inspect`).
+  #
+  # First boot bootstraps the org, project, and API key pair from the
+  # LANGFUSE_INIT_* variables (dev values in `.env.example`) so the keys
+  # are deterministic and match `backend/agent_py/.env.example` — no UI
+  # clicks needed. Bump procedure: change both `:4.58.0` image tags (and
+  # re-check the digest match above) and re-diff this block against the
+  # upstream compose at the new tag.
+
+  # Background worker: consumes the ingestion queue (Redis), writes
+  # batches into ClickHouse, runs evaluations. Carries the shared env
+  # anchor; the web service below merges it and adds its own keys.
+  langfuse-worker:
+    image: langfuse/langfuse-worker:4.58.0
+    profiles: ["langfuse"]
+    mem_limit: 1g
+    cpus: "1.00"
+    restart: always
+    environment: &langfuse-env
+      # Secrets come from the root `.env` (see `.env.example`).
+      DATABASE_URL: postgresql://langfuse:${LANGFUSE_POSTGRES_PASSWORD}@langfuse-db:5432/langfuse
+      SALT: ${LANGFUSE_SALT}
+      ENCRYPTION_KEY: ${LANGFUSE_ENCRYPTION_KEY}
+      TELEMETRY_ENABLED: "false"
+      CLICKHOUSE_MIGRATION_URL: clickhouse://langfuse-clickhouse:9000
+      CLICKHOUSE_URL: http://langfuse-clickhouse:8123
+      CLICKHOUSE_USER: clickhouse
+      CLICKHOUSE_PASSWORD: ${LANGFUSE_CLICKHOUSE_PASSWORD}
+      # Single-node deployment — no Zookeeper/Keeper required.
+      CLICKHOUSE_CLUSTER_ENABLED: "false"
+      # Raw events land in MinIO first; Redis is only a work queue.
+      # Media uploads target the same internal MinIO — the browser-side
+      # media endpoint is intentionally left unset (dev profile
+      # publishes one port only), so trace attachments are visible in
+      # the API/UI payloads but not as rendered media.
+      LANGFUSE_S3_EVENT_UPLOAD_BUCKET: langfuse
+      LANGFUSE_S3_EVENT_UPLOAD_REGION: auto
+      LANGFUSE_S3_EVENT_UPLOAD_ACCESS_KEY_ID: minio
+      LANGFUSE_S3_EVENT_UPLOAD_SECRET_ACCESS_KEY: ${LANGFUSE_MINIO_PASSWORD}
+      LANGFUSE_S3_EVENT_UPLOAD_ENDPOINT: http://langfuse-minio:9000
+      LANGFUSE_S3_EVENT_UPLOAD_FORCE_PATH_STYLE: "true"
+      LANGFUSE_S3_EVENT_UPLOAD_PREFIX: events/
+      LANGFUSE_S3_MEDIA_UPLOAD_BUCKET: langfuse
+      LANGFUSE_S3_MEDIA_UPLOAD_REGION: auto
+      LANGFUSE_S3_MEDIA_UPLOAD_ACCESS_KEY_ID: minio
+      LANGFUSE_S3_MEDIA_UPLOAD_SECRET_ACCESS_KEY: ${LANGFUSE_MINIO_PASSWORD}
+      LANGFUSE_S3_MEDIA_UPLOAD_ENDPOINT: http://langfuse-minio:9000
+      LANGFUSE_S3_MEDIA_UPLOAD_FORCE_PATH_STYLE: "true"
+      LANGFUSE_S3_MEDIA_UPLOAD_PREFIX: media/
+      REDIS_HOST: langfuse-redis
+      REDIS_PORT: "6379"
+      REDIS_AUTH: ${LANGFUSE_REDIS_AUTH}
+    depends_on: &langfuse-deps
+      langfuse-db:
+        condition: service_healthy
+      langfuse-redis:
+        condition: service_healthy
+      langfuse-clickhouse:
+        condition: service_healthy
+      langfuse-minio:
+        condition: service_healthy
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    tmpfs:
+      - /tmp
+    networks: [default]
+
+  # Web UI + ingestion API + OTel/ingestion endpoints. The only langfuse
+  # service on the `internal` network so the compose `agent` service can
+  # ingest traces; the stateful services below stay off it.
+  langfuse-web:
+    image: langfuse/langfuse:4.58.0
+    profiles: ["langfuse"]
+    # 2g + an explicit V8 heap: the Next.js 16 + Prisma boot (migrations,
+    # init scripts) OOM-kills the process under a 1g cap — verified during
+    # bring-up, container crash-looped with "FATAL ERROR: Reached heap
+    # limit". The heap flag keeps V8 under the cgroup limit with headroom
+    # for non-heap RSS.
+    mem_limit: 2g
+    cpus: "1.00"
+    restart: always
+    ports:
+      # The ONLY published langfuse port — UI + ingestion API, reachable
+      # from the host browser at http://localhost:3000. Loopback-bound:
+      # same posture as db / redis / vllm (SECURITY.md H12).
+      - "127.0.0.1:3000:3000"
+    environment:
+      <<: *langfuse-env
+      NODE_OPTIONS: --max-old-space-size=1536
+      NEXTAUTH_URL: http://localhost:3000
+      NEXTAUTH_SECRET: ${LANGFUSE_NEXTAUTH_SECRET}
+      # First-boot bootstrap: creates the org + project + API key pair
+      # deterministically. Re-running with existing volumes is a no-op.
+      LANGFUSE_INIT_ORG_ID: nyx-dev
+      LANGFUSE_INIT_ORG_NAME: Nyx Dev
+      LANGFUSE_INIT_PROJECT_ID: nyx-agent
+      LANGFUSE_INIT_PROJECT_NAME: Nyx Agent
+      LANGFUSE_INIT_PROJECT_PUBLIC_KEY: ${LANGFUSE_INIT_PROJECT_PUBLIC_KEY}
+      LANGFUSE_INIT_PROJECT_SECRET_KEY: ${LANGFUSE_INIT_PROJECT_SECRET_KEY}
+      LANGFUSE_INIT_USER_EMAIL: dev@nyx.local
+      LANGFUSE_INIT_USER_NAME: dev
+      LANGFUSE_INIT_USER_PASSWORD: ${LANGFUSE_INIT_USER_PASSWORD}
+    depends_on: *langfuse-deps
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    tmpfs:
+      - /tmp
+    networks: [default, internal]
+
+  # Metadata store (projects, users, prompts, config). Dedicated
+  # instance — NOT the app's `db` — so langfuse upgrades can't perturb
+  # the application schema and vice versa.
+  langfuse-db:
+    image: postgres:17
+    profiles: ["langfuse"]
+    mem_limit: 512m
+    cpus: "0.50"
+    restart: always
+    environment:
+      - POSTGRES_USER=langfuse
+      - POSTGRES_PASSWORD=${LANGFUSE_POSTGRES_PASSWORD}
+      - POSTGRES_DB=langfuse
+      - TZ=UTC
+      - PGTZ=UTC
+    volumes:
+      - langfuse_db_data:/var/lib/postgresql/data
+    # Same cap profile as the app `db` service — postgres needs
+    # CHOWN/SETUID/SETGID/DAC_OVERRIDE/FOWNER and nothing else.
+    cap_drop: [ALL]
+    cap_add: [CHOWN, SETUID, SETGID, DAC_OVERRIDE, FOWNER]
+    security_opt: ["no-new-privileges:true"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    networks: [default]
+
+  # Trace analytics store (OLAP). Single node — CLICKHOUSE_CLUSTER_ENABLED
+  # is false, so no Keeper/Zookeeper dependency.
+  langfuse-clickhouse:
+    image: clickhouse/clickhouse-server:25.12
+    profiles: ["langfuse"]
+    mem_limit: 2g
+    cpus: "2.00"
+    restart: always
+    environment:
+      - CLICKHOUSE_USER=clickhouse
+      - CLICKHOUSE_PASSWORD=${LANGFUSE_CLICKHOUSE_PASSWORD}
+      - CLICKHOUSE_DB=default
+    volumes:
+      - langfuse_clickhouse_data:/var/lib/clickhouse
+    # The official entrypoint starts as root, fixes volume ownership,
+    # then drops to the `clickhouse` user via setuid — same cap profile
+    # as postgres.
+    cap_drop: [ALL]
+    cap_add: [CHOWN, SETUID, SETGID, DAC_OVERRIDE, FOWNER]
+    security_opt: ["no-new-privileges:true"]
+    healthcheck:
+      test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider http://localhost:8123/ping || exit 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 1s
+    networks: [default]
+
+  # Object storage (S3-compatible) for raw ingestion events + media.
+  # Chainguard build — no console, S3 API only, which is all langfuse
+  # uses. Pinned by digest because chainguard publishes no version tags
+  # for this image; bump deliberately (re-resolve with
+  # `docker buildx imagetools inspect cgr.dev/chainguard/minio:latest`).
+  # `user: 101:101` + the sh entrypoint mirror upstream: the process is
+  # non-root and pre-creates the bucket directory inside the volume.
+  langfuse-minio:
+    image: cgr.dev/chainguard/minio@sha256:dc455cdd4db6e390b1b26514f15ff37681a777bf8dab41aac445a0259f751e56
+    profiles: ["langfuse"]
+    mem_limit: 512m
+    cpus: "0.50"
+    restart: always
+    user: "101:101"
+    entrypoint: sh
+    command:
+      - "-c"
+      - "mkdir -p /data/langfuse && minio server --address \":9000\" --console-address \":9001\" /data"
+    environment:
+      - MINIO_ROOT_USER=minio
+      - MINIO_ROOT_PASSWORD=${LANGFUSE_MINIO_PASSWORD}
+      # `mc` (used by the healthcheck) writes its config under $HOME; the
+      # explicit `user: 101:101` leaves HOME as `/`, unwritable — healthcheck
+      # then fails "mkdir /.mc: permission denied" forever. /tmp is a tmpfs
+      # mount on this service, so the alias config is scratch anyway.
+      - HOME=/tmp
+    volumes:
+      - langfuse_minio_data:/data
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    tmpfs:
+      - /tmp
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 1s
+      timeout: 5s
+      retries: 5
+      start_period: 1s
+    networks: [default]
+
+  # Queue/cache for ingestion (BullMQ). Dedicated instance — never the
+  # app's `redis` — with auth and noeviction (evicting queue keys under
+  # memory pressure would silently drop traces). A named volume keeps
+  # the queue across restarts.
+  langfuse-redis:
+    image: redis:7-alpine
+    profiles: ["langfuse"]
+    mem_limit: 256m
+    cpus: "0.50"
+    restart: always
+    command: ["redis-server", "--requirepass", "${LANGFUSE_REDIS_AUTH}", "--maxmemory-policy", "noeviction"]
+    environment:
+      - REDIS_AUTH=${LANGFUSE_REDIS_AUTH}
+    volumes:
+      - langfuse_redis_data:/data
+    cap_drop: [ALL]
+    cap_add: [CHOWN, SETUID, SETGID]
+    security_opt: ["no-new-privileges:true"]
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli -a \"$$REDIS_AUTH\" ping 2>/dev/null | grep -q PONG"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    networks: [default]
 
   backend:
+    # Opt-in profile. Default `docker compose up` boots only the
+    # infra services (db / redis / jaeger); backend + frontend run
+    # locally via `cd backend && go run ./cmd/api` + `cd frontend &&
+    # npm run dev`. Use `--profile app` (alone or with `--profile
+    # vllm`) to bring the application containers up via compose.
+    profiles: ["app"]
     build:
       context: ./backend
+      # GOPROXY is only relevant at build time. It lives in
+      # `backend/.env.example` for the local dev workflow; compose
+      # doesn't read that file for build-arg substitution, so the
+      # default below is what always lands in the Dockerfile ARG.
+      # Operators needing a custom proxy: set GOPROXY in the shell
+      # before `docker compose build`, or override here directly.
       args:
         - GOPROXY=${GOPROXY:-https://goproxy.cn,direct}
+    mem_limit: 512m
+    cpus: "1.00"
     ports:
       - "8080:8080"
-    # env_file makes .env loading independent of the shell's CWD —
-    # compose always reads the file next to this compose file.
+    # Runtime config is fully sourced from `backend/.env` — every
+    # var listed in `backend/.env.example` (JWT_SECRET, DB_URL,
+    # CORS_ALLOWED_ORIGINS, REDIS_*, OTEL_*, LLM_*, etc.) flows
+    # through here. No `environment:` block on purpose: compose's
+    # `environment:` takes precedence over `env_file`, so leaving
+    # any literal here would lock operators out of overriding that
+    # var via `backend/.env`. Compose-specific defaults that differ
+    # from viper's defaults (e.g. REDIS_ENABLED, OTEL_ENABLED,
+    # LLM_PROVIDER, LLM_BASE_URL) are uncommented in
+    # `backend/.env.example`; copy + edit to opt in.
     env_file:
-      - .env
-    environment:
-      - DB_URL=${DB_URL}
-      - REDIS_URL=${REDIS_URL:-redis://redis:6379}
-      - REDIS_ENABLED=${REDIS_ENABLED:-true}
-      - CACHE_TTL=${CACHE_TTL:-5m}
-      - JWT_SECRET=${JWT_SECRET}
+      - backend/.env
     depends_on:
       db:
         condition: service_healthy
       redis:
         condition: service_healthy
+      jaeger:
+        condition: service_healthy
+      vllm:
+        condition: service_healthy
+        required: false
+      # Optional embed endpoint (--profile embed). When the profile
+      # is off, the service is absent and `required: false` keeps the
+      # backend from refusing to boot. When on, the healthcheck gates
+      # backend start so the first embed attempt doesn't race the
+      # model load.
+      vllm-embed:
+        condition: service_healthy
+        required: false
+    # SECURITY.md M12: backend Dockerfile already sets USER nyx
+    # (non-root), so no compose-level user: override is needed.
+    # Read-only rootfs; tmpfs gives /tmp the writable scratch Go
+    # runtime expects (e.g. cgo build cache, race detector temp
+    # files). All caps dropped; backend doesn't need any.
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    read_only: true
+    tmpfs:
+      - /tmp
+    # Both networks: backend is the bridge between the SPA-facing
+    # default network and the internal network where the Python
+    # agent lives. SPA never resolves `agent` directly.
+    networks: [default, internal]
+
+  # Python Plan-and-Execute agent orchestrator. Opt-in profile —
+  # brought up alongside `backend` when `AGENT_ENABLED=true` is set in
+  # `backend/.env`. Replaces the Go `internal/agent/` package that shipped
+  # in OpenSpec change `agent-loop` (superseded by `agent-langgraph`).
+  # RAG stays in Go (the bridge endpoint `/internal/rag/retrieve` lives on
+  # the backend); tools dispatch via MCP JSON-RPC at `http://backend:8080/mcp`.
+  agent:
+    profiles: ["app"]
+    build:
+      context: ./backend/agent_py
+    mem_limit: 512m
+    cpus: "1.00"
+    ports:
+      # Loopback only — same posture as the vllm services. The Go proxy
+      # reaches the agent on the bridge network; the agent's `/metrics` is
+      # scraped by Prometheus on the bridge network too.
+      - "127.0.0.1:9001:9001"
+    env_file:
+      - backend/.env
+    environment:
+      # In-network hostnames for the bridges the agent calls into.
+      - PYTHON_AGENT_MCP_URL=http://backend:8080/mcp
+      - PYTHON_AGENT_RAG_BRIDGE_URL=http://backend:8080/internal/rag/retrieve
+      - PYTHON_AGENT_REDIS_URL=redis://redis:6379
+      - PYTHON_AGENT_OTEL_ENDPOINT=http://jaeger:4318
+      # Langfuse tracing (--profile langfuse). Keys are interpolated
+      # from the root .env's LANGFUSE_INIT_* pair — the same values the
+      # langfuse-web first-boot bootstrap creates — so the agent can
+      # never drift from the instance it reports to. Enable by setting
+      # PYTHON_AGENT_LANGFUSE_ENABLED in backend/.env; it is NOT listed
+      # here so the env_file value isn't masked by compose's
+      # environment-precedence.
+      - PYTHON_AGENT_LANGFUSE_HOST=http://langfuse-web:3000
+      - PYTHON_AGENT_LANGFUSE_PUBLIC_KEY=${LANGFUSE_INIT_PROJECT_PUBLIC_KEY:-}
+      - PYTHON_AGENT_LANGFUSE_SECRET_KEY=${LANGFUSE_INIT_PROJECT_SECRET_KEY:-}
+      # Web tools (openspec/changes/agent-web-tools): the
+      # PYTHON_AGENT_WEB_* flags + optional PYTHON_AGENT_TAVILY_API_KEY
+      # come from backend/.env — listed nowhere here so the env_file
+      # values aren't masked by compose's environment-precedence. Note
+      # the agent container has egress on these bridge networks (they
+      # are closed bridges, not `internal: true`), so enabling the tools
+      # in a deployed stack is an explicit egress decision.
+      # Run-state persistence — langGraph `AsyncPostgresSaver` (creates
+      # `langgraph.*` checkpoint tables on first run via its built-in
+      # `setup()`) + thin `agent.runs` metadata table.
+      # Migrations are NOT run inline — the dedicated `agent-migrate`
+      # one-shot service (below) is the single source of truth in compose,
+      # gated by `depends_on: agent-migrate (service_completed_successfully)`.
+      # Dev path (`make dev-agent`) sets `migrations_disabled=false` and
+      # runs alembic inline — same posture as the Go backend's
+      # golang-migrate on boot.
+      - PYTHON_AGENT_DATABASE_URL=postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}?options=-c%20search_path%3Dlanggraph%2Cagent
+      - PYTHON_AGENT_MIGRATIONS_DISABLED=true
+      # Compose-side defaults the operator is expected to set in
+      # `backend/.env`. Listed here so a quick `docker compose --profile
+      # app up` works once `backend/.env` is filled in.
+      - PYTHON_AGENT_LLM_BASE_URL=${PYTHON_AGENT_LLM_BASE_URL:-http://vllm:8000/v1}
+      - PYTHON_AGENT_LLM_MODEL=${PYTHON_AGENT_LLM_MODEL:-Qwen/Qwen3-4B-Instruct-2507}
+      - PYTHON_AGENT_LLM_PLANNER_MODEL=${PYTHON_AGENT_LLM_PLANNER_MODEL:-}
+      - AGENT_BUDGET_PER_USER_PER_HOUR=${AGENT_BUDGET_PER_USER_PER_HOUR:-200000}
+    depends_on:
+      redis:
+        condition: service_healthy
+      backend:
+        condition: service_healthy
+      # Run-state migrations (prod path). `agent-migrate` is a one-shot
+      # that runs `alembic upgrade head` against `db` before `agent`
+      # boots. `agent-migrate` itself waits for `db` to be healthy.
+      agent-migrate:
+        condition: service_completed_successfully
+      vllm:
+        condition: service_healthy
+        required: false
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:9000/healthz"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+      start_period: 30s
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    read_only: true
+    tmpfs:
+      - /tmp
+    # Internal network ONLY. The Python agent is reachable by the
+    # Go backend (which is the only service on both networks); the
+    # SPA cannot resolve `agent` from the default network, so even
+    # a misconfigured proxy can't widen the trust surface.
+    # Port 9000 is intentionally NOT published to the host — only
+    # metrics on 127.0.0.1:9001:9001 for Prometheus scraping.
+    networks: [internal]
+
+  # One-shot alembic migrations for the Python agent's run-state
+  # tables. Runs `alembic upgrade head` against `db`, which creates
+  # the `langgraph` schema (so langGraph's `setup()` lands checkpoint
+  # tables there) and the `agent.runs` metadata table + index in
+  # the `agent` schema. Exits 0 on success; `agent` waits for this
+  # service to complete before starting. See
+  # openspec/changes/agent-run-state/.
+  agent-migrate:
+    profiles: ["app"]
+    build:
+      context: ./backend/agent_py
+    mem_limit: 256m
+    cpus: "0.25"
+    command: ["alembic", "upgrade", "head"]
+    env_file:
+      - backend/.env
+    environment:
+      - PYTHON_AGENT_DATABASE_URL=postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}?options=-c%20search_path%3Dlanggraph%2Cagent
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: "no"
+    networks: [internal]
 
   frontend:
+    # See `backend` above — both app containers sit behind the
+    # `app` profile so the default `docker compose up` only stands
+    # up infra (db / redis / jaeger).
+    profiles: ["app"]
     build:
       context: ./frontend
       args:
-        - VITE_API_URL=http://localhost:8080/api
+        # Cross-origin: the SPA hits the backend on :8080 directly.
+        # The browser triggers CORS preflight; see the backend's
+        # CORS_ALLOWED_ORIGINS env above. No more /api/ same-origin
+        # proxy — Bearer is a regular Authorization header that
+        # doesn't need cookie-style same-origin semantics.
+        - VITE_API_URL=${VITE_API_URL:-http://localhost:8080/api}
+        # API_ORIGIN feeds the CSP connect-src directive via the
+        # __API_ORIGIN__ placeholder in nginx.conf.
+        - API_ORIGIN=${API_ORIGIN:-http://localhost:8080}
+        # OpenTelemetry — the frontend Dockerfile bakes VITE_OTEL_ENABLED
+        # and VITE_OTEL_SERVICE_NAME into the bundle at build time.
+        # JAEGER_HOST is read at runtime by nginx to proxy /otlp/ to the
+        # Jaeger OTLP/HTTP receiver (same-origin, no CORS).
+        - VITE_OTEL_ENABLED=${VITE_OTEL_ENABLED:-true}
+        - VITE_OTEL_SERVICE_NAME=${VITE_OTEL_SERVICE_NAME:-nyx-frontend}
+        # Sentry — VITE_SENTRY_DSN is inlined into the SPA bundle.
+        # SENTRY_AUTH_TOKEN / SENTRY_ORG / SENTRY_PROJECT are build-time
+        # only (consumed by @sentry/vite-plugin for sourcemap upload).
+        # Default the token to empty so local builds without a Sentry
+        # account still succeed — the plugin only registers when all
+        # three are set. SENTRY_CSP_ORIGIN feeds the CSP connect-src
+        # directive via the __SENTRY_CSP_ORIGIN__ placeholder; default
+        # is the SaaS ingest host list — self-hosted operators override.
+        - VITE_SENTRY_DSN=${VITE_SENTRY_DSN:-}
+        - SENTRY_AUTH_TOKEN=${SENTRY_AUTH_TOKEN:-}
+        - SENTRY_ORG=${SENTRY_ORG:-}
+        - SENTRY_PROJECT=${SENTRY_PROJECT:-nyx-frontend}
+        - SENTRY_CSP_ORIGIN=${SENTRY_CSP_ORIGIN:-https://*.ingest.sentry.io https://*.sentry.io}
+    mem_limit: 128m
+    cpus: "0.25"
+    # Runtime env comes from `frontend/.env`. Compose's build-arg
+    # substitution above doesn't read this file, so VITE_* baked
+    # into the SPA bundle is controlled by shell env at build time
+    # (12-factor); see `frontend/.env.example` for the mapping.
+    env_file:
+      - frontend/.env
+    # JAEGER_HOST is the only compose-specific runtime literal —
+    # the in-network hostname for the Jaeger container. Don't move
+    # it into `frontend/.env.example` because `jaeger` only resolves
+    # on the compose bridge; local dev runs against localhost.
+    environment:
+      - JAEGER_HOST=jaeger
     # nginx runs as non-root (USER nginx in Dockerfile) so it can't bind
     # privileged port 80. The nginx.conf inside the container listens on 8080.
     ports:
       - "5173:8080"
     depends_on:
       - backend
+      - jaeger
+    # SECURITY.md M12: frontend Dockerfile already sets USER nginx
+    # (non-root), so no compose-level user: override. Read-only
+    # rootfs with tmpfs mounts for nginx's writable scratch dirs
+    # (cache, pid file, /run). All caps dropped — nginx in this
+    # image only needs to listen on a non-privileged port (8080)
+    # and proxy_pass to jaeger/backend.
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    read_only: true
+    tmpfs:
+      - /tmp
+      - /var/cache/nginx:mode=0777
+      - /var/run:mode=0777
+      - /run:mode=0777
+    # Default network only. The SPA reaches the backend over the
+    # default bridge; it cannot reach the internal network at all,
+    # so the Python agent is structurally unreachable from the SPA.
+    networks: [default]
+
+  # Self-hosted vLLM (opt-in profile). Operators bring this up with
+  # `docker compose --profile vllm up`. When inactive, the rest of
+  # the stack boots untouched and the backend's LLM_ENABLED=false
+  # path skips constructing any provider client.
+  #
+  # Image is pinned — vLLM publishes a new minor every few weeks
+  # and a bump can change error JSON shape, default flags, or the
+  # stream framing. Bump deliberately.
+  #
+  # Cold start: Qwen3-4B-Instruct-2507 takes ~30s on GPU after weight
+  # download when --enforce-eager is set (default here); without it,
+  # vLLM's V2 Model Runner captures cudagraphs for batch sizes
+  # 1..max-cuda-graph-bs (default 512) and cold start balloons to
+  # ~10-15 min on first run because each capture round-trips through
+  # the WSL2 GPU-PV DXGI shim. The 600s start_period + 600s of
+  # healthcheck retries covers both with ~5 min headroom. Operators
+  # who need the latency win can drop --enforce-eager; the bootstrap
+  # script waits up to 25 min for the longer cold path.
+  #
+  # GPU: deploy.resources.reservations.devices requests one
+  # NVIDIA device. On a host without the NVIDIA container runtime
+  # this is silently ignored and vLLM boots in CPU mode (slow but
+  # functional for smoke tests).
+  #
+  # Caching: the named vllm_cache volume persists HuggingFace
+  # downloads across `compose down` so a 2 GB model weight doesn't
+  # re-pull every restart. HUGGING_FACE_HUB_TOKEN is REQUIRED —
+  # HF's CAS endpoint (cas-server.xethub.hf.co) demands a token
+  # for all weight downloads, even ungated models like the default
+  # Qwen3-4B-Instruct-2507. Without it model load aborts with an
+  # auth error. Generate at https://huggingface.co/settings/tokens
+  # (read role is enough).
+  vllm:
+    image: vllm/vllm-openai:v0.29.0
+    # vLLM is the only realistic runaway on a dev host — model
+    # weights (~8 GB for Qwen3-4B in bf16) + KV cache + activations
+    # scale with context length. 16 GB / 4 CPU is a safe floor on a
+    # 32 GB laptop with `--enforce-eager`. Bump if you run longer
+    # contexts, larger models, or drop --enforce-eager.
+    mem_limit: 16g
+    cpus: "4.00"
+    profiles: ["vllm"]
+    restart: always
+    command:
+      - "--model"
+      - "${VLLM_MODEL:-Qwen/Qwen3-4B-Instruct-2507}"
+      - "--served-model-name"
+      - "${VLLM_MODEL:-Qwen/Qwen3-4B-Instruct-2507}"
+      - "--host"
+      - "0.0.0.0"
+      - "--port"
+      - "8000"
+      # --enforce-eager skips cudagraph capture: sub-30s cold start
+      # at the cost of ~10-30% per-token latency on small batches.
+      # Comment out to re-enable cudagraphs once you measure the hit.
+      - "--enforce-eager"
+      # Tool calling: the Python agent's react step (_run_react in
+      # backend/agent_py/agent/executor.py) binds tool schemas via the
+      # OpenAI-compatible API and expects structured `tool_calls` in
+      # the response. Without these two flags vLLM returns raw text
+      # and the parser in _extract_tool_calls silently sees []. Requires
+      # vllm>=0.8.5; pinned at v0.29.0 in the image above.
+      # Parser is `hermes` because Qwen3-Instruct (the 4B-Instruct-2507
+      # default here) emits Hermes-style JSON tool calls. The Qwen3-Coder
+      # family uses XML and wants `qwen3_xml` instead — switch if you
+      # swap to a Coder model.
+      - "--enable-auto-tool-choice"
+      - "--tool-call-parser"
+      - "hermes"
+      # Cap GPU memory so the vllm-embed service (which shares the
+      # same device when --profile embed is on) gets a predictable
+      # slice. Without this cap the chat container claims the whole
+      # card and vllm-embed's reservation is meaningless. 0.70
+      # leaves ~30% for the embed model (Qwen/Qwen3-Embedding-0.6B
+      # uses ~2.5 GB at FP16); operators running Qwen3-8B should
+      # drop this further (e.g. 0.55) or drop --enforce-eager on the
+      # chat container.
+      - "--gpu-memory-utilization"
+      - "0.70"
+    environment:
+      - HUGGING_FACE_HUB_TOKEN=${HUGGING_FACE_HUB_TOKEN:-}
+      # HF_ENDPOINT routes HuggingFace API calls (config + weight fetches)
+      # through a mirror. Default https://hf-mirror.com because upstream
+      # https://huggingface.co is often filtered / unreachable from the
+      # Docker-bridge egress path even when the host can reach it (WSL2
+      # vpnkit NAT, corporate firewalls). Mirror covers Qwen / Llama /
+      # Mistra / etc. — override to empty in .env to use upstream.
+      - HF_ENDPOINT=${HF_ENDPOINT:-https://hf-mirror.com}
+      # Skip IPv6 retries: HF resolves to AAAA on most networks, but v6
+      # routing to the upstream is frequently broken even when v4 works.
+      # Without this, vLLM burns its 5-retry budget on doomed v6 SYN
+      # attempts before falling back to v4 — model download then aborts
+      # with ENETUNREACH.
+      - HF_HUB_DISABLE_IPV6=${HF_HUB_DISABLE_IPV6:-1}
+      # WSL2 with GPU-PV (driver exposes CUDA via libcuda.so in
+      # /usr/lib/wsl/lib, no /dev/nvidia*). vLLM disables pinned memory
+      # / UVA by default on WSL2 due to a small perf regression, but the
+      # v1 engine's staged-writes UvaBuffer requires UVA and aborts
+      # otherwise ("RuntimeError: UVA is not available" from
+      # vllm/v1/worker/gpu/buffer_utils.py). Set to 1 to enable. The
+      # flag's comment in vllm/envs.py scopes it to "CPU offloading or
+      # v2 model runner" but in practice it's also required by the v1
+      # staged-writes buffer on WSL2. NOTE: VLLM_USE_V1=0 is NOT a
+      # fallback — the V0 engine was removed in vLLM 0.9 and the var
+      # is no longer in envs.py on the 0.29.0 image we pin.
+      - VLLM_WSL2_ENABLE_PIN_MEMORY=${VLLM_WSL2_ENABLE_PIN_MEMORY:-1}
+    ports:
+      # Loopback only — vLLM is reached by the backend container
+      # on the compose network, never from the host directly.
+      # SECURITY.md H12: same pattern as db / redis.
+      - "127.0.0.1:8000:8000"
+    volumes:
+      - vllm_cache:/root/.cache/huggingface
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    healthcheck:
+      # /v1/models returns the list of loaded models — cheapest
+      # "server is up AND at least one model is loaded" probe.
+      # curl is in the vllm image; older revisions had only wget.
+      test: ["CMD-SHELL", "curl -fsS http://localhost:8000/v1/models > /dev/null || exit 1"]
+      interval: 10s
+      timeout: 5s
+      # Total budget = start_period (600s) + retries × interval = 600s +
+      # 600s = 1200s = 20 min. vLLM v0.29.0's V2 Model Runner captures
+      # cudagraphs for sizes up to 512 on first run — ~10-15 min cold
+      # on Blackwell + WSL2 GPU-PV because each capture round-trips
+      # through the DXGI shim. Subsequent restarts are faster (weights
+      # cached in the vllm_cache volume; only cudagraph capture
+      # repeats). Operators who want sub-minute cold starts at the cost
+      # of throughput can add `--enforce-eager` to the command list.
+      retries: 60
+      start_period: 600s
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    tmpfs:
+      - /tmp
+    # Both networks: backend reaches vLLM on the default side; the
+    # Python agent reaches vLLM on the internal side. Explicit
+    # membership (not relying on Compose V2 auto-attach semantics) so
+    # the chat agent's `PYTHON_AGENT_LLM_BASE_URL=http://vllm:8000/v1`
+    # resolves from `internal` regardless of which compose-spec version
+    # the operator runs.
+    networks: [default, internal]
+
+  # Embedding endpoint for the RAG pipeline (opt-in profile). The
+  # chat vllm service above serves a chat-tuned model (Qwen3-4B /
+  # Qwen3-8B-FP8) which does NOT expose /v1/embeddings — every
+  # embed call returns 404. The Nyx embedder
+  # (internal/llm/vllm/client.go:376) would then silently fail
+  # (ErrProviderUnavailable → feed/service.go:151 logs Warn and
+  # continues), leaving feed_embeddings empty.
+  #
+  # This service serves an embedding-tuned model on host port 8001
+  # and is wired into the backend via the LLM_EMBEDDING_* config
+  # family (LLM_EMBEDDING_BASE_URL=http://vllm-embed:8000/v1 etc.).
+  # Default model Qwen/Qwen3-Embedding-0.6B is multilingual
+  # (100+ languages, 1024-dim), matches the chat model's family
+  # for tokenization consistency, and emits vectors whose dim
+  # matches migration 000015 (vector(1024)).
+  #
+  # Bring up alongside the chat container:
+  #   docker compose --profile vllm --profile embed up -d
+  # The chat vllm service's --gpu-memory-utilization 0.70 cap
+  # (above) leaves ~30% of the device for this service. Qwen3-0.6B
+  # at FP16 needs ~2.5 GB; on a 16 GB card this leaves comfortable
+  # headroom for both.
+  #
+  # Both services share the vllm_cache volume so a model weight
+  # downloaded once is reused on the other container's first start.
+  vllm-embed:
+    image: vllm/vllm-openai:v0.29.0
+    mem_limit: 4g
+    cpus: "2.00"
+    profiles: ["embed"]
+    restart: always
+    command:
+      - "--model"
+      - "${VLLM_EMBED_MODEL:-Qwen/Qwen3-Embedding-0.6B}"
+      - "--served-model-name"
+      - "${VLLM_EMBED_MODEL:-Qwen/Qwen3-Embedding-0.6B}"
+      - "--host"
+      - "0.0.0.0"
+      - "--port"
+      - "8000"
+      # Sub-30s cold start; embed calls are batch-friendly and the
+      # ~10-30% latency hit is irrelevant at retrieval scale.
+      - "--enforce-eager"
+      # Small slice — Qwen3-0.6B at FP16 is ~1.2 GB weights. Cap at
+      # 0.15 so an out-of-memory here doesn't take down the chat
+      # service on the same device. Operators running BGE-large
+      # (~3 GB) should bump this to ~0.25.
+      - "--gpu-memory-utilization"
+      - "0.15"
+      # Embed model context — feed chunk_text is Title + "\n\n" +
+      # Description, well under 512 tokens.
+      - "--max-model-len"
+      - "512"
+    environment:
+      - HUGGING_FACE_HUB_TOKEN=${HUGGING_FACE_HUB_TOKEN:-}
+      - HF_ENDPOINT=${HF_ENDPOINT:-https://hf-mirror.com}
+      - HF_HUB_DISABLE_IPV6=${HF_HUB_DISABLE_IPV6:-1}
+      - VLLM_WSL2_ENABLE_PIN_MEMORY=${VLLM_WSL2_ENABLE_PIN_MEMORY:-1}
+    ports:
+      # Loopback only — same posture as the chat container.
+      - "127.0.0.1:8001:8000"
+    volumes:
+      - vllm_cache:/root/.cache/huggingface
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    healthcheck:
+      # /v1/models returns the loaded model list — cheapest "server
+      # up AND model loaded" probe. Embed model is ~1.2 GB; cold
+      # start well under 5 min on warm cache (cold download ~30 s
+      # on a decent link).
+      test: ["CMD-SHELL", "curl -fsS http://localhost:8000/v1/models > /dev/null || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 300s
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    tmpfs:
+      - /tmp
+    # Both networks: backend reaches vLLM on the default side; the
+    # Python agent reaches vLLM on the internal side. The embed
+    # profile is opt-in, but its network membership is the same shape.
+    networks: [default, internal]
+
+# Network topology: the Python agent service is reachable ONLY by the
+# Go backend. The trust model at /agent/run is the private network —
+# Python does not verify JWTs, and there is no app-layer auth at this
+# hop (see FUTURE_AGENT.md + backend/agent_py/README.md "Trust model").
+# To make that network boundary structural rather than conventional,
+# we split into two bridge networks:
+#
+#   default — the conventional compose bridge. frontend lives here and
+#     can resolve `backend` (so the SPA reaches the API over CORS).
+#     frontend cannot resolve `agent` because `agent` is NOT on this
+#     network.
+#   internal — closed bridge joining backend + agent + the infra
+#     services agent depends on (redis for the budget guard, jaeger
+#     for OTel export, langfuse-web for LLM trace ingestion when the
+#     langfuse profile is up). Only services that explicitly join this
+#     network
+#     can reach the agent's port 9000. Adding a new service that needs
+#     to call the agent requires joining this network deliberately,
+#     so a future bug elsewhere can't quietly widen the trust surface.
+#
+# This is defense in depth, not a replacement for application-layer
+# defenses. The agent's port 9000 is still NOT published to the host
+# (`ports:` on the agent service is intentionally absent — only the
+# metrics port 9001 is published on loopback for Prometheus scraping).
+networks:
+  default:
+    name: nyx_default
+  internal:
+    name: nyx_internal
 
 volumes:
   db_data:
+  vllm_cache:
+  # Langfuse profile state (see the langfuse-* services above). Survive
+  # `make down-langfuse` / `docker compose down`; wipe with
+  # `docker compose --profile langfuse down -v` to reset the instance.
+  langfuse_db_data:
+  langfuse_clickhouse_data:
+  langfuse_minio_data:
+  langfuse_redis_data:

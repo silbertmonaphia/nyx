@@ -1,16 +1,19 @@
 version: "2"
 sql:
   - engine: "postgresql"
-    queries: "queries/movies.sql"
+    queries: "queries/feeds.sql"
     schema:
       - "migrations/000001_create_movies_table.up.sql"
       - "migrations/000003_add_audit_fields_to_movies_table.up.sql"
       - "migrations/000006_add_movies_indexes.up.sql"
       - "migrations/000007_add_movies_description_trgm_index.up.sql"
+      - "migrations/000011_rename_movies_to_feeds.up.sql"
+      - "migrations/000012_add_user_id_to_feeds.up.sql"
+      - "migrations/000013_drop_rating_from_feeds.up.sql"
     gen:
       go:
         package: "db"
-        out: "internal/movie/db"
+        out: "internal/feed/db"
         sql_package: "pgx/v5"
         emit_interface: true
         emit_json_tags: false
@@ -18,6 +21,7 @@ sql:
         emit_empty_slices: true
         rename:
           id: "ID"
+          user_id: "UserID"
           created_at: "CreatedAt"
           updated_at: "UpdatedAt"
           deleted_at: "DeletedAt"
@@ -26,6 +30,9 @@ sql:
     schema:
       - "migrations/000004_create_users_table.up.sql"
       - "migrations/000005_add_deleted_at_to_users_table.up.sql"
+      - "migrations/000008_create_refresh_tokens.up.sql"
+      - "migrations/000009_drop_users_email_uniqueness.up.sql"
+      - "migrations/000010_drop_users_email_column.up.sql"
     gen:
       go:
         package: "db"
@@ -37,9 +44,42 @@ sql:
         emit_empty_slices: true
         rename:
           id: "ID"
+          user_id: "UserID"
           username: "Username"
-          email: "Email"
           password_hash: "PasswordHash"
+          token_hash: "TokenHash"
+          family_id: "FamilyID"
+          replaced_by_id: "ReplacedByID"
+          expires_at: "ExpiresAt"
+          revoked_at: "RevokedAt"
+          created_at: "CreatedAt"
+          updated_at: "UpdatedAt"
+          deleted_at: "DeletedAt"
+  - engine: "postgresql"
+    queries: "queries/rag.sql"
+    schema:
+      - "migrations/000001_create_movies_table.up.sql"
+      - "migrations/000003_add_audit_fields_to_movies_table.up.sql"
+      - "migrations/000011_rename_movies_to_feeds.up.sql"
+      - "migrations/000012_add_user_id_to_feeds.up.sql"
+      - "migrations/000013_drop_rating_from_feeds.up.sql"
+      - "migrations/000014_add_feed_embeddings.up.sql"
+    gen:
+      go:
+        package: "db"
+        out: "internal/rag/db"
+        sql_package: "pgx/v5"
+        emit_interface: true
+        emit_json_tags: false
+        emit_prepared_queries: false
+        emit_empty_slices: true
+        rename:
+          id: "ID"
+          user_id: "UserID"
+          feed_id: "FeedID"
+          content_hash: "ContentHash"
+          chunk_text: "ChunkText"
+          embedded_at: "EmbeddedAt"
           created_at: "CreatedAt"
           updated_at: "UpdatedAt"
           deleted_at: "DeletedAt"

@@ -1,6 +1,132 @@
 {
+  "preferredNotifChannel": "terminal_bell",
+  "hooks": {
+    "Notification": [
+      {
+        "matcher": "permission_prompt|idle_prompt",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File \"$(wslpath -w \"$CLAUDE_PROJECT_DIR/scripts/notify.ps1\")\" 2>/dev/null || true"
+          }
+        ]
+      }
+    ],
+    "SessionStart": [],
+    "Stop": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"$CLAUDE_PROJECT_DIR/.claude/scripts/post-turn-reminder.sh\" 2>/dev/null || true"
+          }
+        ]
+      }
+    ]
+  },
   "permissions": {
+    "allow": [
+      "Bash(go *)",
+      "Bash(gofmt *)",
+      "Bash(SKIP_CONTAINERS=true go *)",
+      "Bash(golangci-lint *)",
+      "Bash(make sqlc*)",
+
+      "Bash(npm run *)",
+      "Bash(npm test*)",
+      "Bash(npm ci)",
+      "Bash(npx vitest *)",
+      "Bash(npx playwright *)",
+      "Bash(npx tsc *)",
+      "Bash(npx eslint *)",
+      "Bash(npx prettier *)",
+
+      "Bash(curl -s http://localhost:*)",
+      "Bash(curl -sS http://localhost:*)",
+      "Bash(curl *https://github.com/*)",
+      "Bash(curl *https://raw.githubusercontent.com/*)",
+      "Bash(wget *https://github.com/*)",
+      "Bash(wget *https://raw.githubusercontent.com/*)",
+      "Bash(git clone https://github.com/*)",
+      "Bash(git clone git@github.com:*)",
+
+      "Bash(grep *)",
+      "Bash(rg *)",
+      "Bash(find *)",
+      "Bash(head *)",
+      "Bash(tail *)",
+      "Bash(wc *)",
+      "Bash(sort *)",
+      "Bash(uniq *)",
+      "Bash(jq *)",
+      "Bash(tree *)",
+      "Bash(ls *)",
+      "Bash(pwd)",
+      "Bash(mkdir -p *)",
+
+      "Bash(git status*)",
+      "Bash(git diff*)",
+      "Bash(git log*)",
+      "Bash(git show*)",
+      "Bash(git branch*)",
+      "Bash(git rev-parse *)",
+
+      "Bash(gh pr view*)",
+      "Bash(gh pr list*)",
+      "Bash(gh pr diff*)",
+      "Bash(gh pr checks*)",
+      "Bash(gh issue view*)",
+      "Bash(gh issue list*)",
+
+      "Bash(sudo docker compose up *)",
+      "Bash(docker compose logs *)",
+      "Bash(docker compose ps)",
+      "Bash(docker ps)",
+      "Bash(docker build *)",
+      "Bash(sudo docker build *)",
+
+      "Bash(python3 -m pip install*)",
+      "Bash(python3 -m venv*)",
+      "Bash(python3 -c*)",
+      "Bash(python3 -m pytest*)",
+      "Bash(python3 -m agent*)",
+      "Bash(source .venv/bin/activate*)",
+      "Bash(pip install*)"
+    ],
     "deny": [
+      "Bash(rm *)",
+      "Bash(unlink *)",
+      "Bash(rmdir *)",
+      "Bash(\\rm *)",
+      "Bash(command rm *)",
+      "Bash(/bin/rm *)",
+      "Bash(/usr/bin/rm *)",
+      "Bash(/usr/bin/unlink *)",
+      "Bash(chmod 777 *)",
+      "Bash(env)",
+      "Bash(printenv*)",
+      "Bash(cat *.env*)",
+      "Bash(!cat *.env.example)",
+      "Read(**/.env*)",
+      "Read(!**/.env.example)",
+      "Edit(**/.env*)",
+      "Edit(!**/.env.example)",
+      "Bash(git push*)",
+      "Bash(git reset --hard*)",
+      "Bash(git clean*)",
+      "Bash(git rebase*)",
+      "Bash(git filter-branch*)",
+      "Bash(git checkout*)",
+      "Bash(git switch*)",
+      "Bash(git restore*)",
+      "Bash(gh pr merge*)",
+      "Bash(gh release*)",
+      "Bash(npm publish*)",
+      "Bash(docker compose down*)",
+      "Bash(docker system prune*)",
+      "Bash(psql *)",
+      "Bash(dropdb *)",
       "Read(**/node_modules/**)",
       "Read(**/vendor/**)",
       "Read(**/dist/**)",
@@ -10,7 +136,7 @@
       "Read(**/test-results/**)",
       "Read(**/db_data/**)",
       "Read(**/*.log)",
-      "Read(**/.env*)"
+      "Edit(backend/internal/**/db/**)"
     ]
   }
 }

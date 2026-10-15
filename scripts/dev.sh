@@ -1,0 +1,362 @@
+#!/usr/bin/env bash
+# Run the backend (Go), the Python agent service (FastAPI on :9000),
+# and/or the frontend (Vite) against the local docker-compose infra
+# (db / redis / jaeger).
+#
+# Usage: ./scripts/dev.sh [backend|frontend|agent|vllm-main|vllm-embed|both|all] [--detach]
+#
+# Default is foreground — the started process attaches to your
+# terminal so output streams live and Ctrl+C kills it cleanly. Pass
+# --detach to run in background: stdout/stderr tee to the terminal
+# AND to /tmp/nyx-{backend,frontend,agent}.log; the script waits on
+# each child, so Ctrl+C tears them down together. PIDs land in
+# /tmp/nyx-*.pid for `make stop`.
+#
+# `both` and `all` require --detach — multiple foreground processes
+# can't share one terminal.
+#
+# Assumes the infra containers are already up for the backend —
+# bring them with `make up` or `docker compose up -d db redis
+# jaeger`. The frontend needs no infra. The Python agent service
+# is only started when `AGENT_ENABLED=true` is set in
+# `backend/.env` (it'd otherwise be a wasted uvicorn process).
+#
+# When AGENT_ENABLED=true the script overrides the Go-side
+# `PYTHON_AGENT_URL` (default `http://agent:9000` — the compose
+# DNS name) and the Python-side bridge URLs (RAG/MCP default to
+# the in-network hostname `backend:8080`) to their localhost
+# equivalents so everything talks over the loopback.
+#
+# The `vllm-main` / `vllm-embed` modes run the chat and embedding
+# models on the HOST instead of in compose — much faster iteration
+# and easier debugging than the `vllm` / `embed` profiles. They
+# need a local vLLM install (`vllm` or `llm` on PATH) and a GPU.
+# Chat: Qwen3-4B-Instruct-2507-FP8 on :8000 (~6970 MiB VRAM,
+# hermes tool-call parser). Embed: Qwen3-Embedding-0.6B on :8001
+# (~3224 MiB VRAM). Do not run them alongside the compose
+# profiles — the ports would collide (`make down-vllm` first).
+
+set -uo pipefail
+
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$REPO_ROOT"
+
+LOG_DIR="${TMPDIR:-/tmp}"
+BACKEND_LOG="$LOG_DIR/nyx-backend.log"
+FRONTEND_LOG="$LOG_DIR/nyx-frontend.log"
+AGENT_LOG="$LOG_DIR/nyx-agent.log"
+VLLM_MAIN_LOG="$LOG_DIR/nyx-vllm-main.log"
+VLLM_EMBED_LOG="$LOG_DIR/nyx-vllm-embed.log"
+BACKEND_PID="$LOG_DIR/nyx-backend.pid"
+FRONTEND_PID="$LOG_DIR/nyx-frontend.pid"
+AGENT_PID="$LOG_DIR/nyx-agent.pid"
+VLLM_MAIN_PID="$LOG_DIR/nyx-vllm-main.pid"
+VLLM_EMBED_PID="$LOG_DIR/nyx-vllm-embed.pid"
+
+mode="${1:-both}"
+detach=false
+
+case "$#" in
+  1) ;;
+  2) case "${2}" in
+       --detach) detach=true ;;
+       *) echo "usage: $0 [backend|frontend|agent|vllm-main|vllm-embed|both|all] [--detach]" >&2; exit 2 ;;
+     esac ;;
+  *) echo "usage: $0 [backend|frontend|agent|vllm-main|vllm-embed|both|all] [--detach]" >&2; exit 2 ;;
+esac
+
+case "$mode" in
+  backend|frontend|agent|vllm-main|vllm-embed|both|all) ;;
+  *) echo "usage: $0 [backend|frontend|agent|vllm-main|vllm-embed|both|all] [--detach]" >&2; exit 2 ;;
+esac
+
+if [[ "$mode" == "both" || "$mode" == "all" ]] && [[ "$detach" != "true" ]]; then
+  echo "'$mode' requires --detach — multiple foreground processes can't share one terminal" >&2
+  echo "  run './scripts/dev.sh $mode --detach' or pick one of backend / frontend / agent" >&2
+  exit 2
+fi
+
+# `all` is `both` + agent. These MUST be functions in every mode —
+# an earlier revision set plain variables for `all` (e.g.
+# `needs_backend=true`), but the usage sites call them as commands
+# (`if needs_backend; then`), which bash can never resolve to a
+# variable. Result: `make dev` silently started nothing. Keep them
+# as functions for all modes.
+needs_backend()     { [[ "$mode" == backend  || "$mode" == both || "$mode" == all ]]; }
+needs_frontend()    { [[ "$mode" == frontend || "$mode" == both || "$mode" == all ]]; }
+needs_agent()       { [[ "$mode" == agent    || "$mode" == all ]]; }
+needs_vllm_main()   { [[ "$mode" == vllm-main ]]; }
+needs_vllm_embed()  { [[ "$mode" == vllm-embed ]]; }
+
+# --- backend preflight -------------------------------------------------
+if needs_backend; then
+  command -v go >/dev/null || { echo "go not on PATH" >&2; exit 1; }
+
+  if [[ ! -f backend/.env ]]; then
+    echo "backend/.env missing — copy backend/.env.example and set JWT_SECRET (32+ bytes)" >&2
+    exit 1
+  fi
+
+  # config.Load() refuses the default placeholder AND an empty
+  # JWT_SECRET (auth.MinSecretBytes = 32, RFC 7518 §3.2). Catch the
+  # common "I copied backend/.env.example but forgot to fill the
+  # secret" mistake here so the backend doesn't crash a few hundred
+  # ms after spawning. Grep for an uncommented, non-empty assignment.
+  if ! grep -qE '^JWT_SECRET=[^[:space:]#]+' backend/.env; then
+    echo "JWT_SECRET missing or empty in backend/.env — set it to a 32+ byte random string" >&2
+    echo "  generate with: openssl rand -base64 48" >&2
+    exit 1
+  fi
+
+  running=$(docker compose ps --status running --format '{{.Service}}' 2>/dev/null | sort -u)
+  missing=()
+  for svc in db redis jaeger; do
+    grep -qxF "$svc" <<<"$running" || missing+=("$svc")
+  done
+  if (( ${#missing[@]} > 0 )); then
+    echo "infra containers not running: ${missing[*]} — run 'make up' (or 'docker compose up -d db redis jaeger') first" >&2
+    exit 1
+  fi
+
+  # Three .env files live in this repo; only `backend/.env` is
+  # sourced here. Why each of the other two is NOT:
+  #
+  #   - `backend/.env` (SOURCED): viper reads .env relative to the
+  #     backend's CWD. `go run` is invoked from `backend/`, so
+  #     viper would look for `backend/.env` — the file exists,
+  #     but viper only reads it if `viper.SetConfigFile` is
+  #     pointed at it explicitly (it is, in config.go) AND the
+  #     process's effective CWD matches. Sourcing dumps every
+  #     KEY=value into the spawned process's env, so viper's
+  #     `BindEnv` + `AutomaticEnv` pick them up regardless of
+  #     how the binary is invoked (cd backend || exec from
+  #     elsewhere). Without this, viper silently falls back to
+  #     the placeholder JWT_SECRET that auth.NewTokenService
+  #     then rejects — the backend crashes ~200 ms after spawn.
+  #
+  #   - `frontend/.env` (NOT SOURCED): Vite reads .env natively
+  #     by its own convention — `frontend/.env` flows straight
+  #     into `import.meta.env.VITE_*` at dev time. Re-sourcing
+  #     it in bash would be redundant AND would inject bare
+  #     (un-prefixed) vars into the npm process's env that
+  #     aren't supposed to be there.
+  #
+  #   - root `.env` (NOT SOURCED): consumed only by `docker
+  #     compose` for the `db` / `vllm` services. Neither the
+  #     backend nor the frontend process reads it; propagating
+  #     it would leak infra tokens (HUGGING_FACE_HUB_TOKEN)
+  #     into the backend's process env for no reason.
+  #
+  # `set -a` + `.` dumps every KEY=value into the spawned
+  # process's environment; bash's normal parsing handles quoted
+  # values.
+  set -a
+  # shellcheck disable=SC1091
+  . ./backend/.env
+  set +a
+
+  # `backend/.env.example` ships DB_URL with the in-network hostname
+  # `db:5432`, which only resolves from inside the compose bridge.
+  # Override AFTER the source above so the locally-run backend reaches
+  # the host-mapped port instead. Same story for REDIS_URL —
+  # `redis:6379` only resolves on the compose network; the
+  # host-mapped port is 6380 (see docker-compose.yml).
+  export DB_URL='postgres://postgres:postgres@127.0.0.1:5433/nyx?sslmode=disable'
+  export REDIS_URL='redis://127.0.0.1:6380'
+fi
+
+# --- frontend preflight ------------------------------------------------
+if needs_frontend; then
+  command -v npm >/dev/null || { echo "npm not on PATH" >&2; exit 1; }
+fi
+
+# --- agent preflight (Python service on :9000) ----------------------------
+# Auto-start when `mode == agent` (operator asked for it), OR when
+# `AGENT_ENABLED=true` is set in `backend/.env` (in which case the Go
+# backend needs the agent running to answer chat requests).
+agent_enabled_in_env=false
+if [[ -f backend/.env ]] && grep -qE '^AGENT_ENABLED=(true|1|yes)\b' backend/.env; then
+  agent_enabled_in_env=true
+fi
+if needs_agent || $agent_enabled_in_env; then
+  command -v python3 >/dev/null || { echo "python3 not on PATH" >&2; exit 1; }
+
+  if [[ ! -d backend/agent_py/.venv ]]; then
+    echo "backend/agent_py/.venv missing — create it with:" >&2
+    echo "  cd backend/agent_py && python3 -m venv .venv && .venv/bin/pip install -e '.[dev]'" >&2
+    exit 1
+  fi
+
+  # Override the in-network hostnames the Python defaults assume, so the
+  # locally-running service talks to the local Go backend on :8080.
+  # Same pattern as the DB_URL / REDIS_URL override below.
+  export PYTHON_AGENT_MCP_URL='http://127.0.0.1:8080/mcp'
+  export PYTHON_AGENT_RAG_BRIDGE_URL='http://127.0.0.1:8080/internal/rag/retrieve'
+
+  # Tell the locally-running Go backend to call the locally-running
+  # Python agent on :9000 (rather than the compose DNS name `agent`).
+  if [[ -z "${PYTHON_AGENT_URL:-}" ]]; then
+    export PYTHON_AGENT_URL='http://127.0.0.1:9000'
+  fi
+fi
+
+# --- vllm preflight (host-run chat / embedding models) --------------------
+vllm_bin=""
+if needs_vllm_main || needs_vllm_embed; then
+  # `vllm` is vLLM's canonical CLI; some installs only expose `llm`
+  # (and vice versa). Prefer `vllm`, fall back, fail loudly otherwise.
+  for candidate in vllm llm; do
+    if command -v "$candidate" >/dev/null 2>&1; then
+      vllm_bin="$candidate"
+      break
+    fi
+  done
+  if [[ -z "$vllm_bin" ]]; then
+    echo "neither 'vllm' nor 'llm' on PATH — install vLLM ('pip install vllm') or use the compose profiles: 'make up-vllm'" >&2
+    exit 1
+  fi
+fi
+
+# --- start -------------------------------------------------------------
+if $detach; then
+  # Detached mode: each child runs as a backgrounded pipeline so the
+  # script can wait on both simultaneously. Output tees to terminal +
+  # per-process log file; PIDs land in /tmp/nyx-*.pid for `make stop`.
+  cleanup() {
+    local code=$?
+    [[ -f "$BACKEND_PID"    ]] && kill "$(cat "$BACKEND_PID")"    2>/dev/null || true
+    [[ -f "$FRONTEND_PID"   ]] && kill "$(cat "$FRONTEND_PID")"   2>/dev/null || true
+    [[ -f "$AGENT_PID"      ]] && kill "$(cat "$AGENT_PID")"      2>/dev/null || true
+    [[ -f "$VLLM_MAIN_PID"  ]] && kill "$(cat "$VLLM_MAIN_PID")"  2>/dev/null || true
+    [[ -f "$VLLM_EMBED_PID" ]] && kill "$(cat "$VLLM_EMBED_PID")" 2>/dev/null || true
+    rm -f "$BACKEND_PID" "$FRONTEND_PID" "$AGENT_PID" \
+          "$VLLM_MAIN_PID" "$VLLM_EMBED_PID"
+    exit "$code"
+  }
+  trap cleanup INT TERM EXIT
+
+  if needs_backend; then
+    echo ">> backend  → $BACKEND_LOG"
+    # Capture the subshell's PID (the one that exec's into the process
+    # we actually want to control) before tee steals the rightmost
+    # slot of the pipeline. $BASHPID is the current subshell's PID; $!
+    # would report tee's PID, which is downstream and dies naturally
+    # when its stdin EOFs.
+    ( cd backend && echo $BASHPID > "$BACKEND_PID" && exec go run ./cmd/api ) \
+      2>&1 | tee "$BACKEND_LOG" &
+  fi
+
+  if needs_frontend; then
+    echo ">> frontend → $FRONTEND_LOG"
+    ( cd frontend && echo $BASHPID > "$FRONTEND_PID" && exec npm run dev ) \
+      2>&1 | tee "$FRONTEND_LOG" &
+  fi
+
+  if needs_agent; then
+    echo ">> agent    → $AGENT_LOG"
+    # Boot the Python orchestrator locally. `python -m agent.main`
+    # is the entrypoint added in the `python -m agent.main boots` fix.
+    ( cd backend/agent_py && echo $BASHPID > "$AGENT_PID" && exec .venv/bin/python -m agent.main ) \
+      2>&1 | tee "$AGENT_LOG" &
+  fi
+
+  if needs_vllm_main; then
+    echo ">> vllm-main → $VLLM_MAIN_LOG  (first run downloads the model)"
+    ( echo $BASHPID > "$VLLM_MAIN_PID" && exec "$vllm_bin" serve Qwen/Qwen3-4B-Instruct-2507-FP8 \
+        --host 0.0.0.0 --port 8000 --tensor-parallel-size 1 \
+        --gpu-memory-utilization 0.9 --max-model-len 4096 \
+        --enable-auto-tool-choice --tool-call-parser hermes ) \
+      2>&1 | tee "$VLLM_MAIN_LOG" &
+  fi
+
+  if needs_vllm_embed; then
+    echo ">> vllm-embed → $VLLM_EMBED_LOG  (first run downloads the model)"
+    ( echo $BASHPID > "$VLLM_EMBED_PID" && exec "$vllm_bin" serve Qwen/Qwen3-Embedding-0.6B \
+        --port 8001 --enforce-eager --gpu-memory-utilization 0.1 --max-model-len 256 ) \
+      2>&1 | tee "$VLLM_EMBED_LOG" &
+  fi
+
+  echo
+  if needs_backend; then
+    echo "    backend   : http://localhost:8080/api"
+    echo "    tail backend  : tail -f $BACKEND_LOG"
+  fi
+  if needs_frontend; then
+    echo "    frontend  : http://localhost:5173"
+    echo "    tail frontend : tail -f $FRONTEND_LOG"
+  fi
+  if needs_agent; then
+    echo "    agent     : http://localhost:9000  (proxy :9001 for /metrics)"
+    echo "    tail agent    : tail -f $AGENT_LOG"
+  fi
+  if needs_vllm_main; then
+    echo "    vllm-main : http://localhost:8000/v1  (chat, OpenAI-compatible)"
+    echo "    tail vllm-main  : tail -f $VLLM_MAIN_LOG"
+  fi
+  if needs_vllm_embed; then
+    echo "    vllm-embed: http://localhost:8001/v1  (embeddings)"
+    echo "    tail vllm-embed : tail -f $VLLM_EMBED_LOG"
+  fi
+  echo
+  echo "Ctrl+C to stop."
+
+  # Wait for whichever children were started (explicit file checks —
+  # an `[[ -f ]] && wait || code=$?` chain would mis-record a missing
+  # pid file as a nonzero child exit). Capture each exit code so the
+  # script can report which one died. Errors stream live to this
+  # terminal AND to the per-process log file via tee.
+  exit_code=0
+  for entry in \
+    "backend:$BACKEND_PID" "frontend:$FRONTEND_PID" "agent:$AGENT_PID" \
+    "vllm-main:$VLLM_MAIN_PID" "vllm-embed:$VLLM_EMBED_PID"; do
+    name="${entry%%:*}"
+    file="${entry#*:}"
+    [[ -f "$file" ]] || continue
+    wait "$(cat "$file")" 2>/dev/null
+    code=$?
+    # 127 = pid not a child of this shell (stale pid file from another
+    # session) — not a child failure, don't report it.
+    if (( code != 0 && code != 127 )); then
+      echo "$name exited with status $code" >&2
+      if (( exit_code == 0 )); then
+        exit_code=$code
+      fi
+    fi
+  done
+  exit "$exit_code"
+else
+  # Foreground mode: replace the script with the single child process
+  # so it inherits the terminal's tty + job-control directly. Ctrl+C
+  # in the terminal kills it; no PID file or cleanup trap needed.
+  if needs_backend; then
+    echo ">> backend  starting in foreground (Ctrl+C to stop)"
+    cd backend || exit 1
+    exec go run ./cmd/api
+  fi
+
+  if needs_frontend; then
+    echo ">> frontend starting in foreground (Ctrl+C to stop)"
+    cd frontend || exit 1
+    exec npm run dev
+  fi
+
+  if needs_agent; then
+    echo ">> agent    starting in foreground (Ctrl+C to stop)"
+    cd backend/agent_py || exit 1
+    exec .venv/bin/python -m agent.main
+  fi
+
+  if needs_vllm_main; then
+    echo ">> vllm-main starting in foreground (Ctrl+C to stop; first run downloads the model)"
+    exec "$vllm_bin" serve Qwen/Qwen3-4B-Instruct-2507-FP8 \
+      --host 0.0.0.0 --port 8000 --tensor-parallel-size 1 \
+      --gpu-memory-utilization 0.9 --max-model-len 4096 \
+      --enable-auto-tool-choice --tool-call-parser hermes
+  fi
+
+  if needs_vllm_embed; then
+    echo ">> vllm-embed starting in foreground (Ctrl+C to stop; first run downloads the model)"
+    exec "$vllm_bin" serve Qwen/Qwen3-Embedding-0.6B \
+      --port 8001 --enforce-eager --gpu-memory-utilization 0.1 --max-model-len 256
+  fi
+fi
