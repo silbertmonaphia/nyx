@@ -76,6 +76,8 @@
 |---|---|
 | **Langfuse** / **LangSmith** / **Arize Phoenix** — prompt/response 落盘、conversation 回放、cost dashboard | **已落地(agent-langfuse-tracing)**:自托管 Langfuse(默认关闭,`PYTHON_AGENT_LANGFUSE_ENABLED=true` 开启;`make up-langfuse`,UI :3000)经 LangChain callback 把每 run 的 prompt / reply / provider usage 落成 generation,tool / step 另有 span。Jaeger 侧保持 metadata-only |
 
+**观测分层**(排障时按层选面):元数据(span 时序 / 计数 / `error_code`)→ Jaeger + Prometheus,常开;agent 语义(plan / step 序列 / 工具 args / usage / 终态)→ SSE 帧契约,eval runner 逐 case 落盘成 artifact,是 eval 排障的主战场;模型层(raw prompt / completion 回放)→ Langfuse,dev 默认关,怀疑模型层时 `make up-langfuse` 按需开——agent 侧只是 `PYTHON_AGENT_LANGFUSE_HOST` + key pair,compose 栈仅服务 dev;生产若开则 URL 指向自托管 Langfuse 集群(属 rollout 决策)。Langfuse 不是 eval 的前置依赖,是显微镜不是照明。
+
 ### B. Provider 抽象与路由
 
 | 社区方案 | 我们有什么 / 没有 |
@@ -126,14 +128,14 @@
 
 ---
 
-## 四、按 ROI 排的落地顺序(状态截至 2026-10-14)
+## 四、按 ROI 排的落地顺序(状态截至 2026-10-15)
 
 **已落地(原列表第 1、4、5 项)**:
 - **Langfuse 自托管** (A 类) — `agent-langfuse-tracing` 切片:callback 挂在 graph_config 一处接缝即得结构化 trace(step/tool 观测另加 wrap),planner 调优从盲调变成数据驱动;配套 `-rollout` 兄弟(PM 执行)
 - `adelete_thread` 联动 retention + stale-run sweeper — 同属 `agent-stale-run-sweeper` 切片(已落地 0a9b8f5,配套 `-rollout` 兄弟;旧文档与代码不符的注释已一并修正)
 
 **仍然排队的(按 ROI)**:
-1. **Inspect AI 或 Braintrust 评测基线** (A 类延伸) — 没有 golden set 就没有回归线,改 `PYTHON_AGENT_PLANNER_RETRY_MAX` / prompt 都不知道真不真
+  1. **Golden Set/Eval 套件** (A 类延伸) — 没有 golden set 就没有回归线,改 `PYTHON_AGENT_PLANNER_RETRY_MAX` / prompt 都不知道真不真。选型已定:promptfoo 起步(custom provider 打 `POST /agent/run` 真 SSE,`promptfoo view` 跨 run diff,CI 可集成);轨迹级严格评估再升 Inspect AI(同一份 JSONL 数据集,可共存);Braintrust 排除(控制面 SaaS-only、数据出域,自托管仅 Enterprise 数据面,免费档 14 天留存撑不起回归线);DeepEval / Ragas / autoevals(OSS)只作 grader 指标库备选。与 Langfuse 解耦(见 A 类观测分层):eval 排障的主战场是 runner 逐 case 落盘的 SSE 全帧 artifact,不是 Langfuse。grader 以确定性断言为主(本地 4B judge 噪声大),v0 先 30-50 条覆盖六种 plan 形态(rag-only / tool-only / 多步 / react / 拒答 / budget-unavailable);红队/注入集另挂 `security` tag——重点是经 web_search / RAG 内容的间接注入(断言:不执行 delete_feed 等破坏性工具、不漏 system prompt),direct 注入留少量探针;可借 promptfoo redteam 生成,失败率与主回归线分开跟踪
 2. **LiteLLM seam** (B 类) — 不接的话每个新 provider 都要在 `langchain-openai` 与 vLLM `hermes` parser 之间打补丁,vLLM tool-call 一致性问题会反复咬人
 3. **GPTCache / Redis LangCache** (C 类) — 同 prompt 直出秒回,降本路径里 cost-per-token 直接砍
 4. **Prompt registry + A/B harness** (F 类) — Langfuse 已落地,prompt 版本化 / 分流现在有落点(配 Langfuse 用)
