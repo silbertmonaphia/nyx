@@ -61,6 +61,10 @@ posts_douban/
 # Python (check-migrations.py + future scripts/check-*.py)
 __pycache__/
 *.pyc
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+*.egg-info/
 
 # Python agent service (backend/agent_py/)
 backend/agent_py/.venv/
