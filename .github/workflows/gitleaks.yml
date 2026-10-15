@@ -6,11 +6,17 @@
 # SHA-pinned to commit e0c47f4f8be36e29cdc102c57e68cb5cbf0e8d1e
 # (release v3.0.0) per the SHA-pinning policy in ci.yml.
 #
-# The action runs `gitleaks detect` against the full history by
-# default. We scope to the diff against the base branch on PRs
-# (--detect-config staged) and run the full-history scan on push
-# events. This matches the standard gitleaks GitHub Action
-# behaviour: full scan on every push + diff scan on PRs.
+# The action scopes `gitleaks detect` itself: PRs scan the diff
+# against the base branch's merge base; pushes scan the commits the
+# push added — tip-scoped for a plain push, but a merge-commit push
+# can widen the range back through the merged history (observed
+# 2026-10-15: 339 commits on the feed-index merge push).
+#
+# The action ships gitleaks 8.24.3, so .gitleaks.toml must stay
+# parseable by that version. Top-level allowlists there use the
+# singular [allowlist] form; the plural [[allowlists]] + condition
+# form is rule-level only and is silently ignored on 8.24.3 — a
+# false green until 420aca4 rewrote the globals.
 name: gitleaks
 
 on:
@@ -41,10 +47,9 @@ jobs:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          # Full history required for the `push` event scan. On PRs
-          # the action uses the merge-base diff instead, but the
-          # checkout still needs fetch-depth: 0 so the action can
-          # see the merge-base.
+          # Full history lets the action resolve the push range (a
+          # merge-commit push can widen it back through the merged
+          # history) and the PR merge base.
           fetch-depth: 0
 
       - name: Run gitleaks
