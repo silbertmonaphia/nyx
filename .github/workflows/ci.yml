@@ -300,7 +300,7 @@ jobs:
         # Playwright auto-starts Vite via frontend/playwright.config.ts webServer block
         cd frontend
         set +e
-        npm run test:e2e
+        npm run test:e2e -- --workers=1
         test_exit=$?
         set -e
         exit $test_exit
