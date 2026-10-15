@@ -65,12 +65,12 @@ func dockerProviderHealth(ctx context.Context) error {
 	return provider.Health(ctx)
 }
 
-func startRedisContainer(ctx context.Context) (string, *redis.RedisContainer, error) {
+func startRedisContainer(ctx context.Context, opts ...testcontainers.ContainerCustomizer) (string, *redis.RedisContainer, error) {
 	hostPort, err := reserveHostPort()
 	if err != nil {
 		return "", nil, err
 	}
-	container, err := runRedis(ctx, hostPort)
+	container, err := runRedis(ctx, hostPort, opts...)
 	if err != nil {
 		return "", nil, err
 	}
@@ -113,6 +113,22 @@ func newIntegrationRedisCache(t *testing.T) Cache {
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = c.Close() })
 	return c
+}
+
+func newDedicatedRedis(t *testing.T, opts ...testcontainers.ContainerCustomizer) (Cache, *redis.RedisContainer) {
+	t.Helper()
+	requireRedisAvailable(t)
+
+	ctx := context.Background()
+	addr, container, err := startRedisContainer(ctx, opts...)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = container.Terminate(context.Background()) })
+
+	c, err := NewRedis(addr)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = c.Close() })
+
+	return c, container
 }
 
 func TestRedisIntegrationReportsRedisMode(t *testing.T) {
@@ -161,21 +177,8 @@ func TestRedisIntegrationDeletePrefixClearsFullNamespace(t *testing.T) {
 }
 
 func TestRedisIntegrationNoevictionRefusesWritesWithoutPanic(t *testing.T) {
-	requireRedisAvailable(t)
 	ctx := context.Background()
-
-	hostPort, err := reserveHostPort()
-	require.NoError(t, err)
-
-	container, err := runRedis(ctx, hostPort,
-		testcontainers.WithCmdArgs("--maxmemory", "1mb", "--maxmemory-policy", "noeviction"),
-	)
-	require.NoError(t, err)
-	t.Cleanup(func() { _ = container.Terminate(context.Background()) })
-
-	c, err := NewRedis("redis://127.0.0.1:" + hostPort)
-	require.NoError(t, err)
-	t.Cleanup(func() { _ = c.Close() })
+	c, _ := newDedicatedRedis(t, testcontainers.WithCmdArgs("--maxmemory", "1mb", "--maxmemory-policy", "noeviction"))
 
 	payload := strings.Repeat("x", 256*1024)
 	var refused error
@@ -192,8 +195,8 @@ func TestRedisIntegrationNoevictionRefusesWritesWithoutPanic(t *testing.T) {
 }
 
 func TestRedisIntegrationPingFailureFallsBackWithoutPanic(t *testing.T) {
-	c := newIntegrationRedisCache(t)
 	ctx := context.Background()
+	c, container := newDedicatedRedis(t)
 
 	require.NoError(t, c.Set(ctx, "integration:ping", "before", time.Minute))
 	var got string
@@ -201,8 +204,7 @@ func TestRedisIntegrationPingFailureFallsBackWithoutPanic(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, hit, "precondition: the write must be readable before the container is stopped")
 
-	require.NoError(t, integrationRedis.Stop(ctx, nil))
-	t.Cleanup(func() { _ = integrationRedis.Start(ctx) })
+	require.NoError(t, container.Stop(ctx, nil))
 
 	pingErr := c.Ping(ctx)
 	assert.Error(t, pingErr, "Ping must surface the stopped backend so health probes see the outage")
@@ -218,23 +220,8 @@ func TestRedisIntegrationPingFailureFallsBackWithoutPanic(t *testing.T) {
 }
 
 func TestRedisIntegrationContainerRestartReconnectsTransparently(t *testing.T) {
-	requireRedisAvailable(t)
 	ctx := context.Background()
-
-	require.NoError(t, integrationRedis.Stop(ctx, nil))
-	require.NoError(t, integrationRedis.Start(ctx))
-
-	var c Cache
-	var constructErr error
-	require.Eventually(t, func() bool {
-		c, constructErr = NewRedis(redisAddr)
-		return constructErr == nil
-	}, 15*time.Second, 200*time.Millisecond, "the container must serve its mapped address again after Start, last NewRedis err=%v", constructErr)
-	t.Cleanup(func() {
-		if c != nil {
-			_ = c.Close()
-		}
-	})
+	c, container := newDedicatedRedis(t)
 
 	var seeded string
 	require.NoError(t, c.Set(ctx, "integration:restart", "before-outage", time.Minute))
@@ -242,10 +229,10 @@ func TestRedisIntegrationContainerRestartReconnectsTransparently(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, hit, "precondition: the client must be healthy before the outage")
 
-	require.NoError(t, integrationRedis.Stop(ctx, nil))
+	require.NoError(t, container.Stop(ctx, nil))
 	require.Error(t, c.Ping(ctx), "the stop must take the mapped address down so the reconnect below is real")
 
-	require.NoError(t, integrationRedis.Start(ctx))
+	require.NoError(t, container.Start(ctx))
 
 	var setErr error
 	require.Eventually(t, func() bool {

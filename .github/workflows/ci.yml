@@ -22,6 +22,12 @@ on:
   pull_request:
     branches: [ main, mvp ]
 
+permissions:
+  # Least privilege by default: every job below only reads the repository.
+  # The release job widens its own scope at the job level (tags + release
+  # commits + release-note PR mentions).
+  contents: read
+
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 

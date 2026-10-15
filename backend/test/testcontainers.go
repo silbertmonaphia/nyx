@@ -26,7 +26,7 @@ type TestDB struct {
 // It does not use t.Cleanup so the caller is responsible for termination.
 func StartPostgres(ctx context.Context) (*TestDB, error) {
 	container, err := postgres.Run(ctx,
-		"postgres:17-alpine",
+		"pgvector/pgvector:pg17",
 		postgres.WithDatabase("nyx_test"),
 		postgres.WithUsername("postgres"),
 		postgres.WithPassword("postgres"),
