@@ -10,7 +10,7 @@
 - [x] 2.1 Run `cd frontend && npm run openapi:check` on the clean tree and confirm exit 0 (2026-10-15: exit 0)
 - [x] 2.2 Negative test: plant drift in `frontend/src/api/openapi/schema.d.ts` (drop a field the spec declares), confirm the check exits non-zero and prints the differing lines, then restore the file and confirm the check is green again — the gate must fail closed, not silently regenerate (2026-10-15: renamed `cache_ping` → `cache_ping_drifted`, ran the step's exact shell block → `step_exit=1` with the `diff -u` output; restored from a byte copy → check exit 0, `git status frontend/` clean)
 - [x] 2.3 Confirm the failure output names the stale file and `npm run openapi:gen`, so the fix is discoverable from the job log alone (the spec's "remedy is discoverable" scenario); if the script's output does not name the command, extend the step to echo it — but do not change `frontend/package.json`'s script contract (2026-10-15: `npm run openapi:check` alone prints only the diff, so the step carries the `::error::` annotation plus `Fix: cd frontend && npm run openapi:gen …`; `package.json` untouched)
-- [ ] 2.4 Push and verify `frontend-test` runs the new step and is green on the pushed commit; record the run URL
+- [x] 2.4 Push and verify `frontend-test` runs the new step and is green on the pushed commit; record the run URL (2026-10-15: https://github.com/silbertmonaphia/nyx/actions/runs/38728338904 — run `success`, all eleven jobs green, and `frontend-test`'s step list shows `7 Frontend OpenAPI type drift check  success` between `Architecture boundary check` and `Test`)
 
 ## 3. Docs
 
