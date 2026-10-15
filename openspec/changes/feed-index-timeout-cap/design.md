@@ -43,9 +43,16 @@ For every variant the consumer is already idempotent — the indexer skips no-op
 
 All three call sites get the same cap: create and update share the `Index` path; delete's `Delete` call is equally pointless to await (a dead embedding row is harmless — the retriever filters `deleted_at IS NULL`). The warn-and-continue contract, span attributes, and the no-op indexer behavior are unchanged; only the deadline added to the context differs.
 
-## D5 — Healability pin
+## D5 — Healability pin, and the drop-on-skip
 
-A cap-skipped index must remain eligible for `BackfillOnce`: eligibility is "no embedding row for the feed", and nothing in the write path marks a feed as finally-indexed — the same property that makes today's failure path tolerable. The unit test for the bounded-wait path asserts the write left no "indexed" marker (the stub records a skip, the service result is success).
+A cap-skipped index must remain eligible for `BackfillOnce`. The live outage simulation exposed the exact contract: `BackfillOnce` selects via `ListFeedsWithoutEmbeddings` — **missing rows only**, never hash-stale rows. Consequences:
+
+- a skipped *create* leaves no row → backfill heals it;
+- a skipped *update* would leave the previous embedding (old `content_hash`) in place — backfill would never pick it up, and RAG would keep serving stale content indefinitely. That state is dormant in today's failure path too (the timeout simply took 60s to reach it), but the cap makes it worth closing properly.
+
+Decision: on a skipped create/update the service best-effort deletes the feed's embedding row (same cap, warn on failure). The row delete is a pure SQL `DELETE` (`Indexer.Delete` → `DeleteFeedEmbedding`, no embedder call) so it completes in milliseconds even while the embedder hangs; the feed then reverts to missing-row eligibility and the next `BackfillOnce` re-embeds it. Missing beats stale: an absent row means "not retrievable yet", a stale row means "retrievable with wrong content". Skipped *deletes* need no drop — the row is harmless because the retriever filters `deleted_at IS NULL`, and the feed is gone.
+
+The unit test for the bounded-wait path asserts the stub saw the delete after the skipped index, and the live simulation (task 5.2) verifies row-dropped → chat-backfill → row-restored with the new hash. That simulation also caught the lazy backfill never running at all — `detachContext` (`chat/service.go`) canceled its own context before returning, so every `BackfillOnce` exited on its first query; the sibling `fix(chat)` commit repairs it, without which this change's healability story would have been both untestable and untrue.
 
 ## D6 — No rollout sibling
 

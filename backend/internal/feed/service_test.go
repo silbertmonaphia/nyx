@@ -65,7 +65,7 @@ func newServiceWithCache(t *testing.T) (Service, *stubRepo, *miniredis.Miniredis
 	}
 	t.Cleanup(func() { _ = c.Close() })
 	repo := &stubRepo{}
-	svc := NewService(repo, c, NoopEmbeddingIndexer{}, time.Minute, noop.NewTracerProvider().Tracer("test"))
+	svc := NewService(repo, c, NoopEmbeddingIndexer{}, time.Minute, 0, noop.NewTracerProvider().Tracer("test"))
 	return svc, repo, mr
 }
 
@@ -100,7 +100,7 @@ func (s *stubIndexer) Delete(_ context.Context, id int) error {
 // swap the noop for an indexer that records calls.
 func newServiceWithStubIndexer(idx EmbeddingIndexer) Service {
 	repo := &stubRepo{}
-	return NewService(repo, cache.NewNoop(), idx, time.Minute, noop.NewTracerProvider().Tracer("test"))
+	return NewService(repo, cache.NewNoop(), idx, time.Minute, 0, noop.NewTracerProvider().Tracer("test"))
 }
 
 // ctxWithUser stamps a user id onto ctx the same way the auth

@@ -52,12 +52,15 @@ func (NoopEmbeddingIndexer) Index(context.Context, int, *Feed) error { return ni
 // Delete is a no-op.
 func (NoopEmbeddingIndexer) Delete(context.Context, int) error { return nil }
 
+const DefaultIndexTimeout = 5 * time.Second
+
 type feedService struct {
-	repo    Repository
-	cache   cache.Cache
-	indexer EmbeddingIndexer
-	ttl     time.Duration
-	tracer  trace.Tracer
+	repo         Repository
+	cache        cache.Cache
+	indexer      EmbeddingIndexer
+	ttl          time.Duration
+	indexTimeout time.Duration
+	tracer       trace.Tracer
 }
 
 // NewService wires the feed domain. The cache parameter may be a no-op
@@ -67,11 +70,14 @@ type feedService struct {
 // implementations uniformly. tracer emits one OTel span per public
 // method; pass the noop tracer (otel.Tracer("…") with the global
 // noop provider) when tracing is disabled — Start becomes free.
-func NewService(repo Repository, c cache.Cache, indexer EmbeddingIndexer, ttl time.Duration, tracer trace.Tracer) Service {
+func NewService(repo Repository, c cache.Cache, indexer EmbeddingIndexer, ttl time.Duration, indexTimeout time.Duration, tracer trace.Tracer) Service {
 	if indexer == nil {
 		indexer = NoopEmbeddingIndexer{}
 	}
-	return &feedService{repo: repo, cache: c, indexer: indexer, ttl: ttl, tracer: tracer}
+	if indexTimeout <= 0 {
+		indexTimeout = DefaultIndexTimeout
+	}
+	return &feedService{repo: repo, cache: c, indexer: indexer, ttl: ttl, indexTimeout: indexTimeout, tracer: tracer}
 }
 
 // SetIndexer swaps the embedding indexer at runtime. The wiring
@@ -148,9 +154,16 @@ func (s *feedService) CreateFeed(ctx context.Context, m *Feed) error {
 	if err := s.repo.Create(ctx, userID, m); err != nil {
 		return err
 	}
-	if err := s.indexer.Index(ctx, userID, m); err != nil {
+	indexCtx, cancel := context.WithTimeout(ctx, s.indexTimeout)
+	if err := s.indexer.Index(indexCtx, userID, m); err != nil {
 		log.Warn().Err(err).Int("feed_id", m.ID).Msg("feed embedding index failed")
+		dropCtx, dropCancel := context.WithTimeout(ctx, s.indexTimeout)
+		if derr := s.indexer.Delete(dropCtx, m.ID); derr != nil {
+			log.Warn().Err(derr).Int("feed_id", m.ID).Msg("feed embedding drop failed")
+		}
+		dropCancel()
 	}
+	cancel()
 	s.invalidate(ctx, userID)
 	return nil
 }
@@ -168,9 +181,16 @@ func (s *feedService) UpdateFeed(ctx context.Context, id int, m *Feed) error {
 	if err := s.repo.Update(ctx, userID, id, m); err != nil {
 		return err
 	}
-	if err := s.indexer.Index(ctx, userID, m); err != nil {
+	indexCtx, cancel := context.WithTimeout(ctx, s.indexTimeout)
+	if err := s.indexer.Index(indexCtx, userID, m); err != nil {
 		log.Warn().Err(err).Int("feed_id", id).Msg("feed embedding index failed")
+		dropCtx, dropCancel := context.WithTimeout(ctx, s.indexTimeout)
+		if derr := s.indexer.Delete(dropCtx, id); derr != nil {
+			log.Warn().Err(derr).Int("feed_id", id).Msg("feed embedding drop failed")
+		}
+		dropCancel()
 	}
+	cancel()
 	s.invalidate(ctx, userID)
 	return nil
 }
@@ -188,9 +208,11 @@ func (s *feedService) DeleteFeed(ctx context.Context, id int) error {
 	if err := s.repo.Delete(ctx, userID, id); err != nil {
 		return err
 	}
-	if err := s.indexer.Delete(ctx, id); err != nil {
+	indexCtx, cancel := context.WithTimeout(ctx, s.indexTimeout)
+	if err := s.indexer.Delete(indexCtx, id); err != nil {
 		log.Warn().Err(err).Int("feed_id", id).Msg("feed embedding delete failed")
 	}
+	cancel()
 	s.invalidate(ctx, userID)
 	return nil
 }

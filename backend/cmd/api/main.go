@@ -152,12 +152,17 @@ func buildAndServe(cfg *config.Config) {
 		log.Fatal().Err(err).Msg("Invalid CACHE_TTL")
 	}
 
+	feedIndexTimeout, err := time.ParseDuration(cfg.FeedIndexTimeout)
+	if err != nil {
+		log.Fatal().Err(err).Msg("Invalid FEED_INDEX_TIMEOUT")
+	}
+
 	// Initialize Feed domain. The indexer starts as noop; cmd/api/main.go
 	// swaps it for the real rag.Indexer below once the chat/embed
 	// wiring is built (LLM is a prerequisite for embeddings).
 	var feedIndexer feed.EmbeddingIndexer = feed.NoopEmbeddingIndexer{}
 	feedRepo := feed.NewRepository(db)
-	feedService := feed.NewService(feedRepo, cacheClient, feedIndexer, cacheTTL, tracing.Provider.Tracer("nyx.feed"))
+	feedService := feed.NewService(feedRepo, cacheClient, feedIndexer, cacheTTL, feedIndexTimeout, tracing.Provider.Tracer("nyx.feed"))
 	feedHandler := feed.NewHandler(feedService)
 
 	// Initialize User domain. accessTTL / refreshTTL come from viper

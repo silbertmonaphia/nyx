@@ -32,9 +32,14 @@ Feed create, update, and delete SHALL attempt embedding-index maintenance with a
 
 ### Requirement: A skipped index stays healable
 
-A write whose indexing was skipped by the cap SHALL leave the feed eligible for the retrieve-time backfill — no state may mark the feed as finally indexed. The next `BackfillOnce` for that user SHALL index it.
+A write whose indexing was skipped by the cap SHALL leave the feed eligible for the retrieve-time backfill. Eligibility is a missing embedding row — the backfill selects only feeds without one — so a skipped create/update SHALL best-effort delete the feed's embedding row (same cap) rather than leave stale content indexed. The next `BackfillOnce` for that user SHALL index the feed.
 
 #### Scenario: Backfill repairs a capped write
 
 - **WHEN** a write was skipped during an embedder outage and the embedder recovers
 - **THEN** a later RAG chat's backfill writes the missing embedding and the feed is retrievable
+
+#### Scenario: A skipped update drops the stale row
+
+- **WHEN** an update's indexing is skipped while a previous embedding row exists
+- **THEN** that row is deleted (best-effort) so the feed is no longer retrievable with outdated content until the backfill re-embeds it

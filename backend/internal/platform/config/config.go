@@ -118,6 +118,7 @@ type Config struct {
 	LLMAPIKey             string `mapstructure:"LLM_API_KEY"`
 	LLMModel              string `mapstructure:"LLM_MODEL"`
 	LLMTimeout            string `mapstructure:"LLM_TIMEOUT"`
+	FeedIndexTimeout      string `mapstructure:"FEED_INDEX_TIMEOUT"`
 	LLMMaxTokens          int    `mapstructure:"LLM_MAX_TOKENS"`
 	LLMSystemPrompt       string `mapstructure:"LLM_SYSTEM_PROMPT"`
 	LLMMaxHistoryMessages int    `mapstructure:"LLM_MAX_HISTORY_MESSAGES"`
@@ -342,6 +343,7 @@ func setDefaults() {
 	viper.SetDefault("LLM_ENABLED", false)
 	viper.SetDefault("LLM_PROVIDER", "openai")
 	viper.SetDefault("LLM_TIMEOUT", "60s")
+	viper.SetDefault("FEED_INDEX_TIMEOUT", "5s")
 	viper.SetDefault("LLM_MAX_TOKENS", 1024)
 	viper.SetDefault("LLM_MAX_HISTORY_MESSAGES", 50)
 	viper.SetDefault("LLM_MAX_MESSAGE_CHARS", 32768)
@@ -482,6 +484,14 @@ func validateDurations(cfg *Config) error {
 		if _, err := time.ParseDuration(cfg.LLMProbeTimeout); err != nil {
 			return fmt.Errorf("invalid LLM_PROBE_TIMEOUT: %w", err)
 		}
+	}
+
+	feedIndexTimeout, parseErr := time.ParseDuration(cfg.FeedIndexTimeout)
+	if parseErr != nil {
+		return fmt.Errorf("invalid FEED_INDEX_TIMEOUT: %w", parseErr)
+	}
+	if feedIndexTimeout <= 0 {
+		return fmt.Errorf("FEED_INDEX_TIMEOUT must be positive, got %v", feedIndexTimeout)
 	}
 	return nil
 }
