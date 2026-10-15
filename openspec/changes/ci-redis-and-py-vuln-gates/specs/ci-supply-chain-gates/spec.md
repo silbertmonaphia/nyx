@@ -31,9 +31,11 @@ emulate (TCP reconnect, real TTL timing, `SCAN+UNLINK` under load,
 
 #### Scenario: PING failure falls back without crashing
 - **WHEN** the Redis container is stopped after a successful cache write
-- **THEN** subsequent cache calls return the cache-miss sentinel and do
-  not panic, log no error above `Warn`, and the calling handler returns
-  its DB-resolved response
+- **THEN** subsequent `Get` calls report the cache-miss signal together
+  with the transport error (which the best-effort callers swallow at
+  `Warn` — the layer never prefers a guessed value over the DB) and never
+  panic, `Ping` surfaces the error so the health probe reports the
+  outage, and `DeletePrefix` returns without panicking
 
 #### Scenario: Container restart reconnects transparently
 - **WHEN** the Redis container is stopped, then restarted on the same
@@ -48,29 +50,52 @@ emulate (TCP reconnect, real TTL timing, `SCAN+UNLINK` under load,
   matching the existing `feed/repository_integration_test.go` and
   `user/repository_integration_test.go` skip pattern
 
+#### Scenario: A container that cannot start fails the suite
+- **WHEN** the Docker provider is healthy but the Redis container fails to
+  start (a throttled image pull, a rejected `Run`, a port that will not
+  bind)
+- **THEN** `TestMain` exits non-zero instead of leaving `redisAddr` empty,
+  so the gate can never report green with every real-Redis scenario
+  skipped
+
 ### Requirement: Python agent dependency vulnerability scan
 
 A `py-audit` job MUST run `pip-audit` against the installed
-`backend/agent_py/.venv` after `pip install -e .`, on every PR whose diff
-touches `backend/agent_py/**` (gated by `dorny/paths-filter`). The job
-MUST fail when `pip-audit` reports any advisory at `High` or `Critical`
-severity that is not present in the documented allowlist.
+`backend/agent_py/.venv` after `pip install -e '.[ci]'`, on every PR whose
+diff touches `backend/agent_py/**` (gated by `dorny/paths-filter`). The
+job MUST fail when `pip-audit` reports any advisory that is not present in
+the documented allowlist, and MUST also fail when pip-audit could not
+audit a dependency at all (`skip_reason`) — except for the project's own
+editable distribution, which is not published to PyPI by design.
+(pip-audit's JSON output carries no severity field and it has no severity
+filter flag, so every reported advisory gates; the dated allowlist is the
+deferral mechanism for noise, in the same role `--audit-level=high` plays
+for `npm audit`.)
 
-#### Scenario: High-severity transitive advisory fails the job
+#### Scenario: Transitive advisory fails the job
 - **WHEN** a PR to `backend/agent_py/pyproject.toml` (or any file under
   `backend/agent_py/`) introduces a transitive dep with a published
-  `High` or `Critical` PyPA advisory
+  PyPA advisory
 - **THEN** the `py-audit` job exits non-zero and the workflow run is
   failed before `e2e-test` is scheduled
 
 #### Scenario: Allowlisted advisory with rationale does not fail the job
-- **WHEN** an advisory is listed in the allowlist file with an inline
-  `## Rationale:` comment that cites the upstream advisory URL and the
-  decision to defer (e.g. no fixed upstream release; fix-in-progress
-  PR; transitive-only-from-test-helper)
+- **WHEN** an advisory is listed in the allowlist file with a `rationale`
+  string that cites the upstream advisory URL and the decision to defer
+  (e.g. no fixed upstream release; fix-in-progress PR;
+  transitive-only-from-test-helper)
 - **THEN** `pip-audit` still exits non-zero but the job wrapper script
   classifies the finding as allowlisted and exits zero, mirroring the
   `govulncheck` allowlist mechanism (`.github/workflows/ci.yml:351-358`)
+
+#### Scenario: Dependency pip-audit cannot audit fails the job
+- **WHEN** a dependency appears in pip-audit's report as `skip_reason`
+  (a git-URL install, a local wheel, a package absent from PyPI)
+- **THEN** the wrapper prints the reason and exits non-zero — a gate that
+  silently treats "could not look" as "nothing found" is worse than no
+  gate. The project's own editable distribution is the one documented
+  exception: it is never published to PyPI, so its skip prints as an
+  informational `SKIP` line and does not fail the job
 
 #### Scenario: PR that does not touch Python deps the job
 - **WHEN** the diff does not match any path under `backend/agent_py/**`
@@ -79,9 +104,9 @@ severity that is not present in the documented allowlist.
 
 #### Scenario: Gate precedes e2e-test
 - **WHEN** `py-audit` fails
-- **THEN** `e2e-test` is not scheduled (it is in the `needs:` list of
-  `py-audit`), so a known-bad Python dep does not spend the e2e lane's
-  ~minute budget
+- **THEN** `e2e-test` is not scheduled (`py-audit` is in the `needs:`
+  list of `e2e-test`, alongside `govulncheck` / `npm-audit`), so a
+  known-bad Python dep does not spend the e2e lane's ~minute budget
 
 ### Requirement: Allowlist mechanism is auditable
 
@@ -101,6 +126,19 @@ both gates uniformly.
 - **WHEN** an allowlist entry's date is more than 90 days in the past
 - **THEN** the wrapper script treats the entry as expired, prints a
   notice, and re-classifies the advisory as failing
+
+#### Scenario: Future-dated allowlist entry is rejected
+- **WHEN** an allowlist entry's date is in the future (beyond a one-day
+  clock-skew tolerance), which would let it defer an advisory forever
+- **THEN** the wrapper treats the allowlist as malformed, names the entry,
+  and exits 2
+
+#### Scenario: Allowlist entry that no longer matches is reported
+- **WHEN** an allowlist entry's advisory is not present in pip-audit's
+  report (upstream shipped a fix and the dependency was upgraded)
+- **THEN** the wrapper prints a `WARN` line naming the entry so the stale
+  deferral is visible in the job log and can be removed, without failing
+  the job (an absent dependency cannot be deferring anything)
 
 ### Requirement: Both gates run as part of the standard CI shape
 

@@ -193,8 +193,16 @@
             "type": "string"
           },
           "cache": {
+            "description": "Active cache implementation: 'redis' or 'noop'.",
             "examples": [
-              "up"
+              "redis"
+            ],
+            "type": "string"
+          },
+          "cache_ping": {
+            "description": "Cache probe result: 'ok' or 'fail'.",
+            "examples": [
+              "ok"
             ],
             "type": "string"
           },
@@ -208,7 +216,8 @@
         "required": [
           "api",
           "database",
-          "cache"
+          "cache",
+          "cache_ping"
         ],
         "type": "object"
       },
@@ -623,7 +632,7 @@
     },
     "/api/health": {
       "get": {
-        "description": "Reports the status of the API, the database connection, and the cache.",
+        "description": "Deep readiness check — reports the status of the API, the database connection, and the cache (active implementation and probe result).",
         "operationId": "health",
         "responses": {
           "200": {

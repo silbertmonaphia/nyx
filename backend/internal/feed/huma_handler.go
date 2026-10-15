@@ -56,7 +56,7 @@ func RegisterFeedOpsTest(api huma.API, h *Handler, tokens auth.TokenService, wit
 		Method:      http.MethodGet,
 		Path:        "/api/health",
 		Summary:     "Health check",
-		Description: "Reports the status of the API, the database connection, and the cache.",
+		Description: "Deep readiness check — reports the status of the API, the database connection, and the cache (active implementation and probe result).",
 		Tags:        []string{"health"},
 	}, h.Health)
 
@@ -164,9 +164,10 @@ type healthResponse struct {
 }
 
 type healthServices struct {
-	API      string `json:"api" example:"up"`
-	Database string `json:"database" example:"up"`
-	Cache    string `json:"cache" example:"up"`
+	API       string `json:"api" example:"up"`
+	Database  string `json:"database" example:"up"`
+	Cache     string `json:"cache" example:"redis" doc:"Active cache implementation: 'redis' or 'noop'."`
+	CachePing string `json:"cache_ping" example:"ok" doc:"Cache probe result: 'ok' or 'fail'."`
 }
 
 // livezOutput / livezResponse are the wire types for /api/livez.
@@ -228,11 +229,6 @@ type getFeedOutput struct{ Body Feed }
 
 // ---- Handler functions ----
 
-// Health returns the liveness/readiness state for the API, its DB
-// pool, and its cache backend. dbStatus / cacheStatus are "up" unless
-// their respective Check*Health call returns an error; status is "ok"
-// only when both upstream checks pass.
-//
 //nolint:revive // unexported-return is huma's idiomatic op pattern
 func (h *Handler) Health(ctx context.Context, _ *struct{}) (*healthOutput, error) {
 	dbStatus := statusUp
@@ -241,9 +237,9 @@ func (h *Handler) Health(ctx context.Context, _ *struct{}) (*healthOutput, error
 		log.Error().Err(err).Msg("Database health check failed")
 	}
 
-	cacheStatus := statusUp
+	cachePing := "ok"
 	if err := h.service.CheckCacheHealth(ctx); err != nil {
-		cacheStatus = statusDown
+		cachePing = "fail"
 		log.Error().Err(err).Msg("Cache health check failed")
 	}
 
@@ -255,9 +251,10 @@ func (h *Handler) Health(ctx context.Context, _ *struct{}) (*healthOutput, error
 	return &healthOutput{Body: healthResponse{
 		Status: status,
 		Services: healthServices{
-			API:      statusUp,
-			Database: dbStatus,
-			Cache:    cacheStatus,
+			API:       statusUp,
+			Database:  dbStatus,
+			Cache:     h.service.CacheMode(),
+			CachePing: cachePing,
 		},
 	}}, nil
 }

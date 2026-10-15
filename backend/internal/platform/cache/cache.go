@@ -51,6 +51,7 @@ type Cache interface {
 	Close() error
 	IncrBy(ctx context.Context, key string, delta int64) (int64, error)
 	Expire(ctx context.Context, key string, ttl time.Duration) error
+	Mode() string
 }
 
 // noopCache satisfies Cache without doing anything. It is used when
@@ -70,6 +71,7 @@ func (noopCache) Ping(context.Context) error                            { return
 func (noopCache) Close() error                                          { return nil }
 func (noopCache) IncrBy(context.Context, string, int64) (int64, error)  { return 0, nil }
 func (noopCache) Expire(context.Context, string, time.Duration) error   { return nil }
+func (noopCache) Mode() string                                          { return "noop" }
 
 // redisCache wraps a *redis.Client.
 type redisCache struct {
@@ -179,4 +181,8 @@ func (c *redisCache) Expire(ctx context.Context, key string, ttl time.Duration) 
 
 func (c *redisCache) Close() error {
 	return c.client.Close()
+}
+
+func (c *redisCache) Mode() string {
+	return "redis"
 }

@@ -32,7 +32,7 @@
 ### 2. ✅ 架构契约（frontend）— dependency-cruiser (2026-09-24)
 
 - **是什么**：在前端 CI 强制 `src/features/*` 与 shared/ 之间的依赖边界。
-- **为什么**：AI 在 React 项目里跨层调用（hooks 直接调 store、components 直接 fetch services 之外的模块）是最高频违规。后端在**类型契约层**（sentinel errors + `api.MapError` 强制错误翻译 + sqlc 自动生成边界 + `feed`/`user` 域间互不依赖）比 frontend 硬，但在**路径/import 层**和 frontend 同样没有自动化兜底 —— frontend 先补这条边。后端路径层兜底是 P1 候选（见 §10 草稿）。
+- **为什么**：AI 在 React 项目里跨层调用（hooks 直接调 store、components 直接 fetch services 之外的模块）是最高频违规。后端在**类型契约层**（sentinel errors + `api.MapError` 强制错误翻译 + sqlc 自动生成边界 + `feed`/`user` 域间互不依赖）比 frontend 硬，但在**路径/import 层**和 frontend 同样没有自动化兜底 —— frontend 先补这条边。后端路径层兜底是 P1 候选（见 §11 草稿）。
 - **怎么做**：
   - `frontend/.dependency-cruiser.cjs`：两条 forbidden 规则 —— (a) `no-cross-feature-<a>-to-<b>`：所有 feature 对之间由 config 加载时从 `src/features/*` 目录动态生成，新增 feature 自动覆盖；`pathNot` 不支持跨字段反向引用，所以走显式枚举（depcruiser 配置文件是 structuredClone-able，predicate function 也不行）。(b) `shared-not-from-features`：components/hooks/services/store/api/utils/types/assets/ 不许 import features/。
   - `services/api.ts` 是 shared，不属于 feature，所有 feature 都 import 它 —— 这是有意为之的 seam，不是漏洞。
@@ -50,14 +50,15 @@
   - `.claude/scripts/post-turn-reminder.sh` + `.claude/settings.json` 的 `Stop` hook：每轮 Claude turn 结束后检测工作树/HEAD 是否相对 base 有改动，是则打印一行提醒让用户手动 `/review`。**hook 不直接起 agent** —— Stop hook 只能跑 shell 命令，再起一个 Claude session 每轮都爆 token + 加延迟，不值；slash command 是重活的手动触发器，hook 只是提醒。
   - **不用 `PostToolUse`**：多文件改动会触发 N 次，单 edit 拆 N 次跑 review 也拖慢反馈。
 
-### 4. ✅ 供应链漏洞扫描 (2026-09-24)
+### 4. ✅ 供应链漏洞扫描 (2026-09-24；Python 侧 2026-10-15)
 
-- **是什么**：`govulncheck`（Go）+ `npm audit --audit-level=high`（frontend）。
-- **为什么**：10 行 YAML 就能捡现成 CVE，比手动追依赖快得多。`gitleaks` 防的是 secrets 进 git，不防已知漏洞。
-- **怎么做**：在 `.github/workflows/ci.yml` 加两个独立 job（与 backend-test / frontend-test 并行，e2e-test + release 把它们列入 `needs`）：
+- **是什么**：`govulncheck`（Go）+ `npm audit --audit-level=high`（frontend）+ `pip-audit`（`backend/agent_py`，2026-10-15 补齐）。
+- **为什么**：10 行 YAML 就能捡现成 CVE，比手动追依赖快得多。`gitleaks` 防的是 secrets 进 git，不防已知漏洞。Python agent 的依赖（fastapi / langgraph / httpx / redis-py …）全部从网络暴露的 handler 可达，此前只有 `agent-alembic-check`（仅冒烟迁移）覆盖。
+- **怎么做**：在 `.github/workflows/ci.yml` 加独立 job（与 backend-test / frontend-test 并行，e2e-test + release 把它们列入 `needs`）：
   - `govulncheck`：setup-go v5.6.0 (SHA pinned)、`go install golang.org/x/vuln/cmd/govulncheck@v1.1.4`、`govulncheck ./...`（默认 source 模式，只报从项目代码可达的漏洞，减少假阳）。
   - `npm-audit`：setup-node v4.4.0 (SHA pinned)、`npm ci` 锁 lockfile、`npm audit --audit-level=high`（high/critical 才 fail gate，moderate 仅 log）。
-  - 两个 job 各 3-5 分钟 timeout，独立失败 → 阻断 release。
+  - `py-audit`：`dorny/paths-filter` 只在 `backend/agent_py/**` 变更时触发；新建 venv + `pip install --upgrade pip` + `pip install -e '.[ci]'`，再由 `scripts/ci/pip_audit_with_allowlist.py` 解析 `pip-audit --format=json`。pip-audit 的 JSON 没有 severity 字段、也没有 severity 过滤开关，所以**所有 advisory 一律 gate**；唯一延期机制是 dated allowlist（`backend/agent_py/.pip-audit-allowlist.toml`，每条带 `id`/`date`/`rationale`，>90 天即过期重新失败），角色等同 npm-audit 的 `--audit-level=high`。注意不要用没升过级的 venv 跑：本地 agent venv 的 pip 23.2.1 会带出 14 条全来自 pip 自身的 advisory，CI 的 `--upgrade pip` 正是为了消掉这层假阳（全新 venv 实测 0 条）。
+  - 三个 job 各 3-5 分钟 timeout，独立失败 → 阻断 release。
 
 ### 5. ✅ Prompt injection 防御 (2026-09-24)
 
@@ -69,35 +70,46 @@
   - human 指令与不可信源冲突时 human wins；
   - `.claude/agents/*.md` 和 `.claude/commands/*.md` prompt 内同样适用。
 
+### 6. ✅ 双缓存 e2e 门 + 真 Redis 集成测试 (2026-10-15)
+
+- **是什么**：两条 e2e lane 并行把关 —— `e2e-test`（`REDIS_ENABLED=false`，noop 回退）与 `e2e-test-redis`（`REDIS_ENABLED=true` + `redis:7-alpine` service container）；cache 包另在 testcontainers 真 Redis 上补集成用例。
+- **为什么**：miniredis 到不了真 Redis 的面（TCP 重连、真实 TTL 时序、`SCAN+UNLINK`、`PING` 失败回退），而 cache 是 best-effort（错误全被吞掉），静默回退 bug 会直接进 prod；只留一条 lane 则会丢掉 noop 回归基线，日后 `REDIS_ENABLED` 默认值翻转时没有信号。
+- **怎么做**：
+  - `backend/internal/platform/cache/cache_integration_test.go`：`TestMain` 起一个共享 `redis:7-alpine` testcontainer，六个场景：`Mode()` 报 `redis`、200ms TTL 过 250ms 读回 miss、`DeletePrefix("feeds:")` 清掉 250 个键（跨 >1 批 `UNLINK`）且不动 `other:1`、`--maxmemory 1mb --maxmemory-policy noeviction` 独立容器里写满后拒绝写入且不 panic、容器停止后 `Ping`/`Get`/`DeletePrefix` 只回错误不 panic、容器重启后同一 client 透明重连。本机实测整包 15.7s。
+  - skip 契约收窄为"只有明确跳过才算跳过"：`SKIP_CONTAINERS=true` 或 **testcontainers provider 自己的 `Health` 探不到 daemon**（即 `redis.Run` 会用的同一条路径）时全套 `t.Skip`；端口预留失败 / `redis.Run` 失败一律 `os.Exit(1)`——否则一次 Docker Hub 拉取限流就能让门在"全跳过"的状态下变绿。
+  - `.github/workflows/ci.yml`：新增 `e2e-test-redis`（复制 `e2e-test` + `redis:7-alpine` service + `REDIS_ENABLED`/`REDIS_URL` env），`e2e-test` 与 `e2e-test-redis` 同时进 `release` 的 `needs`。
+  - 就绪探针升级：`GET /api/health` 的 `services.cache` 改为报实现（`redis`/`noop`）+ 新增 `cache_ping`（`ok`/`fail`），新 lane 的 readiness 循环据此 `grep '"cache":"redis"'`，cache-mode 回归在浏览器断言之前就暴露；前端 `schema.d.ts` 一并 regen。
+  - 两条 lane 各跑一遍非 `@live` 套件（`--workers=1`），本机 side stack 实测：noop 15 passed / 真 Redis 15 passed（Redis 侧留下 15 个 `feeds:u=*` 缓存键为证）。
+
 ---
 
 ## P1 — 看时机（值但有成本）
 
-### 6. OpenAPI drift（双向）
+### 7. OpenAPI drift（双向）
 
 - **是什么**：校验 `huma` 生成的 OpenAPI spec ↔ 前端 axios 客户端类型双向一致。
 - **为什么**：`backend/Makefile` 的 `openapi-diff` target + CI 已经在跑，**守住了"spec 必须反映 handler"这一半**（改 handler 忘了 regen 会失败）。缺口是**反向**：spec 删了一个字段但 SPA 仍在用、SPA 调了 spec 里没有的字段 —— 这一半会 silently 漏掉。已有 `make sqlc-diff` 守 SQL 这一侧（同一类副作用），OpenAPI 反向也一样要守。
 - **怎么做**：`openapi-typescript` 生成前端类型后，加一个 diff step —— 把 SPA `src/**` 里实际发出去的 axios 字段名枚举出来，跟 spec 的 `properties` 做交叉集合：spec 有而代码没用（warning，可过期）、代码有而 spec 没有（**fail**）。失败信号加进 CI。也可以用 `oasdiff` 做 strict 模式（breaking change 必须显式 ack），二选一，先窄后宽。
 
-### 7. 变异测试（Mutation Testing）
+### 8. 变异测试（Mutation Testing）
 
 - **是什么**：故意改坏业务代码，看测试是否还能过——揪"假单测"。
 - **为什么**：AI 容易写"assert True"或没断言的测试刷覆盖率。go test 覆盖率只是覆盖率，变异测试才是真测试质量的代理指标。
 - **怎么做**：Go 用 `go-mutesting`（`gremlins` 是 Groovy/Java 工具，别用错）、TS 用 `@stryker-mutator/*`。先挑一个高价值包（`auth/` token 流、SQL 翻译层）跑通，分数稳定后再 gate。整套开启构建时间会爆炸，按包增量打开。
 
-### 8. AGENTS.md 分片
+### 9. AGENTS.md 分片
 
 - **是什么**：把根 `CLAUDE.md` 里的"改 X 前先读 Y"挪到各 package 的 `AGENTS.md`，按需加载。
 - **为什么**：根 CLAUDE.md 已经在长，按目录加载更省 token、规则也更近代码、更准。
 - **怎么做**：`backend/internal/auth/AGENTS.md`、`backend/migrations/AGENTS.md`、`frontend/src/features/feeds/AGENTS.md`，先从最高频改动的目录开始。
 
-### 9. 视觉回归
+### 10. 视觉回归
 
 - **是什么**：Playwright 截图 + 基线像素对比。
 - **为什么**：AI 改前端"逻辑对、样式崩"是高发问题。
 - **怎么做**：仅当 SPA 视觉改动频繁 + 设计师参与时才值。`playwright` 自带 `toHaveScreenshot()`，或接 Chromatic。先在登录、Feed 列表两个核心页跑通，再扩展。
 
-### 10. 架构契约（backend）— go-arch-lint
+### 11. 架构契约（backend）— go-arch-lint
 
 - **是什么**：在 backend CI 强制 `handler → service → repository → db` 单向依赖 + 域间（`feed`/`user`）互不依赖 + `platform/**` 不依赖任何 domain。
 - **为什么**：与 §2 是同一类问题，frontend 用 `dependency-cruiser` 守住了；后端在**类型契约层**（sentinel + `MapError` + sqlc 边界）比 frontend 硬，但**路径/import 层**完全靠 reviewer —— `service.go` 可以合法 import `huma_handler.go`、`*/service.go` 可以直接吃 `platform/database` 绕过 repository，AI 写跨层代码时只有人眼兜底。
@@ -123,6 +135,6 @@
 
 ## 推荐落地顺序
 
-`#1 迁移安全 → #2 架构契约 → #3 双 Agent 审判 → #4 漏洞扫描 → #5 prompt injection 条款`
+`#1 迁移安全 → #2 架构契约 → #3 双 Agent 审判 → #4 漏洞扫描 → #5 prompt injection 条款 → #6 双缓存 e2e 门`
 
-前两条是结构性收益（一次配、永久拦）；#3/#4 接近零成本；#5 是文档改动。其余看具体痛点出现再立项，避免一次性铺一套 Harness 反而拖慢迭代节奏。
+前两条是结构性收益（一次配、永久拦）；#3/#4/#6 接近零成本；#5 是文档改动。其余看具体痛点出现再立项，避免一次性铺一套 Harness 反而拖慢迭代节奏。

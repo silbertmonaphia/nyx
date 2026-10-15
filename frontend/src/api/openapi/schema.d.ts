@@ -35,7 +35,11 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        get?: never;
+        /**
+         * Get a feed
+         * @description Returns a single feed owned by the authenticated caller. Returns 404 if the feed does not exist OR is owned by another user — single sentinel, no existence leak.
+         */
+        get: operations["get-feed"];
         /**
          * Update a feed
          * @description Updates the title or description of an existing feed. Requires a valid JWT.
@@ -61,7 +65,7 @@ export interface paths {
         };
         /**
          * Health check
-         * @description Reports the status of the API, the database connection, and the cache.
+         * @description Deep readiness check — reports the status of the API, the database connection, and the cache (active implementation and probe result).
          */
         get: operations["health"];
         put?: never;
@@ -261,8 +265,16 @@ export interface components {
         HealthServices: {
             /** @example up */
             api: string;
-            /** @example up */
+            /**
+             * @description Active cache implementation: 'redis' or 'noop'.
+             * @example redis
+             */
             cache: string;
+            /**
+             * @description Cache probe result: 'ok' or 'fail'.
+             * @example ok
+             */
+            cache_ping: string;
             /** @example up */
             database: string;
         };
@@ -357,6 +369,38 @@ export interface operations {
                 "application/json": components["schemas"]["FeedInput"];
             };
         };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Feed"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    "get-feed": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Feed id. */
+                id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
         responses: {
             /** @description OK */
             200: {

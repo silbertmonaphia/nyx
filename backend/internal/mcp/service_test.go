@@ -84,6 +84,7 @@ func (s *stubFeedService) DeleteFeed(ctx context.Context, id int) error {
 
 func (s *stubFeedService) CheckHealth(context.Context) error      { return nil }
 func (s *stubFeedService) CheckCacheHealth(context.Context) error { return nil }
+func (s *stubFeedService) CacheMode() string                      { return "noop" }
 func (s *stubFeedService) SetIndexer(_ feed.EmbeddingIndexer)     {}
 
 // contextOrBG returns a context.Background — tests that exercise the

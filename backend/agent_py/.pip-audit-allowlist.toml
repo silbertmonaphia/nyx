@@ -1,0 +1,1 @@
+# Allowlist consumed by scripts/ci/pip_audit_with_allowlist.py: one [[advisories]] table per deferred advisory, carrying id, date (YYYY-MM-DD) and rationale; entries older than 90 days expire and fail the gate.

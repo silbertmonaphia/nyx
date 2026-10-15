@@ -51,6 +51,9 @@ func TestNoopCache(t *testing.T) {
 	if err := c.Expire(ctx, "k", time.Minute); err != nil {
 		t.Errorf("noop Expire err=%v", err)
 	}
+	if mode := c.Mode(); mode != "noop" {
+		t.Errorf("noop Mode: got %q, want %q", mode, "noop")
+	}
 }
 
 func TestRedisCacheHitMiss(t *testing.T) {

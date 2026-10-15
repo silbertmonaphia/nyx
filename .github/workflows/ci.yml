@@ -212,7 +212,7 @@ jobs:
       run: cd frontend && npm run build
 
   e2e-test:
-    needs: [backend-test, frontend-test, govulncheck, npm-audit]
+    needs: [backend-test, frontend-test, govulncheck, npm-audit, py-audit]
     runs-on: ubuntu-latest
     services:
       postgres:
@@ -320,6 +320,125 @@ jobs:
         path: frontend/test-results/
         retention-days: 14
 
+  e2e-test-redis:
+    needs: [backend-test, frontend-test, govulncheck, npm-audit, py-audit]
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: pgvector/pgvector:pg17
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: nyx
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d nyx"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      DB_URL: "postgres://postgres:postgres@localhost:5432/nyx?sslmode=disable"
+      JWT_SECRET: "ci-secret-0123456789-0123456789-abcdef"
+      CORS_ALLOWED_ORIGINS: "http://localhost:5173"
+      PORT: "8080"
+      REDIS_ENABLED: "true"
+      REDIS_URL: "redis://localhost:6379"
+    steps:
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+    - name: Set up Go
+      uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
+      with:
+        go-version: '1.26.9'
+        cache-dependency-path: backend/go.sum
+    - name: Set up Node
+      uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+      with:
+        node-version: '22'
+        cache: 'npm'
+        cache-dependency-path: frontend/package-lock.json
+    - name: Install Backend deps
+      run: cd backend && go mod vendor
+    - name: Build backend
+      run: cd backend && go build -o /tmp/nyx-api ./cmd/api
+    - name: Install Frontend deps
+      run: cd frontend && npm install --workspaces=false
+    - name: Install Playwright Browsers
+      run: cd frontend && npx playwright install --with-deps chromium
+    - name: Run E2E Tests
+      run: |
+        set -euo pipefail
+
+        cleanup() {
+          if [ -f /tmp/nyx-api.pid ]; then
+            local pid
+            pid=$(cat /tmp/nyx-api.pid)
+            if kill -0 "$pid" 2>/dev/null; then
+              echo "Stopping backend pid=$pid"
+              kill -TERM "$pid" 2>/dev/null || true
+              for _ in {1..10}; do
+                kill -0 "$pid" 2>/dev/null || break
+                sleep 1
+              done
+              kill -KILL "$pid" 2>/dev/null || true
+            fi
+          fi
+        }
+        trap cleanup EXIT
+
+        # CWD = backend so migrations resolve file://migrations
+        cd backend
+        /tmp/nyx-api > /tmp/nyx-api.log 2>&1 &
+        echo $! > /tmp/nyx-api.pid
+        cd ..
+
+        # Readiness: HTTP 200, database up, AND the real-Redis cache mode
+        for i in {1..60}; do
+          body=$(curl -fsS http://localhost:8080/api/health 2>/dev/null || true)
+          if echo "$body" | grep -q '"database":"up"' && echo "$body" | grep -q '"cache":"redis"'; then
+            echo "Backend ready after ${i}s"
+            break
+          fi
+          if [ "$i" -eq 60 ]; then
+            echo "Backend did not become ready in 60s"
+            echo "--- /tmp/nyx-api.log (tail) ---"
+            tail -n 200 /tmp/nyx-api.log || true
+            exit 1
+          fi
+          sleep 1
+        done
+
+        # Playwright auto-starts Vite via frontend/playwright.config.ts webServer block
+        cd frontend
+        set +e
+        npm run test:e2e -- --workers=1
+        test_exit=$?
+        set -e
+        exit $test_exit
+    - name: Upload Playwright HTML report
+      if: always()
+      uses: actions/upload-artifact@50769540e7f4bd5e21e526ee35c689e35e0d6874 # v4.4.0
+      with:
+        name: playwright-report-redis
+        path: frontend/playwright-report/
+        retention-days: 14
+    - name: Upload Playwright test artifacts (traces, videos)
+      if: failure() || cancelled()
+      uses: actions/upload-artifact@50769540e7f4bd5e21e526ee35c689e35e0d6874 # v4.4.0
+      with:
+        name: playwright-test-results-redis
+        path: frontend/test-results/
+        retention-days: 14
+
   # Supply-chain vuln scans — run alongside backend-test / frontend-test
   # so a known-CVE dep blocks the merge before e2e-test (and release) get
   # to spend a long build. govulncheck is govulncheck default (source mode
@@ -379,6 +498,48 @@ jobs:
         # time.
         run: cd frontend && npm audit --workspaces=false --audit-level=high
 
+  # Python dependency audit for the agent service. Mirrors the
+  # govulncheck shape: a wrapper script applies a dated, rationale-
+  # carrying allowlist (backend/agent_py/.pip-audit-allowlist.toml)
+  # so documented deferrals don't gate the merge, and anything
+  # unlisted — or listed but past its 90-day revisit date — fails
+  # the job. paths-filter keeps dep-only unrelated PRs from paying
+  # the venv install cost.
+  py-audit:
+    name: Python dependency audit (pip-audit)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - name: Detect agent dependency changes
+        id: filter
+        uses: dorny/paths-filter@de90cc6fb38fc0963ad72b210f1f284cd68cea36 # v3.0.2
+        with:
+          filters: |
+            agent-deps:
+              - 'backend/agent_py/**'
+      - name: Set up Python
+        if: steps.filter.outputs.agent-deps == 'true'
+        uses: actions/setup-python@e797f83bcb11b83ae66e0230d6156d7c80228e7c # v6.0.0
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+          cache-dependency-path: backend/agent_py/pyproject.toml
+      - name: Install agent deps
+        if: steps.filter.outputs.agent-deps == 'true'
+        working-directory: backend/agent_py
+        run: |
+          python -m venv .venv
+          .venv/bin/pip install --upgrade pip
+          .venv/bin/pip install -e '.[ci]'
+      - name: Audit
+        if: steps.filter.outputs.agent-deps == 'true'
+        working-directory: backend/agent_py
+        run: |
+          PATH="$PWD/.venv/bin:$PATH" python3 ../../scripts/ci/pip_audit_with_allowlist.py
+
   # Release job — only runs on push (not on PRs), and only after CI
   # is green. Drives semantic-release which:
   #   - analyzes Conventional Commits since the last tag per package
@@ -389,7 +550,7 @@ jobs:
   #     via scripts/bump-version.sh
   #   - tags (e.g. backend@0.4.1) and publishes GitHub Releases
   release:
-    needs: [e2e-test, govulncheck, npm-audit]
+    needs: [e2e-test, e2e-test-redis, govulncheck, npm-audit]
     if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/mvp')
     runs-on: ubuntu-latest
     timeout-minutes: 15

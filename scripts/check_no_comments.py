@@ -26,8 +26,23 @@ ALLOW[".tsx"] = ALLOW[".ts"]
 ALLOW[".js"] = ALLOW[".ts"]
 ALLOW[".jsx"] = ALLOW[".ts"]
 
+GENERATED_MARKERS = (
+    "Code generated",
+    "auto-generated",
+    "DO NOT EDIT",
+)
+
 HUNK_RE = re.compile(r"^@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@")
 DIFF_FILE_RE = re.compile(r"^\+\+\+ (?:b/)?(.+)$")
+
+
+def _generated(path: str) -> bool:
+    try:
+        with open(path, encoding="utf-8", errors="replace") as fh:
+            head = fh.read(4096)
+    except OSError:
+        return False
+    return any(marker in head for marker in GENERATED_MARKERS)
 
 
 def _ext(path: str) -> str:
@@ -69,7 +84,12 @@ def iter_added_lines(diff_text: str):
 
 def find_violations(diff_text: str) -> list[tuple[str, int, str]]:
     violations = []
+    generated: dict[str, bool] = {}
     for path, line_no, text in iter_added_lines(diff_text):
+        if path not in generated:
+            generated[path] = _generated(path)
+        if generated[path]:
+            continue
         ext = _ext(path)
         if not ext or not _comment_start(text, ext):
             continue
@@ -100,7 +120,10 @@ def main(argv: list[str] | None = None) -> int:
             "# noqa, # type:, shebangs, // eslint-*, // @ts-*, ///). "
             "Scans added lines only, so every existing comment is grandfathered. "
             "Covers .go .py .ts .tsx .js .jsx; docstrings, shell, SQL, and "
-            "block-comment continuation lines are out of scope."
+            "block-comment continuation lines are out of scope. Files that "
+            "declare themselves generated (a `Code generated` / `auto-generated` "
+            "/ `DO NOT EDIT` banner, e.g. sqlc output and the openapi-typescript "
+            "schema) are exempt: they are emitted, not authored."
         )
     )
     parser.add_argument(

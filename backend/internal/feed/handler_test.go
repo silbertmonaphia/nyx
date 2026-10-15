@@ -135,6 +135,16 @@ func TestHealthHandler(t *testing.T) {
 	if response["status"] != "ok" {
 		t.Errorf("expected status 'ok', got %v", response["status"])
 	}
+	services, ok := response["services"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("expected services object, got %T", response["services"])
+	}
+	if services["cache"] != "noop" {
+		t.Errorf("expected services.cache 'noop', got %v", services["cache"])
+	}
+	if services["cache_ping"] != "ok" {
+		t.Errorf("expected services.cache_ping 'ok', got %v", services["cache_ping"])
+	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Errorf("unmet pgxmock expectations: %v", err)
 	}

@@ -315,6 +315,30 @@ func TestMutationCacheFailure_DoesNotFailRequest(t *testing.T) {
 	}
 }
 
+func TestGetFeeds_CacheFailureFallsThroughToRepo(t *testing.T) {
+	svc, repo, mr := newServiceWithCache(t)
+	ctx := ctxWithUser(t, 1)
+
+	repo.getAllResp = &Page{Items: []Feed{{ID: 7, Title: "A"}}, Total: 1, Page: 1, PageSize: 20}
+
+	if _, err := svc.GetFeeds(ctx, "", 1, 20, SortDesc); err != nil {
+		t.Fatalf("warm cache: %v", err)
+	}
+
+	mr.Close()
+
+	page, err := svc.GetFeeds(ctx, "", 1, 20, SortDesc)
+	if err != nil {
+		t.Fatalf("read must not fail when every cache call fails: %v", err)
+	}
+	if page == nil || page.Total != 1 || len(page.Items) != 1 {
+		t.Fatalf("expected the repo-resolved page, got %+v", page)
+	}
+	if repo.getAllCalls != 2 {
+		t.Errorf("expected the failed cache read to fall through to the repo, got %d repo call(s)", repo.getAllCalls)
+	}
+}
+
 // TestGetFeeds_DefensiveEmptyPageWhenNoUser guards the invariant
 // when auth middleware failed to stamp the context (should never
 // happen in production, but unit tests bypass it). Returning an

@@ -98,14 +98,34 @@ beyond advisory DB refresh.
   the "vendor-neutral" posture of the existing govulncheck / npm-audit
   gates.
 
-### 4. `pip-audit` runs at `--audit-level=high`, parallel to `npm audit`
+### 4. Every pip-audit advisory gates; the allowlist is the only deferral lever
 
-`govulncheck` filters noise by call-graph reachability (only flags
-reachable vulns); `npm audit` and the new `pip-audit` cannot do that
-and so use severity-level filtering. `--audit-level=high` parallels
-`ci.yml:380`'s `npm audit --audit-level=high`, giving both gates a
-uniform "moderate noise is reported but does not gate the merge"
-posture.
+Revised after probing the tool: `pip-audit`'s JSON output carries no
+severity field and it has no `--audit-level`-style flag, so the
+`--audit-level=high` posture planned in the first draft is
+unimplementable. `govulncheck` filters on call-graph reachability and
+`npm audit` on severity; `pip-audit` has neither, so every advisory
+it reports fails the job unless a dated, rationale-carrying allowlist
+entry defers it (see decision 5). That is the same role
+`--audit-level=high` plays at `ci.yml:380` — the noise valve is
+explicit and reviewed rather than a numeric threshold.
+
+`pip` itself is part of the audited venv, so the job must
+`pip install --upgrade pip` before installing the project: the dev
+venv's pinned pip 23.2.1 surfaced 14 advisories against pip alone,
+while a fresh venv on the same pyproject audited clean (0 advisories,
+2026-10-15).
+
+pip-audit also emits dependencies it could not audit at all as
+`skip_reason` entries (no `version`, no `vulns`), and it exits 1 when it
+could not collect a dependency — `--strict` makes that fatal, but it
+also fires for the project's own editable install (`nyx-agent` is not on
+PyPI), which would pin the gate permanently red. So the wrapper owns
+that decision instead: every `skip_reason` prints, and any skipped
+distribution other than the project itself fails the gate. Same
+fail-closed reasoning for the exit code: anything outside pip-audit's
+documented 0 / 1 contract is exit 2, never a pass derived from
+still-parseable stdout.
 
 ### 5. Allowlist is a single TOML file with inline rationale comments
 
@@ -146,9 +166,18 @@ dep-only PR to pay the alembic setup cost.
 
 A package-level `TestMain` starts one Redis testcontainer and shares it
 across the suite; tests that need to simulate connection failure
-(`PING` failure, reconnect) restart the container in their own
-goroutine using the same wrapper, which `testcontainers-go/modules/redis`
-exposes via `redisContainer.Restart(ctx)`.
+(`PING` failure, reconnect) stop and start the container through the
+module's `Stop` / `Start`, which reuse the same host-port binding so the
+client's address survives the outage.
+
+The skip decision is deliberately narrow: `SKIP_CONTAINERS=true` skips,
+and so does an unreachable daemon — probed with the testcontainers
+provider's own `Health`, i.e. the same code path `redis.Run` uses, so
+"the runtime cannot reach a daemon" cannot be confused with "the daemon
+is fine but the container would not start". Everything else exits 1. A
+first draft skipped on *any* `redis.Run` error, which would have turned
+the gate green whenever a Docker Hub pull was throttled — the exact
+silent-no-op failure the gate exists to prevent.
 
 ### 8. CI caching strategy
 
@@ -205,7 +234,12 @@ convention and isolates failures clearly: a green `e2e-test` + red
   green run may require an initial allowlist sweep to grandfather
   pre-existing advisories (mirroring the govulncheck GO-2026-4883/4887
   precedent at `ci.yml:351-358`). Tasks list includes the baseline
-  sweep explicitly so it does not silently swallow real bugs.
+  sweep explicitly so it does not silently swallow real bugs. Observed
+  outcome (2026-10-15): the sweep came back empty — a fresh venv built
+  the CI way (`pip install --upgrade pip` + `pip install -e '.[ci]'`)
+  reports 0 advisories, so the allowlist ships with its header comment
+  only. The findings seen against the dev venv were entirely pip's own
+  advisories under the pod's stale pip 23.2.1.
 - [Two e2e jobs doubles CI minute cost on every push] → ~1 minute per
   job, ~2 minutes total instead of ~1. Free tier is 2000 min/month on
   `ubuntu-latest` for public repos; the added minute is well within

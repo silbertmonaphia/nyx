@@ -453,6 +453,7 @@ func (stubFeedService) UpdateFeed(context.Context, int, *feed.Feed) error { retu
 func (stubFeedService) DeleteFeed(context.Context, int) error             { return nil }
 func (stubFeedService) CheckHealth(context.Context) error                 { return nil }
 func (stubFeedService) CheckCacheHealth(context.Context) error            { return nil }
+func (stubFeedService) CacheMode() string                                 { return "noop" }
 func (stubFeedService) SetIndexer(feed.EmbeddingIndexer)                  {}
 
 // spyFeed records the last args it saw so the smoke tests can

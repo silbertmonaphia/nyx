@@ -20,6 +20,7 @@ type Service interface {
 	DeleteFeed(ctx context.Context, id int) error
 	CheckHealth(ctx context.Context) error
 	CheckCacheHealth(ctx context.Context) error
+	CacheMode() string
 	SetIndexer(idx EmbeddingIndexer)
 }
 
@@ -225,6 +226,10 @@ func (s *feedService) CheckCacheHealth(ctx context.Context) error {
 	ctx, span := s.tracer.Start(ctx, "feed.CheckCacheHealth", trace.WithSpanKind(trace.SpanKindInternal))
 	defer span.End()
 	return s.cache.Ping(ctx)
+}
+
+func (s *feedService) CacheMode() string {
+	return s.cache.Mode()
 }
 
 // invalidate removes every cached page belonging to userID. The
