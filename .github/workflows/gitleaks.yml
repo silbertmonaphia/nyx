@@ -55,6 +55,7 @@ jobs:
           # findings as PR annotations (push events do NOT post
           # annotations, only the workflow log shows the leak).
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITLEAKS_CONFIG: .gitleaks.toml
           # GITLEAKS_LICENSE: only required for Pro / Enterprise
           # features; the free OSS tier is sufficient here. Leaving
           # unset so the OSS gitleaks binary is used.

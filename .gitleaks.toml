@@ -1,0 +1,8 @@
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "CI e2e JWT fixture; throwaway value for an ephemeral runner and database"
+paths = ['''\.github/workflows/ci\.yml''']
+regexes = ['''ci-secret-0123456789-0123456789-abcdef''']
+condition = "AND"
