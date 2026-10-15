@@ -1,4 +1,5 @@
 import argparse
+import fnmatch
 import re
 import subprocess
 import sys
@@ -32,11 +33,18 @@ GENERATED_MARKERS = (
     "DO NOT EDIT",
 )
 
+GENERATED_PATHS = (
+    "frontend/src/api/openapi/schema.d.ts",
+    "backend/internal/*/db/*.go",
+)
+
 HUNK_RE = re.compile(r"^@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@")
 DIFF_FILE_RE = re.compile(r"^\+\+\+ (?:b/)?(.+)$")
 
 
 def _generated(path: str) -> bool:
+    if not any(fnmatch.fnmatch(path, pattern) for pattern in GENERATED_PATHS):
+        return False
     try:
         with open(path, encoding="utf-8", errors="replace") as fh:
             head = fh.read(4096)
@@ -120,10 +128,12 @@ def main(argv: list[str] | None = None) -> int:
             "# noqa, # type:, shebangs, // eslint-*, // @ts-*, ///). "
             "Scans added lines only, so every existing comment is grandfathered. "
             "Covers .go .py .ts .tsx .js .jsx; docstrings, shell, SQL, and "
-            "block-comment continuation lines are out of scope. Files that "
-            "declare themselves generated (a `Code generated` / `auto-generated` "
-            "/ `DO NOT EDIT` banner, e.g. sqlc output and the openapi-typescript "
-            "schema) are exempt: they are emitted, not authored."
+            "block-comment continuation lines are out of scope. Generator "
+            "output is exempt only where the path is on the generated list "
+            "(frontend/src/api/openapi/schema.d.ts, backend/internal/*/db/*.go) "
+            "AND the file carries a `Code generated` / `auto-generated` / "
+            "`DO NOT EDIT` banner — a banner alone exempts nothing, so a file "
+            "cannot exempt itself."
         )
     )
     parser.add_argument(
