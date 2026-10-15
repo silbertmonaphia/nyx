@@ -110,6 +110,34 @@ def test_context_and_removed_lines_are_ignored():
     assert cnc.find_violations(diff) == []
 
 
+def _edit_diff(path: str, removed: list[str], added: list[str]) -> str:
+    body = "\n".join([f"-{line}" for line in removed] + [f"+{line}" for line in added])
+    return (
+        f"diff --git a/{path} b/{path}\n"
+        f"--- a/{path}\n"
+        f"+++ b/{path}\n"
+        f"@@ -1,{len(removed)} +1,{len(added)} @@\n"
+        f"{body}\n"
+    )
+
+
+@pytest.mark.parametrize(
+    ("path", "removed", "added", "expected"),
+    [
+        ("app.ts", ["// ref FUTURE_FRONTEND §10"], ["// ref FUTURE_FRONTEND §11"], 0),
+        ("svc.go", ["// old wording"], ["// new wording"], 0),
+        ("mod.py", ["# old wording"], ["# new wording"], 0),
+        ("app.ts", ["// a", "// b"], ["// a2", "// b2"], 0),
+        ("app.ts", ["// keep", "doWork()"], ["// keep-ish", "doOtherWork()"], 0),
+        ("app.ts", ["oke := true"], ["oke := false", "// why"], 1),
+        ("svc.go", ["return nil"], ["// TODO explain later"], 1),
+        ("app.ts", ["// one"], ["// one", "// two"], 1),
+    ],
+)
+def test_comment_edits_pair_with_removed_lines(path, removed, added, expected):
+    assert len(cnc.find_violations(_edit_diff(path, removed, added))) == expected
+
+
 def _run_cli(cwd: Path) -> subprocess.CompletedProcess:
     return subprocess.run(
         [sys.executable, str(SCRIPT), "--staged"],
@@ -141,3 +169,29 @@ def test_cli_rejects_a_comment_and_names_it(tmp_path):
     assert result.returncode == 1
     assert "svc.go" in result.stderr
     assert "// why this exists" in result.stderr
+
+
+def test_cli_allows_editing_an_existing_comment(tmp_path):
+    _init_repo(tmp_path)
+    svc = tmp_path / "svc.go"
+    svc.write_text("package svc\n\n// ref A\n")
+    subprocess.run(["git", "add", "svc.go"], cwd=tmp_path, check=True)
+    subprocess.run(
+        [
+            "git",
+            "-c",
+            "user.name=test",
+            "-c",
+            "user.email=test@example.com",
+            "commit",
+            "-qm",
+            "init",
+        ],
+        cwd=tmp_path,
+        check=True,
+    )
+    svc.write_text("package svc\n\n// ref B\n")
+    subprocess.run(["git", "add", "svc.go"], cwd=tmp_path, check=True)
+
+    result = _run_cli(tmp_path)
+    assert result.returncode == 0, result.stderr

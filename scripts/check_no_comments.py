@@ -75,25 +75,33 @@ def _allowed(line: str, ext: str) -> bool:
 def iter_added_lines(diff_text: str):
     path = ""
     line_no = 0
+    removed: list[str] = []
     for raw in diff_text.splitlines():
         if raw.startswith("+++"):
             match = DIFF_FILE_RE.match(raw)
             if match:
                 path = match.group(1).strip().strip('"')
             continue
+        if raw.startswith("--- "):
+            continue
         if raw.startswith("@@"):
+            removed = []
             match = HUNK_RE.match(raw)
             line_no = int(match.group(1)) if match else 0
             continue
+        if raw.startswith("-"):
+            removed.append(raw[1:])
+            continue
         if raw.startswith("+"):
-            yield path, line_no, raw[1:]
+            counterpart = removed.pop(0) if removed else None
+            yield path, line_no, raw[1:], counterpart
             line_no += 1
 
 
 def find_violations(diff_text: str) -> list[tuple[str, int, str]]:
     violations = []
     generated: dict[str, bool] = {}
-    for path, line_no, text in iter_added_lines(diff_text):
+    for path, line_no, text, counterpart in iter_added_lines(diff_text):
         if path not in generated:
             generated[path] = _generated(path)
         if generated[path]:
@@ -102,6 +110,8 @@ def find_violations(diff_text: str) -> list[tuple[str, int, str]]:
         if not ext or not _comment_start(text, ext):
             continue
         if _allowed(text, ext):
+            continue
+        if counterpart is not None and _comment_start(counterpart, ext):
             continue
         violations.append((path, line_no, text.strip()))
     return violations
@@ -126,7 +136,10 @@ def main(argv: list[str] | None = None) -> int:
             "knowledge in a test, the commit message, or the docs instead. "
             "Tool directives are allowed (//go:, //nolint, build tags, "
             "# noqa, # type:, shebangs, // eslint-*, // @ts-*, ///). "
-            "Scans added lines only, so every existing comment is grandfathered. "
+            "Scans added lines only: a comment line is allowed when it "
+            "positionally pairs with a removed comment line in the same hunk "
+            "(editing an existing comment in place); a comment on a newly "
+            "added line is rejected. "
             "Covers .go .py .ts .tsx .js .jsx; docstrings, shell, SQL, and "
             "block-comment continuation lines are out of scope. Generator "
             "output is exempt only where the path is on the generated list "
