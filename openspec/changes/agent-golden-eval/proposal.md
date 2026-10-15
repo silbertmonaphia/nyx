@@ -30,7 +30,7 @@ The planner is a probabilistic model (Qwen3-4B) whose failures are statistical, 
 
 ## Impact
 
-- **Code**: `backend/agent_py/eval/` (new), `backend/agent_py/tests/test_golden_eval_harness.py` (new, deterministic), root `Makefile` (one target), `backend/agent_py/pyproject.toml` (pyyaml).
+- **Code**: `backend/agent_py/eval/` (new), `backend/agent_py/tests/test_golden_eval_harness.py` (new, deterministic), root `Makefile` (one target), `backend/agent_py/pyproject.toml` (pyyaml), root `.gitignore` (two lines: report bulk ignored, `BASELINE-*` excepted).
 - **Wire**: none. **Dependencies**: pyyaml only.
 - **Docs**: `AgentEvalPrompts.md` (pointer, operator-confirmed), `backend/agent_py/README.md` (how to run, prereqs, report location, nightly suggestion).
 - **Tests**: the deterministic harness tests above; the corpus run itself needs the live model and is operator-run — task 5 performs and commits the baseline report as evidence.
