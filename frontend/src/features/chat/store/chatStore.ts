@@ -31,7 +31,7 @@ export interface ChatMessage {
   // Agent-loop per-step trace. Populated from `plan` / `step_start`
   // / `tool_call` / `tool_result` / `step_end` SSE events when
   // AGENT_ENABLED=true; absent on the single-turn path. Ephemeral
-  // — the store is not persisted (FUTURE_FRONTEND.md §10), so this
+  // — the store is not persisted (FUTURE_FRONTEND.md §11), so this
   // field stays in-memory only and never lands in localStorage.
   steps?: ChatStep[];
   // Partial-failure signal (agent-tool-dispatch-retry): set when the

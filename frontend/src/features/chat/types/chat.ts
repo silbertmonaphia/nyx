@@ -222,7 +222,7 @@ export interface ApprovalRequest {
  * the UI cares about runtime state (status, latest tool call +
  * result, failure reason), not the planner's prompt / query.
  *
- * Not persisted to localStorage (FUTURE_FRONTEND.md §10 + XSS
+ * Not persisted to localStorage (FUTURE_FRONTEND.md §11 + XSS
  * surface); chat history is ephemeral and the `ChatMessage.steps`
  * array lives on the same in-memory state.
  */

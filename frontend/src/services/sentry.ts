@@ -42,7 +42,7 @@ export function initSentry(): boolean {
 
     // tracesSampleRate 1.0 matches the backend's ParentBased(AlwaysSample)
     // for the first slice. Sampling can be dialled down once free-tier
-    // cost is visible — see FUTURE_FRONTEND.md §11 (post-rollout).
+    // cost is visible — see FUTURE_FRONTEND.md §9 (post-rollout).
     Sentry.init({
       dsn,
       integrations: [
