@@ -8,6 +8,7 @@ The 2026-10-15 embedder outage (vLLM down, port accepting-but-hanging) turned ev
 
 - New setting `FEED_INDEX_TIMEOUT` (viper, default `5s`, validated as a positive duration) — independent from `LLM_TIMEOUT`, which keeps its chat-streaming semantics.
 - `feed.Service` applies the setting as a per-call context deadline around the three best-effort indexer calls (create/update/delete). On deadline or error: same `log.Warn` + continue contract as today; the write result is unchanged. A healthy embedder completes a single-feed embed in well under the cap, so normal-path behavior is byte-identical.
+- On a skipped create/update, the service also drops the feed's embedding row (best-effort, same cap). The backfill only picks feeds *without* a row (`ListFeedsWithoutEmbeddings`), so without the drop an update-skip would leave a stale embedding — serving outdated content to RAG — instead of reverting to missing-row eligibility. Missing beats stale, and the drop is a pure row delete (no embedder call, ms-fast even mid-outage).
 - Constructor + `main.go` wiring updated to carry the timeout; `NoopEmbeddingIndexer` deployments unaffected.
 - Tests: unit tests with a blocking indexer stub proving each write returns within the cap with a warning and a successful result; a healthy-stub test proving the index call still runs to completion; config default/validation tests.
 - **Wire**: none. No new frames, endpoints, or response-shape changes.

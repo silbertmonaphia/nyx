@@ -62,6 +62,7 @@ func TestLoadAppliesDefaults(t *testing.T) {
 	t.Setenv("DB_CONN_MAX_IDLE_TIME", "")
 	t.Setenv("CACHE_TTL", "")
 	t.Setenv("REDIS_URL", "")
+	t.Setenv("FEED_INDEX_TIMEOUT", "")
 
 	cfg, err := Load()
 	if err != nil {
@@ -79,6 +80,9 @@ func TestLoadAppliesDefaults(t *testing.T) {
 	}
 	if cfg.CacheTTL != "5m" {
 		t.Errorf("CacheTTL default = %q, want %q", cfg.CacheTTL, "5m")
+	}
+	if cfg.FeedIndexTimeout != "5s" {
+		t.Errorf("FeedIndexTimeout default = %q, want %q", cfg.FeedIndexTimeout, "5s")
 	}
 	if cfg.RedisEnabled {
 		t.Error("RedisEnabled default = true, want false")
@@ -105,6 +109,26 @@ func TestLoadRejectsBadDurations(t *testing.T) {
 	_, err := Load()
 	if err == nil {
 		t.Fatal("Load() error = nil, want duration parse error")
+	}
+}
+
+func TestLoadRejectsUnparseableFeedIndexTimeout(t *testing.T) {
+	t.Setenv("DB_URL", "postgres://x")
+	t.Setenv("JWT_SECRET", auth.TestSecret)
+	t.Setenv("FEED_INDEX_TIMEOUT", "not-a-duration")
+
+	if _, err := Load(); err == nil {
+		t.Fatal("Load() error = nil, want FEED_INDEX_TIMEOUT parse error")
+	}
+}
+
+func TestLoadRejectsNonPositiveFeedIndexTimeout(t *testing.T) {
+	t.Setenv("DB_URL", "postgres://x")
+	t.Setenv("JWT_SECRET", auth.TestSecret)
+	t.Setenv("FEED_INDEX_TIMEOUT", "0s")
+
+	if _, err := Load(); err == nil {
+		t.Fatal("Load() error = nil, want positive-duration error")
 	}
 }
 
