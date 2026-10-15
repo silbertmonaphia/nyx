@@ -31,6 +31,7 @@ backend/vendor/
 # Docker
 .docker/
 db_data/
+k8s/secrets.*
 
 # Logs
 *.log
@@ -39,3 +40,10 @@ db_data/
 .git/
 .gemini/
 .env
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+backend/agent_py/.venv/
+frontend/playwright-report/
+frontend/test-results/
