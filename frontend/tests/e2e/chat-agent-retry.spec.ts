@@ -66,7 +66,7 @@ async function registerAndOpenChat(page: Page): Promise<void> {
   await expect(page.getByTestId('chat-form')).toBeVisible();
 }
 
-test.describe('Chat / tool retry (live stack)', () => {
+test.describe('Chat / tool retry (live stack)', { tag: '@live' }, () => {
   test.beforeEach(async ({ page }) => {
     await registerAndOpenChat(page);
   });
