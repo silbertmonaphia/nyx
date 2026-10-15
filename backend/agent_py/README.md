@@ -94,6 +94,17 @@ profile).
 cd backend/agent_py && pytest tests/ -v
 ```
 
+## Dependency audit
+
+`pip install -e '.[ci]'` adds `pip-audit`. CI runs it on every change under
+`backend/agent_py/**` through `scripts/ci/pip_audit_with_allowlist.py`, which
+applies `.pip-audit-allowlist.toml` (one dated, rationale-carrying entry per
+deferred advisory; entries expire after 90 days):
+
+```bash
+cd backend/agent_py && PATH="$PWD/.venv/bin:$PATH" python3 ../../scripts/ci/pip_audit_with_allowlist.py
+```
+
 `fakeredis` + `httpx.MockTransport` — no live network needed.
 
 ## Key env vars
