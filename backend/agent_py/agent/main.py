@@ -83,6 +83,31 @@ from .web_tools import build_local_tools
 
 log = logging.getLogger("nyx.agent")
 
+_LOG_FORMAT = "%(asctime)s %(levelname)s %(name)s: %(message)s"
+
+
+def configure_logging() -> None:
+    """Give the process a formatted root handler before uvicorn starts.
+
+    uvicorn's LOGGING_CONFIG only configures its own `uvicorn.*` loggers, so
+    without a root handler every record above `logging.lastResort`'s
+    threshold renders bare — no timestamp, level, or logger name — and the
+    agent's own INFO lines (the Langfuse "tracing enabled (host=…)"
+    announcement, the Prometheus listen line) are dropped outright. Root at
+    WARNING keeps third-party INFO chatter (httpx request lines) out while
+    rendering the OTel exporter's retry/drop diagnostics in full; the
+    `agent` package logger at INFO carries the agent's own operational
+    lines. Idempotent: `basicConfig` is a no-op once root has handlers
+    (uvicorn's dictConfig runs after this in the `python -m agent.main`
+    path and only touches `uvicorn.*` loggers), and the level assignment is
+    absolute.
+    """
+    logging.basicConfig(level=logging.WARNING, format=_LOG_FORMAT)
+    logging.getLogger("agent").setLevel(logging.INFO)
+
+
+configure_logging()
+
 _UUID4_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$")
 
 # Strong refs to detached terminal-persistence tasks (see the finally

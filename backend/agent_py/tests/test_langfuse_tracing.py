@@ -13,6 +13,8 @@ stub-LLM integration tests in the same directory as this file.
 
 from __future__ import annotations
 
+import logging
+import re
 import uuid
 
 import pytest
@@ -21,6 +23,7 @@ from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanE
 
 from agent import observability
 from agent.config import Settings
+from agent.main import configure_logging
 from agent.observability import (
     mask_langfuse_data,
     mask_langfuse_otel_spans,
@@ -288,3 +291,105 @@ def test_mask_otel_spans_patches_only_changed_attributes():
 def test_mask_otel_spans_returns_none_when_batch_is_clean():
     params = _fake_otel_params({"langfuse.observation.output": "plain reply"})
     assert mask_langfuse_otel_spans(params=params) is None
+
+
+_LOG_FORMAT = "%(asctime)s %(levelname)s %(name)s: %(message)s"
+_LOG_FORMAT_RE = re.compile(
+    r"\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2},\d{3} "
+    r"(?P<level>[A-Z]+) (?P<name>[^:]+): (?P<message>.*)",
+    re.DOTALL,
+)
+
+
+@pytest.fixture
+def _restore_logging():
+    root = logging.getLogger()
+    root_level = root.level
+    agent_level = logging.getLogger("agent").level
+    yield
+    root.setLevel(root_level)
+    logging.getLogger("agent").setLevel(agent_level)
+
+
+def test_configure_logging_installs_one_formatted_root_handler(
+    monkeypatch, _restore_logging
+):
+    """D1: root at WARNING with the timestamp/level/logger format, installed
+    once — so a record the process emits renders with all three fields."""
+    root = logging.getLogger()
+    monkeypatch.setattr(root, "handlers", [])
+
+    configure_logging()
+
+    assert root.level == logging.WARNING
+    assert len(root.handlers) == 1
+    rendered = root.handlers[0].formatter.format(
+        logging.LogRecord(
+            "agent.observability",
+            logging.WARNING,
+            __file__,
+            1,
+            "export failed for %s",
+            ("http://langfuse:3000",),
+            None,
+        )
+    )
+    match = _LOG_FORMAT_RE.fullmatch(rendered)
+    assert match is not None, rendered
+    assert match.group("level") == "WARNING"
+    assert match.group("name") == "agent.observability"
+    assert match.group("message") == "export failed for http://langfuse:3000"
+
+
+def test_configure_logging_raises_agent_logger_to_info_and_is_idempotent(
+    monkeypatch, _restore_logging
+):
+    """D1: `agent` at INFO (third-party INFO stays on the root WARNING), and a
+    repeated setup leaves the handler set untouched — the second call is a
+    no-op rather than a duplicate handler."""
+    root = logging.getLogger()
+    monkeypatch.setattr(root, "handlers", [])
+
+    configure_logging()
+
+    assert logging.getLogger("agent").level == logging.INFO
+    assert logging.getLogger("agent.observability").getEffectiveLevel() == logging.INFO
+    first_pass = list(root.handlers)
+    assert len(first_pass) == 1
+
+    configure_logging()
+
+    assert root.handlers == first_pass
+
+
+def test_startup_line_is_dropped_until_the_agent_logger_is_raised(caplog, _restore_logging):
+    """The exact bug: with the pre-change configuration (no root handler, no
+    `agent` level) the startup announcement never reaches an operator; after
+    `configure_logging` it names the host at INFO."""
+    logging.getLogger("agent").setLevel(logging.WARNING)
+
+    caplog.clear()
+    setup_langfuse(_settings(), span_exporter=InMemorySpanExporter())
+    assert [r for r in caplog.records if r.name.startswith("agent.")] == []
+
+    shutdown_langfuse()
+    caplog.clear()
+    configure_logging()
+    setup_langfuse(_settings(), span_exporter=InMemorySpanExporter())
+
+    lines = [r for r in caplog.records if r.name == "agent.observability"]
+    assert len(lines) == 1, [(r.levelno, r.name, r.getMessage()) for r in caplog.records]
+    assert lines[0].levelno == logging.INFO
+    assert "langfuse tracing enabled" in lines[0].getMessage()
+    assert "127.0.0.1:9" in lines[0].getMessage()
+
+
+def test_disabled_tracing_logs_no_langfuse_line(caplog, _restore_logging):
+    """Opt-in gating means silence: disabled never constructs the SDK, so not
+    even at INFO may a Langfuse line appear."""
+    configure_logging()
+    caplog.clear()
+
+    assert setup_langfuse(Settings(_env_file=None, llm_base_url="http://vllm:8000/v1")) is None
+
+    assert [r for r in caplog.records if "langfuse" in r.getMessage().lower()] == []
