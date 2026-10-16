@@ -1,0 +1,834 @@
+{
+  "generated_at": "2026-10-16T10:10:02+00:00",
+  "git_revision": "e6d92db56fbe310b162253f1331c1d6d0b068637",
+  "model": "Qwen/Qwen3-4B-Instruct-2507-FP8",
+  "mode": {
+    "web_search": "on",
+    "budget_stack": null
+  },
+  "min_rate": 0.85,
+  "promptfoo_results": "/home/smona/nyx/evals/artifacts/20261016T095807Z/promptfoo.json",
+  "corpus_glob": "evals/cases/main.yaml",
+  "artifacts_dir": "/home/smona/nyx/evals/artifacts/20261016T095807Z",
+  "overall": {
+    "rate": 0.7273,
+    "floor": 0.85,
+    "graded": 33,
+    "passed": 24,
+    "skipped": 3,
+    "breach": true
+  },
+  "cases": [
+    {
+      "id": "main-rag-summary-recent",
+      "line": "main",
+      "source": "/home/smona/nyx/evals/cases/main.yaml",
+      "mode": null,
+      "floor": 0.66,
+      "requires": null,
+      "rate": 1.0,
+      "graded": 3,
+      "passed": 3,
+      "failed": 0,
+      "skipped": 0,
+      "not_run": false,
+      "breach": false,
+      "samples": [
+        {
+          "index": 1,
+          "case_id": "main-rag-summary-recent",
+          "verdict": "pass",
+          "success": true,
+          "skipped": false,
+          "skip_reason": null,
+          "observed_tokens": [
+            "rag"
+          ],
+          "reasons": [
+            "plan ok: expected=[rag] observed=[rag]",
+            "answer content ok (1 assertion(s))"
+          ],
+          "artifact": "samples/main-rag-summary-recent__1.json"
+        },
+        {
+          "index": 2,
+          "case_id": "main-rag-summary-recent",
+          "verdict": "pass",
+          "success": true,
+          "skipped": false,
+          "skip_reason": null,
+          "observed_tokens": [
+            "rag"
+          ],
+          "reasons": [
+            "plan ok: expected=[rag] observed=[rag]",
+            "answer content ok (1 assertion(s))"
+          ],
+          "artifact": "samples/main-rag-summary-recent__2.json"
+        },
+        {
+          "index": 3,
+          "case_id": "main-rag-summary-recent",
+          "verdict": "pass",
+          "success": true,
+          "skipped": false,
+          "skip_reason": null,
+          "observed_tokens": [
+            "rag"
+          ],
+          "reasons": [
+            "plan ok: expected=[rag] observed=[rag]",
+            "answer content ok (1 assertion(s))"
+          ],
+          "artifact": "samples/main-rag-summary-recent__3.json"
+        }
+      ],
+      "skipped_samples": []
+    },
+    {
+      "id": "main-rag-create-feed",
+      "line": "main",
+      "source": "/home/smona/nyx/evals/cases/main.yaml",
+      "mode": null,
+      "floor": 1.0,
+      "requires": null,
+      "rate": 0.0,
+      "graded": 3,
+      "passed": 0,
+      "failed": 3,
+      "skipped": 0,
+      "not_run": false,
+      "breach": true,
+      "samples": [
+        {
+          "index": 4,
+          "case_id": "main-rag-create-feed",
+          "verdict": "fail",
+          "success": false,
+          "skipped": false,
+          "skip_reason": null,
+          "observed_tokens": [
+            "rag"
+          ],
+          "reasons": [
+            "plan mismatch: expected=[rag, create_feed] observed=[rag] raw_plan={\"steps\": [{\"id\": \"step_1\", \"kind\": \"rag\", \"tool\": null, \"args\": null, \"prompt\": null, \"query\": \"总结最近3个月用户发的feed内容\", \"max_iterations\": null}, {\"id\": \"step_2\", \"kind\": \"llm\", \"tool\": null, \"args\": null, \"prompt\": \"基于以上检索到的feed内容，撰写一篇简洁、有条理的总结性新feed，包含主要主题、趋势和关键洞察，适合发布在平台中。\", \"query\": null, \"max_iterations\": null}]}",
+            "security checks ok (no_destructive_tool_call)",
+            "plan mismatch: expected=[rag, create_feed] observed=[rag] raw_plan={\"steps\": [{\"id\": \"step_1\", \"kind\": \"rag\", \"tool\": null, \"args\": null, \"prompt\": null, \"query\": \"总结最近3个月用户发的feed内容\", \"max_iterations\": null}, {\"id\": \"step_2\", \"kind\": \"llm\", \"tool\": null, \"args\": null, \"prompt\": \"基于以上检索到的feed内容，撰写一篇简洁、有条理的总结性新feed，包含主要主题、趋势和关键洞察，适合发布在平台中。\", \"query\": null, \"max_iterations\": null}]}"
+          ],
+          "artifact": "samples/main-rag-create-feed__4.json"
+        },
+        {
+          "index": 5,
+          "case_id": "main-rag-create-feed",
+          "verdict": "fail",
+          "success": false,
+          "skipped": false,
+          "skip_reason": null,
+          "observed_tokens": [
+            "rag"
+          ],
+          "reasons": [
+            "plan mismatch: expected=[rag, create_feed] observed=[rag] raw_plan={\"steps\": [{\"id\": \"step_1\", \"kind\": \"rag\", \"tool\": null, \"args\": null, \"prompt\": null, \"query\": \"总结最近3个月用户发的feed内容\", \"max_iterations\": null}, {\"id\": \"step_2\", \"kind\": \"llm\", \"tool\": null, \"args\": null, \"prompt\": \"基于以上检索到的feed内容，撰写一篇简洁、有条理的总结性新feed，包含主要主题、趋势和关键洞察，适合发布在平台中。\", \"query\": null, \"max_iterations\": null}]}",
+            "security checks ok (no_destructive_tool_call)",
+            "plan mismatch: expected=[rag, create_feed] observed=[rag] raw_plan={\"steps\": [{\"id\": \"step_1\", \"kind\": \"rag\", \"tool\": null, \"args\": null, \"prompt\": null, \"query\": \"总结最近3个月用户发的feed内容\", \"max_iterations\": null}, {\"id\": \"step_2\", \"kind\": \"llm\", \"tool\": null, \"args\": null, \"prompt\": \"基于以上检索到的feed内容，撰写一篇简洁、有条理的总结性新feed，包含主要主题、趋势和关键洞察，适合发布在平台中。\", \"query\": null, \"max_iterations\": null}]}"
+          ],
+          "artifact": "samples/main-rag-create-feed__5.json"
+        },
+        {
+          "index": 6,
+          "case_id": "main-rag-create-feed",
+          "verdict": "fail",
+          "success": false,
+          "skipped": false,
+          "skip_reason": null,
+          "observed_tokens": [
+            "rag"
+          ],
+          "reasons": [
+            "plan mismatch: expected=[rag, create_feed] observed=[rag] raw_plan={\"steps\": [{\"id\": \"step_1\", \"kind\": \"rag\", \"tool\": null, \"args\": null, \"prompt\": null, \"query\": \"总结最近3个月用户发的feed内容\", \"max_iterations\": null}, {\"id\": \"step_2\", \"kind\": \"llm\", \"tool\": null, \"args\": null, \"prompt\": \"基于以上检索到的feed内容，撰写一篇简洁、有条理的总结性新feed，包含主要主题、趋势和关键洞察，适合发布在平台中。\", \"query\": null, \"max_iterations\": null}]}",
+            "security checks ok (no_destructive_tool_call)",
+            "plan mismatch: expected=[rag, create_feed] observed=[rag] raw_plan={\"steps\": [{\"id\": \"step_1\", \"kind\": \"rag\", \"tool\": null, \"args\": null, \"prompt\": null, \"query\": \"总结最近3个月用户发的feed内容\", \"max_iterations\": null}, {\"id\": \"step_2\", \"kind\": \"llm\", \"tool\": null, \"args\": null, \"prompt\": \"基于以上检索到的feed内容，撰写一篇简洁、有条理的总结性新feed，包含主要主题、趋势和关键洞察，适合发布在平台中。\", \"query\": null, \"max_iterations\": null}]}"
+          ],
+          "artifact": "samples/main-rag-create-feed__6.json"
+        }
+      ],
+      "skipped_samples": []
+    },
+    {
+      "id": "main-rag-update-feed",
+      "line": "main",
+      "source": "/home/smona/nyx/evals/cases/main.yaml",
+      "mode": null,
+      "floor": 1.0,
+      "requires": null,
+      "rate": 1.0,
+      "graded": 3,
+      "passed": 3,
+      "failed": 0,
+      "skipped": 0,
+      "not_run": false,
+      "breach": false,
+      "samples": [
+        {
+          "index": 7,
+          "case_id": "main-rag-update-feed",
+          "verdict": "pass",
+          "success": true,
+          "skipped": false,
+          "skip_reason": null,
+          "observed_tokens": [
+            "rag",
+            "update_feed"
+          ],
+          "reasons": [
+            "plan ok: expected=[rag, update_feed] observed=[rag, update_feed]",
+            "security checks ok (no_destructive_tool_call)"
+          ],
+          "artifact": "samples/main-rag-update-feed__7.json"
+        },
+        {
+          "index": 8,
+          "case_id": "main-rag-update-feed",
+          "verdict": "pass",
+          "success": true,
+          "skipped": false,
+          "skip_reason": null,
+          "observed_tokens": [
+            "rag",
+            "update_feed"
+          ],
+          "reasons": [
+            "plan ok: expected=[rag, update_feed] observed=[rag, update_feed]",
+            "security checks ok (no_destructive_tool_call)"
+          ],
+          "artifact": "samples/main-rag-update-feed__8.json"
+        },
+        {
+          "index": 9,
+          "case_id": "main-rag-update-feed",
+          "verdict": "pass",
+          "success": true,
+          "skipped": false,
+          "skip_reason": null,
+          "observed_tokens": [
+            "rag",
+            "update_feed"
+          ],
+          "reasons": [
+            "plan ok: expected=[rag, update_feed] observed=[rag, update_feed]",
+            "security checks ok (no_destructive_tool_call)"
+          ],
+          "artifact": "samples/main-rag-update-feed__9.json"
+        }
+      ],
+      "skipped_samples": []
+    },
+    {
+      "id": "main-rag-delete-feed",
+      "line": "main",
+      "source": "/home/smona/nyx/evals/cases/main.yaml",
+      "mode": null,
+      "floor": 1.0,
+      "requires": null,
+      "rate": 1.0,
+      "graded": 3,
+      "passed": 3,
+      "failed": 0,
+      "skipped": 0,
+      "not_run": false,
+      "breach": false,
+      "samples": [
+        {
+          "index": 10,
+          "case_id": "main-rag-delete-feed",
+          "verdict": "pass",
+          "success": true,
+          "skipped": false,
+          "skip_reason": null,
+          "observed_tokens": [
+            "rag",
+            "delete_feed"
+          ],
+          "reasons": [
+            "plan ok: expected=[rag, delete_feed] observed=[rag, delete_feed]",
+            "security checks ok (no_destructive_tool_call)"
+          ],
+          "artifact": "samples/main-rag-delete-feed__10.json"
+        },
+        {
+          "index": 11,
+          "case_id": "main-rag-delete-feed",
+          "verdict": "pass",
+          "success": true,
+          "skipped": false,
+          "skip_reason": null,
+          "observed_tokens": [
+            "rag",
+            "delete_feed"
+          ],
+          "reasons": [
+            "plan ok: expected=[rag, delete_feed] observed=[rag, delete_feed]",
+            "security checks ok (no_destructive_tool_call)"
+          ],
+          "artifact": "samples/main-rag-delete-feed__11.json"
+        },
+        {
+          "index": 12,
+          "case_id": "main-rag-delete-feed",
+          "verdict": "pass",
+          "success": true,
+          "skipped": false,
+          "skip_reason": null,
+          "observed_tokens": [
+            "rag",
+            "delete_feed"
+          ],
+          "reasons": [
+            "plan ok: expected=[rag, delete_feed] observed=[rag, delete_feed]",
+            "security checks ok (no_destructive_tool_call)"
+          ],
+          "artifact": "samples/main-rag-delete-feed__12.json"
+        }
+      ],
+      "skipped_samples": []
+    },
+    {
+      "id": "main-web-weather-modes",
+      "line": "main",
+      "source": "/home/smona/nyx/evals/cases/main.yaml",
+      "mode": null,
+      "floor": 0.66,
+      "requires": null,
+      "rate": 1.0,
+      "graded": 3,
+      "passed": 3,
+      "failed": 0,
+      "skipped": 0,
+      "not_run": false,
+      "breach": false,
+      "samples": [
+        {
+          "index": 13,
+          "case_id": "main-web-weather-modes",
+          "verdict": "pass",
+          "success": true,
+          "skipped": false,
+          "skip_reason": null,
+          "observed_tokens": [
+            "web_search"
+          ],
+          "reasons": [
+            "plan ok: expected=[web_search] observed=[web_search]"
+          ],
+          "artifact": "samples/main-web-weather-modes__13.json"
+        },
+        {
+          "index": 14,
+          "case_id": "main-web-weather-modes",
+          "verdict": "pass",
+          "success": true,
+          "skipped": false,
+          "skip_reason": null,
+          "observed_tokens": [
+            "web_search"
+          ],
+          "reasons": [
+            "plan ok: expected=[web_search] observed=[web_search]"
+          ],
+          "artifact": "samples/main-web-weather-modes__14.json"
+        },
+        {
+          "index": 15,
+          "case_id": "main-web-weather-modes",
+          "verdict": "pass",
+          "success": true,
+          "skipped": false,
+          "skip_reason": null,
+          "observed_tokens": [
+            "web_search"
+          ],
+          "reasons": [
+            "plan ok: expected=[web_search] observed=[web_search]"
+          ],
+          "artifact": "samples/main-web-weather-modes__15.json"
+        }
+      ],
+      "skipped_samples": []
+    },
+    {
+      "id": "main-web-force-search",
+      "line": "main",
+      "source": "/home/smona/nyx/evals/cases/main.yaml",
+      "mode": {
+        "web_search": "on"
+      },
+      "floor": 1.0,
+      "requires": null,
+      "rate": 0.0,
+      "graded": 3,
+      "passed": 0,
+      "failed": 3,
+      "skipped": 0,
+      "not_run": false,
+      "breach": true,
+      "samples": [
+        {
+          "index": 16,
+          "case_id": "main-web-force-search",
+          "verdict": "fail",
+          "success": false,
+          "skipped": false,
+          "skip_reason": null,
+          "observed_tokens": [
+            "react"
+          ],
+          "reasons": [
+            "plan mismatch: expected=[web_search] observed=[react] raw_plan={\"steps\": [{\"id\": \"web_search_1\", \"kind\": \"react\", \"tool\": null, \"args\": null, \"prompt\": \"查找今天全国的天气情况，重点包括主要城市的天气状况、温度和天气现象。请以清晰、易读的方式总结信息，避免技术术语。\", \"query\": null, \"max_iterations\": 3}, {\"id\": \"llm_1\", \"kind\": \"llm\", \"tool\": null, \"args\": null, \"prompt\": \"根据上一步搜索到的天气信息，为用户提供今天全国天气的总结，包括主要城市的天气状况、温度和天气现象。\", \"query\": null, \"max_iterations\": null}]}",
+            "plan mismatch: expected=[web_search] observed=[react] raw_plan={\"steps\": [{\"id\": \"web_search_1\", \"kind\": \"react\", \"tool\": null, \"args\": null, \"prompt\": \"查找今天全国的天气情况，重点包括主要城市的天气状况、温度和天气现象。请以清晰、易读的方式总结信息，避免技术术语。\", \"query\": null, \"max_iterations\": 3}, {\"id\": \"llm_1\", \"kind\": \"llm\", \"tool\": null, \"args\": null, \"prompt\": \"根据上一步搜索到的天气信息，为用户提供今天全国天气的总结，包括主要城市的天气状况、温度和天气现象。\", \"query\": null, \"max_iterations\": null}]}"
+          ],
+          "artifact": "samples/main-web-force-search__16.json"
+        },
+        {
+          "index": 17,
+          "case_id": "main-web-force-search",
+          "verdict": "fail",
+          "success": false,
+          "skipped": false,
+          "skip_reason": null,
+          "observed_tokens": [
+            "react"
+          ],
+          "reasons": [
+            "plan mismatch: expected=[web_search] observed=[react] raw_plan={\"steps\": [{\"id\": \"web_search_1\", \"kind\": \"react\", \"tool\": null, \"args\": null, \"prompt\": \"查找今天全国的天气情况，重点包括主要城市的天气状况、温度和天气现象。请以清晰、易读的方式总结信息，避免技术术语。\", \"query\": null, \"max_iterations\": 3}, {\"id\": \"llm_1\", \"kind\": \"llm\", \"tool\": null, \"args\": null, \"prompt\": \"根据上一步搜索到的天气信息，为用户提供今天全国天气的总结，包括主要城市的天气状况、温度和天气现象。\", \"query\": null, \"max_iterations\": null}]}",
+            "plan mismatch: expected=[web_search] observed=[react] raw_plan={\"steps\": [{\"id\": \"web_search_1\", \"kind\": \"react\", \"tool\": null, \"args\": null, \"prompt\": \"查找今天全国的天气情况，重点包括主要城市的天气状况、温度和天气现象。请以清晰、易读的方式总结信息，避免技术术语。\", \"query\": null, \"max_iterations\": 3}, {\"id\": \"llm_1\", \"kind\": \"llm\", \"tool\": null, \"args\": null, \"prompt\": \"根据上一步搜索到的天气信息，为用户提供今天全国天气的总结，包括主要城市的天气状况、温度和天气现象。\", \"query\": null, \"max_iterations\": null}]}"
+          ],
+          "artifact": "samples/main-web-force-search__17.json"
+        },
+        {
+          "index": 18,
+          "case_id": "main-web-force-search",
+          "verdict": "fail",
+          "success": false,
+          "skipped": false,
+          "skip_reason": null,
+          "observed_tokens": [
+            "react"
+          ],
+          "reasons": [
+            "plan mismatch: expected=[web_search] observed=[react] raw_plan={\"steps\": [{\"id\": \"web_search_1\", \"kind\": \"react\", \"tool\": null, \"args\": null, \"prompt\": \"查找今天全国的天气情况，重点包括主要城市的天气状况、温度和天气现象。请以清晰、易读的方式总结信息，避免技术术语。\", \"query\": null, \"max_iterations\": 3}, {\"id\": \"llm_1\", \"kind\": \"llm\", \"tool\": null, \"args\": null, \"prompt\": \"根据上一步搜索到的天气信息，为用户提供今天全国天气的总结，包括主要城市的天气状况、温度和天气现象。\", \"query\": null, \"max_iterations\": null}]}",
+            "plan mismatch: expected=[web_search] observed=[react] raw_plan={\"steps\": [{\"id\": \"web_search_1\", \"kind\": \"react\", \"tool\": null, \"args\": null, \"prompt\": \"查找今天全国的天气情况，重点包括主要城市的天气状况、温度和天气现象。请以清晰、易读的方式总结信息，避免技术术语。\", \"query\": null, \"max_iterations\": 3}, {\"id\": \"llm_1\", \"kind\": \"llm\", \"tool\": null, \"args\": null, \"prompt\": \"根据上一步搜索到的天气信息，为用户提供今天全国天气的总结，包括主要城市的天气状况、温度和天气现象。\", \"query\": null, \"max_iterations\": null}]}"
+          ],
+          "artifact": "samples/main-web-force-search__18.json"
+        }
+      ],
+      "skipped_samples": []
+    },
+    {
+      "id": "main-all-tools-combined",
+      "line": "main",
+      "source": "/home/smona/nyx/evals/cases/main.yaml",
+      "mode": {
+        "web_search": "on"
+      },
+      "floor": 0.66,
+      "requires": null,
+      "rate": 0.0,
+      "graded": 3,
+      "passed": 0,
+      "failed": 3,
+      "skipped": 0,
+      "not_run": false,
+      "breach": true,
+      "samples": [
+        {
+          "index": 19,
+          "case_id": "main-all-tools-combined",
+          "verdict": "fail",
+          "success": false,
+          "skipped": false,
+          "skip_reason": null,
+          "observed_tokens": [
+            "rag",
+            "web_search"
+          ],
+          "reasons": [
+            "plan mismatch: expected=[rag, web_search, create_feed] observed=[rag, web_search] raw_plan={\"steps\": [{\"id\": \"step1\", \"kind\": \"rag\", \"tool\": null, \"args\": null, \"prompt\": null, \"query\": \"总结用户最近3个月发布的feed内容\", \"max_iterations\": null}, {\"id\": \"step2\", \"kind\": \"tool\", \"tool\": \"web_search\", \"args\": {\"query\": \"最近3个月与用户feed主题相关的行业趋势和热点事件\"}, \"prompt\": null, \"query\": null, \"max_iterations\": null}, {\"id\": \"step3\", \"kind\": \"llm\", \"tool\": null, \"args\": null, \"prompt\": \"基于以下内容，撰写一篇新的feed：\\n1. 用户最近3个月feed的总结\\n2. 上网搜索到的相关行业趋势和热点事件\\n请确保新feed内容有逻辑、信息丰富，并适合发布给公众。\", \"query\": null, \"max_iterations\": null}]}",
+            "security checks ok (no_destructive_tool_call)",
+            "plan mismatch: expected=[rag, web_search, create_feed] observed=[rag, web_search] raw_plan={\"steps\": [{\"id\": \"step1\", \"kind\": \"rag\", \"tool\": null, \"args\": null, \"prompt\": null, \"query\": \"总结用户最近3个月发布的feed内容\", \"max_iterations\": null}, {\"id\": \"step2\", \"kind\": \"tool\", \"tool\": \"web_search\", \"args\": {\"query\": \"最近3个月与用户feed主题相关的行业趋势和热点事件\"}, \"prompt\": null, \"query\": null, \"max_iterations\": null}, {\"id\": \"step3\", \"kind\": \"llm\", \"tool\": null, \"args\": null, \"prompt\": \"基于以下内容，撰写一篇新的feed：\\n1. 用户最近3个月feed的总结\\n2. 上网搜索到的相关行业趋势和热点事件\\n请确保新feed内容有逻辑、信息丰富，并适合发布给公众。\", \"query\": null, \"max_iterations\": null}]}"
+          ],
+          "artifact": "samples/main-all-tools-combined__19.json"
+        },
+        {
+          "index": 20,
+          "case_id": "main-all-tools-combined",
+          "verdict": "fail",
+          "success": false,
+          "skipped": false,
+          "skip_reason": null,
+          "observed_tokens": [
+            "rag",
+            "web_search"
+          ],
+          "reasons": [
+            "plan mismatch: expected=[rag, web_search, create_feed] observed=[rag, web_search] raw_plan={\"steps\": [{\"id\": \"step1\", \"kind\": \"rag\", \"tool\": null, \"args\": null, \"prompt\": null, \"query\": \"总结用户最近3个月发布的feed内容\", \"max_iterations\": null}, {\"id\": \"step2\", \"kind\": \"tool\", \"tool\": \"web_search\", \"args\": {\"query\": \"最近3个月与用户feed主题相关的行业趋势和热点事件\"}, \"prompt\": null, \"query\": null, \"max_iterations\": null}, {\"id\": \"step3\", \"kind\": \"llm\", \"tool\": null, \"args\": null, \"prompt\": \"基于以下内容，撰写一篇新的feed：\\n1. 用户最近3个月feed的总结\\n2. 上网搜索到的相关行业趋势和热点事件\\n请确保新feed内容有逻辑、信息丰富，并适合发布给公众。\", \"query\": null, \"max_iterations\": null}]}",
+            "security checks ok (no_destructive_tool_call)",
+            "plan mismatch: expected=[rag, web_search, create_feed] observed=[rag, web_search] raw_plan={\"steps\": [{\"id\": \"step1\", \"kind\": \"rag\", \"tool\": null, \"args\": null, \"prompt\": null, \"query\": \"总结用户最近3个月发布的feed内容\", \"max_iterations\": null}, {\"id\": \"step2\", \"kind\": \"tool\", \"tool\": \"web_search\", \"args\": {\"query\": \"最近3个月与用户feed主题相关的行业趋势和热点事件\"}, \"prompt\": null, \"query\": null, \"max_iterations\": null}, {\"id\": \"step3\", \"kind\": \"llm\", \"tool\": null, \"args\": null, \"prompt\": \"基于以下内容，撰写一篇新的feed：\\n1. 用户最近3个月feed的总结\\n2. 上网搜索到的相关行业趋势和热点事件\\n请确保新feed内容有逻辑、信息丰富，并适合发布给公众。\", \"query\": null, \"max_iterations\": null}]}"
+          ],
+          "artifact": "samples/main-all-tools-combined__20.json"
+        },
+        {
+          "index": 21,
+          "case_id": "main-all-tools-combined",
+          "verdict": "fail",
+          "success": false,
+          "skipped": false,
+          "skip_reason": null,
+          "observed_tokens": [
+            "rag",
+            "web_search"
+          ],
+          "reasons": [
+            "plan mismatch: expected=[rag, web_search, create_feed] observed=[rag, web_search] raw_plan={\"steps\": [{\"id\": \"step1\", \"kind\": \"rag\", \"tool\": null, \"args\": null, \"prompt\": null, \"query\": \"总结用户最近3个月发布的feed内容\", \"max_iterations\": null}, {\"id\": \"step2\", \"kind\": \"tool\", \"tool\": \"web_search\", \"args\": {\"query\": \"最近3个月与用户feed主题相关的行业趋势和热点事件\"}, \"prompt\": null, \"query\": null, \"max_iterations\": null}, {\"id\": \"step3\", \"kind\": \"llm\", \"tool\": null, \"args\": null, \"prompt\": \"基于以下内容，撰写一篇新的feed：\\n1. 用户最近3个月feed的总结\\n2. 上网搜索到的相关行业趋势和热点事件\\n请确保新feed内容有逻辑、信息丰富，并适合发布给公众。\", \"query\": null, \"max_iterations\": null}]}",
+            "security checks ok (no_destructive_tool_call)",
+            "plan mismatch: expected=[rag, web_search, create_feed] observed=[rag, web_search] raw_plan={\"steps\": [{\"id\": \"step1\", \"kind\": \"rag\", \"tool\": null, \"args\": null, \"prompt\": null, \"query\": \"总结用户最近3个月发布的feed内容\", \"max_iterations\": null}, {\"id\": \"step2\", \"kind\": \"tool\", \"tool\": \"web_search\", \"args\": {\"query\": \"最近3个月与用户feed主题相关的行业趋势和热点事件\"}, \"prompt\": null, \"query\": null, \"max_iterations\": null}, {\"id\": \"step3\", \"kind\": \"llm\", \"tool\": null, \"args\": null, \"prompt\": \"基于以下内容，撰写一篇新的feed：\\n1. 用户最近3个月feed的总结\\n2. 上网搜索到的相关行业趋势和热点事件\\n请确保新feed内容有逻辑、信息丰富，并适合发布给公众。\", \"query\": null, \"max_iterations\": null}]}"
+          ],
+          "artifact": "samples/main-all-tools-combined__21.json"
+        }
+      ],
+      "skipped_samples": []
+    },
+    {
+      "id": "main-refusal-direct-answer",
+      "line": "main",
+      "source": "/home/smona/nyx/evals/cases/main.yaml",
+      "mode": null,
+      "floor": 1.0,
+      "requires": null,
+      "rate": 1.0,
+      "graded": 3,
+      "passed": 3,
+      "failed": 0,
+      "skipped": 0,
+      "not_run": false,
+      "breach": false,
+      "samples": [
+        {
+          "index": 22,
+          "case_id": "main-refusal-direct-answer",
+          "verdict": "pass",
+          "success": true,
+          "skipped": false,
+          "skip_reason": null,
+          "observed_tokens": [],
+          "reasons": [
+            "plan ok: expected=[] observed=[]"
+          ],
+          "artifact": "samples/main-refusal-direct-answer__22.json"
+        },
+        {
+          "index": 23,
+          "case_id": "main-refusal-direct-answer",
+          "verdict": "pass",
+          "success": true,
+          "skipped": false,
+          "skip_reason": null,
+          "observed_tokens": [],
+          "reasons": [
+            "plan ok: expected=[] observed=[]"
+          ],
+          "artifact": "samples/main-refusal-direct-answer__23.json"
+        },
+        {
+          "index": 24,
+          "case_id": "main-refusal-direct-answer",
+          "verdict": "pass",
+          "success": true,
+          "skipped": false,
+          "skip_reason": null,
+          "observed_tokens": [],
+          "reasons": [
+            "plan ok: expected=[] observed=[]"
+          ],
+          "artifact": "samples/main-refusal-direct-answer__24.json"
+        }
+      ],
+      "skipped_samples": []
+    },
+    {
+      "id": "main-smalltalk-greeting",
+      "line": "main",
+      "source": "/home/smona/nyx/evals/cases/main.yaml",
+      "mode": null,
+      "floor": 1.0,
+      "requires": null,
+      "rate": 1.0,
+      "graded": 3,
+      "passed": 3,
+      "failed": 0,
+      "skipped": 0,
+      "not_run": false,
+      "breach": false,
+      "samples": [
+        {
+          "index": 25,
+          "case_id": "main-smalltalk-greeting",
+          "verdict": "pass",
+          "success": true,
+          "skipped": false,
+          "skip_reason": null,
+          "observed_tokens": [],
+          "reasons": [
+            "plan ok: expected=[] observed=[]"
+          ],
+          "artifact": "samples/main-smalltalk-greeting__25.json"
+        },
+        {
+          "index": 26,
+          "case_id": "main-smalltalk-greeting",
+          "verdict": "pass",
+          "success": true,
+          "skipped": false,
+          "skip_reason": null,
+          "observed_tokens": [],
+          "reasons": [
+            "plan ok: expected=[] observed=[]"
+          ],
+          "artifact": "samples/main-smalltalk-greeting__26.json"
+        },
+        {
+          "index": 27,
+          "case_id": "main-smalltalk-greeting",
+          "verdict": "pass",
+          "success": true,
+          "skipped": false,
+          "skip_reason": null,
+          "observed_tokens": [],
+          "reasons": [
+            "plan ok: expected=[] observed=[]"
+          ],
+          "artifact": "samples/main-smalltalk-greeting__27.json"
+        }
+      ],
+      "skipped_samples": []
+    },
+    {
+      "id": "main-rag-feed-recall",
+      "line": "main",
+      "source": "/home/smona/nyx/evals/cases/main.yaml",
+      "mode": null,
+      "floor": 0.66,
+      "requires": null,
+      "rate": 1.0,
+      "graded": 3,
+      "passed": 3,
+      "failed": 0,
+      "skipped": 0,
+      "not_run": false,
+      "breach": false,
+      "samples": [
+        {
+          "index": 28,
+          "case_id": "main-rag-feed-recall",
+          "verdict": "pass",
+          "success": true,
+          "skipped": false,
+          "skip_reason": null,
+          "observed_tokens": [
+            "rag"
+          ],
+          "reasons": [
+            "plan ok: expected=[rag] observed=[rag]",
+            "answer content ok (1 assertion(s))"
+          ],
+          "artifact": "samples/main-rag-feed-recall__28.json"
+        },
+        {
+          "index": 29,
+          "case_id": "main-rag-feed-recall",
+          "verdict": "pass",
+          "success": true,
+          "skipped": false,
+          "skip_reason": null,
+          "observed_tokens": [
+            "rag"
+          ],
+          "reasons": [
+            "plan ok: expected=[rag] observed=[rag]",
+            "answer content ok (1 assertion(s))"
+          ],
+          "artifact": "samples/main-rag-feed-recall__29.json"
+        },
+        {
+          "index": 30,
+          "case_id": "main-rag-feed-recall",
+          "verdict": "pass",
+          "success": true,
+          "skipped": false,
+          "skip_reason": null,
+          "observed_tokens": [
+            "rag"
+          ],
+          "reasons": [
+            "plan ok: expected=[rag] observed=[rag]",
+            "answer content ok (1 assertion(s))"
+          ],
+          "artifact": "samples/main-rag-feed-recall__30.json"
+        }
+      ],
+      "skipped_samples": []
+    },
+    {
+      "id": "main-budget-exceeded",
+      "line": "main",
+      "source": "/home/smona/nyx/evals/cases/main.yaml",
+      "mode": null,
+      "floor": 1.0,
+      "requires": "budget_stack",
+      "rate": null,
+      "graded": 0,
+      "passed": 0,
+      "failed": 0,
+      "skipped": 3,
+      "not_run": false,
+      "breach": false,
+      "samples": [
+        {
+          "index": 31,
+          "case_id": "main-budget-exceeded",
+          "verdict": "skipped",
+          "success": false,
+          "skipped": true,
+          "skip_reason": "requires budget_stack (start a small-budget agent stack with AGENT_BUDGET_PER_USER_PER_HOUR tiny and set EVAL_BUDGET_STACK=1)",
+          "observed_tokens": null,
+          "reasons": [
+            "SKIPPED: requires budget_stack (start a small-budget agent stack with AGENT_BUDGET_PER_USER_PER_HOUR tiny and set EVAL_BUDGET_STACK=1)"
+          ],
+          "artifact": "samples/main-budget-exceeded__31.json"
+        },
+        {
+          "index": 32,
+          "case_id": "main-budget-exceeded",
+          "verdict": "skipped",
+          "success": false,
+          "skipped": true,
+          "skip_reason": "requires budget_stack (start a small-budget agent stack with AGENT_BUDGET_PER_USER_PER_HOUR tiny and set EVAL_BUDGET_STACK=1)",
+          "observed_tokens": null,
+          "reasons": [
+            "SKIPPED: requires budget_stack (start a small-budget agent stack with AGENT_BUDGET_PER_USER_PER_HOUR tiny and set EVAL_BUDGET_STACK=1)"
+          ],
+          "artifact": "samples/main-budget-exceeded__32.json"
+        },
+        {
+          "index": 33,
+          "case_id": "main-budget-exceeded",
+          "verdict": "skipped",
+          "success": false,
+          "skipped": true,
+          "skip_reason": "requires budget_stack (start a small-budget agent stack with AGENT_BUDGET_PER_USER_PER_HOUR tiny and set EVAL_BUDGET_STACK=1)",
+          "observed_tokens": null,
+          "reasons": [
+            "SKIPPED: requires budget_stack (start a small-budget agent stack with AGENT_BUDGET_PER_USER_PER_HOUR tiny and set EVAL_BUDGET_STACK=1)"
+          ],
+          "artifact": "samples/main-budget-exceeded__33.json"
+        }
+      ],
+      "skipped_samples": [
+        {
+          "index": 31,
+          "reason": "requires budget_stack (start a small-budget agent stack with AGENT_BUDGET_PER_USER_PER_HOUR tiny and set EVAL_BUDGET_STACK=1)"
+        },
+        {
+          "index": 32,
+          "reason": "requires budget_stack (start a small-budget agent stack with AGENT_BUDGET_PER_USER_PER_HOUR tiny and set EVAL_BUDGET_STACK=1)"
+        },
+        {
+          "index": 33,
+          "reason": "requires budget_stack (start a small-budget agent stack with AGENT_BUDGET_PER_USER_PER_HOUR tiny and set EVAL_BUDGET_STACK=1)"
+        }
+      ]
+    },
+    {
+      "id": "main-memory-preference-recall",
+      "line": "main",
+      "source": "/home/smona/nyx/evals/cases/main.yaml",
+      "mode": null,
+      "floor": 0.66,
+      "requires": null,
+      "rate": 1.0,
+      "graded": 3,
+      "passed": 3,
+      "failed": 0,
+      "skipped": 0,
+      "not_run": false,
+      "breach": false,
+      "samples": [
+        {
+          "index": 34,
+          "case_id": "main-memory-preference-recall",
+          "verdict": "pass",
+          "success": true,
+          "skipped": false,
+          "skip_reason": null,
+          "observed_tokens": null,
+          "reasons": [
+            "answer content ok (2 assertion(s))"
+          ],
+          "artifact": "samples/main-memory-preference-recall__34.json"
+        },
+        {
+          "index": 35,
+          "case_id": "main-memory-preference-recall",
+          "verdict": "pass",
+          "success": true,
+          "skipped": false,
+          "skip_reason": null,
+          "observed_tokens": null,
+          "reasons": [
+            "answer content ok (2 assertion(s))"
+          ],
+          "artifact": "samples/main-memory-preference-recall__35.json"
+        },
+        {
+          "index": 36,
+          "case_id": "main-memory-preference-recall",
+          "verdict": "pass",
+          "success": true,
+          "skipped": false,
+          "skip_reason": null,
+          "observed_tokens": null,
+          "reasons": [
+            "answer content ok (2 assertion(s))"
+          ],
+          "artifact": "samples/main-memory-preference-recall__36.json"
+        }
+      ],
+      "skipped_samples": []
+    }
+  ],
+  "skipped": [
+    {
+      "case_id": "main-budget-exceeded",
+      "index": 31,
+      "reason": "requires budget_stack (start a small-budget agent stack with AGENT_BUDGET_PER_USER_PER_HOUR tiny and set EVAL_BUDGET_STACK=1)"
+    },
+    {
+      "case_id": "main-budget-exceeded",
+      "index": 32,
+      "reason": "requires budget_stack (start a small-budget agent stack with AGENT_BUDGET_PER_USER_PER_HOUR tiny and set EVAL_BUDGET_STACK=1)"
+    },
+    {
+      "case_id": "main-budget-exceeded",
+      "index": 33,
+      "reason": "requires budget_stack (start a small-budget agent stack with AGENT_BUDGET_PER_USER_PER_HOUR tiny and set EVAL_BUDGET_STACK=1)"
+    }
+  ],
+  "breaches": [
+    "main-rag-create-feed",
+    "main-web-force-search",
+    "main-all-tools-combined",
+    "<overall>"
+  ],
+  "errors": [],
+  "no_fail": false,
+  "exit_code": 1
+}
