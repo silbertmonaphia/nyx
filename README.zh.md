@@ -63,6 +63,7 @@ flowchart TB
 - **账号** —— JWT access token，加上带 reuse detection 的轮转 refresh token。
 - **你的 feed** —— 创建、编辑、删除、搜索、分页；所有查询都限定在你自己的账号范围内。
 - **白天/夜间主题** —— 导航栏切换按钮位于 `Nyx` 字标右侧；未选择前实时跟随系统，选择后记住（`localStorage["nyx.theme"]`，缺省 = 跟随系统）并在首帧前应用（无闪烁）。
+- **双语界面（中文 / English）** —— 语言切换按钮位于主题开关旁。每次访问默认中文（不看浏览器语言）；显式选择会存到 `localStorage["nyx.locale"]`（`"zh"` | `"en"`）并长期记住，`<html lang>` 跟随当前语言。
 - **可选基础设施**，默认关闭 —— Redis 缓存、Jaeger 链路追踪、Sentry、MCP server。（Prometheus `/metrics` 始终开启。）
 
 ## 技术栈
