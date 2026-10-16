@@ -52,9 +52,11 @@ flowchart TB
 - **Feed tools with confirmation** — the planner sees the live MCP registry (feed CRUD);
   non-read-only calls pause the run on an in-chat approve/deny card (`confirm_request`).
 - **Memory** — every session and message is persisted (1-year retention floor, soft-delete +
-  grace); the planner gets a cross-session "Known user preferences" block; the subject-facing
-  surfaces are owner-scoped: `/agent/sessions*` (history sidebar API) and GDPR export/erasure
-  (`/agent/me/*`) with a counts-only audit log.
+  grace); the planner and the executor get a cross-session "Known user preferences" block;
+  sessions title themselves from the first exchange (deterministic 48-char label, then one
+  fire-and-forget refinement call); the subject-facing surfaces are owner-scoped:
+  `/agent/sessions*` (history sidebar API) and GDPR export/erasure (`/agent/me/*`) with a
+  counts-only audit log.
 
 ## Endpoints
 
