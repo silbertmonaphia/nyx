@@ -131,7 +131,7 @@ export const en: Translation = {
         ok: 'ok',
         failed: 'failed',
       },
-      tokens: 'tokens: {{total}} (prompt {{prompt}} · completion {{completion}})',
+      tokens: 'tokens: {{total}} ( prompt {{prompt}} · completion {{completion}})',
       partialFailurePlan: 'Run did not reach a terminal step',
       partialFailureSteps:
         'Some steps failed — the answer below may be incomplete',
