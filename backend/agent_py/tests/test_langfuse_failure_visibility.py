@@ -8,11 +8,12 @@ tracing pointed at a host that cannot be reached, and asserts what an
 operator sees in the process log without setting `LANGFUSE_DEBUG` or any
 other flag:
 
-  - the startup INFO line names the configured host;
+  - the startup INFO lines render — the Langfuse one names the configured
+    host, the runtime `nyx.agent` one names the metrics port;
   - the first WARN-or-above export diagnostic arrives within a bounded wait;
   - tracing disabled emits no Langfuse line at all;
   - a real `uvicorn` boot (the dev entrypoint and the compose CMD) emits the
-    startup line once and does not duplicate uvicorn's own lines.
+    startup lines once and does not duplicate uvicorn's own lines.
 
 `_UNRESOLVABLE_HOST` is the host used where the diagnostic must *name* the
 host: a name-resolution failure returns fast enough for the exporter's retry
@@ -21,6 +22,9 @@ WARNING — whose text carries the exception, host included — to render.
 the transport burns the exporter's whole retry deadline before failing, so
 the surfaced ERROR reads "failed to export spans batch due to timeout, max
 retries or shutdown" and the startup line stays the operator's host anchor.
+The host-naming assertion is skipped when the name resolves anyway (a
+wildcard-DNS resolver answers for `.invalid` too); the coarse
+diagnostic-arrived assertion still runs.
 """
 
 from __future__ import annotations
@@ -266,6 +270,36 @@ def _langfuse_lines(records: list[logging.LogRecord]) -> list[logging.LogRecord]
     ]
 
 
+def _runtime_lines(records: list[logging.LogRecord]) -> list[logging.LogRecord]:
+    return [
+        r
+        for r in records
+        if r.name == "nyx.agent"
+        and "prometheus exporter listening" in r.getMessage()
+    ]
+
+
+def _name_resolves(hostname: str, timeout: float = 2.0) -> bool:
+    """True when the name resolves — or when the probe cannot rule it out.
+
+    A wildcard-DNS resolver answers for `.invalid` names too, so the
+    host-naming assertion only runs when resolution positively fails.
+    """
+    result: list[bool] = []
+
+    def _probe() -> None:
+        try:
+            socket.getaddrinfo(hostname, None)
+            result.append(True)
+        except OSError:
+            result.append(False)
+
+    probe = threading.Thread(target=_probe, daemon=True)
+    probe.start()
+    probe.join(timeout)
+    return result[0] if result else True
+
+
 def _export_diagnostics(records: list[logging.LogRecord]) -> list[logging.LogRecord]:
     return [
         r
@@ -319,15 +353,25 @@ async def test_export_failure_is_visible_after_one_run(
             assert startup[0].levelno == logging.INFO
             assert host in startup[0].getMessage()
 
+            runtime = _runtime_lines(records)
+            assert len(runtime) == 1, [
+                (r.levelno, r.name, r.getMessage()) for r in records
+            ]
+            assert runtime[0].levelno == logging.INFO
+
             diagnostic = _wait_for_export_diagnostic(records)
             assert diagnostic is not None, (
                 "no WARN-or-above export diagnostic within "
                 f"{_EXPORT_DIAGNOSTIC_TIMEOUT_SECONDS:.0f}s; records were "
                 f"{[(r.levelno, r.name, r.getMessage()[:120]) for r in records]}"
             )
-            if diagnostic_names_host:
-                hostname = urlparse(host).hostname
-                assert hostname is not None and hostname in diagnostic.getMessage(), (
+            hostname = urlparse(host).hostname
+            if (
+                diagnostic_names_host
+                and hostname is not None
+                and not _name_resolves(hostname)
+            ):
+                assert hostname in diagnostic.getMessage(), (
                     "the export diagnostic must let the operator identify the "
                     f"host; got {diagnostic.getMessage()!r}"
                 )
@@ -351,6 +395,9 @@ async def test_disabled_tracing_emits_no_langfuse_line(
         (r.levelno, r.name, r.getMessage()) for r in _langfuse_lines(records)
     ]
     assert _export_diagnostics(records) == []
+    runtime = _runtime_lines(records)
+    assert len(runtime) == 1, [(r.levelno, r.name, r.getMessage()) for r in records]
+    assert runtime[0].levelno == logging.INFO
 
 
 def _free_port() -> int:
@@ -454,6 +501,15 @@ def test_real_boot_formats_the_startup_line_once(
     assert len(startup) == 1, (
         "the formatted startup line must appear exactly once; saw "
         f"{[line for line in lines if 'langfuse tracing enabled' in line]}"
+    )
+    runtime_pattern = re.compile(
+        r"\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2},\d{3} INFO nyx\.agent: "
+        rf"prometheus exporter listening on :{metrics_port}/metrics$"
+    )
+    runtime = [line for line in lines if runtime_pattern.match(line)]
+    assert len(runtime) == 1, (
+        "the runtime nyx.agent INFO line must render with the process format; "
+        f"saw {[line for line in lines if 'prometheus exporter listening' in line]}"
     )
     for needle in (
         "Started server process",
