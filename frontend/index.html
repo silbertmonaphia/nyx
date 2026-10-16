@@ -60,10 +60,10 @@
     <script>
       // Tailwind v4's `dark:` variant is gated on `.dark` being present
       // up the tree (`@custom-variant dark (&:is(.dark *))` in index.css).
-      // The navbar uses `bg-black` unconditionally, so we MUST honor the
-      // user's prefers-color-scheme and toggle the theme class — otherwise
-      // foreground tokens resolve to their light values (dark text) on a
-      // permanently-black nav and typed input becomes invisible.
+      // The navbar uses `bg-black` unconditionally, so `.dark` MUST be set
+      // before first paint — otherwise foreground tokens resolve to light
+      // values (dark text) on the permanently-black nav. A stored choice
+      // wins; prefers-color-scheme is the fallback when none is stored.
       const mq = window.matchMedia('(prefers-color-scheme: dark)');
       const readChoice = () => {
         if (window.__nyxTheme === 'light' || window.__nyxTheme === 'dark') return window.__nyxTheme;
