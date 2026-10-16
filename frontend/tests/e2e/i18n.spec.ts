@@ -1,8 +1,8 @@
 import { expect, test, type Page } from '@playwright/test';
 
-test.use({ locale: 'en-US' });
+import { LOCALE_STORAGE_KEY } from '../../src/i18n/locale-storage';
 
-const LOCALE_STORAGE_KEY = 'nyx.locale';
+test.use({ locale: 'en-US' });
 
 const emptyFeedPage = {
   data: [],
@@ -66,7 +66,7 @@ test('defaults to Chinese for a browser whose language is English', async ({
   await page.goto('/');
 
   expect(await page.evaluate(() => navigator.language)).toBe('en-US');
-  await expect(page.getByPlaceholder('搜索订阅...')).toBeVisible();
+  await expect(page.getByPlaceholder('搜索订阅…')).toBeVisible();
   await expect(
     page.getByRole('button', { name: '登录 / 注册' }),
   ).toBeVisible();

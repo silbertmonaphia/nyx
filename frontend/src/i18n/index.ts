@@ -2,13 +2,15 @@ import i18next from 'i18next';
 import { initReactI18next } from 'react-i18next';
 
 import { en } from './en';
+import { LOCALE_STORAGE_KEY } from './locale-storage';
 import { zh } from './zh';
+
+export { LOCALE_STORAGE_KEY } from './locale-storage';
 
 export const SUPPORTED_LOCALES = ['zh', 'en'] as const;
 export type Locale = (typeof SUPPORTED_LOCALES)[number];
 
 export const DEFAULT_LOCALE: Locale = 'zh';
-export const LOCALE_STORAGE_KEY = 'nyx.locale';
 
 export function isLocale(value: unknown): value is Locale {
   return value === 'zh' || value === 'en';

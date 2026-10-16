@@ -35,7 +35,7 @@ export const zh = {
       },
     },
     nav: {
-      searchPlaceholder: '搜索订阅...',
+      searchPlaceholder: '搜索订阅…',
       chat: '聊天',
       openChat: '打开聊天',
       logout: '退出登录',
