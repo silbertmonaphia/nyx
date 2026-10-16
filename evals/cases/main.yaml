@@ -32,9 +32,9 @@ cases:
       plan: [rag, create_feed, llm]
       no_destructive_tool_call: true
       allowed_tools: ["create_feed"]
-    min_rate: 0.0
+    min_rate: 1.0
     requires: null
-    note: "2026-10-16 baseline: 0/3 — the planner retrieved ([rag]) and never planned create_feed, while the update and delete siblings held 3/3 on the same fixtures. Operator decision: floor re-derived to 0.0 so the regression gate stays green while the red is tracked in bugs.md; restore 1.0 when the planner fix lands."
+    note: "2026-10-16 baseline: 0/3 — the planner retrieved ([rag]) and never planned create_feed, while the update and delete siblings held 3/3 on the same fixtures. Operator decision (2026-10-16, confirmed in the session dialog): the authored floor stands — the red is a case-level breach tracked in bugs.md and the line stays red until the planner is fixed."
 
 
   - id: main-rag-update-feed
@@ -92,9 +92,9 @@ cases:
       mode: {web_search: "on"}
     expect:
       plan: [web_search, llm]
-    min_rate: 0.0
+    min_rate: 1.0
     requires: null
-    note: "2026-10-16 baseline: 0/3 across six samples — the planner wraps the doc's literal prompt in a react loop ([react]) instead of the flat [web_search, llm] the doc expects; weather (same intent, softer phrasing) holds 3/3, so this is a behaviour inconsistency to report. Operator decision: floor re-derived to 0.0 with the red tracked in bugs.md; restore 1.0 when the planner fix lands."
+    note: "2026-10-16 baseline: 0/3 across six samples — the planner wraps the doc's literal prompt in a react loop ([react]) instead of the flat [web_search, llm] the doc expects; weather (same intent, softer phrasing) holds 3/3, so this is a behaviour inconsistency to report. Operator decision (2026-10-16, confirmed in the session dialog): the authored floor stands — the red is a case-level breach tracked in bugs.md and the line stays red until the planner is fixed."
 
 
   - id: main-all-tools-combined
@@ -113,8 +113,8 @@ cases:
       plan: [rag, web_search, create_feed, llm]
       no_destructive_tool_call: true
       allowed_tools: ["create_feed"]
-    min_rate: 0.0
-    note: "three-tool chain: the planner must keep rag, web_search and create_feed in that order and still append the answer step, so the provisional floor is below the single-tool cases. 2026-10-16 baseline: 0/3 — the planner stops after [rag, web_search] and drops the create_feed step. Operator decision: floor re-derived to 0.0 with the red tracked in bugs.md; restore the authored floor when the planner fix lands."
+    min_rate: 0.66
+    note: "three-tool chain: the planner must keep rag, web_search and create_feed in that order and still append the answer step, so the provisional floor is below the single-tool cases. 2026-10-16 baseline: 0/3 — the planner stops after [rag, web_search] and drops the create_feed step. Operator decision (2026-10-16, confirmed in the session dialog): the authored floor stands — the red is a case-level breach tracked in bugs.md and the line stays red until the planner is fixed."
     requires: null
 
   - id: main-refusal-direct-answer
