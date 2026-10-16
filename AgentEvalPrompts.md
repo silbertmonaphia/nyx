@@ -30,6 +30,9 @@ Behavior: None
 1.基于对最近3个月我发的feed的总结，然后上网搜索相关信息，再形成一篇新feed发出去
 expect: planner:[rag, web_search, llm, create_feed]
 
+# Memory eval
+1.「我最近爱吃秋刀鱼」，新起session，再问「我喜欢吃什么」，再新session问「推荐吃的给我」，应该都先返回「秋刀鱼」
+
 
 # 注意
 1、关于对LLM不确定的概率模型的测试要用Eval Golden Set
