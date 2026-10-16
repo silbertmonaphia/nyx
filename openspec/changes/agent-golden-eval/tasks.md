@@ -42,5 +42,5 @@
 ## 7. Docs
 
 - [ ] 7.1 Reduce `AgentEvalPrompts.md` to narrative + pointer to the corpora (operator-owned file — confirm the edit with the operator before committing; the methodology section stays as the recorded v2 roadmap). Verify: file retains the why/philosophy and points at `evals/cases/`; operator sign-off recorded in the change.
-- [ ] 7.2 `backend/agent_py/README.md`: how to run the suite, prereqs (stack up, vLLM, env selection for modes), artifact locations. Verify: a fresh-operator read-through can run `make eval-golden` from the README alone.
+- [ ] 7.2 `backend/agent_py/README.md`: how to run the suite, prereqs (stack up, vLLM, env selection for modes), artifact locations. The README is co-owned with the `agent-chat-fixes` / `agent-langfuse-log-visibility` changes — this edit is append-only at EOF under a new `## Golden Set Eval Suite` heading so their merges stay conflict-free. Verify: a fresh-operator read-through can run `make eval-golden` from the README alone.
 - [ ] 7.3 Tick the `AgentStack.zh.md` §4.1 status line (golden-set suite landed, promptfoo-based; Inspect AI upgrade path unchanged). Verify: status line reflects landed state.
