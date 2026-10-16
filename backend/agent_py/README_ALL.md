@@ -246,9 +246,10 @@ OTel span `agent.run.retention`.
 
 ## Chat history, session API, and user preferences
 
-Three coupled surfaces share the same DB and lifecycle (see
+Coupled surfaces sharing the same DB and lifecycle (see
 `openspec/changes/agent-chat-history-storage/`,
-`agent-chat-history-ui/`, and `agent-user-preferences/`):
+`agent-chat-history-ui/`, `agent-user-preferences/`, and
+`agent-chat-fixes/`):
 
 - **Chat history** — every turn is persisted (`agent.chat_sessions` /
   `agent.chat_messages`); a two-phase retention (soft-delete + grace,
@@ -259,12 +260,24 @@ Three coupled surfaces share the same DB and lifecycle (see
   history sidebar (list, replay, create, resume, soft-delete),
   owner-scoped via `X-Nyx-User-Id`. An echoed `run_id` on
   `/agent/run` continues the matching live session.
+- **Session titles** — the session's first exchange titles it: the
+  session-init block derives a deterministic label from the first user
+  message (whitespace collapsed, 48 characters max, CJK-safe) and writes
+  it through `set_title_if_empty`, whose `title=''` predicate makes the
+  winning run the session's first exchange by construction. That run then
+  spawns ONE fire-and-forget refinement — a small `planner_model` call
+  with bounded `max_tokens`/`timeout`, never charged to the chat budget —
+  which overwrites the label through the ownership + not-soft-deleted
+  guarded `set_title`. Any failure (store, LLM, unusable output) logs a
+  WARN, keeps the deterministic label, never retries, and never touches
+  the SSE stream.
 - **User preferences** — after a reply completes, a fire-and-forget
   task extracts stated preferences from the turn's last user message
   (gated by a conservative EN/ZH heuristic, never charged to the chat
-  budget) and upserts them per `(user_id, key)`. The planner prompt
-  gains a preferences block; with zero prefs the prompt is
-  byte-identical to the pre-injection form.
+  budget) and upserts them per `(user_id, key)`. The planner AND the
+  executor (both answer paths, `llm` and `react`) gain a preferences
+  block whose lead-in also covers recall questions; with zero prefs the
+  prompt is byte-identical to the pre-injection form.
 - **GDPR export + erasure** — `GET /agent/me/export` returns one JSON
   body with every row tied to the `X-Nyx-User-Id` subject (sessions
   incl. soft-deleted, messages, prefs, runs, checkpoint thread ids);

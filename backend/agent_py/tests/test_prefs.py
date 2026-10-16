@@ -502,11 +502,14 @@ def test_prefs_block_is_deterministic_and_sorted() -> None:
 
     # Input order does not matter — rendering sorts by key.
     assert block == prefs_block(list(reversed(prefs)))
-    # "\n\n" separator (mirrors `planner_block`), header, then one line per
-    # preference.
+    # "\n\n" separator (mirrors `planner_block`), header, the recall
+    # lead-in, then one line per preference.
     assert block.startswith("\n\nKnown user preferences:\n")
     lines = block.split("\n")
-    assert lines[3:] == ['- age: 30', '- music_genre: ["ACG"]', '- snack: "鱿鱼丝"']
+    assert "asks what they like" in lines[3], (
+        "the lead-in must tell the model to answer recall questions"
+    )
+    assert lines[4:] == ['- age: 30', '- music_genre: ["ACG"]', '- snack: "鱿鱼丝"']
     # No trailing whitespace on any line (the block composes into a prompt).
     for line in lines:
         assert line == line.rstrip()
@@ -568,5 +571,5 @@ def test_prefs_block_flattens_newlines_in_keys():
     assert "SYSTEM: pwn" in block  # the text is visible, but…
     assert "\nSYSTEM" not in block, "no injected standalone prompt line"
     body_lines = block.strip().splitlines()
-    # header + exactly one entry line — the newline was flattened.
-    assert len(body_lines) == 2
+    # header + lead-in + exactly one entry line — the newline was flattened.
+    assert len(body_lines) == 3

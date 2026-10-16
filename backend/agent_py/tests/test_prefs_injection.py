@@ -14,7 +14,11 @@ WIRING half of the change — the core module's own coverage lives in
   4. planner prompt parity: `prefs_text=""` composes the pre-injection
      system prompt byte-for-byte; a non-empty block appends after the
      static base + web-tools block; the retry re-prompt carries it;
-  5. the gate skips small talk: "今天天气怎么样" makes no extraction call.
+  5. the gate skips small talk: "今天天气怎么样" makes no extraction call;
+  6. the executor (openspec/changes/agent-chat-fixes 1.1/1.2) carries the
+     block on the answer path, and omits it byte-identically when there
+     are no prefs or the kill switch is on (the unit-level prompt-parity
+     matrix lives in `tests/test_executor.py`).
 
 Pattern mirrors `test_session_continuation.py` (live DB, migrations via
 the real lifespan, stubbed planner/executor/rag/tools clients). The
@@ -491,3 +495,118 @@ async def test_injection_load_failure_degrades_quietly(
     assert "event: terminator" in r.text
     assert "event: error" not in r.text
     assert "stub answer" in r.text, "the run completed normally"
+
+
+# --- executor injection (openspec/changes/agent-chat-fixes tasks 1.1/1.2) ----
+#
+# The executor writes the user-visible answer, so the rendered prefs
+# block must reach BOTH answer paths — and the empty/kill-switch cases
+# must leave those prompts byte-identical. The planner's own injection
+# (above) is unchanged; these pin the second node end-to-end. The
+# unit-level prompt matrix (both paths, empty/kill-switch parity, the
+# factory closure) lives in `tests/test_executor.py`.
+
+
+class _CapturingExecutorLlm:
+    """Executor-side `ChatOpenAI` stub that records the message lists.
+
+    Patched over `agent.executor.ChatOpenAI` only, so the planner still
+    runs its own stub through `bind`/`ainvoke` and every capture here is
+    a user-visible-answer call.
+    """
+
+    captured: ClassVar[list] = []
+
+    def __init__(self, *args, **kwargs):
+        pass
+
+    def bind_tools(self, schemas):
+        return self
+
+    @classmethod
+    def reset(cls) -> None:
+        cls.captured = []
+
+    async def ainvoke(self, messages):
+        from langchain_core.messages import AIMessage
+
+        type(self).captured.append(list(messages))
+        return AIMessage(content="stub answer")
+
+
+async def test_recall_question_reaches_the_executor_prompt(
+    app_ctx, monkeypatch
+) -> None:
+    """Spec "A recall question is answered from the same prompt that
+    writes the reply": with `{snack: 鱿鱼丝}` stored, the executor prompt
+    for "我爱吃什么" carries the block, with no restatement by the user."""
+    import agent.executor as executor_module
+
+    await app_ctx.state.prefs_store.upsert_pref(42, "snack", "鱿鱼丝")
+    monkeypatch.setattr(executor_module, "ChatOpenAI", _CapturingExecutorLlm)
+    _CapturingExecutorLlm.reset()
+    _StubLlm.call_count = 0
+
+    r = await _post_chat(
+        app_ctx, {"messages": [{"role": "user", "content": "我爱吃什么"}]}
+    )
+    assert r.status_code == 200
+    assert "event: terminator" in r.text
+
+    system_messages = [
+        m.content for msgs in _CapturingExecutorLlm.captured for m in msgs if m.type == "system"
+    ]
+    assert system_messages, "the executor ran"
+    assert any("- snack" in content and "鱿鱼丝" in content for content in system_messages)
+
+
+async def test_no_stored_prefs_keeps_the_executor_prompt_untouched(
+    app_ctx, monkeypatch
+) -> None:
+    import agent.executor as executor_module
+
+    monkeypatch.setattr(executor_module, "ChatOpenAI", _CapturingExecutorLlm)
+    _CapturingExecutorLlm.reset()
+    _StubLlm.call_count = 0
+
+    r = await _post_chat(
+        app_ctx, {"messages": [{"role": "user", "content": "今天天气怎么样"}]}
+    )
+    assert r.status_code == 200
+    assert "event: terminator" in r.text
+
+    system_messages = [
+        m.content for msgs in _CapturingExecutorLlm.captured for m in msgs if m.type == "system"
+    ]
+    assert system_messages == ["answer"], (
+        "zero prefs must leave the executor prompt byte-identical"
+    )
+
+
+async def test_kill_switch_omits_the_block_on_the_executor_path(
+    app_ctx_prefs_disabled, monkeypatch
+) -> None:
+    """Spec "Kill switch disables extraction and injection together":
+    even with a stored row, `PYTHON_AGENT_PREFS_ENABLED=false` leaves the
+    executor prompt untouched (the row stays in the table)."""
+    import agent.executor as executor_module
+
+    app = app_ctx_prefs_disabled
+    await app.state.prefs_store.upsert_pref(42, "snack", "鱿鱼丝")
+    monkeypatch.setattr(executor_module, "ChatOpenAI", _CapturingExecutorLlm)
+    _CapturingExecutorLlm.reset()
+    _StubLlm.call_count = 0
+
+    r = await _post_chat(
+        app, {"messages": [{"role": "user", "content": "我爱吃什么"}]}
+    )
+    assert r.status_code == 200
+    assert "event: terminator" in r.text
+
+    system_messages = [
+        m.content for msgs in _CapturingExecutorLlm.captured for m in msgs if m.type == "system"
+    ]
+    assert system_messages == ["answer"], (
+        "the kill switch must omit the block from the executor prompt"
+    )
+    assert len(await _stored_prefs(app)) == 1, "the stored row is untouched"

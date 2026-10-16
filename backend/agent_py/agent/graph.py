@@ -41,12 +41,20 @@ def _executor_step_factory(
     tools: ToolDispatcher,
     tracer: Any,
     approvals: ApprovalGate | None = None,
+    prefs_text: str = "",
 ):
     """Closure that returns the LangGraph-compatible async node for the executor.
 
     `approvals` (openspec/changes/agent-feed-tools D5) gates mutating
     registry calls at the shared dispatch funnel; `None` leaves the gate
     fail-closed (no gate configured ⇒ mutating calls close as denied).
+
+    `prefs_text` rides the same closure pattern as the planner factory
+    (openspec/changes/agent-chat-fixes D1): the rendered per-user
+    preferences block the caller loaded before building the graph, so the
+    node that writes the user-visible answer carries it too. The `""`
+    default keeps the executor's prompts byte-identical for callers that
+    pass no prefs.
     """
     async def _executor_step(state: AgentState) -> AgentState:
         return await executor_node(
@@ -57,6 +65,7 @@ def _executor_step_factory(
             rag=rag,
             tools=tools,
             approvals=approvals,
+            prefs_text=prefs_text,
         )
 
     return _executor_step
@@ -113,8 +122,9 @@ def build_graph(
 
     `prefs_text` is the per-user preferences block (openspec/changes/
     agent-user-preferences D5) the caller loaded from the PrefsStore before
-    building the graph. The default `""` keeps every pre-existing caller's
-    planner prompt byte-identical.
+    building the graph; it rides into BOTH the planner and the executor
+    (openspec/changes/agent-chat-fixes D1). The default `""` keeps every
+    pre-existing caller's planner and executor prompts byte-identical.
     """
     if tracer is None:
         from opentelemetry import trace
@@ -126,7 +136,9 @@ def build_graph(
     )
     builder.add_node(
         "executor",
-        _executor_step_factory(settings, budget, rag, tools, tracer, approvals),
+        _executor_step_factory(
+            settings, budget, rag, tools, tracer, approvals, prefs_text
+        ),
     )
     builder.add_edge(START, "planner")
     builder.add_edge("planner", "executor")

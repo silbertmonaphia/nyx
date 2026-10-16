@@ -18,6 +18,11 @@ the `agent.*` schema) for user-facing chat history:
     parent session (D8 in `design.md`)
   - `touch_session(session_id, user_id)` — refresh `last_active_at`
     without inserting a message row
+  - `set_title_if_empty(session_id, user_id, title)` — first-exchange
+    deterministic title, never clobbering an existing one
+    (`openspec/changes/agent-chat-fixes` D2)
+  - `set_title(session_id, user_id, title)` — overwrite for the async
+    refinement of that title
   - `soft_delete_session(session_id, user_id)` — user-initiated delete:
     `deleted_at = now()`, messages stay until the retention cron
   - `end_session(session_id, user_id)` — set `ended_at = now()` on
@@ -446,6 +451,67 @@ class ChatStore:
             return _parse_command_tag(tag) == 1
 
         return await self._with_retry("touch_session", _update)
+
+    async def set_title_if_empty(
+        self,
+        session_id: str | uuid_lib.UUID,
+        user_id: int,
+        title: str,
+    ) -> bool:
+        """Set the session's title only while it is still empty.
+
+        The deterministic-title write of the first exchange
+        (openspec/changes/agent-chat-fixes D2): the `title=''` predicate
+        makes the write idempotent and never-clobbering, so a
+        continuation or resumed run needs no extra branching — an
+        already-titled session is left alone. All three guards ride the
+        SQL: ownership (`user_id`), retention state (`deleted_at IS NULL`)
+        and emptiness. Returns True when the row was updated, False when
+        no row matched (unknown id, other user, soft-deleted, or a
+        non-empty title already set).
+        """
+
+        async def _update(conn: asyncpg.Connection) -> bool:
+            tag = await conn.execute(
+                "UPDATE chat_sessions SET title=$3 "
+                "WHERE id=$1 AND user_id=$2 AND title='' "
+                "AND deleted_at IS NULL",
+                str(session_id),
+                user_id,
+                title,
+            )
+            return _parse_command_tag(tag) == 1
+
+        return await self._with_retry("set_title_if_empty", _update)
+
+    async def set_title(
+        self,
+        session_id: str | uuid_lib.UUID,
+        user_id: int,
+        title: str,
+    ) -> bool:
+        """Overwrite the session's title, owner- and retention-guarded.
+
+        The refinement write (openspec/changes/agent-chat-fixes D2): the
+        async title-refinement task replaces the deterministic title in
+        place. Unlike `set_title_if_empty` there is no emptiness
+        predicate — the refinement overwrites whatever is there — but
+        ownership and `deleted_at IS NULL` still gate the write, so a
+        session soft-deleted before the task lands is not touched.
+        Returns True when the row was updated, False when no row matched.
+        """
+
+        async def _update(conn: asyncpg.Connection) -> bool:
+            tag = await conn.execute(
+                "UPDATE chat_sessions SET title=$3 "
+                "WHERE id=$1 AND user_id=$2 AND deleted_at IS NULL",
+                str(session_id),
+                user_id,
+                title,
+            )
+            return _parse_command_tag(tag) == 1
+
+        return await self._with_retry("set_title", _update)
 
     async def soft_delete_session(
         self, session_id: str | uuid_lib.UUID, user_id: int

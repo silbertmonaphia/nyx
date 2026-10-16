@@ -10,6 +10,11 @@ Covers:
      `hard_delete_soft_deleted`, with FK ON DELETE CASCADE carrying the
      `chat_messages` rows along
   6. Grace=0 collapses to a single-phase hard-delete
+  7. Title writes (openspec/changes/agent-chat-fixes 2.2/2.3):
+     `set_title_if_empty` fills an empty title exactly once (atomically,
+     even under concurrent first turns) and `set_title` overwrites only
+     the owner's live session — both no-ops for a foreign user or a
+     soft-deleted session
 
 Gated on `TEST_ASYNC_PG_DSN` (self-skips without a live Postgres). When
 the env var is set, the tests run against a real asyncpg pool — no
@@ -256,6 +261,76 @@ async def test_end_session_is_idempotent(pool: asyncpg.Pool) -> None:
     s2 = await store.get_session(run_id, user_id)
     assert s2 is not None
     assert s2.ended_at == first_ended
+
+
+# --- title writes (openspec/changes/agent-chat-fixes 2.2/2.3) --------------
+
+
+async def test_set_title_if_empty_wins_once(pool: asyncpg.Pool) -> None:
+    """The `title=''` predicate is what makes the deterministic write
+    "the session's first exchange": it fills an empty title exactly once
+    and never overwrites."""
+    from agent.chat_store import ChatStore
+
+    store = ChatStore(pool)
+    sid = str(_uuid.uuid4())
+    await store.create_session(1, sid)
+
+    assert await store.set_title_if_empty(sid, 1, "熬夜加班") is True
+    s = await store.get_session(sid, 1)
+    assert s is not None and s.title == "熬夜加班"
+
+    assert await store.set_title_if_empty(sid, 1, "别的标题") is False
+    s2 = await store.get_session(sid, 1)
+    assert s2 is not None and s2.title == "熬夜加班"
+
+
+async def test_set_title_if_empty_is_atomic_under_concurrency(
+    pool: asyncpg.Pool,
+) -> None:
+    """Concurrent first turns (a double-send) must produce exactly ONE
+    winner — the guard lives in the UPDATE's WHERE clause, so the race is
+    decided by the database, not by a read-then-write in Python."""
+    from agent.chat_store import ChatStore
+
+    store = ChatStore(pool)
+    sid = str(_uuid.uuid4())
+    await store.create_session(1, sid)
+
+    results = await asyncio.gather(
+        *(store.set_title_if_empty(sid, 1, f"标题{i}") for i in range(5))
+    )
+    assert results.count(True) == 1, f"exactly one winner; got {results}"
+
+
+async def test_set_title_writes_are_owner_and_soft_delete_guarded(
+    pool: asyncpg.Pool,
+) -> None:
+    """`set_title` overwrites (the refinement path), but only for the
+    owner's live session — a soft-deleted session is never retitled, and
+    a foreign write is a no-op that leaves the row untouched."""
+    from agent.chat_store import ChatStore
+
+    store = ChatStore(pool)
+    sid = str(_uuid.uuid4())
+    await store.create_session(1, sid, title="熬夜加班")
+
+    assert await store.set_title(sid, 1, "生鲜电商推荐") is True
+    s = await store.get_session(sid, 1)
+    assert s is not None and s.title == "生鲜电商推荐"
+
+    assert await store.set_title(sid, 2, "foreign") is False
+    s2 = await store.get_session(sid, 1)
+    assert s2 is not None and s2.title == "生鲜电商推荐"
+
+    assert await store.soft_delete_session(sid, 1) is True
+    assert await store.set_title(sid, 1, "after delete") is False
+    assert await store.set_title_if_empty(sid, 1, "after delete") is False
+    async with pool.acquire() as conn:
+        kept = await conn.fetchval(
+            "SELECT title FROM agent.chat_sessions WHERE id=$1", sid
+        )
+    assert kept == "生鲜电商推荐", "a soft-deleted session keeps its title"
 
 
 async def test_touch_session_refreshes_last_active(

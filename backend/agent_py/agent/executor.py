@@ -84,6 +84,7 @@ async def executor_node(
     rag: RagClient,
     tools: ToolDispatcher,
     approvals: ApprovalGate | None = None,
+    prefs_text: str = "",
 ) -> AgentState:
     plan: Plan | None = state.get("plan")
     if plan is None:
@@ -165,9 +166,27 @@ async def executor_node(
                         span=span,
                     )
                 elif step.kind.value == "llm":
-                    await _run_llm(state, step, settings, tracer, budget, span)
+                    await _run_llm(
+                        state,
+                        step,
+                        settings,
+                        tracer,
+                        budget,
+                        span,
+                        prefs_text=prefs_text,
+                    )
                 elif step.kind.value == "react":
-                    await _run_react(state, step, settings, tracer, budget, tools, span, approvals=approvals)
+                    await _run_react(
+                        state,
+                        step,
+                        settings,
+                        tracer,
+                        budget,
+                        tools,
+                        span,
+                        approvals=approvals,
+                        prefs_text=prefs_text,
+                    )
                 else:
                     raise ValueError(f"unsupported step kind: {step.kind}")
             except _BudgetExceededError:
@@ -265,7 +284,15 @@ async def _run_tool(
     state["step_outputs"][step.id] = result
 
 
-async def _run_llm(state: AgentState, step, settings: Settings, tracer: trace.Tracer, budget: BudgetGuard, span: trace.Span) -> None:
+async def _run_llm(
+    state: AgentState,
+    step,
+    settings: Settings,
+    tracer: trace.Tracer,
+    budget: BudgetGuard,
+    span: trace.Span,
+    prefs_text: str = "",
+) -> None:
     decision = await budget.check_and_increment(state["user_id"], DEFAULT_ESTIMATED_TOKENS, tracer)
     if decision.decision == "exceeded":
         raise _BudgetExceededError()
@@ -280,7 +307,7 @@ async def _run_llm(state: AgentState, step, settings: Settings, tracer: trace.Tr
         temperature=0.0,
     )
 
-    msgs = [SystemMessage(content=step.prompt or "")]
+    msgs = [SystemMessage(content=(step.prompt or "") + (prefs_text or ""))]
     context = _render_prior_data(state, step.id)
     if context:
         msgs.append(SystemMessage(content=context))
@@ -307,6 +334,7 @@ async def _run_react(
     tools: ToolDispatcher,
     span: trace.Span,
     approvals: ApprovalGate | None = None,
+    prefs_text: str = "",
 ) -> None:
     max_iters = step.max_iterations or settings.step_react_max_iterations
     model = state.get("model") or settings.llm_model
@@ -329,7 +357,7 @@ async def _run_react(
     else:
         client = base_client
 
-    messages = [SystemMessage(content=_react_instruction(step))]
+    messages = [SystemMessage(content=_react_instruction(step) + (prefs_text or ""))]
     context = _render_prior_data(state, step.id)
     if context:
         messages.append(SystemMessage(content=context))
