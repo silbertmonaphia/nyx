@@ -39,7 +39,7 @@ flowchart TB
 - **Plan-and-Execute** —— planner 只做一次 LLM 调用（走 provider 结构化输出，Pydantic 校验，校验失败时有界重试），executor 然后按顺序执行各步骤。
 - **步骤类型** —— `rag`（通过 Go RAG 桥读取你的 feed）、`tool`（MCP 工具面）、`llm`（单次调用）、`react`（模型 ↔ 工具嵌套循环，有迭代上限）。
 - **默认就稳** —— 工具分发两类失败均有有界重试（校验失败重新提示 / 瞬时错误退避重试）、每用户 Redis token 预算（fail-closed）、按 IP 限流、运行状态存 Postgres 支持 `run_id` 恢复、僵尸运行清扫 + 保留期 GC。
-- **可观测** —— Prometheus 指标（:9001）、OpenTelemetry 链路（Jaeger）、可选 Langfuse LLM 追踪，以及启动时配置好的进程日志（root 为 WARNING、`agent` 包为 INFO，行格式 `时间 级别 logger: 消息`）：追踪状态与导出失败在默认日志里就可见。
+- **可观测** —— Prometheus 指标（:9001）、OpenTelemetry 链路（Jaeger）、可选 Langfuse LLM 追踪，以及启动时配置好的进程日志（root 为 WARNING，agent 自身的 logger —— `agent` 包与 `nyx.agent.*` 运行时树 —— 为 INFO，行格式 `时间 级别 logger: 消息`）：追踪状态、启动行与导出失败在默认日志里就可见。
 - **可选 web 工具，默认关闭** —— agent 原生的 `web_search`（Tavily，无账号也可用 keyless 档）和带 SSRF 防护、非受信内容框定的 `web_fetch`。
 - **记忆** —— 每个会话与消息都会持久化（保留期下限 1 年，软删除 + 宽限期）；planner 会注入跨会话的"已知用户偏好"块；面向主体的接口全部按 owner 限定：`/agent/sessions*`（历史侧边栏 API）与 GDPR 导出/擦除（`/agent/me/*`，审计仅记计数）。
 

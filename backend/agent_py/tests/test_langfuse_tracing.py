@@ -21,6 +21,7 @@ import pytest
 from opentelemetry import trace
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 
+from agent import main as main_module
 from agent import observability
 from agent.config import Settings
 from agent.main import configure_logging
@@ -305,10 +306,15 @@ _LOG_FORMAT_RE = re.compile(
 def _restore_logging():
     root = logging.getLogger()
     root_level = root.level
-    agent_level = logging.getLogger("agent").level
+    levels = {name: logging.getLogger(name).level for name in ("agent", "nyx.agent")}
+    handlers = list(root.handlers)
     yield
     root.setLevel(root_level)
-    logging.getLogger("agent").setLevel(agent_level)
+    for name, level in levels.items():
+        logging.getLogger(name).setLevel(level)
+    for handler in list(root.handlers):
+        if handler not in handlers:
+            root.removeHandler(handler)
 
 
 def test_configure_logging_installs_one_formatted_root_handler(
@@ -341,12 +347,13 @@ def test_configure_logging_installs_one_formatted_root_handler(
     assert match.group("message") == "export failed for http://langfuse:3000"
 
 
-def test_configure_logging_raises_agent_logger_to_info_and_is_idempotent(
+def test_configure_logging_raises_agent_loggers_to_info_and_is_idempotent(
     monkeypatch, _restore_logging
 ):
-    """D1: `agent` at INFO (third-party INFO stays on the root WARNING), and a
-    repeated setup leaves the handler set untouched — the second call is a
-    no-op rather than a duplicate handler."""
+    """D1: the `agent` package and the runtime's `nyx.agent` tree at INFO
+    (third-party INFO stays on the root WARNING), and a repeated setup leaves
+    the handler set untouched — the second call is a no-op rather than a
+    duplicate handler."""
     root = logging.getLogger()
     monkeypatch.setattr(root, "handlers", [])
 
@@ -354,6 +361,8 @@ def test_configure_logging_raises_agent_logger_to_info_and_is_idempotent(
 
     assert logging.getLogger("agent").level == logging.INFO
     assert logging.getLogger("agent.observability").getEffectiveLevel() == logging.INFO
+    assert logging.getLogger("nyx.agent").level == logging.INFO
+    assert logging.getLogger("nyx.agent.executor").getEffectiveLevel() == logging.INFO
     first_pass = list(root.handlers)
     assert len(first_pass) == 1
 
@@ -362,26 +371,41 @@ def test_configure_logging_raises_agent_logger_to_info_and_is_idempotent(
     assert root.handlers == first_pass
 
 
-def test_startup_line_is_dropped_until_the_agent_logger_is_raised(caplog, _restore_logging):
+def test_startup_lines_are_dropped_until_the_agent_loggers_are_raised(
+    caplog, _restore_logging
+):
     """The exact bug: with the pre-change configuration (no root handler, no
-    `agent` level) the startup announcement never reaches an operator; after
-    `configure_logging` it names the host at INFO."""
+    per-logger INFO) the startup announcements never reach an operator; after
+    `configure_logging` the Langfuse line names the host and a runtime
+    `nyx.agent` line renders at INFO."""
     logging.getLogger("agent").setLevel(logging.WARNING)
+    logging.getLogger("nyx.agent").setLevel(logging.WARNING)
 
     caplog.clear()
     setup_langfuse(_settings(), span_exporter=InMemorySpanExporter())
-    assert [r for r in caplog.records if r.name.startswith("agent.")] == []
+    main_module.log.info("prometheus exporter listening on :9001/metrics")
+    assert [
+        r for r in caplog.records if r.name.startswith(("agent.", "nyx."))
+    ] == []
 
     shutdown_langfuse()
     caplog.clear()
     configure_logging()
     setup_langfuse(_settings(), span_exporter=InMemorySpanExporter())
+    main_module.log.info("prometheus exporter listening on :9001/metrics")
 
     lines = [r for r in caplog.records if r.name == "agent.observability"]
     assert len(lines) == 1, [(r.levelno, r.name, r.getMessage()) for r in caplog.records]
     assert lines[0].levelno == logging.INFO
     assert "langfuse tracing enabled" in lines[0].getMessage()
     assert "127.0.0.1:9" in lines[0].getMessage()
+
+    runtime = [r for r in caplog.records if r.name == "nyx.agent"]
+    assert len(runtime) == 1, [
+        (r.levelno, r.name, r.getMessage()) for r in caplog.records
+    ]
+    assert runtime[0].levelno == logging.INFO
+    assert "prometheus exporter listening" in runtime[0].getMessage()
 
 
 def test_disabled_tracing_logs_no_langfuse_line(caplog, _restore_logging):

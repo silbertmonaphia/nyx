@@ -93,17 +93,20 @@ def configure_logging() -> None:
     without a root handler every record above `logging.lastResort`'s
     threshold renders bare — no timestamp, level, or logger name — and the
     agent's own INFO lines (the Langfuse "tracing enabled (host=…)"
-    announcement, the Prometheus listen line) are dropped outright. Root at
-    WARNING keeps third-party INFO chatter (httpx request lines) out while
-    rendering the OTel exporter's retry/drop diagnostics in full; the
-    `agent` package logger at INFO carries the agent's own operational
-    lines. Idempotent: `basicConfig` is a no-op once root has handlers
-    (uvicorn's dictConfig runs after this in the `python -m agent.main`
-    path and only touches `uvicorn.*` loggers), and the level assignment is
-    absolute.
+    announcement, the Prometheus listen line, "agent_py started") are
+    dropped outright. Root at WARNING keeps third-party INFO chatter (httpx
+    request lines) out while rendering the OTel exporter's retry/drop
+    diagnostics in full; the agent's own loggers at INFO carry its
+    operational lines — both the `agent` package (`agent.observability`)
+    and the runtime's `nyx.agent.*` tree, whose descendant loggers inherit
+    the `nyx.agent` level. Idempotent: `basicConfig` is a no-op once root
+    has handlers (uvicorn's dictConfig runs after this in the
+    `python -m agent.main` path and only touches `uvicorn.*` loggers), and
+    the level assignments are absolute.
     """
     logging.basicConfig(level=logging.WARNING, format=_LOG_FORMAT)
     logging.getLogger("agent").setLevel(logging.INFO)
+    logging.getLogger("nyx.agent").setLevel(logging.INFO)
 
 
 configure_logging()
