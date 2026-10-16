@@ -1,4 +1,5 @@
 import React, { useEffect, useLayoutEffect, useRef } from 'react';
+import { useTranslation } from 'react-i18next';
 import { Feed, NewFeed } from '../types/feed';
 import { Card, CardHeader, CardTitle, CardContent } from '~/components/ui/Card';
 import { Button } from '~/components/ui/Button';
@@ -23,6 +24,7 @@ export const FeedItem: React.FC<FeedItemProps> = ({
   onEdit,
   onDelete,
 }) => {
+  const { t, i18n } = useTranslation();
   const isOwner = feed.user_id === currentUserId;
   return (
     <Card className="hover:shadow-md transition-shadow">
@@ -39,17 +41,17 @@ export const FeedItem: React.FC<FeedItemProps> = ({
               {feed.created_at && (
                 <time
                   dateTime={feed.created_at}
-                  title={new Date(feed.created_at).toLocaleString()}
+                  title={new Date(feed.created_at).toLocaleString(i18n.language)}
                 >
-                  Created {formatRelativeTime(feed.created_at)}
+                  {t('feeds.created', { relative: formatRelativeTime(feed.created_at) })}
                 </time>
               )}
               {feed.updated_at && (
                 <time
                   dateTime={feed.updated_at}
-                  title={new Date(feed.updated_at).toLocaleString()}
+                  title={new Date(feed.updated_at).toLocaleString(i18n.language)}
                 >
-                  Updated {formatRelativeTime(feed.updated_at)}
+                  {t('feeds.updated', { relative: formatRelativeTime(feed.updated_at) })}
                 </time>
               )}
             </div>
@@ -60,7 +62,7 @@ export const FeedItem: React.FC<FeedItemProps> = ({
                 variant="ghost"
                 size="icon"
                 onClick={() => onEdit(feed)}
-                title="Edit"
+                title={t('feeds.edit')}
                 className="h-8 w-8 text-muted-foreground hover:text-primary"
               >
                 <Pencil className="h-4 w-4" />
@@ -69,7 +71,7 @@ export const FeedItem: React.FC<FeedItemProps> = ({
                 variant="ghost"
                 size="icon"
                 onClick={() => onDelete(feed.id)}
-                title="Delete"
+                title={t('feeds.delete')}
                 className="h-8 w-8 text-muted-foreground hover:text-destructive"
               >
                 <Trash2 className="h-4 w-4" />
@@ -132,6 +134,7 @@ interface FeedListProps {
 }
 
 const FeedCount: React.FC<{ loaded: number; total: number }> = ({ loaded, total }) => {
+  const { t } = useTranslation();
   // Render the loaded count and, when pagination is in play (loaded < total),
   // append "of N" so the user knows there is more on the next page.
   const moreOnTheWay = total > loaded;
@@ -142,8 +145,8 @@ const FeedCount: React.FC<{ loaded: number; total: number }> = ({ loaded, total 
       aria-live="polite"
     >
       {moreOnTheWay
-        ? `${loaded} of ${total} feeds loaded`
-        : `${loaded} ${loaded === 1 ? 'feed' : 'feeds'} loaded`}
+        ? t('feeds.countOfTotal', { loaded, total })
+        : t('feeds.countLoaded', { count: loaded })}
     </div>
   );
 };
@@ -163,6 +166,7 @@ export const FeedList: React.FC<FeedListProps> = ({
   onEdit,
   onDelete,
 }) => {
+  const { t } = useTranslation();
   const sentinelRef = useRef<HTMLDivElement | null>(null);
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const didInitialScroll = useRef(false);
@@ -235,7 +239,7 @@ export const FeedList: React.FC<FeedListProps> = ({
         className="no-scrollbar w-full max-w-[600px] flex-1 min-h-0 overflow-y-auto flex flex-col items-center justify-center"
       >
         <div className="w-full py-10 text-center text-muted-foreground rounded-lg border border-dashed border-border">
-          {searchTerm ? `Feed "${searchTerm}" not found` : 'No feeds found'}
+          {searchTerm ? t('feeds.emptySearch', { term: searchTerm }) : t('feeds.empty')}
         </div>
       </div>
     );
@@ -253,7 +257,7 @@ export const FeedList: React.FC<FeedListProps> = ({
           editingFeed?.id === feed.id ? (
             <FeedForm
               key={feed.id}
-              title="Edit Feed"
+              title={t('feeds.editFeed')}
               feed={editingFeed}
               onSubmit={onUpdate}
               onCancel={onCancelEdit}
