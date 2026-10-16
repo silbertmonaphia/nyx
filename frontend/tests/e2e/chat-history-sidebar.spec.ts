@@ -5,7 +5,7 @@ import { test, expect, type Page } from '@playwright/test';
  *
  * Exercises the SPA-visible half of the change:
  *   - the rail lists the tab's sessions newest-first, with a placeholder
- *     label for untitled sessions and a relative timestamp;
+ *     label for untitled sessions and an absolute + relative timestamp;
  *   - a reload restores the active session from sessionStorage and
  *     replays its stored turns into the panel;
  *   - `+ New chat` clears the panel but keeps the rail rows; the next
@@ -14,6 +14,8 @@ import { test, expect, type Page } from '@playwright/test';
  *     clicking the active row is a no-op (no refetch);
  *   - hover+delete drops a row (and clears the panel when it was the
  *     active one);
+ *   - a long history scrolls inside the rail while the dialog stays
+ *     viewport-bounded, and a short history still sizes to its content;
  *   - below `md` the rail is a drawer: hidden by default, opened by the
  *     hamburger, closed again by picking a session.
  *
@@ -316,6 +318,142 @@ test.describe('Chat history sidebar (browser-level, live backend)', { tag: '@liv
     // and the tab forgets the id, so a reload stays graceful.
     await expect(page.getByText(/No messages yet/)).toBeVisible();
     expect(await persistedSessionId(page)).toBeNull();
+  });
+
+  test('long history scrolls the rail internally with the dialog bounded to the viewport', async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width: 1000, height: 800 });
+    await registerAndOpenChat(page);
+
+    for (let i = 0; i < 30; i++) {
+      const previous = await persistedSessionId(page);
+      await page.getByTestId('chat-new-session').click();
+      await expect
+        .poll(
+          async () => {
+            const id = await persistedSessionId(page);
+            return id !== null && id !== previous;
+          },
+          { timeout: 15000 },
+        )
+        .toBe(true);
+    }
+
+    await page.reload();
+    await reopenChat(page);
+
+    const rail = page.getByTestId('chat-session-list');
+    await expect
+      .poll(
+        async () => {
+          await rail.evaluate((el) => {
+            el.scrollTop = el.scrollHeight;
+          });
+          return page.getByTestId('chat-session-row').count();
+        },
+        { timeout: 20000 },
+      )
+      .toBe(30);
+
+    const dialogBox = await page.getByTestId('chat-panel').boundingBox();
+    expect(dialogBox).not.toBeNull();
+    expect(dialogBox!.y).toBeGreaterThanOrEqual(0);
+    expect(dialogBox!.y + dialogBox!.height).toBeLessThanOrEqual(800);
+
+    const railMetrics = await rail.evaluate((el) => ({
+      scrollHeight: el.scrollHeight,
+      clientHeight: el.clientHeight,
+    }));
+    expect(railMetrics.scrollHeight).toBeGreaterThan(railMetrics.clientHeight);
+
+    const railBox = await rail.boundingBox();
+    expect(railBox!.y + railBox!.height).toBeLessThanOrEqual(
+      dialogBox!.y + dialogBox!.height,
+    );
+
+    const composer = page.getByTestId('chat-form');
+    await expect(composer).toBeVisible();
+    const composerBox = await composer.boundingBox();
+    expect(composerBox!.y + composerBox!.height).toBeLessThanOrEqual(800);
+
+    const firstRow = page.getByTestId('chat-session-row').first();
+    await rail.evaluate((el) => {
+      el.scrollTop = 0;
+    });
+    const topBefore = (await firstRow.boundingBox())!.y;
+    await rail.evaluate((el) => {
+      el.scrollTop = 120;
+    });
+    const topAfter = (await firstRow.boundingBox())!.y;
+    expect(topAfter).toBeLessThan(topBefore);
+
+    await page.setViewportSize({ width: 1000, height: 600 });
+    await expect
+      .poll(async () => {
+        const box = await page.getByTestId('chat-panel').boundingBox();
+        return box !== null && box.y >= 0 && box.y + box.height <= 600;
+      })
+      .toBe(true);
+    await expect(composer).toBeVisible();
+    const shortComposerBox = await composer.boundingBox();
+    expect(shortComposerBox!.y + shortComposerBox!.height).toBeLessThanOrEqual(
+      600,
+    );
+    const shortRailMetrics = await rail.evaluate((el) => ({
+      scrollHeight: el.scrollHeight,
+      clientHeight: el.clientHeight,
+    }));
+    expect(shortRailMetrics.scrollHeight).toBeGreaterThan(
+      shortRailMetrics.clientHeight,
+    );
+  });
+
+  test('short history is unaffected: the dialog sizes to its content', async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width: 1000, height: 800 });
+    await registerAndOpenChat(page);
+
+    await page.getByTestId('chat-new-session').click();
+    await waitForPersistedSessionId(page);
+    await page.reload();
+    await reopenChat(page);
+    await expect(page.getByTestId('chat-session-row')).toHaveCount(1);
+
+    const dialogBox = await page.getByTestId('chat-panel').boundingBox();
+    expect(dialogBox).not.toBeNull();
+    expect(dialogBox!.height).toBeLessThan(560);
+
+    const railMetrics = await page
+      .getByTestId('chat-session-list')
+      .evaluate((el) => ({
+        scrollHeight: el.scrollHeight,
+        clientHeight: el.clientHeight,
+      }));
+    expect(railMetrics.scrollHeight).toBeLessThanOrEqual(
+      railMetrics.clientHeight,
+    );
+  });
+
+  test('rows render an absolute + relative timestamp at a legible size', async ({
+    page,
+  }) => {
+    await registerAndOpenChat(page);
+
+    await page.getByTestId('chat-new-session').click();
+    await waitForPersistedSessionId(page);
+    await page.reload();
+    await reopenChat(page);
+
+    const time = page.getByTestId('chat-session-time').first();
+    await expect(time).toBeVisible();
+    await expect(time).toHaveText(/^\d{2}-\d{2} \d{2}:\d{2} · /);
+    await expect(time).toHaveAttribute('title', /^\d{4}-\d{2}-\d{2}T/);
+    const fontSize = await time.evaluate((el) =>
+      parseFloat(window.getComputedStyle(el).fontSize),
+    );
+    expect(fontSize).toBeGreaterThanOrEqual(11);
   });
 
   test('narrow viewport: the hamburger drawer opens and a session click closes it', async ({
