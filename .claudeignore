@@ -47,3 +47,5 @@ __pycache__/
 backend/agent_py/.venv/
 frontend/playwright-report/
 frontend/test-results/
+test-results/
+playwright-report/

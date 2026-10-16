@@ -81,3 +81,5 @@ backend/agent_py/.ruff_cache/
 evals/artifacts/
 evals/**/artifacts/
 .promptfoo/
+test-results/
+playwright-report/
