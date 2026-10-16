@@ -1,4 +1,5 @@
 import React, { useEffect, useRef, useState } from "react";
+import { useTranslation } from "react-i18next";
 import {
   ChevronDown,
   Loader2,
@@ -54,14 +55,15 @@ function formatJsonPreview(value: unknown): string {
  * args preview. Pure presentational; the store owns the data.
  */
 const StepRow: React.FC<{ step: ChatStep }> = ({ step }) => {
+  const { t } = useTranslation();
   const argsPreview = formatJsonPreview(step.toolArgs);
   const resultPreview = formatJsonPreview(step.toolResult);
   const statusLabel =
     step.status === "running"
-      ? "running"
+      ? t("chat.status.running")
       : step.status === "ok"
-        ? "ok"
-        : "failed";
+        ? t("chat.status.ok")
+        : t("chat.status.failed");
   return (
     <li
       className="text-xs space-y-1"
@@ -94,7 +96,7 @@ const StepRow: React.FC<{ step: ChatStep }> = ({ step }) => {
           <span
             className="text-[10px] text-amber-600 dark:text-amber-400"
             data-testid="chat-agent-step-retry"
-            title={`succeeded after ${step.retryCount} retr${step.retryCount === 1 ? "y" : "ies"}`}
+            title={t("chat.retryTitle", { count: step.retryCount })}
           >
             ↻ {step.retryCount}
           </span>
@@ -108,7 +110,9 @@ const StepRow: React.FC<{ step: ChatStep }> = ({ step }) => {
           className="ml-5 text-[10px] text-muted-foreground"
           data-testid="chat-agent-step-args"
         >
-          <summary className="cursor-pointer select-none">args</summary>
+          <summary className="cursor-pointer select-none">
+            {t("chat.stepArgs")}
+          </summary>
           <pre className="mt-1 whitespace-pre-wrap break-words font-mono">
             {JSON.stringify(step.toolArgs, null, 2)}
           </pre>
@@ -119,7 +123,7 @@ const StepRow: React.FC<{ step: ChatStep }> = ({ step }) => {
           className="ml-5 text-[10px] text-muted-foreground"
           data-testid="chat-agent-step-result"
         >
-          result: {resultPreview}
+          {t("chat.stepResult", { preview: resultPreview })}
         </div>
       )}
       {step.status === "failed" && step.reason && (
@@ -158,6 +162,7 @@ interface ChatPanelProps {
  * per second.
  */
 export const ChatPanel: React.FC<ChatPanelProps> = ({ open, onOpenChange }) => {
+  const { t } = useTranslation();
   const messages = useChat((s) => s.messages);
   const isStreaming = useChat((s) => s.isStreaming);
   const error = useChat((s) => s.error);
@@ -267,7 +272,9 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ open, onOpenChange }) => {
                 variant="ghost"
                 size="icon"
                 className="md:hidden"
-                aria-label={sidebarOpen ? "Hide chat history" : "Show chat history"}
+                aria-label={
+                  sidebarOpen ? t("chat.hideHistory") : t("chat.showHistory")
+                }
                 aria-expanded={sidebarOpen}
                 data-testid="chat-sidebar-toggle"
                 onClick={() => setSidebarOpen((v) => !v)}
@@ -275,7 +282,7 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ open, onOpenChange }) => {
                 <Menu className="h-4 w-4" />
               </Button>
             )}
-            <DialogTitle>Chat</DialogTitle>
+            <DialogTitle>{t("chat.title")}</DialogTitle>
             {SIDEBAR_ENABLED && (
               <Button
                 type="button"
@@ -286,13 +293,11 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ open, onOpenChange }) => {
                 onClick={() => void startNewSession()}
               >
                 <Plus className="h-4 w-4" />
-                New chat
+                {t("chat.newChat")}
               </Button>
             )}
           </div>
-          <DialogDescription>
-            Ask anything — responses stream as the model generates them.
-          </DialogDescription>
+          <DialogDescription>{t("chat.description")}</DialogDescription>
         </DialogHeader>
 
         {/* `relative` scopes the mobile drawer to the content area, so
@@ -321,7 +326,7 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ open, onOpenChange }) => {
             >
               {messages.length === 0 && (
                 <p className="text-sm text-muted-foreground text-center py-8">
-                  No messages yet — type below to start.
+                  {t("chat.emptyState")}
                 </p>
               )}
               {messages.map((m, i) => (
@@ -394,8 +399,7 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ open, onOpenChange }) => {
                               className="h-3 w-3"
                               aria-hidden="true"
                             />
-                            {m.steps.length} step
-                            {m.steps.length === 1 ? "" : "s"}
+                            {t("chat.steps", { count: m.steps.length })}
                           </summary>
                           <ul className="mt-1 space-y-2 border-l border-muted pl-2">
                             {m.steps.map((s) => (
@@ -406,9 +410,11 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ open, onOpenChange }) => {
                       )}
                     {m.role === "assistant" && m.usage && (
                       <div className="mt-1 text-[10px] text-muted-foreground">
-                        tokens: {m.usage.total_tokens} (
-                        prompt {m.usage.prompt_tokens} · completion{" "}
-                        {m.usage.completion_tokens})
+                        {t("chat.tokens", {
+                          total: m.usage.total_tokens,
+                          prompt: m.usage.prompt_tokens,
+                          completion: m.usage.completion_tokens,
+                        })}
                       </div>
                     )}
                   </div>
@@ -436,15 +442,14 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ open, onOpenChange }) => {
                   data-testid="chat-session-busy-hint"
                   role="status"
                 >
-                  The agent is still working on this conversation — you can
-                  reply when it finishes.
+                  {t("chat.busyHint")}
                 </p>
               )}
               <Textarea
                 value={draft}
                 onChange={(e) => setDraft(e.target.value)}
                 onKeyDown={handleKeyDown}
-                placeholder="Type a message…"
+                placeholder={t("chat.placeholder")}
                 rows={2}
                 disabled={composerLocked}
                 data-testid="chat-input"
@@ -458,7 +463,7 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ open, onOpenChange }) => {
                     data-testid="chat-cancel"
                   >
                     <Square className="h-4 w-4" />
-                    Cancel
+                    {t("common.cancel")}
                   </Button>
                 )}
                 <Button
@@ -467,7 +472,7 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ open, onOpenChange }) => {
                   data-testid="chat-send"
                 >
                   <Send className="h-4 w-4" />
-                  Send
+                  {t("chat.send")}
                 </Button>
               </div>
             </form>

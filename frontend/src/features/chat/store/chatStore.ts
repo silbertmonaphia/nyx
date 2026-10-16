@@ -1,4 +1,5 @@
 import { create } from "zustand";
+import { t } from "~/i18n";
 import { logger } from "~/services/logger";
 import { chatService } from "../services/chatService";
 import {
@@ -808,7 +809,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
         }
       } else if (isAttached()) {
         const message =
-          err instanceof Error ? err.message : "Chat request failed";
+          err instanceof Error ? err.message : t("chat.errors.generic");
         // Same empty-vs-partial rule as the mid-stream error branch:
         // a stranded empty bubble pollutes the next message's
         // history (planner sees `[user]hi, [assistant]''` and
@@ -944,7 +945,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
       patchApprovalCard(
         set,
         approvalId,
-        { error: "Could not send your decision. Please try again." },
+        { error: t("chat.errors.decision") },
         true,
       );
     }

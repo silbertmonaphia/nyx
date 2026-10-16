@@ -1,4 +1,5 @@
 import React from 'react';
+import { t } from '~/i18n';
 import { logger } from '~/services/logger';
 import { captureSentryException } from '~/services/sentry';
 
@@ -64,10 +65,9 @@ export class ErrorBoundary extends React.Component<Props, State> {
             role="alert"
             className="min-h-screen flex flex-col items-center justify-center gap-3 p-8 text-center"
           >
-            <h1 className="text-2xl font-semibold">Something went wrong</h1>
+            <h1 className="text-2xl font-semibold">{t('errors.boundaryTitle')}</h1>
             <p className="text-muted-foreground max-w-md">
-              An unexpected error stopped the page from rendering. Reload to
-              try again.
+              {t('errors.boundaryBody')}
             </p>
           </div>
         )

@@ -1,5 +1,6 @@
 import React, { useEffect } from 'react';
 import { useForm } from 'react-hook-form';
+import { useTranslation } from 'react-i18next';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { Feed, feedSchema, FeedFormData } from '../types/feed';
 import { Button } from '~/components/ui/Button';
@@ -16,6 +17,7 @@ interface FeedFormProps {
 }
 
 export const FeedForm: React.FC<FeedFormProps> = ({ feed, onSubmit, onCancel, title }) => {
+  const { t } = useTranslation();
   const {
     register,
     handleSubmit,
@@ -59,11 +61,11 @@ export const FeedForm: React.FC<FeedFormProps> = ({ feed, onSubmit, onCancel, ti
       <form onSubmit={handleSubmit(onFormSubmit)}>
         <CardContent className="space-y-4">
           <div className="space-y-2 text-left">
-            <Label htmlFor="title">Title</Label>
+            <Label htmlFor="title">{t('feeds.title')}</Label>
             <Input
               id="title"
               {...register('title')}
-              placeholder="Feed title"
+              placeholder={t('feeds.titlePlaceholder')}
               aria-invalid={!!errors.title}
               className={errors.title ? "border-destructive focus-visible:ring-destructive" : ""}
             />
@@ -71,11 +73,11 @@ export const FeedForm: React.FC<FeedFormProps> = ({ feed, onSubmit, onCancel, ti
           </div>
 
           <div className="space-y-2 text-left">
-            <Label htmlFor="description">Description</Label>
+            <Label htmlFor="description">{t('feeds.description')}</Label>
             <Textarea
               id="description"
               {...register('description')}
-              placeholder="Description"
+              placeholder={t('feeds.descriptionPlaceholder')}
               aria-invalid={!!errors.description}
               className={errors.description ? "border-destructive focus-visible:ring-destructive" : ""}
             />
@@ -84,10 +86,10 @@ export const FeedForm: React.FC<FeedFormProps> = ({ feed, onSubmit, onCancel, ti
         </CardContent>
         <CardFooter className="flex gap-2">
           <Button type="submit" className="flex-1">
-            {feed ? 'Update Feed' : 'Save Feed'}
+            {feed ? t('feeds.update') : t('feeds.save')}
           </Button>
           <Button type="button" variant="outline" onClick={onCancel} className="flex-1">
-            Cancel
+            {t('common.cancel')}
           </Button>
         </CardFooter>
       </form>

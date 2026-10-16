@@ -1,18 +1,24 @@
 import React, { useState } from "react";
 import { useForm } from "react-hook-form";
+import { useTranslation } from "react-i18next";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
 import api, { tokenStore } from "../../../services/api";
 import { useAuthStore } from "../../../store/authStore";
 import { useUiStore } from "../../../store/uiStore";
 import { logger } from "../../../services/logger";
+import { t as translate } from "~/i18n";
 import { Button } from "~/components/ui/Button";
 import { Input } from "~/components/ui/Input";
 import { Label } from "~/components/ui/Label";
 
 const authSchema = z.object({
-  username: z.string().min(3, "Username must be at least 3 characters"),
-  password: z.string().min(6, "Password must be at least 6 characters"),
+  username: z
+    .string()
+    .min(3, { error: () => translate("auth.usernameMin") }),
+  password: z
+    .string()
+    .min(6, { error: () => translate("auth.passwordMin") }),
 });
 
 type AuthFormData = z.infer<typeof authSchema>;
@@ -23,6 +29,7 @@ interface AuthFormProps {
 }
 
 export const AuthForm: React.FC<AuthFormProps> = ({ onSuccess, onCancel }) => {
+  const { t } = useTranslation();
   const [isLogin, setIsLogin] = useState(true);
   const setAuth = useAuthStore((state) => state.setAuth);
   const addToast = useUiStore((state) => state.addToast);
@@ -59,7 +66,7 @@ export const AuthForm: React.FC<AuthFormProps> = ({ onSuccess, onCancel }) => {
         tokenStore.setTokens(body.access_token, body.refresh_token);
       }
       addToast(
-        isLogin ? "Successfully logged in!" : "Successfully registered!",
+        isLogin ? t("auth.loginSuccess") : t("auth.registerSuccess"),
         "success",
       );
       onSuccess();
@@ -71,7 +78,7 @@ export const AuthForm: React.FC<AuthFormProps> = ({ onSuccess, onCancel }) => {
   return (
     <form onSubmit={handleSubmit(onSubmit)} className="space-y-4">
       <div className="space-y-2 text-left">
-        <Label htmlFor="username">Username</Label>
+        <Label htmlFor="username">{t("auth.username")}</Label>
         <Input
           id="username"
           {...register("username")}
@@ -86,7 +93,7 @@ export const AuthForm: React.FC<AuthFormProps> = ({ onSuccess, onCancel }) => {
       </div>
 
       <div className="space-y-2 text-left">
-        <Label htmlFor="password">Password</Label>
+        <Label htmlFor="password">{t("auth.password")}</Label>
         <Input
           id="password"
           type="password"
@@ -104,7 +111,7 @@ export const AuthForm: React.FC<AuthFormProps> = ({ onSuccess, onCancel }) => {
       <div className="flex flex-col gap-4 pt-2">
         <div className="flex gap-2 w-full">
           <Button type="submit" className="flex-1">
-            {isLogin ? "Login" : "Register"}
+            {isLogin ? t("auth.login") : t("auth.register")}
           </Button>
           <Button
             type="button"
@@ -112,17 +119,17 @@ export const AuthForm: React.FC<AuthFormProps> = ({ onSuccess, onCancel }) => {
             onClick={onCancel}
             className="flex-1"
           >
-            Cancel
+            {t("common.cancel")}
           </Button>
         </div>
         <p className="text-sm text-center text-muted-foreground">
-          {isLogin ? "Don't have an account? " : "Already have an account? "}
+          {isLogin ? t("auth.noAccount") : t("auth.haveAccount")}{" "}
           <button
             type="button"
             className="text-primary font-semibold hover:underline underline-offset-4"
             onClick={() => setIsLogin(!isLogin)}
           >
-            {isLogin ? "Register" : "Login"}
+            {isLogin ? t("auth.register") : t("auth.login")}
           </button>
         </p>
       </div>

@@ -24,6 +24,23 @@ The theme toggle lives in the navbar immediately right of the `Nyx` wordmark (hi
   and scrollbars match. The app also publishes the in-session choice on `window.__nyxTheme`, so
   the boot script's listener honors a choice that storage could not persist.
 
+## Localization
+
+The locale toggle sits between the `Nyx` wordmark and the theme toggle (hidden below the `md`
+breakpoint). Both dictionaries live in `src/i18n/`: `zh.ts` is the source of truth and `en.ts`
+is held to it by a recursive parity type, so a key present in one and missing in the other is a
+type error; the declaration merging in `src/i18n/i18next.d.ts` compile-checks the keys passed to
+`t()`, and a runtime test asserts leaf-path and placeholder parity.
+
+- Chinese is the default on every first visit, whatever the browser language is.
+- Storage contract: `localStorage["nyx.locale"]` is `"zh"` or `"en"`; an absent or unrecognized
+  value means "no choice" (→ Chinese). Storage access is best-effort — if it throws, the switch
+  still works for the session and the next load falls back to Chinese.
+- `<html lang>` follows the active locale, and an explicit pick is remembered across reloads.
+- The e2e suite pins `nyx.locale=en` via `tests/e2e/fixtures/e2e-fixtures.ts` so the existing
+  English assertions stand unchanged; `tests/e2e/i18n.spec.ts` deliberately skips that fixture
+  and covers the Chinese default, the switch, and persistence.
+
 ## React Compiler
 
 The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).

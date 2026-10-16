@@ -6,6 +6,7 @@ import { useUiStore } from "../store/uiStore";
 import { useAuthStore } from "../store/authStore";
 import { logger } from "./logger";
 import { captureSentryException } from "./sentry";
+import { t } from "~/i18n";
 import type { ApiError, AuthResponse } from "~/api/openapi";
 
 const api = axios.create({
@@ -417,8 +418,9 @@ function buildServerErrorToast(
   if (status >= 400 && status < 500 && serverMessage) {
     return serverMessage;
   }
-  const ref = requestId ? ` (ref: ${requestId})` : "";
-  return `Server error (${status})${ref}`;
+  return requestId
+    ? t('errors.serverErrorRef', { status, requestId })
+    : t('errors.serverError', { status });
 }
 
 const MAX_LOG_PAYLOAD_CHARS = 2_000;
@@ -455,7 +457,7 @@ api.interceptors.response.use(
     return response;
   },
   async (error: AxiosError) => {
-    let message = "An unexpected error occurred";
+    let message = t('errors.unexpected');
 
     if (error.response) {
       // Handle 401 Unauthorized.
@@ -498,7 +500,7 @@ api.interceptors.response.use(
 
         tokenStore.clear();
         useAuthStore.getState().logout();
-        message = "Session expired. Please login again.";
+        message = t('errors.sessionExpired');
       } else {
         // SECURITY.md H7: never echo the backend `error` field
         // to the toast. Pull the request id off the response
@@ -531,7 +533,7 @@ api.interceptors.response.use(
         );
       }
     } else if (error.request) {
-      message = "No response from server. Please check your connection.";
+      message = t('errors.noResponse');
     } else {
       message = error.message;
     }

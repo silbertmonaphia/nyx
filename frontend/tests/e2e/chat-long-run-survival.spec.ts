@@ -1,4 +1,5 @@
-import { test, expect, type Page, type APIRequestContext } from '@playwright/test';
+import { expect, type Page, type APIRequestContext } from '@playwright/test';
+import { test } from './fixtures/e2e-fixtures';
 
 /**
  * Long-run survival + the summarize→create journey (live stack).

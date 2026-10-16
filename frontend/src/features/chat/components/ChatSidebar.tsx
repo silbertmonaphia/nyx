@@ -1,17 +1,15 @@
 import React, { useEffect, useRef } from "react";
+import { useTranslation } from "react-i18next";
 import { History, Trash2 } from "lucide-react";
 import { cn } from "~/utils/cn";
+import { DEFAULT_LOCALE, i18n } from "~/i18n";
 import { useChat } from "../hooks/useChat";
-import type { SessionSummary } from "../types/chat";
 
 /**
  * Format a timestamp as a short relative label ("5 min ago",
- * "3 days ago"). Deliberately dependency-free: the sidebar needs one
- * coarse label, not a locale-aware formatter.
- *
- * Ungrammatical-but-fine cases collapse upward (45 s → "just now",
- * 25 h → "1 day ago") because the label is orientation, not precision.
- * A future `last_active_at` (clock skew between the browser and the
+ * "3 days ago"). The label is orientation, not precision: buckets
+ * collapse upward (45 s → "just now", 25 h → "1 day ago"), and a
+ * future `last_active_at` (clock skew between the browser and the
  * server) collapses to "just now" rather than a negative duration.
  */
 function relativeTime(iso: string): string {
@@ -19,45 +17,52 @@ function relativeTime(iso: string): string {
   if (Number.isNaN(then)) return "";
 
   const seconds = Math.floor((Date.now() - then) / 1000);
-  if (seconds < 60) return "just now";
+  if (seconds < 60) return i18n.t("time.justNow");
   const minutes = Math.floor(seconds / 60);
-  if (minutes < 60) return `${minutes} min ago`;
+  if (minutes < 60) return i18n.t("time.minutesAgo", { count: minutes });
   const hours = Math.floor(minutes / 60);
-  if (hours < 24) return `${hours} hr ago`;
+  if (hours < 24) return i18n.t("time.hoursAgo", { count: hours });
   const days = Math.floor(hours / 24);
-  if (days < 7) return `${days} day${days === 1 ? "" : "s"} ago`;
+  if (days < 7) return i18n.t("time.daysAgo", { count: days });
   if (days < 30) {
-    const weeks = Math.floor(days / 7);
-    return `${weeks} week${weeks === 1 ? "" : "s"} ago`;
+    return i18n.t("time.weeksAgo", { count: Math.floor(days / 7) });
   }
   if (days < 365) {
-    const months = Math.floor(days / 30);
-    return `${months} month${months === 1 ? "" : "s"} ago`;
+    return i18n.t("time.monthsAgo", { count: Math.floor(days / 30) });
   }
-  const years = Math.floor(days / 365);
-  return `${years} year${years === 1 ? "" : "s"} ago`;
+  return i18n.t("time.yearsAgo", { count: Math.floor(days / 365) });
+}
+
+const absoluteFormatters = new Map<string, Intl.DateTimeFormat>();
+
+function absoluteFormatter(locale: string): Intl.DateTimeFormat {
+  let formatter = absoluteFormatters.get(locale);
+  if (!formatter) {
+    formatter = new Intl.DateTimeFormat(locale, {
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+      hourCycle: "h23",
+    });
+    absoluteFormatters.set(locale, formatter);
+  }
+  return formatter;
 }
 
 function absoluteTime(iso: string): string {
   const then = Date.parse(iso);
   if (Number.isNaN(then)) return "";
-  const d = new Date(then);
-  const pad = (n: number) => String(n).padStart(2, "0");
-  return `${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  const parts = absoluteFormatter(i18n.language || DEFAULT_LOCALE).formatToParts(
+    new Date(then),
+  );
+  const value = (type: Intl.DateTimeFormatPartTypes) =>
+    parts.find((part) => part.type === type)?.value ?? "";
+  return `${value("month")}-${value("day")} ${value("hour")}:${value("minute")}`;
 }
 
 function timeLabel(iso: string): string {
   return [absoluteTime(iso), relativeTime(iso)].filter(Boolean).join(" · ");
-}
-
-/**
- * Row label. The server stores `title=""` until a summariser fills it
- * in, and nothing client-side knows the session's first message, so an
- * untitled session renders the generic placeholder.
- */
-function sessionLabel(session: SessionSummary): string {
-  const title = session.title.trim();
-  return title === "" ? "New chat" : title;
 }
 
 interface ChatSidebarProps {
@@ -83,6 +88,7 @@ export const ChatSidebar: React.FC<ChatSidebarProps> = ({
   onSessionClick,
   className,
 }) => {
+  const { t } = useTranslation();
   const sessionList = useChat((s) => s.sessionList);
   const nextCursor = useChat((s) => s.sessionListNextCursor);
   const currentSessionId = useChat((s) => s.currentSessionId);
@@ -144,12 +150,12 @@ export const ChatSidebar: React.FC<ChatSidebarProps> = ({
   return (
     <aside
       data-testid="chat-sidebar"
-      aria-label="Chat history"
+      aria-label={t("chat.historyAria")}
       className={cn("flex flex-col min-h-0", className)}
     >
       <div className="flex items-center gap-1.5 px-2 py-1.5 text-xs font-medium uppercase tracking-wide text-muted-foreground">
         <History className="h-3 w-3" aria-hidden="true" />
-        History
+        {t("chat.history")}
       </div>
       <div
         ref={scrollRef}
@@ -161,7 +167,7 @@ export const ChatSidebar: React.FC<ChatSidebarProps> = ({
             className="px-2 py-3 text-xs text-muted-foreground"
             data-testid="chat-session-loading"
           >
-            Loading…
+            {t("chat.loading")}
           </p>
         )}
         {!showFirstPageSkeleton && sessionList.length === 0 && (
@@ -169,13 +175,15 @@ export const ChatSidebar: React.FC<ChatSidebarProps> = ({
             className="px-2 py-3 text-xs text-muted-foreground"
             data-testid="chat-session-empty"
           >
-            No conversations yet
+            {t("chat.noConversations")}
           </p>
         )}
         <ul className="space-y-1">
           {sessionList.map((session) => {
             const isActive = session.id === currentSessionId;
-            const label = sessionLabel(session);
+            const storedTitle = session.title.trim();
+            const label =
+              storedTitle === "" ? t("chat.untitledSession") : storedTitle;
             return (
               <li key={session.id} className="group relative">
                 <button
@@ -215,8 +223,8 @@ export const ChatSidebar: React.FC<ChatSidebarProps> = ({
                         className="ml-1 inline-flex items-center align-middle"
                         data-testid="chat-session-running"
                         role="status"
-                        aria-label="Agent is still working on this conversation"
-                        title="Agent is still working on this conversation"
+                        aria-label={t("chat.stillWorking")}
+                        title={t("chat.stillWorking")}
                       >
                         <span
                           className="h-1.5 w-1.5 rounded-full bg-emerald-500 animate-pulse"
@@ -228,7 +236,7 @@ export const ChatSidebar: React.FC<ChatSidebarProps> = ({
                 </button>
                 <button
                   type="button"
-                  aria-label={`Delete ${label}`}
+                  aria-label={t("chat.deleteSession", { label })}
                   data-testid="chat-session-delete"
                   data-session-id={session.id}
                   onClick={() => void deleteSession(session.id)}

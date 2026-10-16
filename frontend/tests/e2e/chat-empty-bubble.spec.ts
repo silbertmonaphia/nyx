@@ -1,4 +1,5 @@
-import { test, expect, type Page, type Route } from '@playwright/test';
+import { expect, type Page, type Route } from '@playwright/test';
+import { test } from './fixtures/e2e-fixtures';
 
 /**
  * Browser-level verification that the chat store drops a stranded

@@ -78,6 +78,10 @@ off by default. Full production topology → [`README_FULL.md` § Architecture](
 - **Light / dark theme** — the navbar toggle sits beside the `Nyx` brand; until you use it the app
   follows the OS scheme (live), and your pick is stored in `localStorage["nyx.theme"]`
   (`"light"` | `"dark"`; absent = follow the OS) and applied before first paint.
+- **Bilingual UI (中文 / English)** — the locale toggle sits beside the theme switch. Every visit
+  starts in Chinese, whatever the browser language is; an explicit pick is stored in
+  `localStorage["nyx.locale"]` (`"zh"` | `"en"`) and remembered, and `<html lang>` follows the
+  active locale.
 - **Optional infrastructure**, off by default — Redis cache, Jaeger tracing, Sentry, MCP server.
   (Prometheus `/metrics` is always on.)
 

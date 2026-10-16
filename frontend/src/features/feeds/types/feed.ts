@@ -1,10 +1,18 @@
 import { z } from 'zod';
+import { t } from '~/i18n';
 import type { Feed as ApiFeed, FeedsPage as ApiFeedsPage } from '~/api/openapi';
 
 // Define the validation schema for a feed entry
 export const feedSchema = z.object({
-  title: z.string().min(1, 'Title is required').max(100, 'Title is too long'),
-  description: z.string().max(1000, 'Description is too long').optional().default(''),
+  title: z
+    .string()
+    .min(1, { error: () => t('feeds.titleRequired') })
+    .max(100, { error: () => t('feeds.titleTooLong') }),
+  description: z
+    .string()
+    .max(1000, { error: () => t('feeds.descriptionTooLong') })
+    .optional()
+    .default(''),
 });
 
 // Derive TypeScript types from the schema
