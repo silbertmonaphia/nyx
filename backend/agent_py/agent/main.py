@@ -36,7 +36,10 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.responses import StreamingResponse
+from langchain_core.messages import HumanMessage, SystemMessage
+from langchain_openai import ChatOpenAI
 from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
+from pydantic import SecretStr
 from redis.asyncio import Redis
 
 from .api.chat_sessions import router as chat_sessions_router
@@ -96,6 +99,174 @@ _FINALIZE_TASKS: set[asyncio.Task[None]] = set()
 # this set keeps it from being GC'd before it finishes writing prefs.
 # Tests await this set draining (see tests/test_prefs_injection.py).
 _PREFS_TASKS: set[asyncio.Task[None]] = set()
+
+_TITLE_TASKS: set[asyncio.Task[None]] = set()
+
+_TITLE_MAX_CHARS = 48
+_TITLE_REFINEMENT_MAX_TOKENS = 64
+_TITLE_REFINEMENT_TIMEOUT_SECONDS = 30
+
+_TITLE_REFINEMENT_SYSTEM_PROMPT = """You title a chat session from its first exchange.
+
+Return ONLY the title text — no quotes, no markdown, no preamble, no trailing punctuation.
+At most 6 words (or 16 characters for Chinese/Japanese/Korean), naming the exchange's subject.
+Use the language the user wrote in. Return the text only."""
+
+
+def _derive_session_title(text: str) -> str:
+    """Deterministic title label for a first user message.
+
+    Whitespace (newlines included) collapses to single spaces, the result
+    is trimmed, and it is truncated to `_TITLE_MAX_CHARS` CHARACTERS —
+    Python slicing counts code points, so a multi-byte character is never
+    split (the CJK-safe bound the spec pins).
+    """
+    collapsed = re.sub(r"\s+", " ", text or "").strip()
+    return collapsed[:_TITLE_MAX_CHARS]
+
+
+def _should_refine_title(
+    *, saw_done: bool, title_written: bool, chat_store: ChatStore | None
+) -> bool:
+    """Whether this run spawns the one-shot title refinement (D2).
+
+    `title_written` is True only for the run that recorded the session's
+    deterministic first-exchange title — `set_title_if_empty` wins the
+    `title=''` guard exactly once per session, so "at most once per
+    session" is structural: a continuation, a resumed run, or a second
+    turn never reaches the spawn. `saw_done` keeps failed / aborted runs
+    (no completed exchange to summarise) out, and the store must be
+    available for the write to mean anything.
+    """
+    return bool(saw_done and title_written and chat_store is not None)
+
+
+async def _record_first_exchange_title(
+    chat_store: ChatStore,
+    *,
+    run_id: str,
+    user_id: int,
+    content: str | None,
+) -> bool:
+    """Write the deterministic first-exchange title; False when it did not land.
+
+    The `title=''` predicate in `set_title_if_empty` is what makes the
+    call idempotent: every non-resumed run reaches it, but only the
+    session's first exchange wins the write. A store failure is
+    warn-logged and the run proceeds unaffected (openspec/changes/
+    agent-chat-fixes "Chat store unavailable degrades silently").
+    """
+    title = _derive_session_title(content or "")
+    if not title:
+        return False
+    try:
+        return await chat_store.set_title_if_empty(run_id, user_id, title)
+    except ChatStoreUnavailable as exc:
+        log.warning(
+            "chat_store.set_title_if_empty failed (non-fatal): "
+            "run_id=%s err=%r",
+            run_id,
+            exc,
+        )
+        return False
+
+
+async def _refine_session_title(
+    chat_store: ChatStore,
+    *,
+    user_id: int,
+    session_id: str,
+    user_text: str,
+    assistant_text: str,
+    settings: Settings,
+) -> None:
+    """One small LLM call → refined session title. NEVER raises.
+
+    Mirrors `extract_preferences` (openspec/changes/agent-chat-fixes D2):
+    per-call `ChatOpenAI(settings.planner_model)` with bounded
+    `max_tokens` / `timeout`, no retry, WARN on failure, and NO budget
+    consultation — an internal operation, not user-visible chat work. Any
+    failure (client construction, LLM error, empty or non-text output,
+    store fault) leaves the deterministic title in place.
+    """
+    try:
+        client = ChatOpenAI(
+            model=settings.planner_model,
+            base_url=settings.llm_base_url,
+            api_key=SecretStr(settings.llm_api_key or "no-key"),
+            temperature=0,
+            max_tokens=_TITLE_REFINEMENT_MAX_TOKENS,
+            timeout=_TITLE_REFINEMENT_TIMEOUT_SECONDS,
+        )
+        response = await client.ainvoke(
+            [
+                SystemMessage(content=_TITLE_REFINEMENT_SYSTEM_PROMPT),
+                HumanMessage(
+                    content=f"User: {user_text}\n\nAssistant: {assistant_text}"
+                ),
+            ]
+        )
+    except Exception as exc:  # noqa: BLE001 — fire-and-forget contract: never raise
+        log.warning(
+            "session title refinement failed (non-fatal): run_id=%s err=%r",
+            session_id,
+            exc,
+        )
+        return
+    raw = response.content
+    title = _derive_session_title(raw) if isinstance(raw, str) else ""
+    if not title:
+        log.warning(
+            "session title refinement produced no usable title (non-fatal): "
+            "run_id=%s content_type=%s",
+            session_id,
+            type(raw).__name__,
+        )
+        return
+    try:
+        await chat_store.set_title(session_id, user_id, title)
+    except Exception as exc:  # noqa: BLE001 — warn-and-continue: the run is over
+        log.warning(
+            "session title refinement write failed (non-fatal): "
+            "run_id=%s err=%r",
+            session_id,
+            exc,
+        )
+
+
+def _spawn_title_refinement(
+    chat_store: ChatStore,
+    *,
+    user_id: int,
+    run_id: str,
+    user_text: str,
+    assistant_text: str,
+    settings: Settings,
+) -> None:
+    """Spawn the fire-and-forget title refinement, tracked in `_TITLE_TASKS`.
+
+    Spawned from `_stream_agent_run`'s finally, strictly after
+    `_persist_terminal` — the reply has already reached the client, and
+    the task holds no reference to the response generator, so it can
+    never delay, block, or alter the SSE stream. The module-level set is
+    the strong ref that keeps asyncio (weak refs only) from GC'ing the
+    task mid-write after a disconnect teardown, mirroring `_PREFS_TASKS`.
+    """
+    if not (user_text and assistant_text):
+        return
+    title_task = asyncio.create_task(
+        _refine_session_title(
+            chat_store,
+            user_id=user_id,
+            session_id=run_id,
+            user_text=user_text,
+            assistant_text=assistant_text,
+            settings=settings,
+        ),
+        name=f"agent-title-{run_id}",
+    )
+    _TITLE_TASKS.add(title_task)
+    title_task.add_done_callback(_TITLE_TASKS.discard)
 
 
 @asynccontextmanager
@@ -673,6 +844,7 @@ async def _stream_agent_run(
     # (design.md D7). The session row is the foundation for every
     # downstream message write — record_message cascades through
     # `ON DELETE CASCADE` to keep the slice self-contained.
+    title_written = False
     if chat_store is not None:
         try:
             # `create_session` is idempotent (`ON CONFLICT (id) DO
@@ -710,6 +882,12 @@ async def _stream_agent_run(
                             run_id,
                             exc,
                         )
+                title_written = await _record_first_exchange_title(
+                    chat_store,
+                    run_id=run_id,
+                    user_id=user_id,
+                    content=user_msgs[0].content if user_msgs else "",
+                )
         except ChatStoreUnavailable as exc:
             log.warning(
                 "chat_store session init failed (non-fatal): run_id=%s err=%r",
@@ -1065,6 +1243,30 @@ async def _stream_agent_run(
                 # could be GC'd mid-write after a disconnect teardown.
                 _PREFS_TASKS.add(prefs_task)
                 prefs_task.add_done_callback(_PREFS_TASKS.discard)
+
+        if (
+            _should_refine_title(
+                saw_done=saw_done,
+                title_written=title_written,
+                chat_store=chat_store,
+            )
+            and chat_store is not None
+        ):
+            _spawn_title_refinement(
+                chat_store,
+                user_id=user_id,
+                run_id=run_id,
+                user_text=next(
+                    (
+                        (m.content or "")
+                        for m in chat_req.messages
+                        if m.role == "user"
+                    ),
+                    "",
+                ),
+                assistant_text="".join(assistant_text_parts),
+                settings=settings,
+            )
 
     # Frontend parser triggers its own terminator on `data: [DONE]`. Old clients
     # that listen on `event: terminator` still work because we emit that event too.

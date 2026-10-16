@@ -381,6 +381,37 @@ async def test_bad_cursor_400(app, cursor):
 
 
 # ---------------------------------------------------------------------------
+# Titles
+# ---------------------------------------------------------------------------
+
+
+async def test_list_surfaces_a_stored_title_and_create_starts_empty(
+    app, pool, store
+):
+    """The title written by the title pipeline (agent-chat-fixes 2.2/2.3)
+    reaches the sidebar wire as-is; a freshly created session still starts
+    with `title=''` — the derivation happens on the first turn, not at
+    creation."""
+    sid = await _seed_session(store, pool, user_id=1)
+    assert await store.set_title_if_empty(sid, 1, "熬夜加班") is True
+
+    listed = (await _call(app, "GET", "/agent/sessions")).json()
+    row = next(s for s in listed["sessions"] if s["id"] == sid)
+    assert row["title"] == "熬夜加班"
+
+    created = (await _call(app, "POST", "/agent/sessions")).json()
+    fresh = (await _call(app, "GET", "/agent/sessions")).json()["sessions"]
+    created_row = next(s for s in fresh if s["id"] == created["session_id"])
+    assert created_row["title"] == ""
+
+    # The title is a session attribute, not a message: the replay surface
+    # is unchanged by it.
+    replay = await _call(app, "GET", f"/agent/sessions/{sid}/messages")
+    assert replay.status_code == 200
+    assert replay.json()["messages"] == []
+
+
+# ---------------------------------------------------------------------------
 # Messages — replay
 # ---------------------------------------------------------------------------
 

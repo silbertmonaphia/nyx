@@ -6,6 +6,7 @@ with a stubbed LLM response. Verifies SSE frame sequence on the wire.
 
 from __future__ import annotations
 
+import itertools
 import json
 from typing import Any, ClassVar
 
@@ -620,3 +621,50 @@ async def test_lifespan_shutdown_survives_pool_close_failure(monkeypatch):
     # Reaching here proves the NameError is gone; the flag proves shutdown
     # continued past the raised pool-close instead of aborting.
     assert shutdown_ran["observability"] is True
+
+# --- session titles: deterministic derivation (agent-chat-fixes 2.2) ------
+
+
+def test_derive_session_title_collapses_whitespace_and_trims() -> None:
+    from agent.main import _derive_session_title
+
+    assert _derive_session_title("  熬夜\n\n加班   ") == "熬夜 加班"
+    assert _derive_session_title("fix\tmy\tsync   script") == "fix my sync script"
+    assert _derive_session_title("") == ""
+    assert _derive_session_title(None) == ""
+    assert _derive_session_title("   \n\t ") == "", "whitespace-only has no title"
+
+
+def test_derive_session_title_truncates_cjk_at_48_code_points() -> None:
+    """An over-long first message yields a bounded title: 200 CJK
+    characters truncate to 48 whole characters — no partial code point,
+    no replacement character."""
+    from agent.main import _TITLE_MAX_CHARS, _derive_session_title
+
+    assert _TITLE_MAX_CHARS == 48
+    long_cjk = "熬夜加班" * 50
+    title = _derive_session_title(long_cjk)
+
+    assert len(title) == 48
+    assert title == long_cjk[:48]
+    assert "\ufffd" not in title, "a multi-byte character must never be split"
+
+
+def test_should_refine_title_truth_table() -> None:
+    """Spawn gate (agent-chat-fixes D2): only a completed run (`saw_done`)
+    that WON the session's first-exchange title write, with the store
+    available, refines. Every other combination — continuation, resume,
+    failed run, store down — must not spawn."""
+    from agent.main import _should_refine_title
+
+    store = object()
+    for saw_done, title_written, chat_store in itertools.product(
+        [True, False], [True, False], [store, None]
+    ):
+        assert _should_refine_title(
+            saw_done=saw_done, title_written=title_written, chat_store=chat_store
+        ) is bool(saw_done and title_written and chat_store is not None)
+
+    assert not _should_refine_title(
+        saw_done=True, title_written=True, chat_store=None
+    ), "no store => no refinement (nothing could be written)"
