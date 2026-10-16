@@ -850,6 +850,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
           }));
         }
         set({ isStreaming: false });
+        void get().refreshSessionList();
       } else if (localController.signal.aborted) {
         // Killed while detached — a Cancel that raced a navigation
         // (the detach already poked the marker) or a destructive
