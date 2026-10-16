@@ -75,3 +75,9 @@ backend/agent_py/*.egg-info/
 backend/agent_py/**/*.egg-info/
 backend/agent_py/.mypy_cache/
 backend/agent_py/.ruff_cache/
+
+# Golden-set eval artifacts + promptfoo's local run store (the baseline
+# report is committed as evidence via a forced add)
+evals/artifacts/
+evals/**/artifacts/
+.promptfoo/

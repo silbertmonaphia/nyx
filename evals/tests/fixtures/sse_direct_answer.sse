@@ -1,0 +1,26 @@
+event: run_id
+data: {"run_id":"657d1213-b210-489e-a883-a8967d232401"}
+
+event: note
+data: {"text":"fresh_run","provider":null,"kind":"fresh_run","last_step_id":null,"run_id":"657d1213-b210-489e-a883-a8967d232401","failed_steps":[]}
+
+event: plan
+data: {"steps":[{"id":"math_answer","kind":"llm","tool":null,"args":null,"prompt":"1+1 \u7b49\u4e8e\u51e0\uff1f","query":null,"max_iterations":null}]}
+
+event: step_start
+data: {"step_id":"math_answer","kind":"llm"}
+
+event: delta
+data: {"delta":"1 + 1 \u7b49\u4e8e 2\u3002"}
+
+event: step_end
+data: {"step_id":"math_answer","status":"ok","reason":null}
+
+event: done
+data: {"usage":{"prompt_tokens":0,"completion_tokens":1000,"total_tokens":1000}}
+
+event: terminator
+data: {"reason":null}
+
+data: [DONE]
+

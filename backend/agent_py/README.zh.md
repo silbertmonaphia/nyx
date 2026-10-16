@@ -111,3 +111,14 @@ Langfuse 追踪可以直接从默认日志诊断：`PYTHON_AGENT_LANGFUSE_ENABLE
 - [`README_ALL.md`](README_ALL.md) —— 完整参考：planner 与工具重试的内部机制、prior-data 上下文限幅、清扫器 + 保留期、Langfuse、完整环境变量表、事故记录。
 - [`FUTURE_AGENT.md`](../../FUTURE_AGENT.md) —— 路线图；[`docs/agent-deployment.md`](../../docs/agent-deployment.md) —— 生产上线文档。
 - `openspec/changes/` —— 每个行为背后的变更提案。
+
+## Golden Set 评估套件
+
+planner 是概率模型，回归表现为**率**而不是单次判定。仓库根目录的 `evals/` 是一套 promptfoo 评估：以每次运行专属的 eval 用户真实调用生产聊天路径（`POST /agent/run`，真 SSE），断言全部确定性（无 LLM judge）。
+
+- `make eval-golden` —— 主回归线（`evals/cases/main.yaml`）；`make eval-security` —— 注入线（`evals/cases/security.yaml`），失败率单独跟踪。两者串行执行（单块 4B 模型），**不启动任何服务**：预检失败即报出尝试的 URL 并退出。
+- 默认指向侧栈（`./scripts/e2e-side-stack.sh up` → Go `:8180`、agent `:9100`；可用 `EVAL_GO_API_URL` / `EVAL_AGENT_URL` 覆盖）。`EVAL_WEB_SEARCH`（`on`/`off`）必须与运行中 agent 的 `PYTHON_AGENT_WEB_SEARCH_ENABLED` 一致 —— weather 用例就是探测器。前置条件缺失的用例（`requires: budget_stack`）报告 **SKIPPED** 并附原因，绝不计入通过。
+- 结果写入 `evals/artifacts/<UTC-stamp>/`：`report.json`、`summary.md`、逐样本原始 SSE 与 transcript。产物整体 gitignore；落地时的 baseline 报告强制入库作为证据。
+- 单元门禁（不需要模型与网络）：仓库根执行 `backend/agent_py/.venv/bin/python -m pytest evals/tests -q`。CI 目前不跑 `backend/agent_py` 的 pytest，故这是本地门禁。
+- 套件内部契约（provider 协议、语料 schema、评分语义）→ 变更规格 `openspec/changes/agent-golden-eval/specs/agent-golden-eval/spec.md`。promptfoo 版本在 Makefile 固定（`EVAL_PROMPTFOO_VERSION`）。
+- 涉及 web 的用例建议走自带的 Tavily stub（`evals/stubs/tavily_stub.py`）而不是真实搜索 API：用 `PYTHON_AGENT_TAVILY_BASE_URL=http://127.0.0.1:8899/search`（配合 `PYTHON_AGENT_WEB_SEARCH_ENABLED=true`）把评估栈指过去。stub 对注入用例吐出预定载荷、对其他查询返回固定结果；keyless Tavily 档位在若干轮之后按 IP 限流，会让 web 用例卡住数分钟——那是率里的外部噪声。

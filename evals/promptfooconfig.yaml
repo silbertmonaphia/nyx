@@ -1,0 +1,12 @@
+description: Nyx agent golden-set eval - main line
+
+prompts:
+  - "{{prompt}}"
+
+providers:
+  - exec:bash bin/provider.sh
+
+tests: file://cases/loader.py:load_main_cases
+
+evaluateOptions:
+  maxConcurrency: 1

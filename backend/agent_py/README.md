@@ -164,3 +164,31 @@ is **not** an auth layer. If port 9000 ever becomes reachable beyond this networ
   prior-data context bounding, sweeper + retention, Langfuse, complete env tables, incidents.
 - [`FUTURE_AGENT.md`](../../FUTURE_AGENT.md) — roadmap; [`docs/agent-deployment.md`](../../docs/agent-deployment.md) — production rollout.
 - `openspec/changes/` — the change proposals behind each behavior.
+
+## Golden Set Eval Suite
+
+The planner is probabilistic, so its regressions show up as **rates**, not single verdicts. `evals/` at the
+repo root holds a promptfoo-based suite that drives the production chat path (`POST /agent/run`, real SSE)
+as a per-run eval user and grades with deterministic assertions — no LLM judge.
+
+- `make eval-golden` — the main regression line (`evals/cases/main.yaml`); `make eval-security` — the
+  injection line (`evals/cases/security.yaml`), tracked separately. Both run serially (one 4B model), never
+  start services, and preflight the stack — a down stack stops with a message naming the URL it tried.
+- Defaults target the side stack (`./scripts/e2e-side-stack.sh up` → Go `:8180`, agent `:9100`; override with
+  `EVAL_GO_API_URL` / `EVAL_AGENT_URL`). Match `EVAL_WEB_SEARCH` (`on`/`off`) to the running agent's
+  `PYTHON_AGENT_WEB_SEARCH_ENABLED` — the weather case is the tripwire. Cases whose prerequisites are absent
+  (`requires: budget_stack`) report **SKIPPED** with a reason and never count as passes.
+- Results land in `evals/artifacts/<UTC-stamp>/`: `report.json`, `summary.md`, per-sample raw SSE and
+  transcripts. Artifacts are gitignored in bulk; the landing baseline report is committed as evidence.
+- `EVAL_FILTER=<regex>` narrows a run to matching cases (diagnostics only: the exit code then covers
+  just the sampled cases — run the unfiltered line before trusting a green).
+- Unit gate (no model, no network): `backend/agent_py/.venv/bin/python -m pytest evals/tests -q` from the
+  repo root. CI runs no `backend/agent_py` pytest today, so this is a local gate.
+- Harness internals (provider contract, corpus schema, grading semantics) → the change spec at
+  `openspec/changes/agent-golden-eval/specs/agent-golden-eval/spec.md`. promptfoo is pinned in the Makefile
+  (`EVAL_PROMPTFOO_VERSION`).
+- Web-shaped cases should run against the bundled Tavily stub (`evals/stubs/tavily_stub.py`), not the live
+  search API: point the eval stack at it with `PYTHON_AGENT_TAVILY_BASE_URL=http://127.0.0.1:8899/search`
+  (+ `PYTHON_AGENT_WEB_SEARCH_ENABLED=true`). The stub serves the hostile payloads the security line keys
+  on and a canned result set for everything else; the keyless Tavily tier IP-rate-limits after a handful of
+  runs and stalls web samples for minutes, which is external noise in a rate.

@@ -17,7 +17,7 @@
 # the `docker compose` plugin on PATH. Backend invocations assume
 # `make up` has been run.
 
-.PHONY: dev dev-backend dev-frontend dev-agent dev-vllm-main dev-vllm-embed dev-infra dev-pgsql-inspect dev-redis-inspect dev-gpu-inspect dev-gpu-watch up down up-vllm down-vllm up-langfuse down-langfuse logs status stop help
+.PHONY: dev dev-backend dev-frontend dev-agent dev-vllm-main dev-vllm-embed dev-infra dev-pgsql-inspect dev-redis-inspect dev-gpu-inspect dev-gpu-watch up down up-vllm down-vllm up-langfuse down-langfuse logs status stop help eval-golden eval-security eval-run
 
 COMPOSE := docker compose
 
@@ -123,3 +123,64 @@ dev-gpu-inspect:
 #: Watch GPU telemetry live — `nvidia-smi dmon` at 1s refresh (power, temp, sm%/VRAM-bandwidth%, clocks, VRAM used). COUNT=<n> takes n samples then exits; DELAY=<s> overrides the interval; Ctrl+C stops.
 dev-gpu-watch:
 	@PATH="$$PATH:/usr/lib/wsl/lib" nvidia-smi dmon -s pucvmet $(if $(DELAY),-d $(DELAY)) $(if $(COUNT),-c $(COUNT))
+
+# --- Golden-set eval (evals/) -----------------------------------------------
+# EVAL_FILTER (promptfoo --filter-pattern) is a diagnostic lever: a filtered
+# run reports only the sampled cases, so its exit code is not a gate — run the
+# unfiltered line before trusting a green.
+# Serial by contract (one 4B vLLM). These targets never start services: they
+# preflight the URLs below and stop with a message when the stack is down.
+# Defaults point at the side-stack convention (scripts/e2e-side-stack.sh):
+# Go :8180, agent :9100. Override with EVAL_GO_API_URL / EVAL_AGENT_URL.
+
+EVAL_GO_API_URL ?= http://localhost:8180
+EVAL_AGENT_URL ?= http://localhost:9100
+EVAL_WEB_SEARCH ?= on
+# Overall floor derived from the 2026-10-16 baseline (0.73) minus margin; per-case
+# floors stay authored and carry the intent (1.0 deterministic shapes, 0.66 best-effort).
+EVAL_MIN_RATE ?= 0.70
+EVAL_MODEL ?= Qwen/Qwen3-4B-Instruct-2507-FP8
+EVAL_PROMPTFOO_VERSION ?= 0.124.1
+EVAL_PYTHON ?= backend/agent_py/.venv/bin/python
+EVAL_CONFIG ?= evals/promptfooconfig.yaml
+EVAL_CORPUS_GLOB ?= evals/cases/main.yaml
+EVAL_FILTER ?=
+EVAL_NO_FAIL ?=
+
+#: Run the golden-set regression line serially against a running stack (defaults to the side stack; does NOT start services).
+eval-golden:
+	@$(MAKE) --no-print-directory eval-run EVAL_CONFIG=evals/promptfooconfig.yaml EVAL_CORPUS_GLOB=evals/cases/main.yaml
+
+#: Run the security (injection) line — same preflight and stack as eval-golden; failure rate tracked separately.
+eval-security:
+	@$(MAKE) --no-print-directory eval-run EVAL_CONFIG=evals/promptfooconfig.security.yaml EVAL_CORPUS_GLOB=evals/cases/security.yaml
+
+eval-run:
+	@set -e; \
+	go_code=$$(curl -s -o /dev/null -w '%{http_code}' -m 3 "$(EVAL_GO_API_URL)/api/feeds" || true); \
+	agent_code=$$(curl -s -o /dev/null -w '%{http_code}' -m 5 "$(EVAL_AGENT_URL)/healthz" || true); \
+	if [ "$$go_code" = "000" ] || [ "$$agent_code" != "200" ]; then \
+		echo "eval preflight failed — Go API $(EVAL_GO_API_URL)/api/feeds => $$go_code, agent $(EVAL_AGENT_URL)/healthz => $$agent_code"; \
+		echo "start a stack first, e.g. ./scripts/e2e-side-stack.sh up (this target never starts services)"; \
+		exit 1; \
+	fi; \
+	stamp=$$(date -u +%Y%m%dT%H%M%SZ); \
+	dir="$$(pwd)/evals/artifacts/$$stamp"; \
+	mkdir -p "$$dir/samples"; \
+	echo "eval $$stamp → $$dir (config $(EVAL_CONFIG), EVAL_WEB_SEARCH=$(EVAL_WEB_SEARCH))"; \
+	$(EVAL_PYTHON) evals/validate.py; \
+	EVAL_RUN_STAMP=$$stamp EVAL_ARTIFACTS_DIR="$$dir" \
+	EVAL_GO_API_URL=$(EVAL_GO_API_URL) EVAL_AGENT_URL=$(EVAL_AGENT_URL) EVAL_WEB_SEARCH=$(EVAL_WEB_SEARCH) \
+	EVAL_BUDGET_STACK=$(EVAL_BUDGET_STACK) EVAL_MODEL=$(EVAL_MODEL) \
+	npx -y promptfoo@$(EVAL_PROMPTFOO_VERSION) eval --config $(EVAL_CONFIG) \
+	  --max-concurrency 1 --no-progress-bar $(if $(EVAL_FILTER),--filter-pattern "$(EVAL_FILTER)",) \
+	  --output "$$dir/promptfoo.json" || pf=$$?; \
+	if [ ! -s "$$dir/promptfoo.json" ]; then echo "promptfoo produced no results (exit $${pf:-1})"; exit 1; fi; \
+	if [ -n "$${pf:-}" ] && [ "$$pf" != "100" ]; then \
+		echo "promptfoo exited $$pf (0 = all passed, 100 = assertion failures; anything else means the run itself failed) — refusing to grade a partial run"; \
+		exit 1; \
+	fi; \
+	EVAL_MODEL=$(EVAL_MODEL) \
+	$(EVAL_PYTHON) evals/bin/check_rate.py "$$dir/promptfoo.json" \
+	  --corpus-glob "$(EVAL_CORPUS_GLOB)" --artifacts-dir "$$dir" --min-rate $(EVAL_MIN_RATE) \
+	  $(if $(EVAL_NO_FAIL),--no-fail,)

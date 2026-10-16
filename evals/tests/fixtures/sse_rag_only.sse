@@ -1,0 +1,32 @@
+event: run_id
+data: {"run_id":"f66ff9c0-72af-464f-bd2c-3ea7527bd4e1"}
+
+event: note
+data: {"text":"fresh_run","provider":null,"kind":"fresh_run","last_step_id":null,"run_id":"f66ff9c0-72af-464f-bd2c-3ea7527bd4e1","failed_steps":[]}
+
+event: plan
+data: {"steps":[{"id":"step_1","kind":"rag","tool":null,"args":null,"prompt":null,"query":"\u603b\u7ed3\u7528\u6237\u6700\u8fd1\u5173\u6ce8\u7684\u996e\u98df\u4e3b\u9898","max_iterations":null},{"id":"final_answer","kind":"llm","tool":null,"args":null,"prompt":"Write the final answer to the user's most recent request, using the data gathered by earlier steps.","query":null,"max_iterations":null}]}
+
+event: step_start
+data: {"step_id":"step_1","kind":"rag"}
+
+event: step_end
+data: {"step_id":"step_1","status":"ok","reason":null}
+
+event: step_start
+data: {"step_id":"final_answer","kind":"llm"}
+
+event: delta
+data: {"delta":"\u4f60\u6700\u8fd1\u5173\u6ce8\u7684\u996e\u98df\u4e3b\u9898\u662f\u5747\u8861\u8425\u517b\u4e0e\u5065\u5eb7\u51cf\u7cd6\uff0c\u6ce8\u91cd\u6df1\u6d77\u9c7c\u6444\u5165\u3001\u5929\u7136\u65e9\u9910\u548c\u51cf\u5c11\u7cbe\u5236\u7cd6\u3002"}
+
+event: step_end
+data: {"step_id":"final_answer","status":"ok","reason":null}
+
+event: done
+data: {"usage":{"prompt_tokens":0,"completion_tokens":1000,"total_tokens":1000}}
+
+event: terminator
+data: {"reason":null}
+
+data: [DONE]
+

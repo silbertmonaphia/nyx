@@ -1,0 +1,17 @@
+event: run_id
+data: {"run_id":"dccb266a-d0e5-44d8-8715-d7846ddb3069"}
+
+event: note
+data: {"text":"fresh_run","provider":null,"kind":"fresh_run","last_step_id":null,"run_id":"dccb266a-d0e5-44d8-8715-d7846ddb3069","failed_steps":[]}
+
+event: error
+data: {"error":"Plan generation failed","code":"planner_failed","request_id":null}
+
+event: done
+data: {"usage":{"prompt_tokens":0,"completion_tokens":0,"total_tokens":0}}
+
+event: terminator
+data: {"reason":"provider call failed"}
+
+data: [DONE]
+

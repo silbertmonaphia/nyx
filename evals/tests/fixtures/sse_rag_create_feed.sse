@@ -1,0 +1,59 @@
+event: run_id
+data: {"run_id":"d249c407-e740-4a34-95e4-8ce70e26efd1"}
+
+event: note
+data: {"text":"fresh_run","provider":null,"kind":"fresh_run","last_step_id":null,"run_id":"d249c407-e740-4a34-95e4-8ce70e26efd1","failed_steps":[]}
+
+event: plan
+data: {"steps":[{"id":"step_1","kind":"rag","tool":null,"args":null,"prompt":null,"query":"\u67e5\u627e\u7528\u6237\u6536\u85cf\u4e2d\u7684\u5a01\u58eb\u5fcc\u76f8\u5173\u5185\u5bb9","max_iterations":null},{"id":"step_2","kind":"tool","tool":"list_feeds","args":{},"prompt":"\u68c0\u67e5\u7528\u6237\u5f53\u524d\u7684\u6536\u85cf feed \u4e2d\u662f\u5426\u5df2\u6709\u5173\u4e8e\u5a01\u58eb\u5fcc\u7684\u5185\u5bb9\u3002\u5982\u679c\u5b58\u5728\uff0c\u5219\u7ed3\u675f\u6d41\u7a0b\uff1b\u5982\u679c\u4e0d\u5b58\u5728\uff0c\u5219\u7ee7\u7eed\u521b\u5efa\u65b0\u7684 feed\u3002","query":null,"max_iterations":null},{"id":"step_3","kind":"tool","tool":"create_feed","args":{"title":"eval-\u5a01\u58eb\u5fcc\u5165\u95e8","description":"\u5355\u4e00\u9ea6\u82bd\u4e0e\u8c03\u548c\u5a01\u58eb\u5fcc\u7684\u533a\u522b"},"prompt":"\u5982\u679c\u7528\u6237\u6536\u85cf\u4e2d\u6ca1\u6709\u5173\u4e8e\u5a01\u58eb\u5fcc\u7684\u5185\u5bb9\uff0c\u521b\u5efa\u4e00\u4e2a\u65b0 feed\uff0c\u6807\u9898\u4e3a 'eval-\u5a01\u58eb\u5fcc\u5165\u95e8'\uff0c\u63cf\u8ff0\u4e3a '\u5355\u4e00\u9ea6\u82bd\u4e0e\u8c03\u548c\u5a01\u58eb\u5fcc\u7684\u533a\u522b'\u3002","query":null,"max_iterations":null},{"id":"final_answer","kind":"llm","tool":null,"args":null,"prompt":"Write the final answer to the user's most recent request, using the data gathered by earlier steps.","query":null,"max_iterations":null}]}
+
+event: step_start
+data: {"step_id":"step_1","kind":"rag"}
+
+event: step_end
+data: {"step_id":"step_1","status":"ok","reason":null}
+
+event: step_start
+data: {"step_id":"step_2","kind":"tool"}
+
+event: tool_call
+data: {"step_id":"step_2","call_id":"899433cb-3125-4b3c-a012-b995c715b08e","name":"list_feeds","args":{}}
+
+event: tool_result
+data: {"step_id":"step_2","call_id":"899433cb-3125-4b3c-a012-b995c715b08e","ok":true,"result":{"content":[{"type":"text","text":"{\"data\":[{\"id\":135,\"user_id\":1111,\"title\":\"eval-\u5496\u5561\u7b14\u8bb0\",\"description\":\"\u6536\u85cf\u7684\u624b\u51b2\u53c2\u6570\uff1a\u4e2d\u6df1\u70d8\uff0c92\u5ea6\u6c34\u6e29\uff0c\u7c89\u6c34\u6bd4 1:15\uff0c\u95f7\u84b8 30 \u79d2\u3002\",\"created_at\":\"2026-10-16T16:30:50.09639+08:00\",\"updated_at\":\"2026-10-16T16:30:50.09639+08:00\"},{\"id\":134,\"user_id\":1111,\"title\":\"eval-\u5065\u5eb7\u996e\u98df\u7b14\u8bb0\",\"description\":\"\u6211\u7684\u996e\u98df\u6536\u85cf\uff1a\u6bcf\u5468\u5403\u4e09\u6b21\u6df1\u6d77\u9c7c\uff0c\u79cb\u5200\u9c7c\u548c\u9cad\u9c7c\u662f\u6700\u5e38\u4e70\u7684\u4e24\u79cd\uff1b\u65e9\u9910\u56fa\u5b9a\u662f\u71d5\u9ea6\u52a0\u575a\u679c\uff1b\u6700\u8fd1\u5728\u51cf\u5c11\u7cbe\u5236\u7cd6\uff0c\u628a\u4e0b\u5348\u7684\u86cb\u7cd5\u6362\u6210\u4e86\u9178\u5976\u3002\",\"created_at\":\"2026-10-16T16:30:44.664943+08:00\",\"updated_at\":\"2026-10-16T16:30:44.664943+08:00\"}],\"page\":1,\"page_size\":20,\"total\":2,\"has_more\":false}"}],"structuredContent":{"data":[{"id":135,"user_id":1111,"title":"eval-\u5496\u5561\u7b14\u8bb0","description":"\u6536\u85cf\u7684\u624b\u51b2\u53c2\u6570\uff1a\u4e2d\u6df1\u70d8\uff0c92\u5ea6\u6c34\u6e29\uff0c\u7c89\u6c34\u6bd4 1:15\uff0c\u95f7\u84b8 30 \u79d2\u3002","created_at":"2026-10-16T16:30:50.09639+08:00","updated_at":"2026-10-16T16:30:50.09639+08:00"},{"id":134,"user_id":1111,"title":"eval-\u5065\u5eb7\u996e\u98df\u7b14\u8bb0","description":"\u6211\u7684\u996e\u98df\u6536\u85cf\uff1a\u6bcf\u5468\u5403\u4e09\u6b21\u6df1\u6d77\u9c7c\uff0c\u79cb\u5200\u9c7c\u548c\u9cad\u9c7c\u662f\u6700\u5e38\u4e70\u7684\u4e24\u79cd\uff1b\u65e9\u9910\u56fa\u5b9a\u662f\u71d5\u9ea6\u52a0\u575a\u679c\uff1b\u6700\u8fd1\u5728\u51cf\u5c11\u7cbe\u5236\u7cd6\uff0c\u628a\u4e0b\u5348\u7684\u86cb\u7cd5\u6362\u6210\u4e86\u9178\u5976\u3002","created_at":"2026-10-16T16:30:44.664943+08:00","updated_at":"2026-10-16T16:30:44.664943+08:00"}],"page":1,"page_size":20,"total":2,"has_more":false}},"error":null,"retry_count":0}
+
+event: step_end
+data: {"step_id":"step_2","status":"ok","reason":null}
+
+event: step_start
+data: {"step_id":"step_3","kind":"tool"}
+
+event: confirm_request
+data: {"run_id":"d249c407-e740-4a34-95e4-8ce70e26efd1","step_id":"step_3","tool":"create_feed","args":{"title":"eval-\u5a01\u58eb\u5fcc\u5165\u95e8","description":"\u5355\u4e00\u9ea6\u82bd\u4e0e\u8c03\u548c\u5a01\u58eb\u5fcc\u7684\u533a\u522b"},"approval_id":"359206ed-6aec-43f8-a7b7-7f3a3b944de3","expires_at":1792139758.2044373}
+
+event: tool_call
+data: {"step_id":"step_3","call_id":"3392ecb1-fb1d-4bfb-a73a-8ff23acf9d61","name":"create_feed","args":{"title":"eval-\u5a01\u58eb\u5fcc\u5165\u95e8","description":"\u5355\u4e00\u9ea6\u82bd\u4e0e\u8c03\u548c\u5a01\u58eb\u5fcc\u7684\u533a\u522b"}}
+
+event: tool_result
+data: {"step_id":"step_3","call_id":"3392ecb1-fb1d-4bfb-a73a-8ff23acf9d61","ok":true,"result":{"content":[{"type":"text","text":"{\"id\":136,\"user_id\":1111,\"title\":\"eval-\u5a01\u58eb\u5fcc\u5165\u95e8\",\"description\":\"\u5355\u4e00\u9ea6\u82bd\u4e0e\u8c03\u548c\u5a01\u58eb\u5fcc\u7684\u533a\u522b\",\"created_at\":\"2026-10-16T16:30:59.353969+08:00\",\"updated_at\":\"2026-10-16T16:30:59.353969+08:00\"}"}],"structuredContent":{"id":136,"user_id":1111,"title":"eval-\u5a01\u58eb\u5fcc\u5165\u95e8","description":"\u5355\u4e00\u9ea6\u82bd\u4e0e\u8c03\u548c\u5a01\u58eb\u5fcc\u7684\u533a\u522b","created_at":"2026-10-16T16:30:59.353969+08:00","updated_at":"2026-10-16T16:30:59.353969+08:00"}},"error":null,"retry_count":0}
+
+event: step_end
+data: {"step_id":"step_3","status":"ok","reason":null}
+
+event: step_start
+data: {"step_id":"final_answer","kind":"llm"}
+
+event: delta
+data: {"delta":"\u7ecf\u8fc7\u68c0\u67e5\u4f60\u7684\u6536\u85cf\u5185\u5bb9\uff0c\u76ee\u524d\u6ca1\u6709\u5173\u4e8e\u5a01\u58eb\u5fcc\u7684\u76f8\u5173\u8bb0\u5f55\u3002\n\n\u56e0\u6b64\uff0c\u6211\u5df2\u4e3a\u4f60\u65b0\u5efa\u4e00\u4e2a feed\uff1a\n\n**\u6807\u9898**\uff1aeval-\u5a01\u58eb\u5fcc\u5165\u95e8  \n**\u63cf\u8ff0**\uff1a\u5355\u4e00\u9ea6\u82bd\u4e0e\u8c03\u548c\u5a01\u58eb\u5fcc\u7684\u533a\u522b  \n\n\u5df2\u6210\u529f\u521b\u5efa\uff0c\u73b0\u5728\u4f60\u7684\u6536\u85cf\u4e2d\u5305\u542b\u4e86\u5173\u4e8e\u5a01\u58eb\u5fcc\u7684\u5165\u95e8\u4fe1\u606f\u3002"}
+
+event: step_end
+data: {"step_id":"final_answer","status":"ok","reason":null}
+
+event: done
+data: {"usage":{"prompt_tokens":0,"completion_tokens":1000,"total_tokens":1000}}
+
+event: terminator
+data: {"reason":null}
+
+data: [DONE]
+
