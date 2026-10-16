@@ -46,9 +46,10 @@ flowchart TB
   re-prompt / transient backoff), per-user Redis token budget (fail-closed), per-IP rate limit,
   run state in Postgres with resume-by-`run_id`, stale-run sweeper + retention GC.
 - **Observable** — Prometheus counters (:9001), OpenTelemetry spans (Jaeger), optional
-  Langfuse LLM tracing, and process logging configured at boot (root at WARNING, the `agent`
-  package at INFO, `timestamp level logger: message` lines) so tracing state and export failures
-  are visible in the default log output.
+  Langfuse LLM tracing, and process logging configured at boot (root at WARNING, the
+  agent's own loggers — the `agent` package and the `nyx.agent.*` runtime tree — at INFO,
+  `timestamp level logger: message` lines) so tracing state, startup lines, and export
+  failures are visible in the default log output.
 - **Optional web tools, off by default** — agent-native `web_search` (Tavily, keyless tier
   works with no account) and SSRF-guarded `web_fetch` with untrusted-content framing.
 - **Feed tools with confirmation** — the planner sees the live MCP registry (feed CRUD);
