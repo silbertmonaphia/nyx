@@ -558,18 +558,25 @@ async def extract_preferences(
 
 _PREFS_HEADER = "Known user preferences:"
 
+_PREFS_LEAD_IN = (
+    "Use these when they are relevant, including when the user asks what "
+    "they like: answer such questions from this list."
+)
+
 
 def prefs_block(prefs: list[Pref]) -> str:
-    """Render the planner prompt block for `prefs`.
+    """Render the preferences prompt block for `prefs`.
 
     Format (documented contract): `""` for an empty list — byte parity
     with the pre-injection prompt, so callers append unconditionally
-    (`PLANNER_SYSTEM_PROMPT + planner_block(settings) + prefs_block(prefs)`).
-    Otherwise a "\\n\\n" separator (mirrors `planner_block`), one header
-    line `Known user preferences:`, then one `- {key}: {json value}` line
-    per preference sorted by key (deterministic across calls; the stored
-    order is not load-order dependent), no trailing whitespace. Values
-    render as compact JSON (`json.dumps`, non-ASCII kept verbatim).
+    (`PLANNER_SYSTEM_PROMPT + planner_block(settings) + prefs_block(prefs)`),
+    including on the executor's system message. Otherwise a "\\n\\n"
+    separator (mirrors `planner_block`), one header line
+    `Known user preferences:`, the `_PREFS_LEAD_IN` usage sentence, then
+    one `- {key}: {json value}` line per preference sorted by key
+    (deterministic across calls; the stored order is not load-order
+    dependent), no trailing whitespace. Values render as compact JSON
+    (`json.dumps`, non-ASCII kept verbatim).
     """
     if not prefs:
         return ""
@@ -582,7 +589,7 @@ def prefs_block(prefs: list[Pref]) -> str:
         f"{_json.dumps(p.value, ensure_ascii=False, sort_keys=True)}"
         for p in sorted(prefs, key=lambda p: p.key)
     ]
-    return "\n\n" + "\n".join([_PREFS_HEADER, *lines])
+    return "\n\n" + "\n".join([_PREFS_HEADER, _PREFS_LEAD_IN, *lines])
 
 
 def _row_to_pref(row: asyncpg.Record | Any) -> Pref:

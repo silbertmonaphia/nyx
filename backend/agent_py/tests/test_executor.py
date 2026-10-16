@@ -1462,3 +1462,108 @@ def test_render_prior_data_strips_untrusted_markers():
     section = block.split("[data_1 — tool result from web_search]\n", 1)[1]
     desc = _json.loads(section)["results"][0]["description"]
     assert "正文 — important content" in desc
+
+
+# --- user-prefs injection (openspec/changes/agent-chat-fixes 1.1/1.2) -----
+#
+# The executor writes the user-visible answer: both answer paths (`llm`
+# and `react`) must carry the rendered prefs block, and must stay
+# byte-identical to their pre-injection prompt shape when the block is
+# empty or absent. The planner-side equivalent lives in
+# `tests/test_prefs_injection.py`; the app-level wire check (recall
+# question + kill switch) lives there too.
+
+
+def _prefs_block() -> str:
+    from agent.prefs import Pref, prefs_block
+
+    return prefs_block([Pref(key="snack", value="鱿鱼丝")])
+
+
+def _answer_step(kind: str) -> PlanStep:
+    return PlanStep(id="s_1", kind=kind, prompt="Answer.", max_iterations=1)
+
+
+async def _run_answer_step(kind, step, state, tracer, **kwargs):
+    with tracer.start_as_current_span("x") as span:
+        if kind == "llm":
+            await _run_llm(
+                state, step, _settings(), tracer, _StubBudget(), span, **kwargs
+            )
+        else:
+            await _run_react(
+                state,
+                step,
+                _settings(),
+                tracer,
+                _StubBudget(),
+                _StubTools(),
+                span,
+                **kwargs,
+            )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("kind", ["llm", "react"])
+async def test_answer_prompt_appends_the_prefs_block(kind, tracer):
+    """Spec "Preferences reach the executor that writes the reply": the
+    block is appended to the step's system prompt on BOTH answer paths."""
+    step = _answer_step(kind)
+    state = _state([step], {})
+    block = _prefs_block()
+
+    await _run_answer_step(kind, step, state, tracer, prefs_text=block)
+
+    system = _CapturingLlm.captured[0][0]
+    assert system.type == "system"
+    assert system.content == "Answer." + block
+    assert "- snack" in system.content
+    assert "asks what they like" in system.content, (
+        "the lead-in covers recall questions on the answer path too"
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("kind", ["llm", "react"])
+async def test_answer_prompt_is_byte_identical_without_prefs(kind, tracer):
+    """Spec "Empty prefs leave the prompt untouched": the pre-injection
+    prompt shape is preserved exactly, whether the caller omits
+    `prefs_text` entirely or passes the empty rendered block."""
+    step = _answer_step(kind)
+
+    await _run_answer_step(kind, step, _state([step], {}), tracer)
+    assert _CapturingLlm.captured[0][0].content == "Answer."
+
+    _CapturingLlm.captured = []
+    await _run_answer_step(kind, step, _state([step], {}), tracer, prefs_text="")
+    assert _CapturingLlm.captured[0][0].content == "Answer."
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("kind", ["llm", "react"])
+async def test_executor_node_threads_prefs_from_the_factory(kind, tracer):
+    """D1: the block rides the graph's node closure into `executor_node`
+    — and the factory's `""` default keeps pre-existing callers'
+    prompts byte-identical."""
+    from agent.graph import _executor_step_factory
+
+    step = _answer_step(kind)
+    block = _prefs_block()
+    node = _executor_step_factory(
+        _settings(),
+        _StubBudget(),
+        None,
+        _StubTools(),
+        tracer,
+        prefs_text=block,
+    )
+
+    await node(_state([step], {}))
+    assert _CapturingLlm.captured[0][0].content == "Answer." + block
+
+    _CapturingLlm.captured = []
+    default_node = _executor_step_factory(
+        _settings(), _StubBudget(), None, _StubTools(), tracer
+    )
+    await default_node(_state([step], {}))
+    assert _CapturingLlm.captured[0][0].content == "Answer."
