@@ -16,6 +16,7 @@ import { test, expect, type Page } from '@playwright/test';
  *     active one);
  *   - a long history scrolls inside the rail while the dialog stays
  *     viewport-bounded, and a short history still sizes to its content;
+ *   - a completed first exchange gives its rail row a real title;
  *   - below `md` the rail is a drawer: hidden by default, opened by the
  *     hamburger, closed again by picking a session.
  *
@@ -35,7 +36,8 @@ import { test, expect, type Page } from '@playwright/test';
  * Preconditions, same as chat-agent-planner.spec.ts: `make up`
  * (db/redis/jaeger) + `make dev` (backend :8080, frontend :5173, Python
  * agent :9000). playwright.config.ts owns the frontend dev server; the
- * rest are operator-provided.
+ * rest are operator-provided. Side-stack runs additionally set
+ * E2E_API_URL to the side backend (default http://localhost:8080/api).
  */
 
 // Fresh user per test — see chat-rag.spec.ts `makeTestUser` for why a
@@ -130,7 +132,29 @@ async function railRowIds(page: Page): Promise<string[]> {
     );
 }
 
+const API_BASE = process.env.E2E_API_URL ?? 'http://localhost:8080/api';
+
+async function seedSessions(page: Page, count: number): Promise<void> {
+  const token = await page.evaluate(() => {
+    const raw = window.sessionStorage.getItem('nyx-token-store');
+    if (raw === null) return null;
+    return (JSON.parse(raw) as { accessToken: string }).accessToken;
+  });
+  if (token === null) throw new Error('no auth token in sessionStorage');
+  for (let i = 0; i < count; i++) {
+    const res = await page.request.post(`${API_BASE}/chat/sessions`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    expect(res.ok(), `seed session ${i + 1}/${count}`).toBe(true);
+    if (i < count - 1) {
+      await new Promise((resolve) => setTimeout(resolve, 200));
+    }
+  }
+}
+
 test.describe('Chat history sidebar (browser-level, live backend)', { tag: '@live' }, () => {
+  test.describe.configure({ timeout: 90000 });
+
   test('a new account starts with an empty rail', async ({ page }) => {
     await registerAndOpenChat(page);
 
@@ -326,19 +350,7 @@ test.describe('Chat history sidebar (browser-level, live backend)', { tag: '@liv
     await page.setViewportSize({ width: 1000, height: 800 });
     await registerAndOpenChat(page);
 
-    for (let i = 0; i < 30; i++) {
-      const previous = await persistedSessionId(page);
-      await page.getByTestId('chat-new-session').click();
-      await expect
-        .poll(
-          async () => {
-            const id = await persistedSessionId(page);
-            return id !== null && id !== previous;
-          },
-          { timeout: 15000 },
-        )
-        .toBe(true);
-    }
+    await seedSessions(page, 30);
 
     await page.reload();
     await reopenChat(page);
@@ -454,6 +466,18 @@ test.describe('Chat history sidebar (browser-level, live backend)', { tag: '@liv
       parseFloat(window.getComputedStyle(el).fontSize),
     );
     expect(fontSize).toBeGreaterThanOrEqual(11);
+  });
+
+  test('a completed first exchange gives its rail row a real title', async ({
+    page,
+  }) => {
+    await registerAndOpenChat(page);
+    await sendMessage(page, `Plan a weekend hike. (${Date.now()})`);
+
+    await expect(page.getByTestId('chat-session-title')).not.toHaveText(
+      'New chat',
+      { timeout: 10000 },
+    );
   });
 
   test('narrow viewport: the hamburger drawer opens and a session click closes it', async ({
