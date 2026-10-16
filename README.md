@@ -75,6 +75,9 @@ off by default. Full production topology → [`README_FULL.md` § Architecture](
 
 - **Accounts** — JWT access tokens plus rotated refresh tokens with reuse detection.
 - **Your feed** — create, edit, delete, search, paginate; every query scoped to your account.
+- **Light / dark theme** — the navbar toggle sits beside the `Nyx` brand; until you use it the app
+  follows the OS scheme (live), and your pick is stored in `localStorage["nyx.theme"]`
+  (`"light"` | `"dark"`; absent = follow the OS) and applied before first paint.
 - **Optional infrastructure**, off by default — Redis cache, Jaeger tracing, Sentry, MCP server.
   (Prometheus `/metrics` is always on.)
 
