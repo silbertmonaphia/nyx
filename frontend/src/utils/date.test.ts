@@ -1,4 +1,5 @@
 import { describe, it, expect } from 'vitest';
+import { i18n } from '~/i18n';
 import { formatRelativeTime } from './date';
 
 const NOW = new Date('2026-09-19T12:00:00Z');
@@ -37,5 +38,23 @@ describe('formatRelativeTime', () => {
     expect(formatRelativeTime(new Date(NOW.getTime() - 90_000).toISOString(), NOW)).toBe(
       '1 minute ago',
     );
+  });
+
+  it('localizes the buckets under the zh locale', async () => {
+    await i18n.changeLanguage('zh');
+
+    expect(formatRelativeTime(new Date(NOW.getTime() - 5_000), NOW)).toBe('刚刚');
+    expect(formatRelativeTime(new Date(NOW.getTime() - 5 * 60_000), NOW)).toBe(
+      '5分钟前',
+    );
+    expect(formatRelativeTime(new Date(NOW.getTime() + 3 * 86_400_000), NOW)).toBe(
+      '3天后',
+    );
+
+    const farPast = formatRelativeTime(new Date(NOW.getTime() - 30 * 86_400_000), NOW);
+    expect(farPast).not.toMatch(/前|后/);
+    expect(farPast).toMatch(/2026/);
+
+    await i18n.changeLanguage('en');
   });
 });

@@ -5,6 +5,7 @@ import { vi, describe, it, expect, beforeEach } from 'vitest';
 import { useFeeds } from './features/feeds/hooks/useFeeds';
 import { useAuthStore } from './store/authStore';
 import { useFeedUiStore } from './features/feeds/store/feedUiStore';
+import { i18n } from '~/i18n';
 
 vi.mock('./features/feeds/hooks/useFeeds');
 vi.mock('./store/authStore');
@@ -59,6 +60,35 @@ describe('App', () => {
     render(<App />);
     const toggle = screen.getByTestId('theme-toggle');
     expect(toggle.parentElement).toHaveTextContent('Nyx');
+  });
+
+  it('renders the navbar in both locales', async () => {
+    await i18n.changeLanguage('zh');
+    render(<App />);
+
+    expect(screen.getByPlaceholderText('搜索订阅...')).toBeInTheDocument();
+    expect(
+      screen.getByRole('button', { name: '登录 / 注册' }),
+    ).toBeInTheDocument();
+    expect(screen.getByTestId('locale-toggle')).toHaveAttribute(
+      'aria-label',
+      '切换语言',
+    );
+
+    await act(async () => {
+      await i18n.changeLanguage('en');
+    });
+
+    expect(
+      screen.getByPlaceholderText('Search for feeds...'),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole('button', { name: 'Login / Register' }),
+    ).toBeInTheDocument();
+    expect(screen.getByTestId('locale-toggle')).toHaveAttribute(
+      'aria-label',
+      'Switch language',
+    );
   });
 
   it('displays loading skeleton initially', () => {
