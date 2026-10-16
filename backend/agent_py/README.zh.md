@@ -39,7 +39,7 @@ flowchart TB
 - **Plan-and-Execute** —— planner 只做一次 LLM 调用（走 provider 结构化输出，Pydantic 校验，校验失败时有界重试），executor 然后按顺序执行各步骤。
 - **步骤类型** —— `rag`（通过 Go RAG 桥读取你的 feed）、`tool`（MCP 工具面）、`llm`（单次调用）、`react`（模型 ↔ 工具嵌套循环，有迭代上限）。
 - **默认就稳** —— 工具分发两类失败均有有界重试（校验失败重新提示 / 瞬时错误退避重试）、每用户 Redis token 预算（fail-closed）、按 IP 限流、运行状态存 Postgres 支持 `run_id` 恢复、僵尸运行清扫 + 保留期 GC。
-- **可观测** —— Prometheus 指标（:9001）、OpenTelemetry 链路（Jaeger）、可选 Langfuse LLM 追踪。
+- **可观测** —— Prometheus 指标（:9001）、OpenTelemetry 链路（Jaeger）、可选 Langfuse LLM 追踪，以及启动时配置好的进程日志（root 为 WARNING、`agent` 包为 INFO，行格式 `时间 级别 logger: 消息`）：追踪状态与导出失败在默认日志里就可见。
 - **可选 web 工具，默认关闭** —— agent 原生的 `web_search`（Tavily，无账号也可用 keyless 档）和带 SSRF 防护、非受信内容框定的 `web_fetch`。
 - **记忆** —— 每个会话与消息都会持久化（保留期下限 1 年，软删除 + 宽限期）；planner 会注入跨会话的"已知用户偏好"块；面向主体的接口全部按 owner 限定：`/agent/sessions*`（历史侧边栏 API）与 GDPR 导出/擦除（`/agent/me/*`，审计仅记计数）。
 
@@ -96,6 +96,9 @@ cd backend/agent_py && pytest tests/ -v
 | `PYTHON_AGENT_CHAT_RETENTION_DAYS` / `…_GRACE_DAYS` | `365` / `7` | 聊天历史保留期（下限 365 天）+ 软删除宽限期 |
 | `PYTHON_AGENT_PREFS_ENABLED` | `true` | 偏好抽取 + planner 注入的 kill switch |
 | `PYTHON_AGENT_GDPR_ENABLED` | `true` | GDPR 导出/擦除 kill switch（503，不碰任何数据） |
+| `LANGFUSE_DEBUG` | 未设置 | Langfuse SDK 详细日志 —— 从**进程环境**读取（见下） |
+
+Langfuse 追踪可以直接从默认日志诊断：`PYTHON_AGENT_LANGFUSE_ENABLED=true` 时启动日志会给出所配置的 host，导出失败会打印 OTel exporter 的重试/丢弃诊断（尽力投递 —— 不影响运行本身）。需要 SDK 级详细输出时，在**进程环境**（shell、compose 的 `environment:`、systemd unit）里设 `LANGFUSE_DEBUG=true`：Langfuse SDK 直接读 `os.environ`，而本服务的 `.env` 由 pydantic-settings 加载、不会同步进 `os.environ` —— 只写 `.env` 没有效果。
 
 全部开关、默认值与设计缘由 → [`README_ALL.md`](README_ALL.md)。
 

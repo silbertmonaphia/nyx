@@ -46,7 +46,9 @@ flowchart TB
   re-prompt / transient backoff), per-user Redis token budget (fail-closed), per-IP rate limit,
   run state in Postgres with resume-by-`run_id`, stale-run sweeper + retention GC.
 - **Observable** — Prometheus counters (:9001), OpenTelemetry spans (Jaeger), optional
-  Langfuse LLM tracing.
+  Langfuse LLM tracing, and process logging configured at boot (root at WARNING, the `agent`
+  package at INFO, `timestamp level logger: message` lines) so tracing state and export failures
+  are visible in the default log output.
 - **Optional web tools, off by default** — agent-native `web_search` (Tavily, keyless tier
   works with no account) and SSRF-guarded `web_fetch` with untrusted-content framing.
 - **Feed tools with confirmation** — the planner sees the live MCP registry (feed CRUD);
@@ -134,6 +136,14 @@ Common flags:
 | `PYTHON_AGENT_CHAT_RETENTION_DAYS` / `…_GRACE_DAYS` | `365` / `7` | Chat-history retention (floor 365 days) + soft-delete grace |
 | `PYTHON_AGENT_PREFS_ENABLED` | `true` | Preference extraction + planner-injection kill switch |
 | `PYTHON_AGENT_GDPR_ENABLED` | `true` | GDPR export/erase kill switch (503, touches nothing) |
+| `LANGFUSE_DEBUG` | unset | Langfuse SDK verbose mode — read from the **process environment** (see below) |
+
+Langfuse tracing is diagnosable from the default logs: with `PYTHON_AGENT_LANGFUSE_ENABLED=true`
+the boot line names the configured host, and a failing export surfaces the OTel exporter's
+retry/drop diagnostic (best-effort delivery — the run itself is unaffected). For SDK-level verbose
+output set `LANGFUSE_DEBUG=true` in the **process environment** (shell, compose `environment:`,
+systemd unit): the Langfuse SDK reads `os.environ`, and the agent's `.env` is loaded by
+pydantic-settings without being mirrored into it — a `.env` entry alone has no effect.
 
 Every knob, default, and rationale → [`README_ALL.md`](README_ALL.md).
 
