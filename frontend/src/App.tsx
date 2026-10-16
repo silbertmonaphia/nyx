@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import './App.css';
 import { Feed, NewFeed } from './features/feeds/types/feed';
 import { useFeeds } from './features/feeds/hooks/useFeeds';
@@ -24,15 +25,13 @@ import {
 import { Plus, X, Search, LogOut, User as UserIcon, MessageSquare, ArrowDownNarrowWide, ArrowUpNarrowWide } from 'lucide-react';
 import { PageMeta } from './components/app/PageMeta';
 import { ThemeToggle } from './components/app/ThemeToggle';
+import { LocaleToggle } from './components/app/LocaleToggle';
 import { logger } from './services/logger';
 import { ChatPanel } from './features/chat/components/ChatPanel';
 import { resetFeedStateForNewUser } from './features/feeds/services/resetFeedState';
 
-const DEFAULT_TITLE = 'Nyx — Your minimalist feed guide';
-const DEFAULT_DESCRIPTION =
-  'A minimalist feed for discovering, tracking, and curating the films you love.';
-
 function App() {
+  const { t } = useTranslation();
   const {
     searchTerm,
     setSearchTerm,
@@ -127,29 +126,29 @@ function App() {
   // should still announce itself in the title.
   const trimmedSearch = debouncedSearchTerm.trim();
   const pageTitle = editingFeed
-    ? `Edit "${editingFeed.title}" — Nyx`
+    ? t('app.title.edit', { title: editingFeed.title })
     : showAddForm && isAuthenticated
-    ? 'Add a feed — Nyx'
+    ? t('app.title.add')
     : showAuthForm && !isAuthenticated
-    ? 'Sign in — Nyx'
+    ? t('app.title.signIn')
     : chatOpen && isAuthenticated
-    ? 'Chat — Nyx'
+    ? t('app.title.chat')
     : sortOrder === 'asc' && !trimmedSearch
-    ? 'Oldest first — Nyx'
+    ? t('app.title.oldestFirst')
     : trimmedSearch
-    ? `"${trimmedSearch}" — Search — Nyx`
-    : DEFAULT_TITLE;
+    ? t('app.title.search', { term: trimmedSearch })
+    : t('app.title.default');
   const pageDescription = editingFeed
-    ? `Edit the details of "${editingFeed.title}" in your Nyx feed.`
+    ? t('app.description.edit', { title: editingFeed.title })
     : showAddForm && isAuthenticated
-    ? 'Add a new entry to your Nyx feed.'
+    ? t('app.description.add')
     : showAuthForm && !isAuthenticated
-    ? 'Sign in or create a Nyx account to curate your feed.'
+    ? t('app.description.signIn')
     : chatOpen && isAuthenticated
-    ? 'Stream a chat with the Nyx assistant.'
+    ? t('app.description.chat')
     : trimmedSearch
-    ? `Search Nyx for "${trimmedSearch}".`
-    : DEFAULT_DESCRIPTION;
+    ? t('app.description.search', { term: trimmedSearch })
+    : t('app.description.default');
 
   return (
     <div className="app-root">
@@ -161,13 +160,14 @@ function App() {
             <div className="text-2xl font-bold bg-gradient-to-r from-primary to-accent bg-clip-text text-transparent">
               Nyx
             </div>
+            <LocaleToggle />
             <ThemeToggle />
           </div>
           <div className="relative w-full max-w-3xl">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
             <Input
               type="text"
-              placeholder="Search for feeds..."
+              placeholder={t('nav.searchPlaceholder')}
               value={searchTerm}
               maxLength={200}
               onChange={(e) => setSearchTerm(e.target.value)}
@@ -181,11 +181,11 @@ function App() {
                   variant="outline"
                   size="sm"
                   onClick={() => setChatOpen(true)}
-                  aria-label="Open chat"
+                  aria-label={t('nav.openChat')}
                   className="gap-2"
                 >
                   <MessageSquare className="h-4 w-4" />
-                  Chat
+                  {t('nav.chat')}
                 </Button>
                 <div className="hidden md:flex items-center gap-2 text-sm font-medium text-muted-foreground">
                   <UserIcon className="h-4 w-4" />
@@ -193,11 +193,11 @@ function App() {
                 </div>
                 <Button variant="outline" size="sm" onClick={() => logout()} className="gap-2">
                   <LogOut className="h-4 w-4" />
-                  Logout
+                  {t('nav.logout')}
                 </Button>
               </>
             ) : (
-              <Button size="sm" onClick={() => setShowAuthForm(true)}>Login / Register</Button>
+              <Button size="sm" onClick={() => setShowAuthForm(true)}>{t('nav.loginOrRegister')}</Button>
             )}
           </div>
         </div>
@@ -219,7 +219,7 @@ function App() {
             onCancelEdit={resetFormState}
             onEdit={(feed) => {
               if (!isAuthenticated) {
-                useUiStore.getState().addToast('Please login to edit feeds', 'info');
+                useUiStore.getState().addToast(t('app.toast.loginToEdit'), 'info');
                 setShowAuthForm(true);
                 return;
               }
@@ -230,14 +230,14 @@ function App() {
               // somehow lingers (e.g. optimistic row before cache
               // eviction) — better UX than a silent failure.
               if (feed.user_id !== user?.id) {
-                useUiStore.getState().addToast('You can only edit feeds you created', 'info');
+                useUiStore.getState().addToast(t('app.toast.ownerOnly'), 'info');
                 return;
               }
               setEditingFeed(feed);
             }}
             onDelete={(id) => {
               if (!isAuthenticated) {
-                useUiStore.getState().addToast('Please login to delete feeds', 'info');
+                useUiStore.getState().addToast(t('app.toast.loginToDelete'), 'info');
                 setShowAuthForm(true);
                 return;
               }
@@ -247,7 +247,7 @@ function App() {
 
           {isAuthenticated && showAddForm && (
             <FeedForm
-              title="New Feed"
+              title={t('feeds.newFeed')}
               onSubmit={handleAddOrUpdateFeed}
               onCancel={resetFormState}
             />
@@ -260,10 +260,10 @@ function App() {
               onClick={toggleSortOrder}
               aria-label={
                 sortOrder === 'desc'
-                  ? 'Sorted newest first; click to show oldest first'
-                  : 'Sorted oldest first; click to show newest first'
+                  ? t('nav.sort.toggleToOldest')
+                  : t('nav.sort.toggleToNewest')
               }
-              title={sortOrder === 'desc' ? 'Newest first' : 'Oldest first'}
+              title={sortOrder === 'desc' ? t('nav.sort.newest') : t('nav.sort.oldest')}
               className="h-14 w-14 rounded-full shadow-lg"
               data-testid="toggle-sort-order"
             >
@@ -277,7 +277,7 @@ function App() {
               <Button
                 size="icon"
                 onClick={() => setShowAddForm(!showAddForm)}
-                aria-label={showAddForm ? 'Cancel adding feed' : 'Add feed'}
+                aria-label={showAddForm ? t('nav.cancelAddFeed') : t('nav.addFeed')}
                 className="h-14 w-14 rounded-full shadow-lg"
               >
                 {showAddForm ? <X className="h-6 w-6" /> : <Plus className="h-6 w-6" />}
@@ -290,10 +290,8 @@ function App() {
       <Dialog open={showAuthForm && !isAuthenticated} onOpenChange={setShowAuthForm}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>Login or Register</DialogTitle>
-            <DialogDescription>
-              Sign in to your account, or create a new one to start curating.
-            </DialogDescription>
+            <DialogTitle>{t('app.authDialog.title')}</DialogTitle>
+            <DialogDescription>{t('app.authDialog.description')}</DialogDescription>
           </DialogHeader>
           <AuthForm
             onSuccess={() => setShowAuthForm(false)}
@@ -310,14 +308,12 @@ function App() {
       >
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>Delete feed</DialogTitle>
-            <DialogDescription>
-              This will remove the feed from your list. This action cannot be undone.
-            </DialogDescription>
+            <DialogTitle>{t('app.deleteDialog.title')}</DialogTitle>
+            <DialogDescription>{t('app.deleteDialog.description')}</DialogDescription>
           </DialogHeader>
           <DialogFooter>
             <Button variant="outline" onClick={() => setConfirmDeleteId(null)}>
-              Cancel
+              {t('common.cancel')}
             </Button>
             <Button
               variant="destructive"
@@ -325,7 +321,7 @@ function App() {
               disabled={deleteFeed.isPending}
               data-testid="confirm-delete"
             >
-              {deleteFeed.isPending ? 'Deleting…' : 'Delete'}
+              {deleteFeed.isPending ? t('app.deleteDialog.pending') : t('app.deleteDialog.confirm')}
             </Button>
           </DialogFooter>
         </DialogContent>

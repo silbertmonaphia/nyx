@@ -1,10 +1,13 @@
 import { Moon, Sun } from 'lucide-react';
+import { useTranslation } from 'react-i18next';
 import { Button } from '~/components/ui/Button';
 import { setChoice, useTheme } from '~/theme/theme';
 
 export function ThemeToggle() {
+  const { t } = useTranslation();
   const theme = useTheme();
   const next: 'light' | 'dark' = theme === 'dark' ? 'light' : 'dark';
+  const label = next === 'dark' ? t('theme.dark') : t('theme.light');
 
   return (
     <Button
@@ -12,8 +15,8 @@ export function ThemeToggle() {
       variant="ghost"
       size="icon"
       onClick={() => setChoice(next)}
-      aria-label={`Switch to ${next} theme`}
-      title={`Switch to ${next} theme`}
+      aria-label={label}
+      title={label}
       data-testid="theme-toggle"
       className="hidden md:inline-flex h-9 w-9 shrink-0 text-white/70 hover:bg-white/10 hover:text-white"
     >
