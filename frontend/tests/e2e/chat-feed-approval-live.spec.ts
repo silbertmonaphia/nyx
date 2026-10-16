@@ -1,4 +1,5 @@
-import { test, expect, type Page } from '@playwright/test';
+import { expect, type Page } from '@playwright/test';
+import { test } from './fixtures/e2e-fixtures';
 
 /**
  * Live feed-creation approval flow — agent-feed-tools task 7.2.

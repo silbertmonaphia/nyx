@@ -11,27 +11,59 @@
  * localized automatically and no date library is required.
  */
 
+import { DEFAULT_LOCALE, i18n, t } from '~/i18n';
+
 const MS_PER_SECOND = 1_000;
 const MS_PER_MINUTE = 60 * MS_PER_SECOND;
 const MS_PER_HOUR = 60 * MS_PER_MINUTE;
 const MS_PER_DAY = 24 * MS_PER_HOUR;
 const MS_PER_WEEK = 7 * MS_PER_DAY;
 
-const rtf = new Intl.RelativeTimeFormat(undefined, { numeric: 'auto' });
-const dtf = new Intl.DateTimeFormat(undefined, {
-  year: 'numeric',
-  month: 'short',
-  day: 'numeric',
-});
+const rtfCache = new Map<string, Intl.RelativeTimeFormat>();
+const dtfCache = new Map<string, Intl.DateTimeFormat>();
+
+function locale(): string {
+  return i18n.language || DEFAULT_LOCALE;
+}
+
+function relativeFormatter(): Intl.RelativeTimeFormat {
+  const key = locale();
+  let formatter = rtfCache.get(key);
+  if (!formatter) {
+    formatter = new Intl.RelativeTimeFormat(key, { numeric: 'auto' });
+    rtfCache.set(key, formatter);
+  }
+  return formatter;
+}
+
+function absoluteFormatter(): Intl.DateTimeFormat {
+  const key = locale();
+  let formatter = dtfCache.get(key);
+  if (!formatter) {
+    formatter = new Intl.DateTimeFormat(key, {
+      year: 'numeric',
+      month: 'short',
+      day: 'numeric',
+    });
+    dtfCache.set(key, formatter);
+  }
+  return formatter;
+}
 
 export function formatRelativeTime(input: string | Date, now: Date = new Date()): string {
   const date = typeof input === 'string' ? new Date(input) : input;
   const diffMs = date.getTime() - now.getTime();
   const absMs = Math.abs(diffMs);
 
-  if (absMs < MS_PER_MINUTE) return 'just now';
-  if (absMs < MS_PER_HOUR) return rtf.format(Math.round(diffMs / MS_PER_MINUTE), 'minute');
-  if (absMs < MS_PER_DAY) return rtf.format(Math.round(diffMs / MS_PER_HOUR), 'hour');
-  if (absMs < MS_PER_WEEK) return rtf.format(Math.round(diffMs / MS_PER_DAY), 'day');
-  return dtf.format(date);
+  if (absMs < MS_PER_MINUTE) return t('time.justNow');
+  if (absMs < MS_PER_HOUR) {
+    return relativeFormatter().format(Math.round(diffMs / MS_PER_MINUTE), 'minute');
+  }
+  if (absMs < MS_PER_DAY) {
+    return relativeFormatter().format(Math.round(diffMs / MS_PER_HOUR), 'hour');
+  }
+  if (absMs < MS_PER_WEEK) {
+    return relativeFormatter().format(Math.round(diffMs / MS_PER_DAY), 'day');
+  }
+  return absoluteFormatter().format(date);
 }

@@ -1,4 +1,11 @@
 import '@testing-library/jest-dom';
+import { beforeEach } from 'vitest';
+
+import i18n from '../i18n';
+
+beforeEach(async () => {
+  await i18n.changeLanguage('en');
+});
 
 // JSDOM doesn't ship IntersectionObserver. Components that use it for
 // infinite-scroll need a stub. The real behaviour is exercised in E2E.

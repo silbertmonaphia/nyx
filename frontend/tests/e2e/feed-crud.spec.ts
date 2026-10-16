@@ -1,4 +1,5 @@
-import { test, expect } from '@playwright/test';
+import { expect } from '@playwright/test';
+import { test } from './fixtures/e2e-fixtures';
 
 /**
  * End-to-end coverage of the feed list CRUD flow.

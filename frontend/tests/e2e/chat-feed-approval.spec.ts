@@ -1,4 +1,5 @@
-import { test, expect, type Page, type Route } from '@playwright/test';
+import { expect, type Page, type Route } from '@playwright/test';
+import { test } from './fixtures/e2e-fixtures';
 import http from 'node:http';
 import type { AddressInfo } from 'node:net';
 

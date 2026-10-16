@@ -1,4 +1,5 @@
-import { test, expect, type Page } from '@playwright/test';
+import { expect, type Page } from '@playwright/test';
+import { test } from './fixtures/e2e-fixtures';
 
 /**
  * Chat history sidebar — browser verification for `agent-chat-history-ui`.

@@ -1,4 +1,5 @@
-import { test, expect, type Page, type Locator } from '@playwright/test';
+import { expect, type Page, type Locator } from '@playwright/test';
+import { test } from './fixtures/e2e-fixtures';
 
 /**
  * Browser-level verification of the chat / RAG flow.

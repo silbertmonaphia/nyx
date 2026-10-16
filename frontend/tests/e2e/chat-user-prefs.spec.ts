@@ -1,5 +1,6 @@
 import { execFileSync } from 'node:child_process';
-import { test, expect, type Page } from '@playwright/test';
+import { expect, type Page } from '@playwright/test';
+import { test } from './fixtures/e2e-fixtures';
 
 /**
  * User-preference memory — browser verification for
