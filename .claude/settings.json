@@ -12,6 +12,17 @@
         ]
       }
     ],
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "cmd=$(jq -r '.tool_input.command // empty'); case \"$cmd\" in *clear_all_claude_code_agents_via_tmux*) printf '%s' '{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"ask\",\"permissionDecisionReason\":\"会向所有 Claude pane 发送 /clear，请确认\"}}';; esac"
+          }
+        ]
+      }
+    ],
     "SessionStart": [],
     "Stop": [
       {
