@@ -51,11 +51,9 @@
         0%   { background-position: 200% 0; }
         100% { background-position: -200% 0; }
       }
-      @media (prefers-color-scheme: dark) {
-        html, body { background: #0b0b10; }
-        body { color: #e5e7eb; }
-        #nyx-skeleton .bar { background: linear-gradient(90deg, #1f2937 0%, #374151 50%, #1f2937 100%); background-size: 200% 100%; }
-      }
+      html.dark, html.dark body { background: #0b0b10; }
+      html.dark body { color: #e5e7eb; }
+      html.dark #nyx-skeleton .bar { background: linear-gradient(90deg, #1f2937 0%, #374151 50%, #1f2937 100%); background-size: 200% 100%; }
     </style>
   </head>
   <body>
@@ -67,7 +65,19 @@
       // foreground tokens resolve to their light values (dark text) on a
       // permanently-black nav and typed input becomes invisible.
       const mq = window.matchMedia('(prefers-color-scheme: dark)');
-      const apply = () => document.documentElement.classList.toggle('dark', mq.matches);
+      const readChoice = () => {
+        if (window.__nyxTheme === 'light' || window.__nyxTheme === 'dark') return window.__nyxTheme;
+        try {
+          const stored = window.localStorage.getItem('nyx.theme');
+          if (stored === 'light' || stored === 'dark') return stored;
+        } catch {}
+        return null;
+      };
+      const apply = () => {
+        const theme = readChoice() || (mq.matches ? 'dark' : 'light');
+        document.documentElement.classList.toggle('dark', theme === 'dark');
+        document.documentElement.style.colorScheme = theme;
+      };
       apply();
       // Safari < 14 only fires addListener; modern browsers fire addEventListener.
       if (mq.addEventListener) mq.addEventListener('change', apply);

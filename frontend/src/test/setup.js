@@ -75,3 +75,26 @@ if (typeof globalThis.IntersectionObserver === 'undefined') {
   // @ts-expect-error - test-only global polyfill
   globalThis.BroadcastChannel = BroadcastChannelStub;
 }
+
+if (typeof window !== 'undefined' && typeof window.matchMedia === 'undefined') {
+  window.matchMedia = (query) => {
+    const listeners = new Set();
+    return {
+      media: query,
+      matches: false,
+      onchange: null,
+      addEventListener: (type, listener) => {
+        if (type === 'change') listeners.add(listener);
+      },
+      removeEventListener: (type, listener) => {
+        if (type === 'change') listeners.delete(listener);
+      },
+      addListener: (listener) => listeners.add(listener),
+      removeListener: (listener) => listeners.delete(listener),
+      dispatchEvent: (event) => {
+        for (const listener of listeners) listener(event);
+        return true;
+      },
+    };
+  };
+}

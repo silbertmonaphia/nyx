@@ -23,6 +23,7 @@ import {
 } from './components/ui/Dialog';
 import { Plus, X, Search, LogOut, User as UserIcon, MessageSquare, ArrowDownNarrowWide, ArrowUpNarrowWide } from 'lucide-react';
 import { PageMeta } from './components/app/PageMeta';
+import { ThemeToggle } from './components/app/ThemeToggle';
 import { logger } from './services/logger';
 import { ChatPanel } from './features/chat/components/ChatPanel';
 import { resetFeedStateForNewUser } from './features/feeds/services/resetFeedState';
@@ -156,8 +157,11 @@ function App() {
       <ToastContainer />
       <nav className="sticky top-0 z-50 w-full border-b bg-black">
         <div className="w-full px-6 h-16 grid grid-cols-[1fr_auto_1fr] items-center gap-4">
-          <div className="text-2xl font-bold bg-gradient-to-r from-primary to-accent bg-clip-text text-transparent justify-self-start">
-            Nyx
+          <div className="flex items-center gap-3 justify-self-start">
+            <div className="text-2xl font-bold bg-gradient-to-r from-primary to-accent bg-clip-text text-transparent">
+              Nyx
+            </div>
+            <ThemeToggle />
           </div>
           <div className="relative w-full max-w-3xl">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />

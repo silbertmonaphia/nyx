@@ -55,6 +55,12 @@ describe('App', () => {
     expect(screen.getAllByText('Nyx').length).toBeGreaterThan(0);
   });
 
+  it('renders the theme toggle next to the brand in the nav', () => {
+    render(<App />);
+    const toggle = screen.getByTestId('theme-toggle');
+    expect(toggle.parentElement).toHaveTextContent('Nyx');
+  });
+
   it('displays loading skeleton initially', () => {
     mockUseFeeds.mockReturnValue({ ...baseFeeds, isLoading: true });
     render(<App />);
