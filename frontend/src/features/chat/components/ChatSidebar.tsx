@@ -38,6 +38,18 @@ function relativeTime(iso: string): string {
   return `${years} year${years === 1 ? "" : "s"} ago`;
 }
 
+function absoluteTime(iso: string): string {
+  const then = Date.parse(iso);
+  if (Number.isNaN(then)) return "";
+  const d = new Date(then);
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
+function timeLabel(iso: string): string {
+  return [absoluteTime(iso), relativeTime(iso)].filter(Boolean).join(" · ");
+}
+
 /**
  * Row label. The server stores `title=""` until a summariser fills it
  * in, and nothing client-side knows the session's first message, so an
@@ -187,10 +199,11 @@ export const ChatSidebar: React.FC<ChatSidebarProps> = ({
                     {label}
                   </span>
                   <span
-                    className="block text-[10px] text-muted-foreground"
+                    className="block text-[11px] text-muted-foreground"
                     data-testid="chat-session-time"
+                    title={session.last_active_at}
                   >
-                    {relativeTime(session.last_active_at)}
+                    {timeLabel(session.last_active_at)}
                     {runningSessionIds.includes(session.id) && (
                       // A detached run is still streaming into this
                       // session (the panel moved on but the SSE

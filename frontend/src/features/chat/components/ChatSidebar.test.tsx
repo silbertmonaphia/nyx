@@ -74,7 +74,7 @@ describe('ChatSidebar', () => {
     mockedService.deleteSession.mockReset().mockResolvedValue(undefined);
   });
 
-  it('renders rows in list order with title, placeholder, and relative time', () => {
+  it('renders rows in list order with title, placeholder, and absolute + relative time', () => {
     const fiveMinAgo = new Date(Date.now() - 5 * 60 * 1000).toISOString();
     const threeDaysAgo = new Date(Date.now() - 3 * 24 * 60 * 60 * 1000).toISOString();
     resetStore({
@@ -96,12 +96,28 @@ describe('ChatSidebar', () => {
     // first message).
     expect(screen.getByText('Trip planning')).toBeInTheDocument();
     expect(screen.getByText('New chat')).toBeInTheDocument();
-    expect(screen.getAllByTestId('chat-session-time')[0]).toHaveTextContent(
-      '5 min ago',
+
+    const times = screen.getAllByTestId('chat-session-time');
+    expect(times[0]).toHaveTextContent(/^\d{2}-\d{2} \d{2}:\d{2} · 5 min ago$/);
+    expect(times[1]).toHaveTextContent(
+      /^\d{2}-\d{2} \d{2}:\d{2} · 3 days ago$/,
     );
-    expect(screen.getAllByTestId('chat-session-time')[1]).toHaveTextContent(
-      '3 days ago',
-    );
+    expect(times[0]).toHaveAttribute('title', fiveMinAgo);
+    expect(times[1]).toHaveAttribute('title', threeDaysAgo);
+    expect(times[0].className).toMatch(/text-\[11px\]/);
+  });
+
+  it('renders the absolute date for a session older than a year', () => {
+    const longAgo = new Date(Date.now() - 400 * 24 * 60 * 60 * 1000).toISOString();
+    resetStore({
+      sessionList: [makeSession('s-old', { last_active_at: longAgo })],
+    });
+
+    render(<ChatSidebar />);
+
+    const time = screen.getByTestId('chat-session-time');
+    expect(time).toHaveTextContent(/^\d{2}-\d{2} \d{2}:\d{2} · 1 year ago$/);
+    expect(time).toHaveAttribute('title', longAgo);
   });
 
   it('shows the empty state when the first page came back empty', async () => {

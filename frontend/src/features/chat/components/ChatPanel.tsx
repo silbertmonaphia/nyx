@@ -166,8 +166,6 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ open, onOpenChange }) => {
   const submitApproval = useChat((s) => s.submitApproval);
   const expireApproval = useChat((s) => s.expireApproval);
   const reset = useChat((s) => s.reset);
-  const useFeeds = useChat((s) => s.useFeeds);
-  const setUseFeeds = useChat((s) => s.setUseFeeds);
   const hydrateSession = useChat((s) => s.hydrateSession);
   const startNewSession = useChat((s) => s.startNewSession);
   // The active session still has a detached background run streaming
@@ -299,8 +297,10 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ open, onOpenChange }) => {
 
         {/* `relative` scopes the mobile drawer to the content area, so
             the hamburger in the header stays reachable while it is
-            open. */}
-        <div className="relative flex gap-3 min-h-0">
+            open. The `max-h` bounds the row so the rail's own scroll
+            container engages instead of the dialog growing with the
+            session count. */}
+        <div className="relative flex gap-3 min-h-0 max-h-[70vh]">
           {SIDEBAR_ENABLED && (
             <ChatSidebar
               onSessionClick={() => setSidebarOpen(false)}
@@ -430,29 +430,6 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ open, onOpenChange }) => {
               className="flex flex-col gap-2"
               data-testid="chat-form"
             >
-              <div className="flex items-center gap-2">
-                <input
-                  type="checkbox"
-                  id="chat-use-feeds"
-                  checked={useFeeds}
-                  onChange={(e) => setUseFeeds(e.target.checked)}
-                  disabled={composerLocked}
-                  data-testid="chat-use-feeds"
-                  className="h-4 w-4 rounded border-input accent-primary"
-                  aria-label="Use my feeds"
-                />
-                <label
-                  htmlFor="chat-use-feeds"
-                  className="text-xs text-muted-foreground cursor-pointer"
-                >
-                  Use my feeds
-                </label>
-                {useFeeds && (
-                  <span className="text-[10px] text-muted-foreground/70 ml-auto">
-                    Answers grounded in your feeds
-                  </span>
-                )}
-              </div>
               {sessionBusy && (
                 <p
                   className="text-[10px] text-muted-foreground"

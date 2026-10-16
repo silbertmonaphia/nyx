@@ -166,7 +166,6 @@ export const chatService = {
     messages: Message[],
     signal: AbortSignal,
     opts: {
-      rag?: boolean;
       /**
        * Active session id. Sent as `run_id` so the agent resumes that
        * session (and does not re-record the replayed user messages)
@@ -183,7 +182,7 @@ export const chatService = {
       onRunId?: (id: string) => void;
     } = {},
   ): AsyncGenerator<ChatEvent> {
-    const body: ChatRequest = { messages, rag: opts.rag };
+    const body: ChatRequest = { messages };
     if (opts.runId) {
       body.run_id = opts.runId;
     }

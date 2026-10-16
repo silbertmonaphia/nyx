@@ -220,36 +220,6 @@ describe('ChatPanel', () => {
   });
 });
 
-describe('ChatPanel useFeeds toggle', () => {
-  it('renders the checkbox and lets the user flip it', async () => {
-    render(<ChatPanel open={true} onOpenChange={() => {}} />);
-    const toggle = screen.getByTestId('chat-use-feeds') as HTMLInputElement;
-    expect(toggle.checked).toBe(false);
-
-    await userEvent.click(toggle);
-    expect(toggle.checked).toBe(true);
-  });
-
-  it('disables the toggle while a stream is in flight', async () => {
-    // Seed a fake streaming state by writing into the store
-    // directly — the user-facing send path is exercised in
-    // chatStore.test.ts.
-    useChatStore.setState({ isStreaming: true });
-    render(<ChatPanel open={true} onOpenChange={() => {}} />);
-    const toggle = screen.getByTestId('chat-use-feeds') as HTMLInputElement;
-    expect(toggle.disabled).toBe(true);
-
-    useChatStore.setState({ isStreaming: false });
-  });
-
-  it('shows a "grounded in your feeds" hint when the toggle is on', async () => {
-    useChatStore.setState({ useFeeds: true });
-    render(<ChatPanel open={true} onOpenChange={() => {}} />);
-    expect(screen.getByText(/grounded in your feeds/i)).toBeInTheDocument();
-    useChatStore.setState({ useFeeds: false });
-  });
-});
-
 // ---- Agent-loop steps region (openspec/changes/agent-loop) ----
 // When the assistant row carries `steps`, ChatPanel renders an
 // "agent steps" <details> with one row per step. The single-turn
@@ -977,7 +947,6 @@ describe('ChatPanel approval card', () => {
 
     expect(screen.getByTestId('chat-input')).toBeDisabled();
     expect(screen.getByTestId('chat-send')).toBeDisabled();
-    expect(screen.getByTestId('chat-use-feeds')).toBeDisabled();
     expect(
       screen.getByTestId('chat-session-busy-hint'),
     ).toHaveTextContent(/still working/i);
