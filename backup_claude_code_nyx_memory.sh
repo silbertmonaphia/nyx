@@ -3,7 +3,7 @@ set -eu
 
 SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 SRC="$HOME/.claude/projects/-home-smona-nyx/memory"
-DEST="${1:-$SCRIPT_DIR/backups}"
+DEST="${1:-$SCRIPT_DIR/backups_claude_code_memory}"
 KEEP=5
 STAMP=$(date +%Y%m%dT%H%M%S)
 

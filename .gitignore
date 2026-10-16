@@ -83,4 +83,4 @@ evals/**/artifacts/
 .promptfoo/
 test-results/
 playwright-report/
-backups/
+backups_claude_code_memory/
