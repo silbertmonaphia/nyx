@@ -16,9 +16,9 @@ set -uo pipefail
 repo_root=$(git rev-parse --show-toplevel 2>/dev/null) || exit 0
 cd "$repo_root" || exit 0
 
-# Pick the first base branch that exists locally.
+# Pick the first base branch that exists locally; mvp preferred, main lags behind it.
 base=""
-for b in main mvp; do
+for b in mvp main; do
     if git rev-parse --verify -q "$b" >/dev/null 2>&1; then
         base=$b
         break

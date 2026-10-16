@@ -1,5 +1,5 @@
 ---
-description: Spawn the test-reviewer agent against the current branch diff vs the project base (main, fallback mvp). Use after a feature/fix lands, before committing or pushing, to catch correctness / security / CLAUDE.md violations.
+description: Spawn the test-reviewer agent against the current branch diff vs the project base (mvp, fallback main). Use after a feature/fix lands, before committing or pushing, to catch correctness / security / CLAUDE.md violations.
 allowed-tools: ["Agent", "Bash", "Read", "Glob", "Grep"]
 ---
 
@@ -11,8 +11,8 @@ You are running the project's review pass. Use the Agent tool to spawn the
 ## Steps
 
 1. Pick the base ref:
-   - `main` if it exists locally (`git rev-parse --verify main`).
-   - else `mvp` (the current branch's parent in this project's CI config).
+   - `mvp` if it exists locally (`git rev-parse --verify mvp`) — the live trunk, parent of feature branches.
+   - else `main` (fallback; main trails mvp).
 2. Spawn the `test-reviewer` agent via the Agent tool with the prompt:
 
    > Review the diff against the base ref. Scope is `git diff <base>...HEAD`.

@@ -46,7 +46,7 @@
 - **是什么**：每次 backend/frontend 改动后自动跑一遍 `test-reviewer` 子 agent。
 - **为什么**：`test-reviewer` 已定义在 `.claude/agents/test-reviewer.md`，但 `settings.json` 没挂 hook 强制执行；现在是"有人想用才用"。思维盲区有便宜解药但没人按。
 - **怎么做**：
-  - `.claude/commands/review.md`：slash command `/review` —— body 教主 session 用 Agent tool 起 `test-reviewer` 子 agent，scope 为 `git diff <base>...HEAD`（base = main，缺失时回退 mvp），强制 `ReportFindings` 输出，CONFIRMED 不清零就 `request changes`。
+  - `.claude/commands/review.md`：slash command `/review` —— body 教主 session 用 Agent tool 起 `test-reviewer` 子 agent，scope 为 `git diff <base>...HEAD`（base = mvp，缺失时回退 main），强制 `ReportFindings` 输出，CONFIRMED 不清零就 `request changes`。
   - `.claude/scripts/post-turn-reminder.sh` + `.claude/settings.json` 的 `Stop` hook：每轮 Claude turn 结束后检测工作树/HEAD 是否相对 base 有改动，是则打印一行提醒让用户手动 `/review`。**hook 不直接起 agent** —— Stop hook 只能跑 shell 命令，再起一个 Claude session 每轮都爆 token + 加延迟，不值；slash command 是重活的手动触发器，hook 只是提醒。
   - **不用 `PostToolUse`**：多文件改动会触发 N 次，单 edit 拆 N 次跑 review 也拖慢反馈。
 
