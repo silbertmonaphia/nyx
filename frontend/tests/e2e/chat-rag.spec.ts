@@ -10,7 +10,6 @@ import { test, expect, type Page, type Locator } from '@playwright/test';
  *     a burst of deltas queues scroll writes correctly.
  *   - AbortController race: cancelling mid-stream must drop the
  *     half-built assistant row, not leave an empty bubble.
- *   - useFeeds toggle persistence in localStorage across close/reopen.
  *   - Dialog close → reset semantics: closing the chat panel must
  *     wipe the ephemeral message history.
  *   - Multi-turn order: assistant reply of turn N must sit below
@@ -184,30 +183,6 @@ test.describe('Chat / RAG flow (browser-level)', { tag: '@live' }, () => {
     ).toBeVisible();
     await expect(page.getByTestId('chat-message-assistant')).toHaveCount(0);
     await expect(page.getByTestId('chat-error')).toHaveCount(0);
-  });
-
-  test('useFeeds toggle resets on dialog close', async ({ page }) => {
-    // Closing the chat wipes `useFeeds` back to off — the persisted
-    // user preference survives (localStorage) but is not auto-
-    // applied to a fresh session. Avoids surprising the next visitor
-    // who shares the browser. The in-session value still survives a
-    // chat close → reopen cycle when the toggle is never touched.
-    const toggle = page.getByTestId('chat-use-feeds');
-    await expect(toggle).not.toBeChecked();
-
-    // Flip on, close, reopen — toggle must be off again.
-    await toggle.check();
-    await expect(toggle).toBeChecked();
-    await closeChat(page);
-    await page.getByRole('button', { name: 'Open chat' }).click();
-    await expect(page.getByTestId('chat-form')).toBeVisible();
-    await expect(page.getByTestId('chat-use-feeds')).not.toBeChecked();
-
-    // Flip off, close, reopen — still off (the no-op case).
-    await page.getByTestId('chat-use-feeds').uncheck();
-    await closeChat(page);
-    await page.getByRole('button', { name: 'Open chat' }).click();
-    await expect(page.getByTestId('chat-use-feeds')).not.toBeChecked();
   });
 
   test('closing and reopening the dialog restores the active conversation', async ({

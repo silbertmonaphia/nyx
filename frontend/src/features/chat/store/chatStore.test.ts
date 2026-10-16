@@ -32,14 +32,13 @@ function resetStore() {
     messages: [],
     isStreaming: false,
     error: null,
-    useFeeds: false,
     currentSessionId: null,
     sessionList: [],
     sessionListNextCursor: null,
     isFetchingMore: false,
     runningSessionIds: [],
   });
-  // Clear any persisted toggle / session id from a previous test.
+  // Clear any persisted session id from a previous test.
   localStorage.clear();
   sessionStorage.clear();
 }
@@ -575,75 +574,10 @@ describe('useChatStore', () => {
       expect(state.isStreaming).toBe(false);
       expect(state.error).toBeNull();
     });
-
-    it('also resets useFeeds to false so a fresh session starts clean', async () => {
-      await act(async () => {
-        useChatStore.getState().setUseFeeds(true);
-      });
-      expect(useChatStore.getState().useFeeds).toBe(true);
-
-      await act(async () => {
-        await useChatStore.getState().reset();
-      });
-
-      expect(useChatStore.getState().useFeeds).toBe(false);
-      expect(localStorage.getItem('nyx.chat.useFeeds')).toBe('false');
-    });
   });
 
-  describe('useFeeds toggle', () => {
-    it('persists true to localStorage and is read on next module init', async () => {
-      await act(async () => {
-        useChatStore.getState().setUseFeeds(true);
-      });
-      expect(useChatStore.getState().useFeeds).toBe(true);
-      expect(localStorage.getItem('nyx.chat.useFeeds')).toBe('true');
-    });
-
-    it('passes rag: true to streamMessage when useFeeds is on', async () => {
-      await act(async () => {
-        useChatStore.getState().setUseFeeds(true);
-      });
-
-      mockedService.streamMessage.mockImplementationOnce(
-        (messages: unknown, signal: AbortSignal) =>
-          makeStream(
-            [
-              {
-                kind: 'done',
-                usage: {
-                  prompt_tokens: 1,
-                  completion_tokens: 1,
-                  total_tokens: 2,
-                },
-              },
-            ],
-            signal,
-          ),
-      );
-
-      // Fire-and-forget send: the held promise inside makeStream
-      // means send() never resolves until releaseStream() runs.
-      act(() => {
-        void useChatStore.getState().send('hi');
-      });
-
-      // Wait for the call to land, then assert the third arg.
-      await waitFor(() => {
-        expect(mockedService.streamMessage).toHaveBeenCalled();
-      });
-      const call = mockedService.streamMessage.mock.calls[0];
-      // `objectContaining`: since agent-chat-history-ui the opts also
-      // carry the session hooks (`runId`, `onRunId`).
-      expect(call[2]).toEqual(expect.objectContaining({ rag: true }));
-
-      await act(async () => {
-        releaseStream();
-      });
-    });
-
-    it('passes rag: false when useFeeds is off (default)', async () => {
-      // useFeeds default is false (reset above clears it).
+  describe('send options and session adoption', () => {
+    it('does not send a rag field on the stream request', async () => {
       mockedService.streamMessage.mockImplementationOnce(
         (messages: unknown, signal: AbortSignal) =>
           makeStream(
@@ -669,7 +603,7 @@ describe('useChatStore', () => {
         expect(mockedService.streamMessage).toHaveBeenCalled();
       });
       const call = mockedService.streamMessage.mock.calls[0];
-      expect(call[2]).toEqual(expect.objectContaining({ rag: false }));
+      expect(call[2]).not.toHaveProperty('rag');
       // No active session in this suite's reset state → no run_id echo.
       expect(call[2].runId).toBeNull();
 
@@ -1085,8 +1019,8 @@ describe('useChatStore', () => {
         releaseStream();
       });
 
-      // The `useFeeds` toggle may write to localStorage; the agent
-      // step trace never does.
+      // The store keeps nothing in localStorage; the agent step
+      // trace in particular never lands there.
       const keys = Object.keys(localStorage);
       const hasStepsKey = keys.some((k) => /steps|agent|chat\.history/i.test(k));
       expect(hasStepsKey).toBe(false);
