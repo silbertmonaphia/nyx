@@ -473,7 +473,7 @@ test.describe('Chat history sidebar (browser-level, live backend)', { tag: '@liv
     page,
   }) => {
     await registerAndOpenChat(page);
-    await sendMessage(page, `Plan a weekend hike. (${Date.now()})`);
+    await sendMessage(page, `Reply with one short sentence. (${Date.now()})`);
 
     await expect(page.getByTestId('chat-session-title')).not.toHaveText(
       'New chat',
