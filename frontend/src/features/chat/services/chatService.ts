@@ -1,4 +1,5 @@
 import type { ApiError } from "~/api/openapi";
+import { t } from "~/i18n";
 import api, { tokenStore, refreshTokensAndReplay } from "~/services/api";
 import { injectTraceparent } from "~/services/telemetry";
 import {
@@ -81,7 +82,7 @@ async function requestJson<T>(
   if (!response.ok) {
     throw new ChatApiError(
       response.status,
-      `Chat request failed (${response.status})`,
+      t('chat.errors.requestFailed', { status: response.status }),
     );
   }
 
@@ -93,7 +94,7 @@ async function requestJson<T>(
   try {
     return JSON.parse(text) as T;
   } catch {
-    throw new ChatApiError(response.status, "Chat response was not valid JSON");
+    throw new ChatApiError(response.status, t("chat.errors.invalidJson"));
   }
 }
 
@@ -222,7 +223,8 @@ export const chatService = {
       } catch {
         // Body wasn't JSON — fall back to a generic message.
       }
-      const message = envelope?.error ?? `Chat request failed (${response.status})`;
+      const message =
+        envelope?.error ?? t('chat.errors.requestFailed', { status: response.status });
       throw new ChatStreamError({
         kind: "http",
         status: response.status,
@@ -234,7 +236,7 @@ export const chatService = {
       throw new ChatStreamError({
         kind: "http",
         status: 500,
-        message: "Chat response had no body",
+        message: t("chat.errors.noBody"),
       });
     }
 
@@ -392,7 +394,7 @@ export const chatService = {
                 error:
                   typeof parsed.error === "string"
                     ? parsed.error
-                    : "Chat stream error",
+                    : t("chat.errors.streamError"),
                 request_id:
                   typeof parsed.request_id === "string"
                     ? parsed.request_id
@@ -402,7 +404,7 @@ export const chatService = {
             } catch {
               yield {
                 kind: "error",
-                error: "Chat stream error",
+                error: t("chat.errors.streamError"),
                 request_id: "",
               };
             }
@@ -716,7 +718,7 @@ export const chatService = {
       started_at?: unknown;
     }>(SESSIONS_URL, { method: "POST" });
     if (typeof data?.session_id !== "string" || data.session_id === "") {
-      throw new ChatApiError(200, "Chat session creation returned no id");
+      throw new ChatApiError(200, t("chat.errors.sessionNoId"));
     }
     return {
       session_id: data.session_id,

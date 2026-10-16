@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { AlertCircle, CheckCircle, History, X } from "lucide-react";
 import { Button } from "~/components/ui/Button";
 import { Card, CardContent } from "~/components/ui/Card";
@@ -57,6 +58,7 @@ export const ConfirmationCard: React.FC<ConfirmationCardProps> = ({
   onDecide,
   onExpire,
 }) => {
+  const { t } = useTranslation();
   // Local in-flight guard: the decision POST is idempotent server-side
   // (first decision wins), but the buttons shouldn't invite a
   // double-click while the request is on the wire.
@@ -99,12 +101,12 @@ export const ConfirmationCard: React.FC<ConfirmationCardProps> = ({
           : AlertCircle;
   const headline =
     confirm.decision === "approved"
-      ? "Approved"
+      ? t("chat.confirmation.approved")
       : confirm.decision === "denied"
-        ? "Denied"
+        ? t("chat.confirmation.denied")
         : confirm.decision === "expired"
-          ? "Expired"
-          : "Approval needed";
+          ? t("chat.confirmation.expired")
+          : t("chat.confirmation.needed");
 
   return (
     <Card
@@ -119,7 +121,7 @@ export const ConfirmationCard: React.FC<ConfirmationCardProps> = ({
           <span>{headline}</span>
         </div>
         <div className="flex flex-wrap items-center gap-1">
-          <span className="opacity-70">Tool:</span>
+          <span className="opacity-70">{t("chat.confirmation.tool")}</span>
           <span
             className="font-mono font-medium"
             data-testid="chat-confirm-tool"
@@ -140,7 +142,9 @@ export const ConfirmationCard: React.FC<ConfirmationCardProps> = ({
               data-testid="chat-confirm-countdown"
               role="timer"
             >
-              Expires in {formatRemaining(remainingMs)}
+              {t("chat.confirmation.expiresIn", {
+                time: formatRemaining(remainingMs),
+              })}
             </span>
             <div className="flex gap-2">
               <Button
@@ -151,7 +155,7 @@ export const ConfirmationCard: React.FC<ConfirmationCardProps> = ({
                 data-testid="chat-confirm-deny"
                 onClick={() => void handleDecide("deny")}
               >
-                Deny
+                {t("chat.confirmation.deny")}
               </Button>
               <Button
                 type="button"
@@ -160,7 +164,7 @@ export const ConfirmationCard: React.FC<ConfirmationCardProps> = ({
                 data-testid="chat-confirm-approve"
                 onClick={() => void handleDecide("approve")}
               >
-                Approve
+                {t("chat.confirmation.approve")}
               </Button>
             </div>
           </div>
@@ -172,10 +176,10 @@ export const ConfirmationCard: React.FC<ConfirmationCardProps> = ({
             aria-live="polite"
           >
             {confirm.decision === "approved"
-              ? "Approved — the agent is running this call."
+              ? t("chat.confirmation.approvedBody")
               : confirm.decision === "denied"
-                ? "Denied — the agent was told the call was rejected."
-                : "This request expired before a decision — the call was not executed."}
+                ? t("chat.confirmation.deniedBody")
+                : t("chat.confirmation.expiredBody")}
           </div>
         )}
         {confirm.error && (

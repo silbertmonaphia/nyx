@@ -1,4 +1,5 @@
 import type React from "react";
+import { useTranslation } from "react-i18next";
 import { cn } from "~/utils/cn";
 
 /**
@@ -35,17 +36,15 @@ export interface PartialFailureBannerProps {
 export const PartialFailureBanner: React.FC<PartialFailureBannerProps> = ({
   failedSteps,
 }) => {
+  const { t } = useTranslation();
   // The server only sends an empty `failed_steps` when the run
   // terminated before any step reached a terminal status (plan-level
   // error per the spec). In that case the user-facing text differs:
   // the run never reached a step, so listing ids would be a lie.
   const isPlanLevel = failedSteps.length === 0;
   const headline = isPlanLevel
-    ? "Run did not reach a terminal step"
-    : "Some steps failed — the answer below may be incomplete";
-  // TODO(i18n): the codebase has no localisation framework today;
-  // strings live inline. When one lands, move the headline + step
-  // listing into the same string table.
+    ? t("chat.partialFailurePlan")
+    : t("chat.partialFailureSteps");
   return (
     <div
       className={cn(

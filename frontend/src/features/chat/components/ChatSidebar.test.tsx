@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { ChatSidebar } from './ChatSidebar';
+import { i18n } from '~/i18n';
 import { useChatStore } from '../store/chatStore';
 import { chatService } from '../services/chatService';
 import { ChatApiError, type SessionSummary } from '../types/chat';
@@ -381,5 +382,29 @@ describe('ChatSidebar', () => {
     await waitFor(() => {
       expect(screen.queryByTestId('chat-session-running')).toBeNull();
     });
+  });
+
+  it('renders the Chinese labels and time buckets under the zh locale', async () => {
+    const fiveMinAgo = new Date(Date.now() - 5 * 60 * 1000).toISOString();
+    const threeDaysAgo = new Date(Date.now() - 3 * 24 * 60 * 60 * 1000).toISOString();
+    await i18n.changeLanguage('zh');
+    resetStore({
+      sessionList: [
+        makeSession('s3', { title: 'Trip planning', last_active_at: fiveMinAgo }),
+        makeSession('s2', { last_active_at: threeDaysAgo }),
+      ],
+    });
+
+    render(<ChatSidebar />);
+
+    expect(screen.getByText('历史')).toBeInTheDocument();
+    expect(screen.getByText('新建对话')).toBeInTheDocument();
+    expect(screen.getByText('Trip planning')).toBeInTheDocument();
+
+    const times = screen.getAllByTestId('chat-session-time');
+    expect(times[0]).toHaveTextContent(/^\d{2}-\d{2} \d{2}:\d{2} · 5 分钟前$/);
+    expect(times[1]).toHaveTextContent(/^\d{2}-\d{2} \d{2}:\d{2} · 3 天前$/);
+
+    await i18n.changeLanguage('en');
   });
 });
