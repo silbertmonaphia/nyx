@@ -1,10 +1,11 @@
 import { test as base } from '@playwright/test';
 
-export const LOCALE_STORAGE_KEY = 'nyx.locale';
+import { LOCALE_STORAGE_KEY } from '../../../src/i18n/locale-storage';
+
 export const PINNED_LOCALE = 'en';
 
 export const test = base.extend({
-  context: async ({ context }, use) => {
+  context: async ({ context }, provide) => {
     await context.addInitScript((entry) => {
       try {
         window.localStorage.setItem(entry.key, entry.value);
@@ -12,7 +13,6 @@ export const test = base.extend({
         return;
       }
     }, { key: LOCALE_STORAGE_KEY, value: PINNED_LOCALE });
-    // eslint-disable-next-line react-hooks/rules-of-hooks
-    await use(context);
+    await provide(context);
   },
 });

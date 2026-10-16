@@ -66,7 +66,7 @@ describe('App', () => {
     await i18n.changeLanguage('zh');
     render(<App />);
 
-    expect(screen.getByPlaceholderText('搜索订阅...')).toBeInTheDocument();
+    expect(screen.getByPlaceholderText('搜索订阅…')).toBeInTheDocument();
     expect(
       screen.getByRole('button', { name: '登录 / 注册' }),
     ).toBeInTheDocument();
