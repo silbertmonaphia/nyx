@@ -140,8 +140,8 @@ instead of the plain single-turn RAG chat. Everything else works the same either
 - **[`README_FULL.md`](README_FULL.md)** — the full technical README: architecture diagram, auth
   internals, API reference, testing matrix.
 - [`FUTURE_AGENT.md`](FUTURE_AGENT.md) — the agent roadmap: what's landed, what's next.
-- [`AgentArchitecture.md`](AgentArchitecture.md) — how the agent is put together.
-- [`AgentFaultTolerance.md`](AgentFaultTolerance.md) — every failure mode, and what covers it.
+- [`AgentArchitecture.md`](docs_agent/AgentArchitecture.md) — how the agent is put together.
+- [`AgentFaultTolerance.md`](docs_agent/AgentFaultTolerance.md) — every failure mode, and what covers it.
 - [`backend/agent_py/README.md`](backend/agent_py/README.md) — the Python service in detail.
 - [`docs/agent-deployment.md`](docs/agent-deployment.md) — production rollout for the agent.
 - [`CLAUDE.md`](CLAUDE.md) · [`SECURITY.md`](SECURITY.md) · [`FUTURE.md`](FUTURE.md) · [`openspec/`](openspec/)

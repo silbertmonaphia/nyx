@@ -5,7 +5,7 @@ Revises: 0005_chat_user_prefs
 Create Date: 2026-10-14
 
 Append-only audit log for GDPR export/erase operations
-(openspec/changes/agent-gdpr-compliance, Slice 4 of `AgentMemoryRoadmap.md`).
+(openspec/changes/agent-gdpr-compliance, Slice 4 of `docs_agent/AgentMemoryRoadmap.md`).
 
 One table, `agent.data_audit_log` — one row per served data-subject
 operation:

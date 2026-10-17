@@ -1,6 +1,6 @@
 # Agent Memory Roadmap
 
-The slice plan that turns the three pain points in [`AgentMemoryDesign.md`](./AgentMemoryDesign.md) into shippable OpenSpec changes. For the long-term agent capability direction (P0–P2 across provider/tool/loop/state/observability/web-tools), see [`FUTURE_AGENT.md`](./FUTURE_AGENT.md) §2.1 — this roadmap supersedes that single-line entry with the actual split.
+The slice plan that turns the three pain points in [`AgentMemoryDesign.md`](./AgentMemoryDesign.md) into shippable OpenSpec changes. For the long-term agent capability direction (P0–P2 across provider/tool/loop/state/observability/web-tools), see [`FUTURE_AGENT.md`](../FUTURE_AGENT.md) §2.1 — this roadmap supersedes that single-line entry with the actual split.
 
 ---
 
@@ -172,7 +172,7 @@ Each slice produces an `openspec/changes/agent-<slice>/` (impl) + a sibling `*-r
 ## References
 
 - [`AgentMemoryDesign.md`](./AgentMemoryDesign.md) — the three pain points this roadmap addresses.
-- [`FUTURE_AGENT.md`](./FUTURE_AGENT.md) §2.1 — original (single-line) entry this roadmap supersedes.
+- [`FUTURE_AGENT.md`](../FUTURE_AGENT.md) §2.1 — original (single-line) entry this roadmap supersedes.
 - [`FUTURE_AGENT.md`](./FUTURE_AGENT.md) §1.1 — precedent for the retention cron + grace-period pattern (`agent-stale-run-sweeper`).
 - `openspec/config.yaml` — rollout-split convention; each impl slice gets a `*-rollout` sibling.
 - `openspec/changes/agent-stale-run-sweeper-rollout/tasks.md` — model for the rollout-sibling task shape.

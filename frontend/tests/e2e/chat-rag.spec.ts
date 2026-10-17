@@ -192,7 +192,7 @@ test.describe('Chat / RAG flow (browser-level)', { tag: '@live' }, () => {
     // agent-chat-history-ui changed this contract: closing the dialog no
     // longer wipes the conversation. Reopening restores the active
     // session and replays its stored turns — the product goal is that
-    // closing the window must NOT lose the chat (AgentMemoryDesign.md
+    // closing the window must NOT lose the chat (docs_agent/AgentMemoryDesign.md
     // pain point 2). A fresh conversation starts only via the explicit
     // `+ New chat` action (covered in chat-history-sidebar.spec.ts).
     await sendMessage(page, 'remember me');

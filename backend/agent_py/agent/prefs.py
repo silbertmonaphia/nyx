@@ -1,6 +1,6 @@
 """User-preference memory for the planner (openspec/changes/agent-user-preferences).
 
-Slice 3 of `AgentMemoryRoadmap.md`: remember stable preferences the user
+Slice 3 of `docs_agent/AgentMemoryRoadmap.md`: remember stable preferences the user
 states in conversation and feed them into the planner's system prompt so
 the agent stops treating every session like a stranger. Four concerns
 live here:

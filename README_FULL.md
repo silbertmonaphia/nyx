@@ -6,7 +6,7 @@ A minimalist feed application — Go 1.26.1 API, React 19 SPA, PostgreSQL, optio
 
 ## Highlights
 
-- **Plan-and-Execute agent (the main development focus)** — `backend/agent_py/`, a Python FastAPI + LangGraph service. A planner decomposes each request into typed steps, an executor runs them through tools (feed CRUD via the MCP tool surface, RAG over the caller's own entries, web search + SSRF-guarded web fetch), and the whole run streams to the chat UI as `plan` / `step_start` / `tool_call` / `tool_result` / `step_end` frames. Runs persist in Postgres (checkpointer + stale-run sweeper + retention GC), a per-user token budget and rate limits bound cost, and failures degrade gracefully (bounded tool retries with a partial-failure banner, structured planner output with bounded re-prompts). With `AGENT_ENABLED=true` the Go chat handler is a byte-for-byte SSE proxy to it. See [`FUTURE_AGENT.md`](FUTURE_AGENT.md), [`AgentArchitecture.md`](AgentArchitecture.md), [`AgentFaultTolerance.md`](AgentFaultTolerance.md), [`backend/agent_py/README.md`](backend/agent_py/README.md).
+- **Plan-and-Execute agent (the main development focus)** — `backend/agent_py/`, a Python FastAPI + LangGraph service. A planner decomposes each request into typed steps, an executor runs them through tools (feed CRUD via the MCP tool surface, RAG over the caller's own entries, web search + SSRF-guarded web fetch), and the whole run streams to the chat UI as `plan` / `step_start` / `tool_call` / `tool_result` / `step_end` frames. Runs persist in Postgres (checkpointer + stale-run sweeper + retention GC), a per-user token budget and rate limits bound cost, and failures degrade gracefully (bounded tool retries with a partial-failure banner, structured planner output with bounded re-prompts). With `AGENT_ENABLED=true` the Go chat handler is a byte-for-byte SSE proxy to it. See [`FUTURE_AGENT.md`](FUTURE_AGENT.md), [`AgentArchitecture.md`](docs_agent/AgentArchitecture.md), [`AgentFaultTolerance.md`](docs_agent/AgentFaultTolerance.md), [`backend/agent_py/README.md`](backend/agent_py/README.md).
 - **Clean-arch backend** — `chi v5` router + `huma v2` for declarative, OpenAPI 3.1-emitting HTTP handlers. SQL is type-safe via `sqlc` + `pgx/v5` + `pgxpool`.
 - **Modern frontend** — React 19 + Vite 8 + TypeScript, Tailwind CSS v4, Radix UI primitives (shadcn-style), TanStack Query, Zustand, React Hook Form + Zod, axios; a persisted light/dark theme toggle (OS-follow until chosen, applied before first paint).
 - **Auth** — JWT access tokens (default 15m) paired with rotated refresh tokens (default 7d, opaque, sha256-hashed, family-level reuse detection). Auth endpoints (`/api/register`, `/api/login`, `/api/refresh`) return `{access_token, refresh_token, token_type: "Bearer", expires_at, user}` in the body; every protected endpoint expects `Authorization: Bearer <access_token>`. `/api/logout` + `/api/refresh` send `{refresh_token}` in the body. Bcrypt-hashed passwords. The SPA stores tokens in a module-level `tokenStore` (in-memory + `sessionStorage`); the Zustand `authStore` persist carries only `user`. Native clients (iOS / Android / Unity / Unreal / console SDKs) speak the identical wire contract — only the token storage differs. Production topology: SPA at `app.nyx.com`, API at `api.nyx.com` (separate Ingress hosts); Bearer is a custom header → CORS preflight = CSRF defence, no token flow needed.
@@ -99,7 +99,7 @@ nyx/
 │       └── utils/        # Helpers (cn, etc.)
 ├── k8s/                  # Deployment, Service, Ingress, Secrets manifests
 ├── openspec/             # OpenSpec change/spec records
-├── AgentArchitecture.md  # agent design · AgentFaultTolerance.md — failure surfaces
+├── docs_agent/           # Agent*.md docs — design, fault surfaces, eval prompts, memory roadmap
 ├── FUTURE_AGENT.md       # agent roadmap (FUTURE.md / FUTURE_BACKEND.md / FUTURE_FRONTEND.md — other tracks)
 ├── docker-compose.yml        # Dev stack only — production runs on k8s/
 ```
@@ -300,7 +300,7 @@ migrations; under compose a one-shot `agent-migrate` service runs them), heartbe
 stale, and garbage-collected by a retention job. A per-user token budget bounds cost, and the
 hot path is rate-limited. Tool-dispatch failures retry a bounded number of times, then surface
 as a banner in the UI rather than a dead stream; planner output is obtained as structured JSON
-with bounded re-prompts. Every failure surface is catalogued in `AgentFaultTolerance.md`.
+with bounded re-prompts. Every failure surface is catalogued in `docs_agent/AgentFaultTolerance.md`.
 
 Observability: `agent.run` / `agent.step.*` OTel spans ride the existing trace pipeline; the
 service exposes Prometheus counters (`agent_runs_total`, `agent_steps_total`,
@@ -318,7 +318,7 @@ make dev              # backend + frontend + agent (the agent service always sta
 The service's own keys (`PYTHON_AGENT_*` — model endpoints, run-state/retention/sweeper
 settings, tool toggles) are documented in `backend/agent_py/.env.example` and
 `backend/agent_py/README.md`; production rollout order is in `docs/agent-deployment.md`.
-Design deep dives: `AgentArchitecture.md` and `FUTURE_AGENT.md`.
+Design deep dives: `docs_agent/AgentArchitecture.md` and `FUTURE_AGENT.md`.
 
 ## Testing
 

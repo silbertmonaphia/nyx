@@ -119,7 +119,7 @@ curl -fsS -X POST http://localhost:8080/api/chat \
 
 ## GDPR data handling: export + erasure
 
-Companion to `openspec/changes/agent-gdpr-compliance/` (Slice 4 of `AgentMemoryRoadmap.md`). Two owner-scoped endpoints on the agent service:
+Companion to `openspec/changes/agent-gdpr-compliance/` (Slice 4 of `docs_agent/AgentMemoryRoadmap.md`). Two owner-scoped endpoints on the agent service:
 
 - `GET /agent/me/export` — one JSON body carrying every row tied to the subject (covers a subject-access request).
 - `DELETE /agent/me` — physical erasure of every row tied to the subject (covers a right-to-erasure request). Idempotent.

@@ -28,5 +28,5 @@
 ## References
 
 - `openspec/changes/agent-user-preferences/` — implementation change (proposal, design, specs, tasks).
-- `AgentMemoryRoadmap.md` — Slice 3 of the 4-slice plan.
+- `docs_agent/AgentMemoryRoadmap.md` — Slice 3 of the 4-slice plan.
 - `openspec/changes/agent-chat-history-storage-rollout/tasks.md` — sibling model; the prefs table rides the same retention story.

@@ -5,7 +5,7 @@ Revises: 0004_chat_sessions_and_messages
 Create Date: 2026-10-14
 
 User-preference memory (openspec/changes/agent-user-preferences, Slice 3
-of `AgentMemoryRoadmap.md`).
+of `docs_agent/AgentMemoryRoadmap.md`).
 
 One table, `agent.chat_user_prefs` — one row per `(user_id, key)`:
 

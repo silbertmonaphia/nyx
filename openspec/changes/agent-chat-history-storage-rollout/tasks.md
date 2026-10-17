@@ -20,4 +20,4 @@
 - `openspec/specs/agent-chat-history-store/spec.md` — canonical behaviour spec synced at archive.
 - `docs/agent-deployment.md` — rollout order, env vars, verification queries.
 - `openspec/changes/agent-stale-run-sweeper-rollout/tasks.md` — sibling model this change mirrors.
-- `AgentMemoryRoadmap.md` — Slice 1 of the 4-slice plan; this rollout is its production tail.
+- `docs_agent/AgentMemoryRoadmap.md` — Slice 1 of the 4-slice plan; this rollout is its production tail.

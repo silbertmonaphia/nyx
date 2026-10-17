@@ -32,4 +32,4 @@
 - `openspec/specs/agent-chat-sessions-api/spec.md` + `openspec/specs/chat-history-sidebar/spec.md` — canonical behaviour specs synced at archive.
 - `docs/agent-deployment.md` — rollout order, env vars, verification queries.
 - `openspec/changes/agent-chat-history-storage-rollout/tasks.md` — the storage-layer gates that must precede this UI rollout.
-- `AgentMemoryRoadmap.md` — Slice 2 of the 4-slice plan; this rollout is its production tail.
+- `docs_agent/AgentMemoryRoadmap.md` — Slice 2 of the 4-slice plan; this rollout is its production tail.

@@ -119,8 +119,8 @@ make dev-vllm-embed   # 向量模型  (Qwen3-Embedding-0.6B, :8001, 支撑 RAG)
 
 - **[`README_FULL.md`](README_FULL.md)** —— 完整技术版 README：架构图、auth 内部机制、API 参考、测试矩阵。
 - [`FUTURE_AGENT.md`](FUTURE_AGENT.md) —— agent 路线图：已完成什么、下一步做什么。
-- [`AgentArchitecture.md`](AgentArchitecture.md) —— agent 的整体设计。
-- [`AgentFaultTolerance.md`](AgentFaultTolerance.md) —— 每一个故障面，以及由什么来兜底。
+- [`AgentArchitecture.md`](docs_agent/AgentArchitecture.md) —— agent 的整体设计。
+- [`AgentFaultTolerance.md`](docs_agent/AgentFaultTolerance.md) —— 每一个故障面，以及由什么来兜底。
 - [`backend/agent_py/README.zh.md`](backend/agent_py/README.zh.md) —— Python 服务详细文档。
 - [`docs/agent-deployment.md`](docs/agent-deployment.md) —— agent 的生产上线流程。
 - [`CLAUDE.md`](CLAUDE.md) · [`SECURITY.md`](SECURITY.md) · [`FUTURE.md`](FUTURE.md) · [`openspec/`](openspec/)

@@ -2,7 +2,7 @@
 
 Owns `agent.data_audit_log` (a Postgres table in the `agent.*` schema) —
 one row per served data-subject operation (`openspec/changes/agent-gdpr-compliance`,
-Slice 4 of `AgentMemoryRoadmap.md`):
+Slice 4 of `docs_agent/AgentMemoryRoadmap.md`):
 
   - `record(user_id, action, summary)` — the only application insert.
     `payload_summary` carries COUNTS, never content (design.md D4): if it

@@ -28,6 +28,6 @@
 ## References
 
 - `openspec/changes/agent-gdpr-compliance/` — implementation change (proposal, design, specs, tasks).
-- `AgentMemoryRoadmap.md` — Slice 4 of the 4-slice plan.
+- `docs_agent/AgentMemoryRoadmap.md` — Slice 4 of the 4-slice plan.
 - `SECURITY.md` — the data-inventory cross-link the implementation adds.
 - `openspec/changes/agent-chat-history-storage-rollout/tasks.md` — sibling model.
