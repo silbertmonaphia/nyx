@@ -10,12 +10,13 @@ export const ToastContainer: React.FC = () => {
   if (toasts.length === 0) return null;
 
   return (
-    <div className="fixed top-4 right-4 z-[100] flex flex-col gap-2 pointer-events-none w-full max-w-sm">
+    <div className="fixed top-4 left-1/2 -translate-x-1/2 z-[100] flex flex-col items-center gap-2 pointer-events-none w-full max-w-sm px-4">
       {toasts.map((toast) => (
         <div
           key={toast.id}
+          data-testid="toast"
           className={cn(
-            "pointer-events-auto flex items-center justify-between gap-3 p-4 rounded-lg shadow-lg border animate-in slide-in-from-right-full duration-300",
+            "pointer-events-auto flex items-center justify-between gap-3 p-4 rounded-lg shadow-lg border animate-in slide-in-from-top-full duration-300 w-full",
             toast.type === 'error' && "bg-destructive text-destructive-foreground border-destructive/50",
             toast.type === 'success' && "bg-green-600 text-white border-green-500",
             toast.type === 'info' && "bg-primary text-primary-foreground border-primary/50"

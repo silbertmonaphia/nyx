@@ -25,6 +25,13 @@ test.describe('Authentication', () => {
 
     // Verify toast and login state
     await expect(page.getByText(/Successfully registered!/i)).toBeVisible();
+    const toastBox = await page.getByTestId('toast').boundingBox();
+    const viewport = page.viewportSize();
+    expect(toastBox).not.toBeNull();
+    expect(viewport).not.toBeNull();
+    expect(
+      Math.abs(toastBox!.x + toastBox!.width / 2 - viewport!.width / 2),
+    ).toBeLessThan(2);
     // The header shows the username as plain text and a Logout button —
     // both gate on `isAuthenticated`, so seeing them is proof the
     // session landed.
