@@ -30,7 +30,7 @@ export const en: Translation = {
       authDialog: {
         title: 'Login or Register',
         description:
-          'Sign in to your account, or create a new one to start curating.',
+          'Sign in to your account, or create a new one.',
       },
       deleteDialog: {
         title: 'Delete feed',
@@ -38,6 +38,12 @@ export const en: Translation = {
           'This will remove the feed from your list. This action cannot be undone.',
         confirm: 'Delete',
         pending: 'Deleting…',
+      },
+      logoutAllDialog: {
+        title: 'Logout all devices',
+        description: 'This revokes your login sessions on every device. This window will be logged out too.',
+        confirm: 'Logout all',
+        pending: 'Logging out…',
       },
       toast: {
         loginToEdit: 'Please login to edit feeds',
@@ -50,6 +56,7 @@ export const en: Translation = {
       chat: 'Chat',
       openChat: 'Open chat',
       logout: 'Logout',
+      logoutAll: 'Logout all devices',
       loginOrRegister: 'Login / Register',
       addFeed: 'Add feed',
       cancelAddFeed: 'Cancel adding feed',
@@ -78,6 +85,11 @@ export const en: Translation = {
       registerSuccess: 'Successfully registered!',
       usernameMin: 'Username must be at least 3 characters',
       passwordMin: 'Password must be at least 6 characters',
+      rememberMe: 'Remember me',
+      invalidCredentials: 'Invalid username or password',
+      usernameTaken: 'Username already taken',
+      tooManyAttempts: 'Too many attempts. Please try again later.',
+      requestFailed: 'Something went wrong. Please try again.',
     },
     feeds: {
       newFeed: 'New Feed',
@@ -183,6 +195,7 @@ export const en: Translation = {
       boundaryTitle: 'Something went wrong',
       boundaryBody:
         'An unexpected error stopped the page from rendering. Reload to try again.',
+      logoutAllFailed: 'Could not revoke your other sessions. Check your connection and try again.',
     },
     common: {
       cancel: 'Cancel',

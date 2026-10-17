@@ -129,10 +129,10 @@ describe('interpolation', () => {
 
     await i18n.changeLanguage('zh');
     expect(t('feeds.countOfTotal', { loaded: 2, total: 42 })).toBe(
-      '已加载 2 / 42 条订阅',
+      '已加载 2 / 42 条私人动态',
     );
     expect(t('feeds.emptySearch', { term: 'matrix' })).toBe(
-      '未找到订阅 "matrix"',
+      '未找到私人动态 "matrix"',
     );
   });
 
