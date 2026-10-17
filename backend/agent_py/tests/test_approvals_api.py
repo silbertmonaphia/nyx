@@ -17,6 +17,7 @@ from fastapi import FastAPI
 
 from agent.approvals import DECISION_APPROVE, ApprovalStore
 from agent.approvals_api import router
+from agent.chat_store import ChatStoreUnavailable
 
 
 class _StubRunMetadata:
@@ -27,13 +28,26 @@ class _StubRunMetadata:
         return object() if (run_id, user_id) in self.owned else None
 
 
-def _app(redis=None, run_metadata=None) -> FastAPI:
+class _StubChatStore:
+    def __init__(self, owned=(), unavailable=False):
+        self.owned = {(str(sid), uid) for sid, uid in owned}
+        self.unavailable = unavailable
+
+    async def get_session(self, session_id, user_id):
+        if self.unavailable:
+            raise ChatStoreUnavailable("chat store unavailable")
+        return object() if (str(session_id), user_id) in self.owned else None
+
+
+def _app(redis=None, run_metadata=None, chat_store=None) -> FastAPI:
     app = FastAPI()
     app.include_router(router)
     if redis is not None:
         app.state.redis = redis
     if run_metadata is not None:
         app.state.run_metadata = run_metadata
+    if chat_store is not None:
+        app.state.chat_store = chat_store
     return app
 
 
@@ -150,3 +164,43 @@ async def test_no_run_metadata_layer_fails_closed(redis):
         resp = await client.post("/agent/approvals", json=BODY, headers=HEADERS)
     assert resp.status_code == 404
     assert resp.json()["detail"] == "run not found"
+
+
+async def test_session_owned_decision_recorded_without_runs_row(redis):
+    await _seed_intent(redis)
+    app = _app(
+        redis=redis,
+        run_metadata=_StubRunMetadata(),
+        chat_store=_StubChatStore({("run-1", 7)}),
+    )
+    async with _client(app) as client:
+        ok = await client.post("/agent/approvals", json=BODY, headers=HEADERS)
+    assert ok.status_code == 200
+    assert ok.json() == {"recorded": True}
+    assert await ApprovalStore(redis).get_decision("run-1", "appr-1") == DECISION_APPROVE
+
+
+async def test_session_fallback_stays_fail_closed(redis):
+    await _seed_intent(redis)
+    cases = [
+        _StubChatStore(),
+        _StubChatStore({("run-1", 8)}),
+        _StubChatStore({("run-1", 7)}, unavailable=True),
+    ]
+    for index, store in enumerate(cases):
+        approval_id = f"appr-fallback-{index}"
+        await _seed_intent(redis, approval_id=approval_id)
+        app = _app(
+            redis=redis,
+            run_metadata=_StubRunMetadata(),
+            chat_store=store,
+        )
+        async with _client(app) as client:
+            resp = await client.post(
+                "/agent/approvals",
+                json={**BODY, "approval_id": approval_id},
+                headers=HEADERS,
+            )
+        assert resp.status_code == 404, f"case {index}: {resp.status_code}"
+        assert resp.json()["detail"] == "run not found"
+        assert await ApprovalStore(redis).get_decision("run-1", approval_id) is None

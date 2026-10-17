@@ -27,6 +27,7 @@ from opentelemetry import trace
 from pydantic import BaseModel
 
 from .approvals import ApprovalStore
+from .chat_store import ChatStoreUnavailable
 
 log = logging.getLogger("nyx.agent.approvals_api")
 
@@ -59,8 +60,9 @@ async def post_approval(request: Request, body: ApprovalDecisionBody) -> dict:
         # fail closed with the same sentinel as an unknown run.
         if run_metadata is None:
             raise HTTPException(status_code=404, detail="run not found")
-        run = await run_metadata.get_run(body.run_id, user_id)
-        if run is None:
+        if not await _run_ownership_verified(
+            request, run_metadata, body.run_id, user_id
+        ):
             raise HTTPException(status_code=404, detail="run not found")
 
         store = _approval_store(request)
@@ -94,6 +96,31 @@ async def post_approval(request: Request, body: ApprovalDecisionBody) -> dict:
             ) from exc
         span.set_attribute("recorded", recorded)
         return {"recorded": recorded}
+
+
+async def _run_ownership_verified(
+    request: Request, run_metadata, run_id: str, user_id: int
+) -> bool:
+    """True when `user_id` owns the run, or owns the chat session the run
+    continues. Session-first conversations (SPA "+ New chat" →
+    `POST /agent/sessions`) never mint an `agent.runs` row — continuation
+    turns key the confirmation gate on the session id — so the runs-row
+    lookup alone would 404 every decision inside those conversations.
+    Ownership semantics mirror the run entrypoint's dual lookup in
+    `main.py`. Any store failure closes as False (fail closed, same
+    single 404 sentinel as an unknown run — no existence leak).
+    """
+    run = await run_metadata.get_run(run_id, user_id)
+    if run is not None:
+        return True
+    chat_store = getattr(request.app.state, "chat_store", None)
+    if chat_store is None:
+        return False
+    try:
+        session = await chat_store.get_session(run_id, user_id)
+    except ChatStoreUnavailable:
+        return False
+    return session is not None
 
 
 def _require_user_id(request: Request) -> int:
