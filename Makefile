@@ -21,6 +21,8 @@
 
 COMPOSE := docker compose
 
+POSTGRES_PASSWORD := $(shell sed -n 's/^POSTGRES_PASSWORD=//p' .env)
+
 # Expanded to `--detach` when DETACH=1 is passed on the command line,
 # empty otherwise. Lets the singles run in foreground by default and
 # opt into backgrounding without a second target.
@@ -108,9 +110,9 @@ down:
 logs:
 	$(COMPOSE) logs -f --tail=100
 
-#: Open a psql shell against the dev Postgres — `psql -h 127.0.0.1 -p 5433 -U postgres -d nyx`; prompts for the POSTGRES_PASSWORD from .env.
+#: Open a psql shell against the dev Postgres — `psql -h 127.0.0.1 -p 5433 -U postgres -d nyx`; POSTGRES_PASSWORD read from .env.
 dev-pgsql-inspect:
-	psql -h 127.0.0.1 -p 5433 -U postgres -d nyx
+	@PGPASSWORD='$(POSTGRES_PASSWORD)' psql -h 127.0.0.1 -p 5433 -U postgres -d nyx
 
 #: Open a redis-cli shell against the dev Redis — `redis-cli -h 127.0.0.1 -p 6380`.
 dev-redis-inspect:
