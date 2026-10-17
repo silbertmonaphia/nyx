@@ -1,5 +1,5 @@
 import { queryClient } from '~/services/queryClient';
-import { FEEDS_QUERY_KEY } from '../hooks/useFeeds';
+import { FEEDS_QUERY_KEY } from '~/services/queryKeys';
 import { useFeedUiStore } from '../store/feedUiStore';
 
 // Wipe everything that's scoped to the previous user's identity so a

@@ -9,10 +9,8 @@ import { feedService } from '../services/feedService';
 import { Feed, NewFeed, PaginatedFeeds } from '../types/feed';
 import type { SortOrder } from '../store/feedUiStore';
 import { useAuthStore } from '~/store/authStore';
+import { FEEDS_QUERY_KEY } from '~/services/queryKeys';
 
-// Exported so non-React modules (the user-change reset helper) can
-// drop every cached feed page without re-deriving the key shape.
-export const FEEDS_QUERY_KEY = 'feeds' as const;
 const PAGE_SIZE = 5;
 
 // Negative ids are placeholders for rows that have not yet been

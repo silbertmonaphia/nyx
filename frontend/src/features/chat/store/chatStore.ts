@@ -1,6 +1,7 @@
 import { create } from "zustand";
 import { t } from "~/i18n";
 import { logger } from "~/services/logger";
+import { invalidateFeedQueries } from "~/services/queryInvalidation";
 import { chatService } from "../services/chatService";
 import {
   ChatApiError,
@@ -879,6 +880,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
         // let a fast user start a new run whose panel the replay would
         // then clobber. The marker always clears, even when the session
         // is gone (the replay's own 404 path asks for exactly that).
+        invalidateFeedQueries();
         void (async () => {
           try {
             if (
@@ -903,6 +905,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
     // `detachLiveStream`). The run finishes server-side and surfaces
     // through the rail.
     detachLiveStream();
+    invalidateFeedQueries();
     set({ messages: [], isStreaming: false, error: null });
   },
 

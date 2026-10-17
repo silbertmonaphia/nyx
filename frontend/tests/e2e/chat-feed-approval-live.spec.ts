@@ -8,7 +8,7 @@ import { test } from './fixtures/e2e-fixtures';
  * the pause/resume mechanics against fixtures; THIS spec drives the real
  * thing end to end: live planner/executor → Go MCP server → a real
  * `confirm_request` pause → a real decision POST → the feed landing in
- * Postgres (visible on the feeds page after a reload).
+ * Postgres (visible on the feeds page as soon as the chat panel closes).
  *
  * Environment: PLAYWRIGHT_BASE_URL must point at a stack running THIS
  * worktree's feature code (scripts/e2e-side-stack.sh up — SPA :5274,
@@ -73,11 +73,10 @@ test.describe('Feed-tool approval flow (live stack)', { tag: '@live' }, () => {
     });
     await expect(page.getByTestId('chat-error')).toHaveCount(0);
 
-    // Close the chat and reload: the feeds page shows the created row —
-    // proof the decision executed against the real registry + Postgres.
+    // Close the chat: the feeds page shows the created row without a
+    // reload — proof the decision executed and the cache was refreshed.
     await page.keyboard.press('Escape');
     await expect(page.getByTestId('chat-form')).not.toBeVisible();
-    await page.reload();
     await expect(page.getByTestId('feed-list')).toContainText(FEED_NAME, {
       timeout: 15_000,
     });

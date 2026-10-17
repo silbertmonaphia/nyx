@@ -3,6 +3,10 @@ import { act, waitFor } from '@testing-library/react';
 import { chatService } from '../services/chatService';
 import { useChatStore } from './chatStore';
 import { ChatApiError, type ChatEvent, type SessionMessage } from '../types/chat';
+import { queryClient } from '~/services/queryClient';
+import { useAuthStore } from '~/store/authStore';
+
+const TEST_USER = { id: 1, username: 'tester', created_at: '', updated_at: '' };
 
 // Auto-mock the service so we can yield hand-crafted streams per
 // test. Mirrors the pattern in useFeeds.test.ts.
@@ -574,6 +578,37 @@ describe('useChatStore', () => {
       expect(state.messages).toEqual([]);
       expect(state.isStreaming).toBe(false);
       expect(state.error).toBeNull();
+    });
+
+    it('invalidates the feed cache so closing the dialog refetches it', () => {
+      useAuthStore.setState({ user: TEST_USER, isAuthenticated: true });
+      const invalidate = vi
+        .spyOn(queryClient, 'invalidateQueries')
+        .mockResolvedValue(undefined);
+
+      try {
+        useChatStore.getState().reset();
+
+        expect(invalidate).toHaveBeenCalledWith({ queryKey: ['feeds'] });
+      } finally {
+        invalidate.mockRestore();
+        useAuthStore.setState({ user: null, isAuthenticated: false });
+      }
+    });
+
+    it('skips the feed refetch when auth was torn down before the close', () => {
+      useAuthStore.setState({ user: null, isAuthenticated: false });
+      const invalidate = vi
+        .spyOn(queryClient, 'invalidateQueries')
+        .mockResolvedValue(undefined);
+
+      try {
+        useChatStore.getState().reset();
+
+        expect(invalidate).not.toHaveBeenCalled();
+      } finally {
+        invalidate.mockRestore();
+      }
     });
   });
 
@@ -1907,6 +1942,42 @@ describe('useChatStore', () => {
       expect(mockedService.listSessions).toHaveBeenCalledTimes(1);
       expect(mockedService.getMessages).not.toHaveBeenCalled();
       expect(useChatStore.getState().isStreaming).toBe(false);
+    });
+
+    it('a detached run reaching its terminal state invalidates the feed cache', async () => {
+      useChatStore.setState({ currentSessionId: 'sess-a' });
+      const stream = makePushStream();
+      mockedService.streamMessage.mockImplementationOnce(stream.impl);
+
+      act(() => {
+        void useChatStore.getState().send('hi');
+      });
+      await waitFor(() => {
+        expect(useChatStore.getState().isStreaming).toBe(true);
+      });
+
+      await act(async () => {
+        await useChatStore.getState().startNewSession();
+      });
+      useAuthStore.setState({ user: TEST_USER, isAuthenticated: true });
+      const invalidate = vi
+        .spyOn(queryClient, 'invalidateQueries')
+        .mockResolvedValue(undefined);
+
+      try {
+        await act(async () => {
+          stream.close();
+          await Promise.resolve();
+        });
+        await waitFor(() => {
+          expect(useChatStore.getState().runningSessionIds).toEqual([]);
+        });
+
+        expect(invalidate).toHaveBeenCalledWith({ queryKey: ['feeds'] });
+      } finally {
+        invalidate.mockRestore();
+        useAuthStore.setState({ user: null, isAuthenticated: false });
+      }
     });
 
     it('replays the finished run when its session is back on screen', async () => {
