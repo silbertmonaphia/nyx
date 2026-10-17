@@ -16,7 +16,7 @@ import { test } from './fixtures/e2e-fixtures';
  *   - hover+delete drops a row (and clears the panel when it was the
  *     active one);
  *   - a long history scrolls inside the rail while the dialog stays
- *     viewport-bounded, and a short history still sizes to its content;
+ *     viewport-bounded, and every history shares the same fixed height;
  *   - a completed first exchange gives its rail row a real title;
  *   - below `md` the rail is a drawer: hidden by default, opened by the
  *     hamburger, closed again by picking a session.
@@ -468,9 +468,7 @@ test.describe('Chat history sidebar (browser-level, live backend)', { tag: '@liv
     );
   });
 
-  test('short history is unaffected: the dialog sizes to its content', async ({
-    page,
-  }) => {
+  test('short history shares the fixed dialog height', async ({ page }) => {
     await page.setViewportSize({ width: 1000, height: 800 });
     await registerAndOpenChat(page);
 
@@ -482,7 +480,8 @@ test.describe('Chat history sidebar (browser-level, live backend)', { tag: '@liv
 
     const dialogBox = await page.getByTestId('chat-panel').boundingBox();
     expect(dialogBox).not.toBeNull();
-    expect(dialogBox!.height).toBeLessThan(560);
+    expect(dialogBox!.height).toBeGreaterThan(650);
+    expect(dialogBox!.height).toBeLessThan(800);
 
     const railMetrics = await page
       .getByTestId('chat-session-list')

@@ -302,10 +302,10 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ open, onOpenChange }) => {
 
         {/* `relative` scopes the mobile drawer to the content area, so
             the hamburger in the header stays reachable while it is
-            open. The `max-h` bounds the row so the rail's own scroll
-            container engages instead of the dialog growing with the
-            session count. */}
-        <div className="relative flex gap-3 min-h-0 max-h-[70vh]">
+            open. The fixed `h` keeps the dialog the same size for an
+            empty session and a long one; the rail and the message list
+            scroll internally instead of resizing the dialog. */}
+        <div className="relative flex gap-3 min-w-0 min-h-0 h-[70vh]">
           {SIDEBAR_ENABLED && (
             <ChatSidebar
               onSessionClick={() => setSidebarOpen(false)}
@@ -321,7 +321,7 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ open, onOpenChange }) => {
           <div className="flex-1 min-w-0 flex flex-col gap-3">
             <div
               ref={listRef}
-              className="max-h-[60vh] overflow-y-auto rounded-md border bg-muted/30 p-3 space-y-3"
+              className="flex-1 min-h-0 overflow-y-auto rounded-md border bg-muted/30 p-3 space-y-3"
               data-testid="chat-message-list"
             >
               {messages.length === 0 && (

@@ -150,19 +150,19 @@ The SPA SHALL NOT abort a streaming run on navigation. Starting a new chat (`+ N
 
 ### Requirement: Viewport-bounded dialog with an internally scrolling rail
 
-The chat dialog SHALL NOT grow beyond the viewport. With an arbitrarily long session history (tens of sessions across lazy-loaded pages), the dialog's height SHALL stay within the viewport, the session rail SHALL scroll internally when its rows exceed the available height, and the message composer SHALL remain visible and reachable without scrolling the page (Radix keeps document scroll locked while the dialog is open). The mobile drawer presentation is unchanged; a short history SHALL still size the dialog to its content.
+The chat dialog SHALL NOT grow beyond the viewport. The dialog's height SHALL stay fixed for every history length: an empty session and a session with many turns SHALL open at the same height, with the session rail and the message list scrolling internally. The message composer SHALL remain visible and reachable without scrolling the page (Radix keeps document scroll locked while the dialog is open). The mobile drawer presentation is unchanged.
 
 #### Scenario: Long history scrolls the rail, not the dialog
 
 - **WHEN** the user opens the chat dialog on an 800px-tall viewport with 30 sessions (multiple lazy-loaded pages appended)
 - **THEN** the dialog's bounding box stays within the viewport, the rail's scroll container has `scrollHeight > clientHeight`, scrolling the rail moves rows, and the composer stays visible
 
-#### Scenario: Short history is unaffected
+#### Scenario: Short history shares the fixed height
 
 - **WHEN** the user has 2 sessions and a short message history
-- **THEN** the dialog sizes to its content as before and the rail shows no scrollbar
+- **THEN** the dialog opens at the same fixed height as a long history and the rail shows no scrollbar
 
-#### Scenario: Message list still scrolls independently
+#### Scenario: Message list scrolls independently
 
-- **WHEN** a single session's messages exceed the message area's cap
-- **THEN** the message list scrolls internally (its existing bounded behavior) while the rail and composer remain reachable
+- **WHEN** a single session's messages exceed the message area's height
+- **THEN** the message list scrolls internally while the rail and composer remain reachable
