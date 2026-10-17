@@ -88,9 +88,9 @@ up:
 up-langfuse:
 	$(COMPOSE) --profile langfuse up -d langfuse-web langfuse-worker
 
-#: Stop the Langfuse stack only — db/redis/jaeger keep running; volumes preserved. Re-up with `make up-langfuse`.
+#: Remove the Langfuse stack only — db/redis/jaeger keep running; volumes preserved. Re-up with `make up-langfuse`.
 down-langfuse:
-	$(COMPOSE) --profile langfuse stop langfuse-web langfuse-worker langfuse-db langfuse-redis langfuse-clickhouse langfuse-minio
+	$(COMPOSE) --profile langfuse down langfuse-web langfuse-worker langfuse-db langfuse-redis langfuse-clickhouse langfuse-minio
 
 #: Start the vLLM chat + embed containers (full local LLM stack). Requires `make up` already running.
 up-vllm:
