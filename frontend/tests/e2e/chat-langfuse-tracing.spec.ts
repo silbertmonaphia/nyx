@@ -20,7 +20,7 @@ import { test } from './fixtures/e2e-fixtures';
  * Assumes the dev stack is up: `make up` (db/redis/jaeger) + `make dev`
  * (backend :8080, frontend :5173, Python agent :9000) with a reachable LLM
  * provider AND the agent started with PYTHON_AGENT_LANGFUSE_ENABLED=true
- * pointed at a running Langfuse instance (`make up-langfuse`, UI :3000).
+ * pointed at a running Langfuse instance (`make dev-up-langfuse`, UI :3000).
  * playwright.config.ts only manages the frontend dev server; the rest are
  * preconditions.
  *

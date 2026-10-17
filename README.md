@@ -118,7 +118,7 @@ Then open:
 
 - App + chat — <http://localhost:5173>
 - API docs — <http://localhost:8080/api/swagger>
-- Traces — <http://localhost:16686> (Jaeger) · Langfuse on :3000 via `make up-langfuse`
+- Traces — <http://localhost:16686> (Jaeger) · Langfuse on :3000 via `make dev-up-langfuse`
 
 Chat is gated by `LLM_ENABLED=true`; adding `AGENT_ENABLED=true` routes it through the agent
 instead of the plain single-turn RAG chat. Everything else works the same either way.

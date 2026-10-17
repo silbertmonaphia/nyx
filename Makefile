@@ -9,7 +9,7 @@
 # install + GPU; do not run alongside the compose profiles).
 # `dev-infra` runs the infra containers (db + redis + jaeger) in the
 # foreground — Ctrl+C stops them; `up` is the detached, idempotent
-# variant. `up-langfuse` / `down-langfuse` manage the self-hosted
+# variant. `dev-up-langfuse` / `dev-down-langfuse` manage the self-hosted
 # Langfuse tracing stack (opt-in; ~6 GB RAM — web alone needs >1g to
 # boot) separately from the base infra. `dev-pgsql-inspect` /
 # `dev-redis-inspect` open psql / redis-cli shells against the running
@@ -17,7 +17,7 @@
 # the `docker compose` plugin on PATH. Backend invocations assume
 # `make up` has been run.
 
-.PHONY: dev dev-backend dev-frontend dev-agent dev-vllm-main dev-vllm-embed dev-infra dev-pgsql-inspect dev-redis-inspect dev-gpu-inspect dev-gpu-watch up down up-vllm down-vllm up-langfuse down-langfuse logs status stop help eval-golden eval-security eval-run
+.PHONY: dev dev-backend dev-frontend dev-agent dev-vllm-main dev-vllm-embed dev-infra dev-pgsql-inspect dev-redis-inspect dev-gpu-inspect dev-gpu-watch up down up-vllm down-vllm dev-up-langfuse dev-down-langfuse logs status stop help eval-golden eval-security eval-run
 
 COMPOSE := docker compose
 
@@ -85,11 +85,11 @@ up:
 	$(COMPOSE) up -d db redis jaeger
 
 #: Bring up the self-hosted Langfuse tracing stack (langfuse-web/worker + clickhouse/minio/redis/postgres). Detached; idempotent. Needs the LANGFUSE_* vars in .env (see .env.example). UI on http://localhost:3000.
-up-langfuse:
+dev-up-langfuse:
 	$(COMPOSE) --profile langfuse up -d langfuse-web langfuse-worker
 
-#: Remove the Langfuse stack only — db/redis/jaeger keep running; volumes preserved. Re-up with `make up-langfuse`.
-down-langfuse:
+#: Remove the Langfuse stack only — db/redis/jaeger keep running; volumes preserved. Re-up with `make dev-up-langfuse`.
+dev-down-langfuse:
 	$(COMPOSE) --profile langfuse down langfuse-web langfuse-worker langfuse-db langfuse-redis langfuse-clickhouse langfuse-minio
 
 #: Start the vLLM chat + embed containers (full local LLM stack). Requires `make up` already running.

@@ -305,7 +305,7 @@ with bounded re-prompts. Every failure surface is catalogued in `docs_agent/Agen
 Observability: `agent.run` / `agent.step.*` OTel spans ride the existing trace pipeline; the
 service exposes Prometheus counters (`agent_runs_total`, `agent_steps_total`,
 `agent_tool_calls_total`, `agent_tokens_total`, …) on `/metrics`; Langfuse LLM tracing is
-opt-in (`make up-langfuse`, UI on <http://localhost:3000>).
+opt-in (`make dev-up-langfuse`, UI on <http://localhost:3000>).
 
 Run it in dev:
 

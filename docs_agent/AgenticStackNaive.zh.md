@@ -13,7 +13,7 @@
 3、Ochestration: LangGraph(Planner-and-Executer[reAct] loop)
 ?4、Eval: Goden Set: promptfoo(mvp) => Inspect AI
 ?5、Security: Prompt Injection
-6、Otel: Langfuse(langfuse+langfus-worker+ClickHouse+MinIO+PostgreSQL+Redis) 开发默认关闭,可以make up-langfuse起。线上agent不用docker compose这个langfuse，直接配置langfuse集群的url，docker compose的langfuse只对开发本地有用
+6、Otel: Langfuse(langfuse+langfus-worker+ClickHouse+MinIO+PostgreSQL+Redis) 开发默认关闭,可以make dev-up-langfuse起。线上agent不用docker compose这个langfuse，直接配置langfuse集群的url，docker compose的langfuse只对开发本地有用
 7、Memory: Mem0
 
 8、Tool: web_serach(Tavily),web_fetch,feed tools...

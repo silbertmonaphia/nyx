@@ -318,9 +318,9 @@ Jaeger (which stay metadata-only). Tracing is **best-effort**: an
 unreachable or slow Langfuse never affects a run's SSE stream.
 
 ```
-make up-langfuse      # langfuse-web/worker + clickhouse/minio/redis/postgres
+make dev-up-langfuse      # langfuse-web/worker + clickhouse/minio/redis/postgres
 # UI: http://localhost:3000  (org/project/keys bootstrapped from LANGFUSE_INIT_*)
-make down-langfuse    # stop the stack only (volumes preserved)
+make dev-down-langfuse    # stop the stack only (volumes preserved)
 ```
 
 | Env var                            | Default                  | Purpose                                                                 |

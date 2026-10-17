@@ -115,7 +115,7 @@ services:
   # LLM-level tracing for the Python agent — prompts, replies, token
   # usage, and step/tool structure per run. See OpenSpec change
   # `agent-langfuse-tracing`. Opt-in via `--profile langfuse` /
-  # `make up-langfuse`: the six containers below cost ~6 GB RAM (web
+  # `make dev-up-langfuse`: the six containers below cost ~6 GB RAM (web
   # alone needs >1g to boot) and are only useful while working on the
   # agent, so they stay OUT of the default `make up` set (same rationale
   # as the vllm profile).
@@ -899,7 +899,7 @@ volumes:
   db_data:
   vllm_cache:
   # Langfuse profile state (see the langfuse-* services above). Survive
-  # `make down-langfuse` / `docker compose down`; wipe with
+  # `make dev-down-langfuse` / `docker compose down`; wipe with
   # `docker compose --profile langfuse down -v` to reset the instance.
   langfuse_db_data:
   langfuse_clickhouse_data:

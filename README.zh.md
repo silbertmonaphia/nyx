@@ -99,7 +99,7 @@ make dev-vllm-embed   # 向量模型  (Qwen3-Embedding-0.6B, :8001, 支撑 RAG)
 
 - 应用 + 聊天 —— <http://localhost:5173>
 - API 文档 —— <http://localhost:8080/api/swagger>
-- 链路 —— <http://localhost:16686>（Jaeger）· Langfuse 在 :3000，用 `make up-langfuse` 启动
+- 链路 —— <http://localhost:16686>（Jaeger）· Langfuse 在 :3000，用 `make dev-up-langfuse` 启动
 
 聊天由 `LLM_ENABLED=true` 开启；再加上 `AGENT_ENABLED=true` 则会路由到 agent，而不是普通的单轮 RAG 聊天。其余一切不受影响。
 

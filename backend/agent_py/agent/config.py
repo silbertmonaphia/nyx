@@ -214,7 +214,7 @@ class Settings(BaseSettings):
     # false, no client is constructed and no payload leaves the process.
     # Refuses to start when enabled without credentials (validator below).
     langfuse_enabled: bool = False
-    # Host-dev default: `make up-langfuse` publishes the UI/API on
+    # Host-dev default: `make dev-up-langfuse` publishes the UI/API on
     # 127.0.0.1:3000 there — same reasoning as mcp_url/otel_endpoint
     # above (compose-only hostnames don't resolve on the host).
     # docker-compose.yml overrides this with the in-network hostname

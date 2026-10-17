@@ -74,9 +74,9 @@
 
 | 社区方案 | 我们有什么 / 没有 |
 |---|---|
-| **Langfuse** / **LangSmith** / **Arize Phoenix** — prompt/response 落盘、conversation 回放、cost dashboard | **已落地(agent-langfuse-tracing)**:自托管 Langfuse(默认关闭,`PYTHON_AGENT_LANGFUSE_ENABLED=true` 开启;`make up-langfuse`,UI :3000)经 LangChain callback 把每 run 的 prompt / reply / provider usage 落成 generation,tool / step 另有 span。Jaeger 侧保持 metadata-only |
+| **Langfuse** / **LangSmith** / **Arize Phoenix** — prompt/response 落盘、conversation 回放、cost dashboard | **已落地(agent-langfuse-tracing)**:自托管 Langfuse(默认关闭,`PYTHON_AGENT_LANGFUSE_ENABLED=true` 开启;`make dev-up-langfuse`,UI :3000)经 LangChain callback 把每 run 的 prompt / reply / provider usage 落成 generation,tool / step 另有 span。Jaeger 侧保持 metadata-only |
 
-**观测分层**(排障时按层选面):元数据(span 时序 / 计数 / `error_code`)→ Jaeger + Prometheus,常开;agent 语义(plan / step 序列 / 工具 args / usage / 终态)→ SSE 帧契约,eval runner 逐 case 落盘成 artifact,是 eval 排障的主战场;模型层(raw prompt / completion 回放)→ Langfuse,dev 默认关,怀疑模型层时 `make up-langfuse` 按需开——agent 侧只是 `PYTHON_AGENT_LANGFUSE_HOST` + key pair,compose 栈仅服务 dev;生产若开则 URL 指向自托管 Langfuse 集群(属 rollout 决策)。Langfuse 不是 eval 的前置依赖,是显微镜不是照明。
+**观测分层**(排障时按层选面):元数据(span 时序 / 计数 / `error_code`)→ Jaeger + Prometheus,常开;agent 语义(plan / step 序列 / 工具 args / usage / 终态)→ SSE 帧契约,eval runner 逐 case 落盘成 artifact,是 eval 排障的主战场;模型层(raw prompt / completion 回放)→ Langfuse,dev 默认关,怀疑模型层时 `make dev-up-langfuse` 按需开——agent 侧只是 `PYTHON_AGENT_LANGFUSE_HOST` + key pair,compose 栈仅服务 dev;生产若开则 URL 指向自托管 Langfuse 集群(属 rollout 决策)。Langfuse 不是 eval 的前置依赖,是显微镜不是照明。
 
 ### B. Provider 抽象与路由
 
