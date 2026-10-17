@@ -28,14 +28,55 @@ const expectDark = (page: Page) =>
 const expectLight = (page: Page) =>
   expect.poll(() => darkClassOn(page)).toBe(false);
 
+const USER = {
+  id: 1,
+  username: 'theme_user',
+  created_at: '2026-10-17T00:00:00Z',
+  updated_at: '2026-10-17T00:00:00Z',
+};
+
+async function stubAuthenticated(page: Page): Promise<void> {
+  await page.addInitScript((user) => {
+    window.localStorage.setItem(
+      'nyx-auth-storage',
+      JSON.stringify({ state: { user }, version: 3 }),
+    );
+    window.localStorage.setItem(
+      'nyx-token-store',
+      JSON.stringify({ accessToken: 'stub-at', refreshToken: 'stub-rt' }),
+    );
+  }, USER);
+  await page.route(
+    (url) => url.pathname.startsWith('/api/'),
+    (route) => {
+      const pathname = new URL(route.request().url()).pathname;
+      if (pathname.endsWith('/me')) return route.fulfill({ json: USER });
+      if (pathname.endsWith('/feeds')) {
+        return route.fulfill({
+          json: { data: [], page: 1, page_size: 20, total: 0, has_more: false },
+        });
+      }
+      if (pathname.endsWith('/chat/sessions')) {
+        return route.fulfill({ json: { sessions: [], next_cursor: null } });
+      }
+      return route.fulfill({ status: 404, json: { detail: 'stubbed' } });
+    },
+  );
+}
+
 async function openApp(page: Page): Promise<void> {
   await page.goto('/');
   await expect(page.getByTestId('theme-toggle')).toBeVisible();
+  if ((await page.getByTestId('chat-form').count()) > 0) {
+    await page.keyboard.press('Escape');
+    await expect(page.getByTestId('chat-form')).toHaveCount(0);
+  }
 }
 
 test.describe('Theme toggle', () => {
   test('first visit follows a dark OS scheme', async ({ page }) => {
     await page.emulateMedia({ colorScheme: 'dark' });
+    await stubAuthenticated(page);
     await openApp(page);
 
     await expectDark(page);
@@ -49,6 +90,7 @@ test.describe('Theme toggle', () => {
 
   test('first visit follows a light OS scheme', async ({ page }) => {
     await page.emulateMedia({ colorScheme: 'light' });
+    await stubAuthenticated(page);
     await openApp(page);
 
     await expectLight(page);
@@ -63,6 +105,7 @@ test.describe('Theme toggle', () => {
     page,
   }) => {
     await page.emulateMedia({ colorScheme: 'light' });
+    await stubAuthenticated(page);
     await openApp(page);
     const toggle = page.getByTestId('theme-toggle');
 
@@ -76,6 +119,9 @@ test.describe('Theme toggle', () => {
     await page.reload();
 
     await expectDark(page);
+    await expect(page.getByTestId('chat-form')).toBeVisible();
+    await page.keyboard.press('Escape');
+    await expect(page.getByTestId('chat-form')).toHaveCount(0);
     await expect(page.getByTestId('theme-toggle')).toHaveAttribute(
       'aria-label',
       'Switch to light theme',
@@ -102,6 +148,7 @@ test.describe('Theme toggle', () => {
 
   test('an OS change is honored while no choice is stored', async ({ page }) => {
     await page.emulateMedia({ colorScheme: 'light' });
+    await stubAuthenticated(page);
     await openApp(page);
     const toggle = page.getByTestId('theme-toggle');
     await expectLight(page);
@@ -120,6 +167,7 @@ test.describe('Theme toggle', () => {
 
   test('a stored choice outranks a later OS change', async ({ page }) => {
     await page.emulateMedia({ colorScheme: 'light' });
+    await stubAuthenticated(page);
     await openApp(page);
     const toggle = page.getByTestId('theme-toggle');
     await expectLight(page);
@@ -146,12 +194,17 @@ test.describe('Theme toggle', () => {
   test('an in-session choice survives an OS flip when storage writes fail', async ({
     page,
   }) => {
+    await page.emulateMedia({ colorScheme: 'light' });
+    await stubAuthenticated(page);
     await page.addInitScript(() => {
-      Storage.prototype.setItem = () => {
-        throw new Error('QuotaExceededError');
+      const original = Storage.prototype.setItem;
+      Storage.prototype.setItem = function (key: string, value: string) {
+        if (key === 'nyx.theme') {
+          throw new Error('QuotaExceededError');
+        }
+        return original.call(this, key, value);
       };
     });
-    await page.emulateMedia({ colorScheme: 'light' });
     await openApp(page);
     const toggle = page.getByTestId('theme-toggle');
 
@@ -175,6 +228,7 @@ test.describe('Theme toggle', () => {
 
   test('the navbar background follows the theme', async ({ page }) => {
     await page.emulateMedia({ colorScheme: 'light' });
+    await stubAuthenticated(page);
     await openApp(page);
 
     const navBg = () =>

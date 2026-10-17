@@ -53,8 +53,8 @@ export const en: Translation = {
     },
     nav: {
       searchPlaceholder: 'Search for feeds...',
-      chat: 'Chat',
-      openChat: 'Open chat',
+      chat: 'AI Agent',
+      openChat: 'Open AI Agent',
       logout: 'Logout',
       logoutAll: 'Logout all devices',
       loginOrRegister: 'Login / Register',

@@ -46,9 +46,9 @@ function App() {
   } = useFeedUiStore();
 
   const { isAuthenticated, user, logout, logoutAll } = useAuthStore();
-  const [showAuthForm, setShowAuthForm] = useState(false);
   const [confirmDeleteId, setConfirmDeleteId] = useState<number | null>(null);
-  const [chatOpen, setChatOpen] = useState(false);
+  const [chatDismissed, setChatDismissed] = useState(false);
+  const chatOpen = isAuthenticated && !chatDismissed;
   const [showLogoutAll, setShowLogoutAll] = useState(false);
   const [loggingOutAll, setLoggingOutAll] = useState(false);
 
@@ -144,7 +144,7 @@ function App() {
     ? t('app.title.edit', { title: editingFeed.title })
     : showAddForm && isAuthenticated
     ? t('app.title.add')
-    : showAuthForm && !isAuthenticated
+    : !isAuthenticated
     ? t('app.title.signIn')
     : chatOpen && isAuthenticated
     ? t('app.title.chat')
@@ -157,7 +157,7 @@ function App() {
     ? t('app.description.edit', { title: editingFeed.title })
     : showAddForm && isAuthenticated
     ? t('app.description.add')
-    : showAuthForm && !isAuthenticated
+    : !isAuthenticated
     ? t('app.description.signIn')
     : chatOpen && isAuthenticated
     ? t('app.description.chat')
@@ -195,7 +195,7 @@ function App() {
                 <Button
                   variant="outline"
                   size="sm"
-                  onClick={() => setChatOpen(true)}
+                  onClick={() => setChatDismissed(false)}
                   aria-label={t('nav.openChat')}
                   className="gap-2"
                 >
@@ -220,9 +220,7 @@ function App() {
                   {t('nav.logoutAll')}
                 </Button>
               </>
-            ) : (
-              <Button size="sm" onClick={() => setShowAuthForm(true)}>{t('nav.loginOrRegister')}</Button>
-            )}
+            ) : null}
           </div>
         </div>
       </nav>
@@ -244,7 +242,6 @@ function App() {
             onEdit={(feed) => {
               if (!isAuthenticated) {
                 useUiStore.getState().addToast(t('app.toast.loginToEdit'), 'info');
-                setShowAuthForm(true);
                 return;
               }
               // Defense-in-depth: the backend will 404 (not 403) on
@@ -262,7 +259,6 @@ function App() {
             onDelete={(id) => {
               if (!isAuthenticated) {
                 useUiStore.getState().addToast(t('app.toast.loginToDelete'), 'info');
-                setShowAuthForm(true);
                 return;
               }
               confirmDelete(id);
@@ -311,16 +307,18 @@ function App() {
         </div>
       </section>
 
-      <Dialog open={showAuthForm && !isAuthenticated} onOpenChange={setShowAuthForm}>
-        <DialogContent>
+      <Dialog open={!isAuthenticated}>
+        <DialogContent
+          hideClose
+          onEscapeKeyDown={(e) => e.preventDefault()}
+          onPointerDownOutside={(e) => e.preventDefault()}
+          onInteractOutside={(e) => e.preventDefault()}
+        >
           <DialogHeader>
             <DialogTitle>{t('app.authDialog.title')}</DialogTitle>
             <DialogDescription>{t('app.authDialog.description')}</DialogDescription>
           </DialogHeader>
-          <AuthForm
-            onSuccess={() => setShowAuthForm(false)}
-            onCancel={() => setShowAuthForm(false)}
-          />
+          <AuthForm required onSuccess={() => setChatDismissed(false)} />
         </DialogContent>
       </Dialog>
 
@@ -377,7 +375,7 @@ function App() {
         </DialogContent>
       </Dialog>
 
-      <ChatPanel open={chatOpen} onOpenChange={setChatOpen} />
+      <ChatPanel open={chatOpen} onOpenChange={(open) => setChatDismissed(!open)} />
 
       <section id="spacer"></section>
     </div>

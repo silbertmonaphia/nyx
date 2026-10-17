@@ -9,6 +9,22 @@ import { i18n } from '~/i18n';
 
 vi.mock('./features/feeds/hooks/useFeeds');
 vi.mock('./store/authStore');
+vi.mock('./features/chat/components/ChatPanel', () => ({
+  ChatPanel: ({
+    open,
+    onOpenChange,
+  }: {
+    open: boolean;
+    onOpenChange: (open: boolean) => void;
+  }) =>
+    open ? (
+      <div data-testid="chat-panel-mock">
+        <button type="button" onClick={() => onOpenChange(false)}>
+          close-chat-mock
+        </button>
+      </div>
+    ) : null,
+}));
 
 const mockUseFeeds = useFeeds as any;
 const mockUseAuthStore = useAuthStore as any;
@@ -56,6 +72,34 @@ describe('App', () => {
     expect(screen.getAllByText('Nyx').length).toBeGreaterThan(0);
   });
 
+  it('gates the app behind a non-dismissable auth dialog while logged out', async () => {
+    await i18n.changeLanguage('en');
+    render(<App />);
+
+    expect(
+      screen.getByRole('heading', { name: 'Login or Register' }),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByRole('button', { name: /^cancel$/i }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole('button', { name: /close/i }),
+    ).not.toBeInTheDocument();
+  });
+
+  it('opens the AI Agent panel by default when authenticated', async () => {
+    await i18n.changeLanguage('en');
+    mockUseAuthStore.mockReturnValue({
+      isAuthenticated: true,
+      user: { id: 1, username: 'testuser' },
+      logout: vi.fn(),
+    });
+
+    render(<App />);
+
+    expect(await screen.findByTestId('chat-panel-mock')).toBeInTheDocument();
+  });
+
   it('renders the theme toggle next to the brand in the nav', () => {
     render(<App />);
     const toggle = screen.getByTestId('theme-toggle');
@@ -68,7 +112,7 @@ describe('App', () => {
 
     expect(screen.getByPlaceholderText('搜索私人动态…')).toBeInTheDocument();
     expect(
-      screen.getByRole('button', { name: '登录 / 注册' }),
+      screen.getByRole('heading', { name: '登录或注册' }),
     ).toBeInTheDocument();
     expect(screen.getByTestId('locale-toggle')).toHaveAttribute(
       'aria-label',
@@ -83,7 +127,7 @@ describe('App', () => {
       screen.getByPlaceholderText('Search for feeds...'),
     ).toBeInTheDocument();
     expect(
-      screen.getByRole('button', { name: 'Login / Register' }),
+      screen.getByRole('heading', { name: 'Login or Register' }),
     ).toBeInTheDocument();
     expect(screen.getByTestId('locale-toggle')).toHaveAttribute(
       'aria-label',
@@ -393,14 +437,26 @@ describe('App', () => {
       document.title = '';
     });
 
-    it('uses the default Nyx title when nothing else is going on', () => {
+    it('uses the default Nyx title when nothing else is going on', async () => {
+      mockUseAuthStore.mockReturnValue({
+        isAuthenticated: true,
+        user: { id: 1, username: 'testuser' },
+        logout: vi.fn(),
+      });
       render(<App />);
+      await userEvent.click(screen.getByText('close-chat-mock'));
       expect(document.title).toBe('Nyx — Your minimalist feed guide');
     });
 
     it('reflects the debounced search term, not the raw input', async () => {
       vi.useFakeTimers();
+      mockUseAuthStore.mockReturnValue({
+        isAuthenticated: true,
+        user: { id: 1, username: 'testuser' },
+        logout: vi.fn(),
+      });
       render(<App />);
+      fireEvent.click(screen.getByText('close-chat-mock'));
 
       const input = screen.getByPlaceholderText('Search for feeds...');
 
@@ -424,9 +480,8 @@ describe('App', () => {
       vi.useRealTimers();
     });
 
-    it('uses the sign-in title when the auth form is open (logged out)', async () => {
+    it('uses the sign-in title while logged out', () => {
       render(<App />);
-      await userEvent.click(screen.getByText('Login / Register'));
       expect(document.title).toBe('Sign in — Nyx');
     });
 
@@ -508,11 +563,17 @@ describe('App', () => {
       expect(useFeedUiStore.getState().sortOrder).toBe('asc');
     });
 
-    it('uses the "Oldest first" title when the order is reversed', () => {
+    it('uses the "Oldest first" title when the order is reversed', async () => {
+      mockUseAuthStore.mockReturnValue({
+        isAuthenticated: true,
+        user: { id: 1, username: 'testuser' },
+        logout: vi.fn(),
+      });
       act(() => {
         useFeedUiStore.getState().setSortOrder('asc');
       });
       render(<App />);
+      await userEvent.click(screen.getByText('close-chat-mock'));
       expect(document.title).toBe('Oldest first — Nyx');
     });
   });

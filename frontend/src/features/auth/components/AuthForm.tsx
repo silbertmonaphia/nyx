@@ -24,11 +24,16 @@ const authSchema = z.object({
 type AuthFormData = z.infer<typeof authSchema>;
 
 interface AuthFormProps {
-  onSuccess: () => void;
-  onCancel: () => void;
+  onSuccess?: () => void;
+  onCancel?: () => void;
+  required?: boolean;
 }
 
-export const AuthForm: React.FC<AuthFormProps> = ({ onSuccess, onCancel }) => {
+export const AuthForm: React.FC<AuthFormProps> = ({
+  onSuccess,
+  onCancel,
+  required = false,
+}) => {
   const { t } = useTranslation();
   const [isLogin, setIsLogin] = useState(true);
   const [remember, setRemember] = useState(true);
@@ -72,7 +77,7 @@ export const AuthForm: React.FC<AuthFormProps> = ({ onSuccess, onCancel }) => {
         isLogin ? t("auth.loginSuccess") : t("auth.registerSuccess"),
         "success",
       );
-      onSuccess();
+      onSuccess?.();
     } catch (err) {
       const status = (err as { response?: { status?: number } }).response?.status;
       if (isLogin && status === 401) {
@@ -144,14 +149,16 @@ export const AuthForm: React.FC<AuthFormProps> = ({ onSuccess, onCancel }) => {
           <Button type="submit" className="flex-1">
             {isLogin ? t("auth.login") : t("auth.register")}
           </Button>
-          <Button
-            type="button"
-            variant="outline"
-            onClick={onCancel}
-            className="flex-1"
-          >
-            {t("common.cancel")}
-          </Button>
+          {!required && (
+            <Button
+              type="button"
+              variant="outline"
+              onClick={onCancel}
+              className="flex-1"
+            >
+              {t("common.cancel")}
+            </Button>
+          )}
         </div>
         <p className="text-sm text-center text-muted-foreground">
           {isLogin ? t("auth.noAccount") : t("auth.haveAccount")}{" "}

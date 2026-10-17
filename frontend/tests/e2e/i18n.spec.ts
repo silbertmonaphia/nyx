@@ -51,12 +51,30 @@ async function stubApi(page: Page) {
       if (path.endsWith('/login')) {
         return route.fulfill({ json: loginPayload });
       }
+      if (path.endsWith('/me')) {
+        return route.fulfill({ json: loginPayload.user });
+      }
       if (path.endsWith('/chat/sessions')) {
         return route.fulfill({ json: sessionPage });
       }
       return route.fulfill({ status: 404, json: { detail: 'stubbed' } });
     },
   );
+}
+
+async function closeChatIfOpen(page: Page): Promise<void> {
+  if ((await page.getByTestId('chat-form').count()) > 0) {
+    await page.keyboard.press('Escape');
+    await expect(page.getByTestId('chat-form')).toHaveCount(0);
+  }
+}
+
+async function loginStubbed(page: Page): Promise<void> {
+  await page.getByLabel('用户名').fill('zh_user');
+  await page.getByLabel('密码').fill('secret123');
+  await page.getByRole('button', { name: '登录', exact: true }).click();
+  await expect(page.getByText('登录成功！')).toBeVisible();
+  await closeChatIfOpen(page);
 }
 
 test('defaults to Chinese for a browser whose language is English', async ({
@@ -68,10 +86,10 @@ test('defaults to Chinese for a browser whose language is English', async ({
   expect(await page.evaluate(() => navigator.language)).toBe('en-US');
   await expect(page.getByPlaceholder('搜索私人动态…')).toBeVisible();
   await expect(
-    page.getByRole('button', { name: '登录 / 注册' }),
+    page.getByRole('heading', { name: '登录或注册' }),
   ).toBeVisible();
   await expect(page.locator('html')).toHaveAttribute('lang', 'zh');
-  await expect(page).toHaveTitle('Nyx — 你的极简私人动态指南');
+  await expect(page).toHaveTitle('登录 — Nyx');
   expect(
     await page.evaluate(
       (key) => window.localStorage.getItem(key),
@@ -83,11 +101,10 @@ test('defaults to Chinese for a browser whose language is English', async ({
 test('applies a locale switch immediately', async ({ page }) => {
   await stubApi(page);
   await page.goto('/');
+  await loginStubbed(page);
 
   await page.getByTestId('locale-en').click();
-  await expect(
-    page.getByRole('button', { name: 'Login / Register' }),
-  ).toBeVisible();
+  await expect(page.getByPlaceholder('Search for feeds...')).toBeVisible();
   await expect(page.locator('html')).toHaveAttribute('lang', 'en');
   expect(
     await page.evaluate(
@@ -97,28 +114,23 @@ test('applies a locale switch immediately', async ({ page }) => {
   ).toBe('en');
 
   await page.getByTestId('locale-zh').click();
-  await expect(
-    page.getByRole('button', { name: '登录 / 注册' }),
-  ).toBeVisible();
+  await expect(page.getByPlaceholder('搜索私人动态…')).toBeVisible();
   await expect(page.locator('html')).toHaveAttribute('lang', 'zh');
 });
 
 test('keeps the chosen locale across a reload', async ({ page }) => {
   await stubApi(page);
   await page.goto('/');
+  await loginStubbed(page);
 
   await page.getByTestId('locale-en').click();
-  await expect(
-    page.getByRole('button', { name: 'Login / Register' }),
-  ).toBeVisible();
+  await expect(page.getByPlaceholder('Search for feeds...')).toBeVisible();
 
   await page.reload();
 
-  await expect(
-    page.getByRole('button', { name: 'Login / Register' }),
-  ).toBeVisible();
+  await expect(page.getByTestId('chat-form')).toBeVisible();
   await expect(page.locator('html')).toHaveAttribute('lang', 'en');
-  await expect(page).toHaveTitle('Nyx — Your minimalist feed guide');
+  await expect(page).toHaveTitle('Chat — Nyx');
 });
 
 test('renders the login, feed, sidebar, and composer surfaces in Chinese', async ({
@@ -127,7 +139,6 @@ test('renders the login, feed, sidebar, and composer surfaces in Chinese', async
   await stubApi(page);
   await page.goto('/');
 
-  await page.getByRole('button', { name: '登录 / 注册' }).click();
   await expect(page.getByRole('heading', { name: '登录或注册' })).toBeVisible();
   await expect(
     page.getByText('登录你的账号，或创建新账号。'),
@@ -137,20 +148,7 @@ test('renders the login, feed, sidebar, and composer surfaces in Chinese', async
   await page.getByLabel('密码').fill('secret123');
   await page.getByRole('button', { name: '登录', exact: true }).click();
   await expect(page.getByText('登录成功！')).toBeVisible();
-  await expect(page.getByRole('button', { name: '退出登录' })).toBeVisible();
 
-  await expect(page.getByTestId('feed-list-empty')).toHaveText('暂无私人动态');
-  await expect(page.getByTestId('toggle-sort-order')).toHaveAttribute(
-    'title',
-    '最新优先',
-  );
-  await expect(page.getByTestId('toggle-sort-order')).toHaveAttribute(
-    'aria-label',
-    '当前为最新优先；点击切换为最早优先',
-  );
-  await expect(page.getByRole('button', { name: '添加私人动态' })).toBeVisible();
-
-  await page.getByRole('button', { name: '打开聊天' }).click();
   await expect(page.getByRole('heading', { name: '聊天' })).toBeVisible();
   await expect(page.getByPlaceholder('输入消息…')).toBeVisible();
   await expect(page.getByTestId('chat-send')).toHaveText('发送');
@@ -161,4 +159,17 @@ test('renders the login, feed, sidebar, and composer surfaces in Chinese', async
     'aria-label',
     '删除 Trip planning',
   );
+
+  await closeChatIfOpen(page);
+  await expect(page.getByRole('button', { name: '退出登录' })).toBeVisible();
+  await expect(page.getByTestId('feed-list-empty')).toHaveText('暂无私人动态');
+  await expect(page.getByTestId('toggle-sort-order')).toHaveAttribute(
+    'title',
+    '最新优先',
+  );
+  await expect(page.getByTestId('toggle-sort-order')).toHaveAttribute(
+    'aria-label',
+    '当前为最新优先；点击切换为最早优先',
+  );
+  await expect(page.getByRole('button', { name: '添加私人动态' })).toBeVisible();
 });

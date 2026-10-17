@@ -159,16 +159,22 @@ export const useAuthStore = create<AuthState>()(
       partialize: (state) => ({
         user: state.user,
       }),
-      // After hydration, derive `isAuthenticated` from the presence
-      // of `user`. Without this hook, the partialized shape restores
-      // `user` but leaves `isAuthenticated` at its initial `false`,
-      // and the UI flashes logged-out until the reconciliation
-      // probe (`useAuthReconciliation`) completes. Deriving here
-      // keeps the persisted shape minimal (no `isAuthenticated`
-      // entry in localStorage) while eliminating the flash.
-      onRehydrateStorage: () => (state) => {
-        if (!state) return;
-        return { isAuthenticated: state.user !== null };
+      // Derive `isAuthenticated` from the persisted `user` during
+      // hydration. `merge` runs with the persisted slice, so the
+      // flag is correct on the first render — without it the
+      // partialized shape restores `user` but leaves the flag false
+      // until the reconciliation probe completes, flashing the auth
+      // gate on every reload. The persisted shape stays minimal (no
+      // `isAuthenticated` entry in localStorage).
+      merge: (persistedState, currentState) => {
+        const persisted = persistedState as Partial<AuthState> | null;
+        const user = persisted?.user ?? null;
+        return {
+          ...currentState,
+          ...persisted,
+          user,
+          isAuthenticated: user !== null,
+        };
       },
       // migrate handles upgrades from older persist shapes:
       //   v1 → v2 (pre-cookie): dropped token / refreshToken / expiresAt

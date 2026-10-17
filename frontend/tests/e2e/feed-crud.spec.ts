@@ -31,21 +31,23 @@ test.describe('Feed CRUD', () => {
     await page.goto('/');
 
     // Register (testUser is random per describe; nothing exists yet)
-    await page.getByRole('button', { name: /Login \/ Register/i }).click();
     await page.getByRole('button', { name: /Register/i }).last().click();
     await page.getByLabel(/Username/i).fill(testUser.username);
     await page.getByLabel(/Password/i).fill(testUser.password);
     await page.getByRole('button', { name: /^Register$/i }).click();
-    await expect(page.getByRole('button', { name: /^Logout$/i })).toBeVisible();
+    await expect(page.getByTestId('chat-form')).toBeVisible();
+    await page.keyboard.press('Escape');
+    await expect(page.getByTestId('chat-form')).toHaveCount(0);
 
     // Log out, then log back in to verify the Login path too.
     await page.getByRole('button', { name: /^Logout$/i }).click();
     await expect(page.getByRole('button', { name: /^Logout$/i })).toHaveCount(0);
-    await page.getByRole('button', { name: /Login \/ Register/i }).click();
     await page.getByLabel(/Username/i).fill(testUser.username);
     await page.getByLabel(/Password/i).fill(testUser.password);
     await page.getByRole('button', { name: /^Login$/i }).click();
-    await expect(page.getByRole('button', { name: /^Logout$/i })).toBeVisible();
+    await expect(page.getByTestId('chat-form')).toBeVisible();
+    await page.keyboard.press('Escape');
+    await expect(page.getByTestId('chat-form')).toHaveCount(0);
 
     // 1. Create
     const feedTitle = `Test Feed ${Date.now()}`;

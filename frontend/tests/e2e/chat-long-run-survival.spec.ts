@@ -84,12 +84,10 @@ async function registerSeedAndLogin(
   }
 
   await page.goto('/');
-  await page.getByRole('button', { name: /Login \/ Register/i }).click();
   await page.getByLabel(/Username/i).fill(user.username);
   await page.getByLabel(/Password/i).fill(user.password);
   await page.getByRole('button', { name: /^Login$/i }).click();
   await expect(page.getByText(/Successfully logged in!/i)).toBeVisible();
-  await page.getByRole('button', { name: 'Open chat' }).click();
   await expect(page.getByTestId('chat-form')).toBeVisible();
 }
 

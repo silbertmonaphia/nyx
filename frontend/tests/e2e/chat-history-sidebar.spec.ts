@@ -55,13 +55,11 @@ const CURRENT_SESSION_KEY = 'nyx.chat.currentSessionId';
 async function registerAndOpenChat(page: Page): Promise<void> {
   const user = makeTestUser();
   await page.goto('/');
-  await page.getByRole('button', { name: /Login \/ Register/i }).click();
   await page.getByRole('button', { name: /Register/i }).last().click();
   await page.getByLabel(/Username/i).fill(user.username);
   await page.getByLabel(/Password/i).fill(user.password);
   await page.getByRole('button', { name: /^Register$/i }).click();
   await expect(page.getByText(/Successfully registered!/i)).toBeVisible();
-  await page.getByRole('button', { name: 'Open chat' }).click();
   await expect(page.getByTestId('chat-form')).toBeVisible();
 }
 
@@ -71,7 +69,6 @@ async function registerAndOpenChat(page: Page): Promise<void> {
  * drawer class differs across the breakpoint.
  */
 async function reopenChat(page: Page): Promise<void> {
-  await page.getByRole('button', { name: 'Open chat' }).click();
   await expect(page.getByTestId('chat-form')).toBeVisible();
 }
 
@@ -184,11 +181,10 @@ test.describe('Chat history sidebar (browser-level, live backend)', { tag: '@liv
     await page.getByRole('button', { name: /^Close$/i }).click();
     await page.getByRole('button', { name: /^Logout$/i }).click();
     await expect(
-      page.getByRole('button', { name: /Login \/ Register/i }),
+      page.getByRole('heading', { name: 'Login or Register' }),
     ).toBeVisible();
 
     const secondUser = makeTestUser();
-    await page.getByRole('button', { name: /Login \/ Register/i }).click();
     await page.getByRole('button', { name: /Register/i }).last().click();
     await page.getByLabel(/Username/i).fill(secondUser.username);
     await page.getByLabel(/Password/i).fill(secondUser.password);
@@ -197,7 +193,6 @@ test.describe('Chat history sidebar (browser-level, live backend)', { tag: '@liv
 
     await expect.poll(() => persistedSessionId(page)).toBeNull();
 
-    await page.getByRole('button', { name: 'Open chat' }).click();
     await expect(page.getByTestId('chat-form')).toBeVisible();
     await expect(page.getByTestId('chat-session-empty')).toHaveText(
       'No conversations yet',

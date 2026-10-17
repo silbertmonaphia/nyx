@@ -47,13 +47,11 @@ const CURRENT_SESSION_KEY = 'nyx.chat.currentSessionId';
 async function registerAndOpenChat(page: Page): Promise<void> {
   const user = makeTestUser();
   await page.goto('/');
-  await page.getByRole('button', { name: /Login \/ Register/i }).click();
   await page.getByRole('button', { name: /Register/i }).last().click();
   await page.getByLabel(/Username/i).fill(user.username);
   await page.getByLabel(/Password/i).fill(user.password);
   await page.getByRole('button', { name: /^Register$/i }).click();
   await expect(page.getByText(/Successfully registered!/i)).toBeVisible();
-  await page.getByRole('button', { name: 'Open chat' }).click();
   await expect(page.getByTestId('chat-form')).toBeVisible();
 }
 
@@ -220,7 +218,7 @@ test.describe('Chat background runs (browser-level, live backend)', { tag: '@liv
 
     // Reopening restores the session; the run is still working (rail
     // pulse + locked composer while its replay shows the user row).
-    await page.getByRole('button', { name: 'Open chat' }).click();
+    await page.getByRole('button', { name: 'Open AI Agent' }).click();
     await expect(page.getByTestId('chat-form')).toBeVisible();
     const row = rowFor(page, sessionId!);
     await expect(row.getByTestId('chat-session-running')).toBeVisible({

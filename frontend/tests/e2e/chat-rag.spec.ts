@@ -39,14 +39,11 @@ function makeTestUser() {
 async function registerAndOpenChat(page: Page): Promise<void> {
   const TEST_USER = makeTestUser();
   await page.goto('/');
-  await page.getByRole('button', { name: /Login \/ Register/i }).click();
   await page.getByRole('button', { name: /Register/i }).last().click();
   await page.getByLabel(/Username/i).fill(TEST_USER.username);
   await page.getByLabel(/Password/i).fill(TEST_USER.password);
   await page.getByRole('button', { name: /^Register$/i }).click();
   await expect(page.getByText(/Successfully registered!/i)).toBeVisible();
-  // Open chat
-  await page.getByRole('button', { name: 'Open chat' }).click();
   await expect(page.getByTestId('chat-form')).toBeVisible();
 }
 
@@ -202,7 +199,7 @@ test.describe('Chat / RAG flow (browser-level)', { tag: '@live' }, () => {
     ).toBeGreaterThan(0);
 
     await closeChat(page);
-    await page.getByRole('button', { name: 'Open chat' }).click();
+    await page.getByRole('button', { name: 'Open AI Agent' }).click();
     await expect(page.getByTestId('chat-form')).toBeVisible();
 
     // The replayed turn comes back over the session REST endpoints
@@ -252,7 +249,7 @@ test.describe('Chat / RAG flow (browser-level)', { tag: '@live' }, () => {
     await page.getByRole('button', { name: /^Logout$/i }).click();
     // Now the Chat button should not be present.
     await expect(
-      page.getByRole('button', { name: 'Open chat' }),
+      page.getByRole('button', { name: 'Open AI Agent' }),
     ).toHaveCount(0);
   });
 });

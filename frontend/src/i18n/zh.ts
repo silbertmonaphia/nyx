@@ -42,8 +42,8 @@ export const zh = {
     },
     nav: {
       searchPlaceholder: '搜索私人动态…',
-      chat: '聊天',
-      openChat: '打开聊天',
+      chat: 'AI Agent',
+      openChat: '打开 AI Agent',
       logout: '退出登录',
       logoutAll: '退出所有设备',
       loginOrRegister: '登录 / 注册',
