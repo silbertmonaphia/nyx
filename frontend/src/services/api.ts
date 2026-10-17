@@ -9,6 +9,14 @@ import { captureSentryException } from "./sentry";
 import { t } from "~/i18n";
 import type { ApiError, AuthResponse } from "~/api/openapi";
 
+declare module "axios" {
+  interface AxiosRequestConfig {
+    skipAuthRefresh?: boolean;
+    skipErrorToast?: boolean;
+    _retried?: boolean;
+  }
+}
+
 const api = axios.create({
   baseURL: import.meta.env.VITE_API_URL || "http://localhost:8080/api",
   headers: {
@@ -550,7 +558,9 @@ api.interceptors.response.use(
       message = error.message;
     }
 
-    useUiStore.getState().addToast(message, "error");
+    if (!config?.skipErrorToast) {
+      useUiStore.getState().addToast(message, "error");
+    }
 
     return Promise.reject(error);
   },

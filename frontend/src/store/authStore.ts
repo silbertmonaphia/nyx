@@ -2,7 +2,7 @@ import { create } from "zustand";
 import { persist, createJSONStorage } from "zustand/middleware";
 import axios from "axios";
 import type { User as ApiUser, AuthResponse } from "~/api/openapi";
-import { tokenStore } from "../services/api";
+import api, { tokenStore } from "../services/api";
 import { setSentryUser } from "../services/sentry";
 
 // Wire type — sourced from the generated OpenAPI schema so the
@@ -12,10 +12,10 @@ export type User = ApiUser;
 // Subset of the wire envelope we persist from login/register/refresh.
 // Post-Bearer migration, the body carries access_token, refresh_token,
 // token_type, expires_at, and user. We persist only `user` for the UI
-// hint — the actual access / refresh tokens live in the in-memory +
-// sessionStorage tokenStore in services/api.ts. Persisting tokens to
-// localStorage would re-introduce XSS-exfiltration risk and defeat
-// the whole point of moving off cookies.
+// hint — the actual access / refresh tokens live in the tokenStore in
+// services/api.ts, which owns their persistence (localStorage for a
+// remembered login, sessionStorage otherwise). Keeping tokens out of
+// this shape keeps the Zustand snapshot free of secrets.
 type AuthPayload = Pick<AuthResponse, "user">;
 
 interface AuthState {
@@ -28,6 +28,7 @@ interface AuthState {
   isAuthenticated: boolean;
   setAuth: (res: AuthPayload) => void;
   logout: () => void;
+  logoutAll: () => Promise<boolean>;
 }
 
 // Safe storage: guards against SSR / test environments where `window`
@@ -127,6 +128,24 @@ export const useAuthStore = create<AuthState>()(
             // don't surface to the user.
           });
       },
+
+      logoutAll: async () => {
+        let ok = false;
+        try {
+          await api.post("/logout-all", undefined, { skipErrorToast: true });
+          ok = true;
+        } catch {
+          ok = false;
+        } finally {
+          set({
+            user: null,
+            isAuthenticated: false,
+          });
+          setSentryUser(null);
+          tokenStore.clear();
+        }
+        return ok;
+      },
     }),
     {
       name: "nyx-auth-storage",
@@ -159,7 +178,7 @@ export const useAuthStore = create<AuthState>()(
       // We strip every token-shaped field on every migration and keep
       // only the non-secret profile data. The user re-logs in if
       // their session isn't already backed by the in-memory +
-      // sessionStorage tokenStore. Fail-safe, never fail-open. The
+      // persisted tokenStore. Fail-safe, never fail-open. The
       // `version` is bumped on any persist-shape change so existing
       // localStorage is migrated once, not silently dropped.
       version: 3,

@@ -22,13 +22,14 @@ import {
   DialogHeader,
   DialogTitle,
 } from './components/ui/Dialog';
-import { Plus, X, Search, LogOut, User as UserIcon, MessageSquare, ArrowDownNarrowWide, ArrowUpNarrowWide } from 'lucide-react';
+import { Plus, X, Search, LogOut, User as UserIcon, MessageSquare, ArrowDownNarrowWide, ArrowUpNarrowWide, Users } from 'lucide-react';
 import { PageMeta } from './components/app/PageMeta';
 import { ThemeToggle } from './components/app/ThemeToggle';
 import { LocaleToggle } from './components/app/LocaleToggle';
 import { logger } from './services/logger';
 import { ChatPanel } from './features/chat/components/ChatPanel';
 import { resetFeedStateForNewUser } from './features/feeds/services/resetFeedState';
+import { useChatStateReset } from './features/chat/hooks/useChatStateReset';
 
 function App() {
   const { t } = useTranslation();
@@ -44,14 +45,17 @@ function App() {
     resetFormState,
   } = useFeedUiStore();
 
-  const { isAuthenticated, user, logout } = useAuthStore();
+  const { isAuthenticated, user, logout, logoutAll } = useAuthStore();
   const [showAuthForm, setShowAuthForm] = useState(false);
   const [confirmDeleteId, setConfirmDeleteId] = useState<number | null>(null);
   const [chatOpen, setChatOpen] = useState(false);
+  const [showLogoutAll, setShowLogoutAll] = useState(false);
+  const [loggingOutAll, setLoggingOutAll] = useState(false);
 
   // Boot-time round-trip: if localStorage has a persisted user,
   // reconcile it against the server. SECURITY.md L7.
   useAuthReconciliation();
+  useChatStateReset();
 
   // Drop every cached feed page + UI state when the authenticated
   // user changes (login / logout / user swap). The query key inside
@@ -99,6 +103,17 @@ function App() {
 
   const confirmDelete = (id: number) => {
     setConfirmDeleteId(id);
+  };
+
+  const handleLogoutAll = async () => {
+    if (loggingOutAll) return;
+    setLoggingOutAll(true);
+    const ok = await logoutAll();
+    setLoggingOutAll(false);
+    setShowLogoutAll(false);
+    if (!ok) {
+      useUiStore.getState().addToast(t('errors.logoutAllFailed'), 'error');
+    }
   };
 
   const executeDelete = async () => {
@@ -194,6 +209,15 @@ function App() {
                 <Button variant="outline" size="sm" onClick={() => logout()} className="gap-2">
                   <LogOut className="h-4 w-4" />
                   {t('nav.logout')}
+                </Button>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setShowLogoutAll(true)}
+                  className="gap-2"
+                >
+                  <Users className="h-4 w-4" />
+                  {t('nav.logoutAll')}
                 </Button>
               </>
             ) : (
@@ -322,6 +346,32 @@ function App() {
               data-testid="confirm-delete"
             >
               {deleteFeed.isPending ? t('app.deleteDialog.pending') : t('app.deleteDialog.confirm')}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={showLogoutAll} onOpenChange={setShowLogoutAll}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>{t('app.logoutAllDialog.title')}</DialogTitle>
+            <DialogDescription>{t('app.logoutAllDialog.description')}</DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => setShowLogoutAll(false)}
+              disabled={loggingOutAll}
+            >
+              {t('common.cancel')}
+            </Button>
+            <Button
+              variant="destructive"
+              onClick={handleLogoutAll}
+              disabled={loggingOutAll}
+              data-testid="confirm-logout-all"
+            >
+              {loggingOutAll ? t('app.logoutAllDialog.pending') : t('app.logoutAllDialog.confirm')}
             </Button>
           </DialogFooter>
         </DialogContent>

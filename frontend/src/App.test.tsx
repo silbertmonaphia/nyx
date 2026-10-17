@@ -66,7 +66,7 @@ describe('App', () => {
     await i18n.changeLanguage('zh');
     render(<App />);
 
-    expect(screen.getByPlaceholderText('搜索订阅…')).toBeInTheDocument();
+    expect(screen.getByPlaceholderText('搜索私人动态…')).toBeInTheDocument();
     expect(
       screen.getByRole('button', { name: '登录 / 注册' }),
     ).toBeInTheDocument();
@@ -144,6 +144,52 @@ describe('App', () => {
         expect.objectContaining({ title: 'New Test Feed' }),
       );
     });
+  });
+
+  it('logs out all devices from the confirm dialog (when authenticated)', async () => {
+    await i18n.changeLanguage('en');
+    const logoutAll = vi.fn().mockResolvedValue(true);
+    mockUseAuthStore.mockReturnValue({
+      isAuthenticated: true,
+      user: { id: 1, username: 'testuser' },
+      logout: vi.fn(),
+      logoutAll,
+    });
+
+    render(<App />);
+
+    await userEvent.click(screen.getByRole('button', { name: /logout all devices/i }));
+    expect(
+      screen.getByText(
+        'This revokes your login sessions on every device. This window will be logged out too.',
+      ),
+    ).toBeInTheDocument();
+
+    await userEvent.click(screen.getByTestId('confirm-logout-all'));
+
+    await waitFor(() => expect(logoutAll).toHaveBeenCalledTimes(1));
+  });
+
+  it('shows an error toast when logout-all fails', async () => {
+    await i18n.changeLanguage('en');
+    const logoutAll = vi.fn().mockResolvedValue(false);
+    mockUseAuthStore.mockReturnValue({
+      isAuthenticated: true,
+      user: { id: 1, username: 'testuser' },
+      logout: vi.fn(),
+      logoutAll,
+    });
+
+    render(<App />);
+
+    await userEvent.click(screen.getByRole('button', { name: /logout all devices/i }));
+    await userEvent.click(screen.getByTestId('confirm-logout-all'));
+
+    expect(
+      await screen.findByText(
+        'Could not revoke your other sessions. Check your connection and try again.',
+      ),
+    ).toBeInTheDocument();
   });
 
   it('can start editing a feed (when authenticated)', async () => {

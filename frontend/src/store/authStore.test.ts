@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest';
 import { useAuthStore, loginAxios } from './authStore';
+import api from '~/services/api';
 import type { User } from '~/api/openapi';
 
 // The auth store calls `setSentryUser` on login/register/refresh
@@ -147,6 +148,51 @@ describe('useAuthStore', () => {
     });
   });
 
+  describe('logoutAll', () => {
+    let postSpy: ReturnType<typeof vi.spyOn>;
+
+    beforeEach(() => {
+      postSpy = vi.spyOn(api, 'post').mockResolvedValue({} as never);
+    });
+
+    afterEach(() => {
+      postSpy.mockRestore();
+    });
+
+    it('POSTs to /logout-all, clears local state, and returns true', async () => {
+      const { tokenStore } = await import('~/services/api');
+      tokenStore.setTokens('access.token', 'refresh.token');
+      useAuthStore.getState().setAuth({ user: baseUser });
+
+      const ok = await useAuthStore.getState().logoutAll();
+
+      expect(ok).toBe(true);
+      expect(postSpy).toHaveBeenCalledWith('/logout-all', undefined, {
+        skipErrorToast: true,
+      });
+      expect(useAuthStore.getState().user).toBeNull();
+      expect(useAuthStore.getState().isAuthenticated).toBe(false);
+      expect(tokenStore.getAccessToken()).toBeNull();
+      expect(tokenStore.getRefreshToken()).toBeNull();
+      expect(setSentryUser).toHaveBeenCalledWith(null);
+    });
+
+    it('clears local state and returns false when the request fails', async () => {
+      postSpy.mockRejectedValueOnce(new Error('network down'));
+      const { tokenStore } = await import('~/services/api');
+      tokenStore.setTokens('access.token', 'refresh.token');
+      useAuthStore.getState().setAuth({ user: baseUser });
+
+      const ok = await useAuthStore.getState().logoutAll();
+
+      expect(ok).toBe(false);
+      expect(useAuthStore.getState().user).toBeNull();
+      expect(tokenStore.getAccessToken()).toBeNull();
+      expect(tokenStore.getRefreshToken()).toBeNull();
+      expect(setSentryUser).toHaveBeenCalledWith(null);
+    });
+  });
+
   describe('persist partialize', () => {
     it('writes only `user` to storage', () => {
       // Inspect what partialize actually returns. Zustand exposes the
@@ -167,8 +213,8 @@ describe('useAuthStore', () => {
       expect(partial).toEqual({ user: baseUser });
       // Crucially: `isAuthenticated` is NOT part of the persisted shape.
       expect(Object.keys(partial)).not.toContain('isAuthenticated');
-      // Token-shaped fields are NOT in the persisted shape — they ride
-      // httpOnly cookies, not localStorage.
+      // Token-shaped fields are NOT in the persisted shape — the
+      // tokenStore owns token storage, not this profile.
       expect(Object.keys(partial)).not.toContain('token');
       expect(Object.keys(partial)).not.toContain('refreshToken');
       expect(Object.keys(partial)).not.toContain('expiresAt');

@@ -249,7 +249,7 @@ test.describe('Chat / RAG flow (browser-level)', { tag: '@live' }, () => {
   test('chat button is hidden when unauthenticated', async ({ page }) => {
     // Logout via the nav button to flip auth store.
     await closeChat(page);
-    await page.getByRole('button', { name: /Logout/i }).click();
+    await page.getByRole('button', { name: /^Logout$/i }).click();
     // Now the Chat button should not be present.
     await expect(
       page.getByRole('button', { name: 'Open chat' }),

@@ -352,7 +352,8 @@ See `k8s/*.yaml` for per-resource config.
 | POST | `/api/register` | — | Body `{username, password}`. Returns `{access_token, refresh_token, token_type: "Bearer", expires_at, user}` |
 | POST | `/api/login` | — | Body `{username, password}`. Returns the Bearer pair + user |
 | POST | `/api/refresh` | — | Body `{refresh_token}`. Returns a fresh Bearer pair + user. Reuse revokes the entire family |
-| POST | `/api/logout` | Bearer | Body `{refresh_token}`. Revokes only that row. Returns 204 |
+| POST | `/api/logout` | Bearer | Body `{refresh_token}`. Revokes that token's family (this login chain only). Returns 204 |
+| POST | `/api/logout-all` | Bearer | Revokes every active refresh token for the caller. Returns 204 |
 | GET | `/api/me` | Bearer | Access-token subject's profile — the SPA calls it on every page load |
 | GET | `/api/feeds` | JWT | Lists feeds **owned by the caller**; `?q=`, `?page=`, `?page_size=` |
 | GET | `/api/feeds/{id}` | JWT | Single feed; 404 for missing *or* other users' — no existence leak |
