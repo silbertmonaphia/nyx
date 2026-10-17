@@ -30,8 +30,8 @@ const baseUser: User = {
 // both wrap AuthResponse in the JSON body, NOT Set-Cookie). The token
 // pair rides the JSON body per the Bearer contract (RFC 6750); the
 // wrapped `api` request interceptor stamps them on subsequent
-// requests and the tokenStore writes them to sessionStorage so a
-// page reload can adopt them without a fresh login.
+// requests and the tokenStore writes them to localStorage (default
+// "Remember me") so a reload or new window can adopt them.
 const authResponse: AuthResponse = {
   access_token: 'test.access.token',
   refresh_token: 'test.refresh.token',
@@ -54,8 +54,9 @@ describe('AuthForm', () => {
     onCancel = vi.fn();
 
     // Reset the real tokenStore between tests — earlier cases may
-    // have left stale in-memory tokens or sessionStorage entries.
+    // have left stale in-memory tokens or persisted entries.
     tokenStore.clear();
+    localStorage.clear();
     sessionStorage.clear();
 
     // `AuthForm` reads `setAuth` from `useAuthStore((s) => s.setAuth)`.
@@ -72,10 +73,10 @@ describe('AuthForm', () => {
     it('POSTs to /login, calls setAuth with the response, stores tokens, and fires onSuccess', async () => {
       // The wire contract is end-to-end: a successful login must
       // populate BOTH the auth profile (for the UI hint) and the
-      // in-memory + sessionStorage token store (for subsequent
-      // Bearer headers AND for surviving an F5 — the IIFE in
-      // services/api.ts reads sessionStorage on boot, and an empty
-      // sessionStorage triggers the useAuthReconciliation logout
+      // in-memory + persisted token store (for subsequent Bearer
+      // headers AND for surviving an F5 — the IIFE in
+      // services/api.ts reads storage on boot, and empty storage
+      // triggers the useAuthReconciliation logout
       // branch). Skipping setTokens after a 200 leaves the SPA in a
       // "logged in but every protected request will 401" state, and
       // an F5 logs the user out — both bugs were traced to this
@@ -103,14 +104,14 @@ describe('AuthForm', () => {
       });
 
       // The bearer pair from the response lands in the tokenStore
-      // (which mirrors to sessionStorage for F5 survival) and in
-      // memory for the request interceptor. sessionStorage's
-      // 'nyx-token-store' key is what the IIFE re-hydrates from on
-      // the next page load.
+      // (which mirrors to localStorage because "Remember me" is on
+      // by default) and in memory for the request interceptor.
+      // localStorage's 'nyx-token-store' key is what the IIFE
+      // re-hydrates from on the next window.
       expect(tokenStore.getAccessToken()).toBe('test.access.token');
       expect(tokenStore.getRefreshToken()).toBe('test.refresh.token');
       const persisted = JSON.parse(
-        sessionStorage.getItem('nyx-token-store') ?? 'null',
+        localStorage.getItem('nyx-token-store') ?? 'null',
       );
       expect(persisted).toEqual({
         accessToken: 'test.access.token',
@@ -159,6 +160,63 @@ describe('AuthForm', () => {
 
       expect(onSuccess).toHaveBeenCalledTimes(1);
       expect(logout).not.toHaveBeenCalled();
+    });
+
+    it('stores tokens in sessionStorage when remember me is unchecked', async () => {
+      mockedPost.mockResolvedValueOnce({ data: authResponse });
+
+      render(<AuthForm onSuccess={onSuccess} onCancel={onCancel} />);
+
+      await userEvent.type(screen.getByLabelText(/username/i), 'newbie');
+      await userEvent.type(screen.getByLabelText(/password/i), 'hunter2');
+      await userEvent.click(screen.getByLabelText(/remember me/i));
+      await userEvent.click(screen.getByRole('button', { name: /^login$/i }));
+
+      await waitFor(() => expect(setAuth).toHaveBeenCalled());
+
+      expect(
+        JSON.parse(sessionStorage.getItem('nyx-token-store') ?? 'null'),
+      ).toEqual({
+        accessToken: 'test.access.token',
+        refreshToken: 'test.refresh.token',
+      });
+      expect(localStorage.getItem('nyx-token-store')).toBeNull();
+    });
+  });
+
+  describe('server errors', () => {
+    it('shows invalid credentials inline under the password field on a 401', async () => {
+      mockedPost.mockRejectedValueOnce({ response: { status: 401 } });
+
+      render(<AuthForm onSuccess={onSuccess} onCancel={onCancel} />);
+
+      await userEvent.type(screen.getByLabelText(/username/i), 'newbie');
+      await userEvent.type(screen.getByLabelText(/password/i), 'wrongpass');
+      await userEvent.click(screen.getByRole('button', { name: /^login$/i }));
+
+      const alert = await screen.findByRole('alert');
+      expect(alert).toHaveTextContent('Invalid username or password');
+      expect(screen.getByLabelText(/password/i)).toHaveAttribute(
+        'aria-invalid',
+        'true',
+      );
+      expect(onSuccess).not.toHaveBeenCalled();
+      expect(logout).not.toHaveBeenCalled();
+    });
+
+    it('shows username taken inline on a register 409', async () => {
+      mockedPost.mockRejectedValueOnce({ response: { status: 409 } });
+
+      render(<AuthForm onSuccess={onSuccess} onCancel={onCancel} />);
+
+      await userEvent.click(screen.getByRole('button', { name: /^register$/i }));
+      await userEvent.type(screen.getByLabelText(/username/i), 'taken');
+      await userEvent.type(screen.getByLabelText(/password/i), 'hunter2');
+      await userEvent.click(screen.getByRole('button', { name: /^register$/i }));
+
+      const alert = await screen.findByRole('alert');
+      expect(alert).toHaveTextContent('Username already taken');
+      expect(onSuccess).not.toHaveBeenCalled();
     });
   });
 

@@ -88,7 +88,7 @@ The SPA SHALL render a `+ New chat` button in the chat header (next to the exist
 
 ### Requirement: Tab reload restores the active session
 
-When the SPA reloads the page, the sidebar SHALL restore the active session id from `sessionStorage` (the same persistence mechanism the existing `tokenStore` uses), and SHALL re-fetch the messages for that session. If the restored session id no longer exists (deleted by the user or reaped by retention), the SPA SHALL fall back to an empty welcome state without showing an error to the user.
+When the SPA reloads the page, the sidebar SHALL restore the active session id from `sessionStorage`, and SHALL re-fetch the messages for that session. If the restored session id no longer exists (deleted by the user or reaped by retention), the SPA SHALL fall back to an empty welcome state without showing an error to the user.
 
 #### Scenario: Reload restores the active session
 

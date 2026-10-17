@@ -48,7 +48,12 @@ function getResponseErrorHandler(): (error: unknown) => Promise<unknown> {
  * Construct a 401-shaped axios error with the given www-authenticate
  * challenge (or `undefined` for a header-less response).
  */
-function make401(opts: { wwwAuthenticate?: string; retried?: boolean; skipAuthRefresh?: boolean } = {}) {
+function make401(opts: {
+  wwwAuthenticate?: string;
+  retried?: boolean;
+  skipAuthRefresh?: boolean;
+  url?: string;
+} = {}) {
   const headers: Record<string, string> = {};
   if (opts.wwwAuthenticate !== undefined) {
     headers['www-authenticate'] = opts.wwwAuthenticate;
@@ -56,6 +61,7 @@ function make401(opts: { wwwAuthenticate?: string; retried?: boolean; skipAuthRe
   const config: Record<string, unknown> = {};
   if (opts.retried) config._retried = true;
   if (opts.skipAuthRefresh) config.skipAuthRefresh = true;
+  if (opts.url !== undefined) config.url = opts.url;
 
   const error = Object.assign(new Error('Request failed'), {
     response: {
@@ -111,6 +117,36 @@ describe('api response interceptor', () => {
     const fulfilled = handlers[0].fulfilled;
     const response = { data: { hello: 'world' }, status: 200 };
     expect(fulfilled(response)).toBe(response);
+  });
+
+  it('rejects a login 401 without logout, toast, or token clearing', async () => {
+    tokenStore.setTokens('live.access', 'live.refresh');
+    const error = make401({ url: '/login' });
+
+    await expect(rejected(error)).rejects.toBe(error);
+
+    expect(logout).not.toHaveBeenCalled();
+    expect(addToast).not.toHaveBeenCalled();
+    expect(loggerError).not.toHaveBeenCalled();
+    expect(tokenStore.getAccessToken()).toBe('live.access');
+    tokenStore.clear();
+  });
+
+  it('rejects a register 409 without a toast', async () => {
+    const error = Object.assign(new Error('Request failed'), {
+      response: {
+        status: 409,
+        data: { error: 'Username already taken' },
+        headers: {},
+      },
+      config: { url: '/register' },
+    });
+
+    await expect(rejected(error)).rejects.toBe(error);
+
+    expect(logout).not.toHaveBeenCalled();
+    expect(addToast).not.toHaveBeenCalled();
+    expect(loggerError).not.toHaveBeenCalled();
   });
 
   it('attempts refresh on a bare 401 and logs out if refresh fails (H8)', async () => {

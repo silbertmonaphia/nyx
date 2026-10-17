@@ -18,7 +18,7 @@ import type { User } from '~/api/openapi';
  * not a user-visible failure.
  *
  * 401 handling: a stale access token is the most common cause. We
- * try `POST /api/refresh` with the sessionStorage refresh token
+ * try `POST /api/refresh` with the persisted refresh token
  * before giving up — only after refresh fails (or the retry /api/me
  * also 401s, meaning the server-side session was actually revoked)
  * do we run the full logout. This keeps an expired-access-token
@@ -50,7 +50,7 @@ export function useAuthReconciliation(): void {
     void (async () => {
       // Wait for any in-flight cross-tab token handshake so we
       // probe /api/me with tokens a peer tab just adopted, not the
-      // empty sessionStorage copy of a freshly-opened Tab B.
+      // empty storage copy of a freshly-opened Tab B.
       await tokenStore.whenReady();
       if (cancelled) return;
 

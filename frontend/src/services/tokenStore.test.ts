@@ -6,18 +6,74 @@ import { tokenStore } from './api';
 // per test) so messages don't leak between cases.
 
 beforeEach(() => {
-  // Reset module-level state: in-memory tokens, sessionStorage,
+  // Reset module-level state: in-memory tokens, persisted storage,
   // and any in-flight boot handshake. tokenStore.clear() also
   // tears down the BroadcastChannel subscription so the next
   // getChannel() call re-subscribes to a fresh channel — this
   // matters when tests insert entries into the channels Set.
   tokenStore.clear();
+  localStorage.clear();
   sessionStorage.clear();
 });
 
 afterEach(() => {
   tokenStore.clear();
+  localStorage.clear();
   vi.useRealTimers();
+});
+
+describe('tokenStore remember-me persistence', () => {
+  it('writes to localStorage when remember is true', () => {
+    tokenStore.setTokens('at', 'rt', true);
+
+    expect(JSON.parse(localStorage.getItem('nyx-token-store') ?? 'null')).toEqual({
+      accessToken: 'at',
+      refreshToken: 'rt',
+    });
+    expect(sessionStorage.getItem('nyx-token-store')).toBeNull();
+  });
+
+  it('writes to sessionStorage when remember is false', () => {
+    tokenStore.setTokens('at', 'rt', false);
+
+    expect(JSON.parse(sessionStorage.getItem('nyx-token-store') ?? 'null')).toEqual({
+      accessToken: 'at',
+      refreshToken: 'rt',
+    });
+    expect(localStorage.getItem('nyx-token-store')).toBeNull();
+  });
+
+  it('removes the other storage copy when the mode changes', () => {
+    tokenStore.setTokens('first.at', 'first.rt', true);
+    tokenStore.setTokens('second.at', 'second.rt', false);
+
+    expect(localStorage.getItem('nyx-token-store')).toBeNull();
+    expect(JSON.parse(sessionStorage.getItem('nyx-token-store') ?? 'null')).toEqual({
+      accessToken: 'second.at',
+      refreshToken: 'second.rt',
+    });
+  });
+
+  it('keeps the remembered mode across refreshes that omit the flag', () => {
+    tokenStore.setTokens('first.at', 'first.rt', true);
+    tokenStore.setTokens('rotated.at', 'rotated.rt');
+
+    expect(JSON.parse(localStorage.getItem('nyx-token-store') ?? 'null')).toEqual({
+      accessToken: 'rotated.at',
+      refreshToken: 'rotated.rt',
+    });
+    expect(sessionStorage.getItem('nyx-token-store')).toBeNull();
+  });
+
+  it('clear removes tokens from both storages', () => {
+    localStorage.setItem('nyx-token-store', JSON.stringify({ accessToken: 'a', refreshToken: 'b' }));
+    sessionStorage.setItem('nyx-token-store', JSON.stringify({ accessToken: 'c', refreshToken: 'd' }));
+
+    tokenStore.clear();
+
+    expect(localStorage.getItem('nyx-token-store')).toBeNull();
+    expect(sessionStorage.getItem('nyx-token-store')).toBeNull();
+  });
 });
 
 describe('tokenStore cross-tab sync', () => {
@@ -73,7 +129,7 @@ describe('tokenStore cross-tab sync', () => {
   });
 
   it('whenReady resolves on incoming sync when local store is empty', async () => {
-    // Simulate Tab B: empty tokenStore, no local sessionStorage.
+    // Simulate Tab B: empty tokenStore, no local persistence.
     // armBootTimeout was called at hydrate; we're waiting for a
     // peer to respond. Manufacture the peer by opening a channel
     // and posting a sync.

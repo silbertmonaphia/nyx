@@ -1,5 +1,5 @@
 import axios from "axios";
-import type { AxiosError, InternalAxiosRequestConfig } from "axios";
+import type { AxiosError } from "axios";
 import { context } from "@opentelemetry/api";
 import { injectTraceparent } from "./telemetry";
 import { useUiStore } from "../store/uiStore";
@@ -25,19 +25,19 @@ const api = axios.create({
 
 // tokenStore is the single source of truth for the in-memory access
 // + refresh tokens. It is intentionally a module-level singleton
-// rather than part of the Zustand auth store: tokens must NEVER be
-// persisted to localStorage (persisted tokens are an XSS-exfiltration
-// target — see authStore.partialize), and they must NEVER travel
-// through React state (React re-renders would race the refresh-on-
-// 401 single-flight logic).
+// rather than part of the Zustand auth store: tokens must NEVER ship
+// inside the persisted auth profile (Zustand localStorage — see
+// authStore.partialize), and they must NEVER travel through React
+// state (React re-renders would race the refresh-on-401 single-flight
+// logic).
 //
-// sessionStorage is consulted on store init so a page reload within
-// the same tab keeps the session. Cross-tab sync is handled via
-// BroadcastChannel — see FUTURE.md §"Multi-tab concurrent refresh
-// race" for the broader rationale (a stale sessionStorage in Tab B
-// would otherwise trigger family-revoke when Tab A's refresh
-// rotated the refresh token).
-const SESSION_STORAGE_KEY = "nyx-token-store";
+// Persistence is opt-in per login: "Remember me" (default on) writes
+// to localStorage so it survives closing the window; unchecked keeps
+// it in sessionStorage for this tab only. Cross-tab sync is handled
+// via BroadcastChannel — see FUTURE.md §"Multi-tab concurrent refresh
+// race" for the rationale (a stale sessionStorage in Tab B would
+// otherwise trigger family-revoke when Tab A rotates the refresh).
+const TOKEN_STORAGE_KEY = "nyx-token-store";
 
 // BroadcastChannel name used for cross-tab token sync. Same-origin
 // only, transient (messages exist only while both tabs are alive)
@@ -45,7 +45,7 @@ const SESSION_STORAGE_KEY = "nyx-token-store";
 const TOKEN_CHANNEL_NAME = "nyx-tokens";
 
 // How long a freshly-opened tab waits for a sync response from a
-// live peer before falling through to its own sessionStorage state.
+// live peer before falling through to its own persisted state.
 // Short enough to be invisible to users, long enough to win the
 // race against the first outbound auth request.
 const BOOT_TIMEOUT_MS = 200;
@@ -61,9 +61,11 @@ interface PersistedTokens {
   refreshToken: string;
 }
 
-function readSessionTokens(): PersistedTokens | null {
+function readStorageTokens(kind: "local" | "session"): PersistedTokens | null {
   try {
-    const raw = window.sessionStorage.getItem(SESSION_STORAGE_KEY);
+    const storage =
+      kind === "local" ? window.localStorage : window.sessionStorage;
+    const raw = storage.getItem(TOKEN_STORAGE_KEY);
     if (!raw) return null;
     const parsed = JSON.parse(raw) as Partial<PersistedTokens>;
     if (
@@ -83,36 +85,40 @@ function readSessionTokens(): PersistedTokens | null {
   }
 }
 
-function writeSessionTokens(at: string, rt: string): void {
+function writeTokens(at: string, rt: string): void {
   try {
-    window.sessionStorage.setItem(
-      SESSION_STORAGE_KEY,
+    const target = rememberMe ? window.localStorage : window.sessionStorage;
+    const other = rememberMe ? window.sessionStorage : window.localStorage;
+    target.setItem(
+      TOKEN_STORAGE_KEY,
       JSON.stringify({ accessToken: at, refreshToken: rt }),
     );
+    other.removeItem(TOKEN_STORAGE_KEY);
   } catch {
-    // sessionStorage unavailable (private mode quota, SSR) — fall
-    // back to in-memory only. Page reload will require a fresh
-    // login.
+    // Storage unavailable (private mode quota, SSR) — fall back to
+    // in-memory only. Page reload will require a fresh login.
   }
 }
 
-function clearSessionTokens(): void {
+function clearPersistedTokens(): void {
   try {
-    window.sessionStorage.removeItem(SESSION_STORAGE_KEY);
-  } catch {
-    // ignored
-  }
+    window.localStorage.removeItem(TOKEN_STORAGE_KEY);
+  } catch {}
+  try {
+    window.sessionStorage.removeItem(TOKEN_STORAGE_KEY);
+  } catch {}
 }
 
 let accessToken: string | null = null;
 let refreshToken: string | null = null;
+let rememberMe = false;
 
 // Cross-tab token sync via BroadcastChannel. The channel is created
 // lazily on first use so tests / SSR / environments without
 // BroadcastChannel don't pay the constructor cost. Channel messages
 // are transient (delivered only while both tabs are listening) and
 // same-origin only — strictly safer than localStorage for token
-// transport; equivalent XSS exposure to sessionStorage.
+// transport; equivalent XSS exposure to the persisted token stores.
 let tokenChannel: BroadcastChannel | null = null;
 function getChannel(): BroadcastChannel | null {
   if (typeof BroadcastChannel === "undefined") return null;
@@ -123,12 +129,12 @@ function getChannel(): BroadcastChannel | null {
   return tokenChannel;
 }
 
-// Boot handshake: a freshly-opened tab whose sessionStorage is
-// empty posts `{type:'request'}` and waits up to BOOT_TIMEOUT_MS
+// Boot handshake: a freshly-opened tab with no persisted tokens
+// posts `{type:'request'}` and waits up to BOOT_TIMEOUT_MS
 // for a live peer to respond with `{type:'sync', at, rt}`. The
 // promise resolves early on any of:
-//   - the local sessionStorage already had tokens (no handshake
-//     needed; we are Tab A on F5)
+//   - persisted storage already had tokens (no handshake needed;
+//     we are Tab A on F5)
 //   - a sync response arrived (we are Tab B and Tab A responded)
 //   - the timeout fires (no live peer; we are alone)
 // When the promise is resolved, every awaiter proceeds — typically
@@ -169,10 +175,11 @@ export const tokenStore = {
   whenReady(): Promise<void> {
     return bootPromise;
   },
-  setTokens(at: string, rt: string): void {
+  setTokens(at: string, rt: string, remember?: boolean): void {
+    if (remember !== undefined) rememberMe = remember;
     accessToken = at;
     refreshToken = rt;
-    writeSessionTokens(at, rt);
+    writeTokens(at, rt);
     // New tokens in this tab → broadcast to peers so a stale Tab B
     // adopts them before its next refresh attempt. Settles the boot
     // handshake immediately too (we have tokens; no need to wait).
@@ -182,7 +189,8 @@ export const tokenStore = {
   clear(): void {
     accessToken = null;
     refreshToken = null;
-    clearSessionTokens();
+    rememberMe = false;
+    clearPersistedTokens();
     // Tell peers to drop their copies too — closes the window
     // where Tab B continues with stale tokens after Tab A logged
     // out. Settle any in-flight boot handshake as well.
@@ -202,7 +210,7 @@ function onChannelMessage(ev: MessageEvent<unknown>): void {
       msg.rt !== ""
     ) {
       // Only adopt if we don't already have tokens — a Tab B that
-      // just hydrated from sessionStorage may have a copy the
+      // just hydrated from persistence may have a copy the
       // originating tab considers stale; the freshest broadcast
       // wins, but if our local state is already populated we trust
       // it (avoids a re-hydration race where a slow broadcast
@@ -210,7 +218,7 @@ function onChannelMessage(ev: MessageEvent<unknown>): void {
       if (!accessToken) {
         accessToken = msg.at;
         refreshToken = msg.rt;
-        writeSessionTokens(msg.at, msg.rt);
+        writeTokens(msg.at, msg.rt);
       }
       settleBoot();
     }
@@ -218,7 +226,7 @@ function onChannelMessage(ev: MessageEvent<unknown>): void {
     // A peer tab is asking whether anyone has live tokens. If we
     // do, reply with our current pair. The reply is the source of
     // the cross-tab sync — without it, the asking tab would
-    // time out and fall through to its empty sessionStorage.
+    // time out and fall through to its empty persisted state.
     if (accessToken && refreshToken) {
       getChannel()?.postMessage({
         type: "sync",
@@ -233,23 +241,24 @@ function onChannelMessage(ev: MessageEvent<unknown>): void {
     // peer's next action).
     accessToken = null;
     refreshToken = null;
-    clearSessionTokens();
+    clearPersistedTokens();
     settleBoot();
   }
 }
 
-// Hydrate from sessionStorage on module load so a page reload within
-// the same tab keeps the session. Subsequent setTokens / clear calls
-// keep the in-memory and sessionStorage views in lockstep.
+// Hydrate on module load: localStorage (a remembered session) first,
+// then sessionStorage (this tab's session). Subsequent setTokens /
+// clear calls keep the in-memory and persisted views in lockstep.
 //
-// If sessionStorage had nothing (cold tab opened with no peer or no
-// prior session), arm the boot handshake: post a `request` and wait
-// up to BOOT_TIMEOUT_MS for a live peer to respond with its tokens.
+// If neither storage had anything, arm the boot handshake: post a
+// `request` and wait up to BOOT_TIMEOUT_MS for a live peer.
 (function hydrate() {
-  const persisted = readSessionTokens();
+  const persistent = readStorageTokens("local");
+  const persisted = persistent ?? readStorageTokens("session");
   const ch = getChannel();
   if (ch) ch.addEventListener("message", onChannelMessage);
   if (persisted) {
+    rememberMe = persistent !== null;
     accessToken = persisted.accessToken;
     refreshToken = persisted.refreshToken;
     // No handshake needed; boot stays RESOLVED.
@@ -452,21 +461,25 @@ function sanitiseForLog(value: unknown): unknown {
 }
 
 // Response interceptor for global error handling
+function isAuthEndpoint(url: string | undefined): boolean {
+  if (!url) return false;
+  const path = url.split("?")[0];
+  return path === "/login" || path === "/register";
+}
+
 api.interceptors.response.use(
   (response) => {
     return response;
   },
   async (error: AxiosError) => {
     let message = t('errors.unexpected');
+    const config = error.config;
 
     if (error.response) {
       // Handle 401 Unauthorized.
-      const config = error.config as
-        | (InternalAxiosRequestConfig & {
-            skipAuthRefresh?: boolean;
-            _retried?: boolean;
-          })
-        | undefined;
+      if (isAuthEndpoint(config?.url)) {
+        return Promise.reject(error);
+      }
       const skipRefresh = !config || config.skipAuthRefresh || config._retried;
 
       if (error.response.status === 401) {

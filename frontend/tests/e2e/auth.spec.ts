@@ -38,4 +38,64 @@ test.describe('Authentication', () => {
     await expect(page.getByText(testUser.username)).toBeVisible();
     await expect(page.getByRole('button', { name: /Logout/i })).toBeVisible();
   });
+
+  test('should keep the session in a new window when remember me is checked', async ({
+    page,
+    context,
+  }) => {
+    const username = `remember_${Date.now()}_${Math.floor(Math.random() * 10000)}`;
+
+    await page.goto('/');
+    await page.getByRole('button', { name: /Login \/ Register/i }).click();
+    await page.getByRole('button', { name: /Register/i }).last().click();
+    await page.getByLabel(/Username/i).fill(username);
+    await page.getByLabel(/Password/i).fill('password123');
+    await expect(page.getByLabel(/Remember me/i)).toBeChecked();
+    await page.getByRole('button', { name: /^Register$/i }).click();
+    await expect(page.getByRole('button', { name: /^Logout$/i })).toBeVisible();
+    expect(
+      await page.evaluate(() => window.localStorage.getItem('nyx-token-store')),
+    ).not.toBeNull();
+
+    await page.close();
+    const reopened = await context.newPage();
+    await reopened.goto('/');
+
+    await expect(reopened.getByRole('button', { name: /^Logout$/i })).toBeVisible();
+    await expect(reopened.getByText(username)).toBeVisible();
+  });
+
+
+  test('wrong password shows an inline error instead of a session-expired toast', async ({
+    page,
+  }) => {
+    const user = {
+      username: `wrongpass_${Date.now()}_${Math.floor(Math.random() * 10000)}`,
+      password: 'password123',
+    };
+
+    await page.goto('/');
+    await page.getByRole('button', { name: /Login \/ Register/i }).click();
+    await page.getByRole('button', { name: /Register/i }).last().click();
+    await page.getByLabel(/Username/i).fill(user.username);
+    await page.getByLabel(/Password/i).fill(user.password);
+    await page.getByRole('button', { name: /^Register$/i }).click();
+    await expect(page.getByRole('button', { name: /^Logout$/i })).toBeVisible();
+
+    await page.getByRole('button', { name: /^Logout$/i }).click();
+    await page.getByRole('button', { name: /Login \/ Register/i }).click();
+    await page.getByLabel(/Username/i).fill(user.username);
+    await page.getByLabel(/Password/i).fill('wrongpassword');
+    await page.getByRole('button', { name: /^Login$/i }).click();
+
+    const alert = page.getByRole('alert');
+    await expect(alert).toHaveText(/Invalid username or password/i);
+    await expect(page.getByText(/Session expired/i)).toHaveCount(0);
+
+    const inputBox = await page.getByLabel(/Password/i).boundingBox();
+    const alertBox = await alert.boundingBox();
+    expect(inputBox).not.toBeNull();
+    expect(alertBox).not.toBeNull();
+    expect(alertBox!.y).toBeGreaterThan(inputBox!.y);
+  });
 });

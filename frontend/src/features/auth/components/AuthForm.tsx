@@ -31,6 +31,8 @@ interface AuthFormProps {
 export const AuthForm: React.FC<AuthFormProps> = ({ onSuccess, onCancel }) => {
   const { t } = useTranslation();
   const [isLogin, setIsLogin] = useState(true);
+  const [remember, setRemember] = useState(true);
+  const [serverError, setServerError] = useState<string | null>(null);
   const setAuth = useAuthStore((state) => state.setAuth);
   const addToast = useUiStore((state) => state.addToast);
 
@@ -47,23 +49,24 @@ export const AuthForm: React.FC<AuthFormProps> = ({ onSuccess, onCancel }) => {
   });
 
   const onSubmit = async (data: AuthFormData) => {
+    setServerError(null);
     try {
       const endpoint = isLogin ? "/login" : "/register";
       const payload = { username: data.username, password: data.password };
       const response = await api.post(endpoint, payload);
-      // Wire the in-memory + sessionStorage token store AND the
-      // authStore profile. setAuth takes only `{user}` (the
-      // pick'd PersistedAuthPayload), so the bearer pair is
-      // handled separately. Without this call, the wrapped-`api`
-      // request interceptor has nothing to stamp onto subsequent
-      // requests, AND the IIFE in services/api.ts finds an empty
-      // sessionStorage after F5 — useAuthReconciliation sees no
-      // access token and triggers a hard logout (CLAUDE.md
-      // F5/refresh must keep the session alive).
+      // Wire the token store (localStorage when "Remember me" is
+      // checked, sessionStorage otherwise) AND the authStore
+      // profile. setAuth takes only `{user}` (the pick'd
+      // PersistedAuthPayload), so the bearer pair is handled
+      // separately. Without this call, the wrapped-`api` request
+      // interceptor has nothing to stamp onto subsequent requests,
+      // AND the IIFE in services/api.ts finds empty storage after
+      // F5 — useAuthReconciliation sees no access token and logs
+      // out (CLAUDE.md F5 refresh must keep the session alive).
       setAuth(response.data);
       const body = response.data;
       if (body?.access_token && body?.refresh_token) {
-        tokenStore.setTokens(body.access_token, body.refresh_token);
+        tokenStore.setTokens(body.access_token, body.refresh_token, remember);
       }
       addToast(
         isLogin ? t("auth.loginSuccess") : t("auth.registerSuccess"),
@@ -71,6 +74,16 @@ export const AuthForm: React.FC<AuthFormProps> = ({ onSuccess, onCancel }) => {
       );
       onSuccess();
     } catch (err) {
+      const status = (err as { response?: { status?: number } }).response?.status;
+      if (isLogin && status === 401) {
+        setServerError(t("auth.invalidCredentials"));
+      } else if (!isLogin && status === 409) {
+        setServerError(t("auth.usernameTaken"));
+      } else if (status === 429) {
+        setServerError(t("auth.tooManyAttempts"));
+      } else {
+        setServerError(t("auth.requestFailed"));
+      }
       logger.error("Auth error", { error: String(err) });
     }
   };
@@ -81,7 +94,7 @@ export const AuthForm: React.FC<AuthFormProps> = ({ onSuccess, onCancel }) => {
         <Label htmlFor="username">{t("auth.username")}</Label>
         <Input
           id="username"
-          {...register("username")}
+          {...register("username", { onChange: () => setServerError(null) })}
           aria-invalid={!!errors.username}
           className={errors.username ? "border-destructive" : ""}
         />
@@ -97,15 +110,33 @@ export const AuthForm: React.FC<AuthFormProps> = ({ onSuccess, onCancel }) => {
         <Input
           id="password"
           type="password"
-          {...register("password")}
-          aria-invalid={!!errors.password}
-          className={errors.password ? "border-destructive" : ""}
+          {...register("password", { onChange: () => setServerError(null) })}
+          aria-invalid={!!errors.password || !!serverError}
+          className={errors.password || serverError ? "border-destructive" : ""}
         />
         {errors.password && (
           <p className="text-xs font-medium text-destructive">
             {errors.password.message}
           </p>
         )}
+        {serverError && (
+          <p role="alert" className="text-xs font-medium text-destructive">
+            {serverError}
+          </p>
+        )}
+      </div>
+
+      <div className="flex items-center gap-2">
+        <input
+          id="remember-me"
+          type="checkbox"
+          checked={remember}
+          onChange={(e) => setRemember(e.target.checked)}
+          className="h-4 w-4 rounded border-input accent-primary"
+        />
+        <Label htmlFor="remember-me" className="text-sm font-normal">
+          {t("auth.rememberMe")}
+        </Label>
       </div>
 
       <div className="flex flex-col gap-4 pt-2">
@@ -127,7 +158,10 @@ export const AuthForm: React.FC<AuthFormProps> = ({ onSuccess, onCancel }) => {
           <button
             type="button"
             className="text-primary font-semibold hover:underline underline-offset-4"
-            onClick={() => setIsLogin(!isLogin)}
+            onClick={() => {
+              setServerError(null);
+              setIsLogin(!isLogin);
+            }}
           >
             {isLogin ? t("auth.register") : t("auth.login")}
           </button>
