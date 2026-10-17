@@ -169,7 +169,7 @@ function App() {
     <div className="app-root">
       <PageMeta title={pageTitle} description={pageDescription} />
       <ToastContainer />
-      <nav className="sticky top-0 z-50 w-full border-b bg-black">
+      <nav className="sticky top-0 z-50 w-full border-b bg-background">
         <div className="w-full px-6 h-16 grid grid-cols-[1fr_auto_1fr] items-center gap-4">
           <div className="flex items-center gap-3 justify-self-start">
             <div className="text-2xl font-bold bg-gradient-to-r from-primary to-accent bg-clip-text text-transparent">

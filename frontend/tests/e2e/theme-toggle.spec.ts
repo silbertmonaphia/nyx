@@ -173,6 +173,24 @@ test.describe('Theme toggle', () => {
     expect(await computedColorScheme(page)).toBe('dark');
   });
 
+  test('the navbar background follows the theme', async ({ page }) => {
+    await page.emulateMedia({ colorScheme: 'light' });
+    await openApp(page);
+
+    const navBg = () =>
+      page.locator('nav').evaluate((el) => getComputedStyle(el).backgroundColor);
+    const luminance = (rgb: string) => {
+      const [r, g, b] = rgb.match(/\d+/g)!.map(Number);
+      return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+    };
+
+    expect(luminance(await navBg())).toBeGreaterThan(200);
+
+    await page.getByTestId('theme-toggle').click();
+    await expectDark(page);
+    await expect.poll(async () => luminance(await navBg())).toBeLessThan(50);
+  });
+
   test('the toggle is hidden below the md breakpoint', async ({ page }) => {
     await page.setViewportSize({ width: 390, height: 844 });
     await page.goto('/');

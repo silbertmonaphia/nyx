@@ -17,7 +17,7 @@ export function LocaleToggle() {
       aria-label={t('locale.switch')}
       title={t('locale.switch')}
       data-testid="locale-toggle"
-      className="hidden md:inline-flex items-center gap-0.5 rounded-full border border-white/15 p-0.5"
+      className="hidden md:inline-flex items-center gap-0.5 rounded-full border border-border p-0.5"
     >
       {OPTIONS.map(({ locale, label }) => (
         <button
@@ -28,8 +28,8 @@ export function LocaleToggle() {
           data-testid={`locale-${locale}`}
           className={
             active === locale
-              ? 'rounded-full bg-white/15 px-2 py-0.5 text-xs font-medium text-white'
-              : 'rounded-full px-2 py-0.5 text-xs font-medium text-white/50 hover:text-white'
+              ? 'rounded-full bg-secondary px-2 py-0.5 text-xs font-medium text-secondary-foreground'
+              : 'rounded-full px-2 py-0.5 text-xs font-medium text-muted-foreground hover:text-foreground'
           }
         >
           {label}
