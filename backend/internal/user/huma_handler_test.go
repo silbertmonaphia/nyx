@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -659,9 +660,9 @@ func TestRefreshHandler_UnknownTokenReturns401(t *testing.T) {
 // TestLogoutHandler_NoContent covers the auth-required logout happy
 // path. The caller must present a valid access token in the
 // Authorization: Bearer header; the refresh_token in the body
-// identifies the row we revoke. Per M1, Logout revokes only the
-// supplied row, not the surrounding family. Returns 204 with empty
-// body and no Set-Cookie headers (Bearer transport carries no cookies).
+// identifies the family we revoke (other devices stay logged in).
+// Returns 204 with empty body and no Set-Cookie headers (Bearer
+// transport carries no cookies).
 func TestLogoutHandler_NoContent(t *testing.T) {
 	tokens, err := auth.NewTokenService([]byte(auth.TestSecret), 15*time.Minute)
 	if err != nil {
@@ -673,18 +674,14 @@ func TestLogoutHandler_NoContent(t *testing.T) {
 	}
 
 	now := time.Now()
-	var revokedID int64
+	var revokedFamily int64
 	repo := &stubRepo{
 		getRefreshFn: func(_ context.Context, _ []byte) (*RefreshTokenRow, error) {
 			return &RefreshTokenRow{ID: 1, UserID: 7, FamilyID: 99, ExpiresAt: now.Add(time.Hour)}, nil
 		},
-		revokeByIDFn: func(_ context.Context, id int64) error {
-			revokedID = id
-			return nil
-		},
-		revokeFamilyFn: func(_ context.Context, _ int64) (int64, error) {
-			t.Error("RevokeRefreshTokenFamily must not be reached on per-session logout")
-			return 0, nil
+		revokeFamilyFn: func(_ context.Context, familyID int64) (int64, error) {
+			revokedFamily = familyID
+			return 1, nil
 		},
 	}
 
@@ -699,8 +696,8 @@ func TestLogoutHandler_NoContent(t *testing.T) {
 	if rr.Body.Len() != 0 {
 		t.Errorf("204 body should be empty, got %q", rr.Body.String())
 	}
-	if revokedID != 1 {
-		t.Errorf("expected row 1 to be revoked, got %d", revokedID)
+	if revokedFamily != 99 {
+		t.Errorf("expected family 99 to be revoked, got %d", revokedFamily)
 	}
 	if cookies := rr.Result().Cookies(); len(cookies) != 0 {
 		t.Errorf("logout must not set cookies; got %d", len(cookies))
@@ -731,7 +728,7 @@ func TestLogoutHandler_RequiresAuth(t *testing.T) {
 
 // TestLogoutHandler_ReadsTokenFromBody pins the Bearer contract on
 // the logout path: the handler reads the refresh token from the
-// body (not a cookie) and revokes exactly that row.
+// body (not a cookie) and revokes that token's family.
 func TestLogoutHandler_ReadsTokenFromBody(t *testing.T) {
 	tokens, err := auth.NewTokenService([]byte(auth.TestSecret), 15*time.Minute)
 	if err != nil {
@@ -742,15 +739,15 @@ func TestLogoutHandler_ReadsTokenFromBody(t *testing.T) {
 		t.Fatalf("GenerateToken: %v", err)
 	}
 
-	var revokedID int64
+	var revokedFamily int64
 	now := time.Now()
 	repo := &stubRepo{
 		getRefreshFn: func(_ context.Context, _ []byte) (*RefreshTokenRow, error) {
 			return &RefreshTokenRow{ID: 7, UserID: 7, FamilyID: 1, ExpiresAt: now.Add(time.Hour)}, nil
 		},
-		revokeByIDFn: func(_ context.Context, id int64) error {
-			revokedID = id
-			return nil
+		revokeFamilyFn: func(_ context.Context, familyID int64) (int64, error) {
+			revokedFamily = familyID
+			return 1, nil
 		},
 	}
 
@@ -762,8 +759,87 @@ func TestLogoutHandler_ReadsTokenFromBody(t *testing.T) {
 	if rr.Code != http.StatusNoContent {
 		t.Fatalf("status = %d, want 204; body=%s", rr.Code, rr.Body.String())
 	}
-	if revokedID != 7 {
-		t.Errorf("expected row 7 to be revoked, got %d", revokedID)
+	if revokedFamily != 1 {
+		t.Errorf("expected family 1 to be revoked, got %d", revokedFamily)
+	}
+}
+
+func TestLogoutAllHandler_NoContent(t *testing.T) {
+	tokens, err := auth.NewTokenService([]byte(auth.TestSecret), 15*time.Minute)
+	if err != nil {
+		t.Fatalf("auth.NewTokenService: %v", err)
+	}
+	accessToken, err := tokens.GenerateToken(7, testUsername)
+	if err != nil {
+		t.Fatalf("GenerateToken: %v", err)
+	}
+
+	var seenUser int
+	repo := &stubRepo{
+		revokeByUserFn: func(_ context.Context, userID int) (int64, error) {
+			seenUser = userID
+			return 2, nil
+		},
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/api/logout-all", nil)
+	req.Header.Set("Authorization", "Bearer "+accessToken)
+	rr := httptest.NewRecorder()
+	newTestRouterWithRepo(repo).ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusNoContent {
+		t.Fatalf("status = %d, want 204; body=%s", rr.Code, rr.Body.String())
+	}
+	if rr.Body.Len() != 0 {
+		t.Errorf("204 body should be empty, got %q", rr.Body.String())
+	}
+	if seenUser != 7 {
+		t.Errorf("repo received userID=%d, want 7", seenUser)
+	}
+}
+
+func TestLogoutAllHandler_RequiresAuth(t *testing.T) {
+	repo := &stubRepo{
+		revokeByUserFn: func(_ context.Context, _ int) (int64, error) {
+			t.Error("repo.RevokeRefreshTokensByUser must not be reached when auth fails")
+			return 0, nil
+		},
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/api/logout-all", nil)
+	rr := httptest.NewRecorder()
+	newTestRouterWithRepo(repo).ServeHTTP(rr, req)
+
+	env := decodeEnvelope(t, rr, http.StatusUnauthorized)
+	if env.Message == "" {
+		t.Errorf("expected an error message on auth failure")
+	}
+}
+
+func TestLogoutAllHandler_RepoErrorPropagates(t *testing.T) {
+	tokens, err := auth.NewTokenService([]byte(auth.TestSecret), 15*time.Minute)
+	if err != nil {
+		t.Fatalf("auth.NewTokenService: %v", err)
+	}
+	accessToken, err := tokens.GenerateToken(7, testUsername)
+	if err != nil {
+		t.Fatalf("GenerateToken: %v", err)
+	}
+
+	repo := &stubRepo{
+		revokeByUserFn: func(_ context.Context, _ int) (int64, error) {
+			return 0, errors.New("connection reset")
+		},
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/api/logout-all", nil)
+	req.Header.Set("Authorization", "Bearer "+accessToken)
+	rr := httptest.NewRecorder()
+	newTestRouterWithRepo(repo).ServeHTTP(rr, req)
+
+	env := decodeEnvelope(t, rr, http.StatusInternalServerError)
+	if env.Details != "Failed to logout all sessions" {
+		t.Errorf("details = %v, want the static safe detail", env.Details)
 	}
 }
 

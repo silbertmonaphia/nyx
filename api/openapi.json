@@ -738,7 +738,7 @@
     },
     "/api/logout": {
       "post": {
-        "description": "Revoke the refresh token identified in the request body. Requires a valid access token in the Authorization header. Returns 204.",
+        "description": "Revoke the refresh token identified in the request body and every rotated token in its family. Requires a valid access token in the Authorization header. Returns 204.",
         "operationId": "logout",
         "requestBody": {
           "content": {
@@ -771,6 +771,36 @@
           }
         ],
         "summary": "Logout a user",
+        "tags": [
+          "auth"
+        ]
+      }
+    },
+    "/api/logout-all": {
+      "post": {
+        "description": "Revoke every active refresh token for the authenticated user. Access tokens already issued remain valid until they expire (at most the configured access TTL, default 15m). Requires a valid access token in the Authorization header. Returns 204.",
+        "operationId": "logout-all",
+        "responses": {
+          "204": {
+            "description": "No Content"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Logout all sessions",
         "tags": [
           "auth"
         ]

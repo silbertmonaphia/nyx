@@ -9,11 +9,13 @@ import (
 	"time"
 
 	"nyx/internal/platform/api"
+	"nyx/internal/platform/auth"
 	"nyx/test"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.opentelemetry.io/otel/trace/noop"
 )
 
 // TestMain for the user package. We only get one per package, so this
@@ -241,5 +243,73 @@ func TestRefreshTokensIntegration(t *testing.T) {
 		affected, err = repo.RevokeRefreshTokenFamily(ctx, first.FamilyID)
 		require.NoError(t, err)
 		assert.Equal(t, int64(0), affected)
+	})
+
+	t.Run("RevokeAllForUser", func(t *testing.T) {
+		repo := setupRefreshIntegrationTest(t)
+
+		u := &User{Username: "dave", PasswordHash: "x"}
+		require.NoError(t, repo.CreateUser(ctx, u))
+
+		expires := time.Now().Add(7 * 24 * time.Hour)
+		first, err := repo.CreateRefreshToken(ctx, u.ID, []byte("hash-e"), expires)
+		require.NoError(t, err)
+		_, err = repo.RotateRefreshToken(ctx, first.ID, u.ID, []byte("hash-f"), first.FamilyID, expires)
+		require.NoError(t, err)
+		second, err := repo.CreateRefreshToken(ctx, u.ID, []byte("hash-g"), expires)
+		require.NoError(t, err)
+		_, err = repo.RotateRefreshToken(ctx, second.ID, u.ID, []byte("hash-h"), second.FamilyID, expires)
+		require.NoError(t, err)
+
+		other := &User{Username: "erin", PasswordHash: "x"}
+		require.NoError(t, repo.CreateUser(ctx, other))
+		otherToken, err := repo.CreateRefreshToken(ctx, other.ID, []byte("hash-i"), expires)
+		require.NoError(t, err)
+
+		affected, err := repo.RevokeRefreshTokensByUser(ctx, u.ID)
+		require.NoError(t, err)
+		assert.Equal(t, int64(2), affected, "one active row per family should be revoked")
+
+		affected, err = repo.RevokeRefreshTokensByUser(ctx, u.ID)
+		require.NoError(t, err)
+		assert.Equal(t, int64(0), affected, "second call must be a no-op")
+
+		survivor, err := repo.GetRefreshTokenByHash(ctx, []byte("hash-i"))
+		require.NoError(t, err)
+		assert.Equal(t, otherToken.ID, survivor.ID)
+		assert.Nil(t, survivor.RevokedAt, "another user's tokens must survive")
+	})
+
+	t.Run("LogoutFamilyIsolation", func(t *testing.T) {
+		repo := setupRefreshIntegrationTest(t)
+		tokens, err := auth.NewTokenService([]byte(auth.TestSecret), 15*time.Minute)
+		require.NoError(t, err)
+		svc := NewService(repo, tokens, 15*time.Minute, 7*24*time.Hour, noop.NewTracerProvider().Tracer("test"))
+
+		u := &User{Username: "frank", PasswordHash: "x"}
+		require.NoError(t, repo.CreateUser(ctx, u))
+
+		expires := time.Now().Add(7 * 24 * time.Hour)
+		rawA, hashA, err := newRefreshToken()
+		require.NoError(t, err)
+		_, err = repo.CreateRefreshToken(ctx, u.ID, hashA, expires)
+		require.NoError(t, err)
+		rawB, hashB, err := newRefreshToken()
+		require.NoError(t, err)
+		_, err = repo.CreateRefreshToken(ctx, u.ID, hashB, expires)
+		require.NoError(t, err)
+
+		require.NoError(t, svc.Logout(ctx, rawA))
+
+		a, err := repo.GetRefreshTokenByHash(ctx, hashA)
+		require.NoError(t, err)
+		assert.NotNil(t, a.RevokedAt, "the logged-out family must be revoked")
+
+		b, err := repo.GetRefreshTokenByHash(ctx, hashB)
+		require.NoError(t, err)
+		assert.Nil(t, b.RevokedAt, "the other device's family must survive")
+
+		_, err = svc.Refresh(ctx, rawB)
+		require.NoError(t, err, "the other device must still be able to refresh")
 	})
 }

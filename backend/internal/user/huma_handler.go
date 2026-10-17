@@ -85,18 +85,29 @@ func RegisterUserOpsTest(api huma.API, h *Handler, tokens auth.TokenService) {
 
 	// /api/logout IS auth-required: the middleware enforces a valid
 	// Authorization: Bearer header. The refresh_token in the body
-	// identifies the single refresh-token row we revoke
-	// (per-session — other devices stay logged in, see SECURITY.md M1).
+	// identifies the family we revoke (other devices stay logged
+	// in, see SECURITY.md M1).
 	huma.Register(api, huma.Operation{
 		OperationID: "logout",
 		Method:      http.MethodPost,
 		Path:        "/api/logout",
 		Summary:     "Logout a user",
-		Description: "Revoke the refresh token identified in the request body. Requires a valid access token in the Authorization header. Returns 204.",
+		Description: "Revoke the refresh token identified in the request body and every rotated token in its family. Requires a valid access token in the Authorization header. Returns 204.",
 		Tags:        []string{"auth"},
 		Security:    []map[string][]string{{"BearerAuth": {}}},
 		Middlewares: huma.Middlewares{middleware.NewHumaAuth(tokens)},
 	}, h.Logout)
+
+	huma.Register(api, huma.Operation{
+		OperationID: "logout-all",
+		Method:      http.MethodPost,
+		Path:        "/api/logout-all",
+		Summary:     "Logout all sessions",
+		Description: "Revoke every active refresh token for the authenticated user. Access tokens already issued remain valid until they expire (at most the configured access TTL, default 15m). Requires a valid access token in the Authorization header. Returns 204.",
+		Tags:        []string{"auth"},
+		Security:    []map[string][]string{{"BearerAuth": {}}},
+		Middlewares: huma.Middlewares{middleware.NewHumaAuth(tokens)},
+	}, h.LogoutAll)
 
 	// /api/me returns the profile of the access token's subject.
 	// The SPA fires this on every page load so its persisted
@@ -221,6 +232,15 @@ func (h *Handler) Logout(ctx context.Context, in *logoutInput) (*logoutOutput, e
 		if err := h.service.Logout(ctx, in.Body.RefreshToken); err != nil {
 			return nil, api.MapError(ctx, err, "Failed to logout")
 		}
+	}
+	return &logoutOutput{Status: http.StatusNoContent}, nil
+}
+
+//nolint:revive // unexported-return is huma's idiomatic op pattern
+func (h *Handler) LogoutAll(ctx context.Context, _ *struct{}) (*logoutOutput, error) {
+	id := reqctx.UserIDFromContext(ctx)
+	if err := h.service.LogoutAll(ctx, id); err != nil {
+		return nil, api.MapError(ctx, err, "Failed to logout all sessions")
 	}
 	return &logoutOutput{Status: http.StatusNoContent}, nil
 }

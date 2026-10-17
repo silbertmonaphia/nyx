@@ -42,6 +42,9 @@ func (s *stubCleanupRepo) RevokeRefreshTokenFamily(context.Context, int64) (int6
 func (s *stubCleanupRepo) RevokeRefreshTokenByID(context.Context, int64) error {
 	return errors.New("not used")
 }
+func (s *stubCleanupRepo) RevokeRefreshTokensByUser(context.Context, int) (int64, error) {
+	return 0, errors.New("not used")
+}
 func (s *stubCleanupRepo) CountActiveRefreshTokensByUser(context.Context, int) (int64, error) {
 	return 0, nil
 }

@@ -77,6 +77,11 @@ UPDATE refresh_tokens
 SET revoked_at = COALESCE(revoked_at, now())
 WHERE id = $1 AND revoked_at IS NULL;
 
+-- name: RevokeRefreshTokensByUser :execrows
+UPDATE refresh_tokens
+SET revoked_at = COALESCE(revoked_at, now())
+WHERE user_id = $1 AND revoked_at IS NULL;
+
 -- name: CountActiveRefreshTokensByUser :one
 -- Counts non-revoked, non-expired rows for a user. Used by the
 -- service layer on every mint to enforce the per-user family cap

@@ -235,6 +235,20 @@ func (q *Queries) RevokeRefreshTokenFamily(ctx context.Context, familyID int64) 
 	return result.RowsAffected(), nil
 }
 
+const revokeRefreshTokensByUser = `-- name: RevokeRefreshTokensByUser :execrows
+UPDATE refresh_tokens
+SET revoked_at = COALESCE(revoked_at, now())
+WHERE user_id = $1 AND revoked_at IS NULL
+`
+
+func (q *Queries) RevokeRefreshTokensByUser(ctx context.Context, userID int32) (int64, error) {
+	result, err := q.db.Exec(ctx, revokeRefreshTokensByUser, userID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const rotateRefreshToken = `-- name: RotateRefreshToken :one
 WITH new_row AS (
     INSERT INTO refresh_tokens (user_id, token_hash, family_id, replaced_by_id, expires_at)

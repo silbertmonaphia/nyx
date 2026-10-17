@@ -42,6 +42,7 @@ type stubRepo struct {
 	rotateFn           func(ctx context.Context, oldID int64, userID int, tokenHash []byte, familyID int64, expiresAt time.Time) (*RefreshTokenRow, error)
 	revokeFamilyFn     func(ctx context.Context, familyID int64) (int64, error)
 	revokeByIDFn       func(ctx context.Context, id int64) error
+	revokeByUserFn     func(ctx context.Context, userID int) (int64, error)
 	countActiveFn      func(ctx context.Context, userID int) (int64, error)
 	listOldestActiveFn func(ctx context.Context, userID int, limit int) ([]int64, error)
 	purgeOlderThanFn   func(ctx context.Context, cutoff time.Time) (int64, error)
@@ -104,6 +105,12 @@ func (s *stubRepo) RevokeRefreshTokenByID(ctx context.Context, id int64) error {
 		return errors.New("RevokeRefreshTokenByID not stubbed")
 	}
 	return s.revokeByIDFn(ctx, id)
+}
+func (s *stubRepo) RevokeRefreshTokensByUser(ctx context.Context, userID int) (int64, error) {
+	if s.revokeByUserFn == nil {
+		return 0, errors.New("RevokeRefreshTokensByUser not stubbed")
+	}
+	return s.revokeByUserFn(ctx, userID)
 }
 
 func (s *stubRepo) CountActiveRefreshTokensByUser(ctx context.Context, userID int) (int64, error) {
@@ -678,24 +685,24 @@ func TestGetByID_NotFound(t *testing.T) {
 	}
 }
 
-// TestLogout_RevokesOnlySuppliedRow — per-session revocation (M1).
-// Logging out revokes exactly the supplied row's ID, not the
-// surrounding family. This is the property that lets two devices
-// stay logged in independently.
-func TestLogout_RevokesOnlySuppliedRow(t *testing.T) {
+// TestLogout_RevokesFamily — per-session revocation (M1).
+// Logging out revokes the supplied token's family, including any
+// rotated token (e.g. one stolen by an attacker), while other
+// devices' families stay logged in independently.
+func TestLogout_RevokesFamily(t *testing.T) {
 	now := time.Now()
-	var revokedID int64
+	var revokedFamily int64
 	repo := &stubRepo{
 		getRefreshFn: func(_ context.Context, _ []byte) (*RefreshTokenRow, error) {
 			return &RefreshTokenRow{ID: 1, UserID: 7, FamilyID: 99, ExpiresAt: now.Add(time.Hour)}, nil
 		},
-		revokeByIDFn: func(_ context.Context, id int64) error {
-			revokedID = id
+		revokeByIDFn: func(_ context.Context, _ int64) error {
+			t.Error("Logout must NOT revoke by row; the whole family goes")
 			return nil
 		},
-		revokeFamilyFn: func(_ context.Context, _ int64) (int64, error) {
-			t.Error("Logout must NOT call RevokeRefreshTokenFamily; per-session only")
-			return 0, nil
+		revokeFamilyFn: func(_ context.Context, familyID int64) (int64, error) {
+			revokedFamily = familyID
+			return 1, nil
 		},
 	}
 	svc := NewService(repo, newTestTokens(t), 15*time.Minute, 7*24*time.Hour, noop.NewTracerProvider().Tracer("test"))
@@ -704,8 +711,40 @@ func TestLogout_RevokesOnlySuppliedRow(t *testing.T) {
 	if err := svc.Logout(context.Background(), raw); err != nil {
 		t.Fatalf("Logout: %v", err)
 	}
-	if revokedID != 1 {
-		t.Errorf("expected row 1 to be revoked, got %d", revokedID)
+	if revokedFamily != 99 {
+		t.Errorf("expected family 99 to be revoked, got %d", revokedFamily)
+	}
+}
+
+func TestLogoutAll_RevokesEveryFamilyForUser(t *testing.T) {
+	var seenUser int
+	repo := &stubRepo{
+		revokeByUserFn: func(_ context.Context, userID int) (int64, error) {
+			seenUser = userID
+			return 3, nil
+		},
+	}
+	svc := NewService(repo, newTestTokens(t), 15*time.Minute, 7*24*time.Hour, noop.NewTracerProvider().Tracer("test"))
+
+	if err := svc.LogoutAll(context.Background(), 42); err != nil {
+		t.Fatalf("LogoutAll: %v", err)
+	}
+	if seenUser != 42 {
+		t.Errorf("repo received userID=%d, want 42", seenUser)
+	}
+}
+
+func TestLogoutAll_RepoErrorPropagates(t *testing.T) {
+	sentinel := errors.New("connection reset")
+	repo := &stubRepo{
+		revokeByUserFn: func(_ context.Context, _ int) (int64, error) {
+			return 0, sentinel
+		},
+	}
+	svc := NewService(repo, newTestTokens(t), 15*time.Minute, 7*24*time.Hour, noop.NewTracerProvider().Tracer("test"))
+
+	if err := svc.LogoutAll(context.Background(), 42); !errors.Is(err, sentinel) {
+		t.Errorf("LogoutAll err = %v, want %v", err, sentinel)
 	}
 }
 

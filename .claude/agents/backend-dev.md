@@ -35,7 +35,7 @@ config.Load → DB (pgxpool + golang-migrate) → cache → TokenService
 
 - Public read: `GET /api/health`, `GET /api/feeds`, `GET /api/feeds/{id}`.
 - Auth write: `POST /api/feeds`, `PUT /api/feeds/{id}`, `DELETE /api/feeds/{id}` — JWT-guarded.
-- Auth lifecycle: `POST /api/register`, `POST /api/login`, `POST /api/refresh` (opaque refresh token), `POST /api/logout` (revokes the supplied token's family).
+- Auth lifecycle: `POST /api/register`, `POST /api/login`, `POST /api/refresh` (opaque refresh token), `POST /api/logout` (revokes the supplied token's family), `POST /api/logout-all` (revokes every active refresh token for the caller).
 - Docs: `/api/swagger`, `/api/swagger/doc.json`, `/api/swagger/doc.yaml`.
 - Metrics: `/metrics` (Prometheus).
 

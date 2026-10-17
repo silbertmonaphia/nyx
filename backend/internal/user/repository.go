@@ -95,6 +95,7 @@ type Querier interface {
 	RotateRefreshToken(ctx context.Context, arg db.RotateRefreshTokenParams) (db.RotateRefreshTokenRow, error)
 	RevokeRefreshTokenFamily(ctx context.Context, familyID int64) (int64, error)
 	RevokeRefreshTokenByID(ctx context.Context, id int64) error
+	RevokeRefreshTokensByUser(ctx context.Context, userID int32) (int64, error)
 
 	// Refresh-token maintenance (see SECURITY.md M2).
 	CountActiveRefreshTokensByUser(ctx context.Context, userID int32) (int64, error)
@@ -151,6 +152,7 @@ type Repository interface {
 	RotateRefreshToken(ctx context.Context, oldID int64, userID int, tokenHash []byte, familyID int64, expiresAt time.Time) (*RefreshTokenRow, error)
 	RevokeRefreshTokenFamily(ctx context.Context, familyID int64) (int64, error)
 	RevokeRefreshTokenByID(ctx context.Context, id int64) error
+	RevokeRefreshTokensByUser(ctx context.Context, userID int) (int64, error)
 
 	// Refresh-token maintenance. CountActiveRefreshTokensByUser feeds
 	// RefreshCap enforcement; ListOldestActiveRefreshTokensByUser
@@ -342,6 +344,10 @@ func (r *sqlRepository) RevokeRefreshTokenFamily(ctx context.Context, familyID i
 
 func (r *sqlRepository) RevokeRefreshTokenByID(ctx context.Context, id int64) error {
 	return r.q.RevokeRefreshTokenByID(ctx, id)
+}
+
+func (r *sqlRepository) RevokeRefreshTokensByUser(ctx context.Context, userID int) (int64, error) {
+	return r.q.RevokeRefreshTokensByUser(ctx, toInt32(userID))
 }
 
 func (r *sqlRepository) CountActiveRefreshTokensByUser(ctx context.Context, userID int) (int64, error) {

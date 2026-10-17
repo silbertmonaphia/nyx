@@ -127,9 +127,29 @@ export interface paths {
         put?: never;
         /**
          * Logout a user
-         * @description Revoke the refresh token identified in the request body. Requires a valid access token in the Authorization header. Returns 204.
+         * @description Revoke the refresh token identified in the request body and every rotated token in its family. Requires a valid access token in the Authorization header. Returns 204.
          */
         post: operations["logout"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/logout-all": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Logout all sessions
+         * @description Revoke every active refresh token for the authenticated user. Access tokens already issued remain valid until they expire (at most the configured access TTL, default 15m). Requires a valid access token in the Authorization header. Returns 204.
+         */
+        post: operations["logout-all"];
         delete?: never;
         options?: never;
         head?: never;
@@ -589,6 +609,33 @@ export interface operations {
                 "application/json": components["schemas"]["LogoutRequest"];
             };
         };
+        responses: {
+            /** @description No Content */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    "logout-all": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
         responses: {
             /** @description No Content */
             204: {

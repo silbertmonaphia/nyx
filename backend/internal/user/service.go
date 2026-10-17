@@ -67,9 +67,10 @@ type Service interface {
 	// huma never sees a refresh_token field, the wire contract is
 	// cookie-only.
 	Refresh(ctx context.Context, rawRefresh string) (*AuthResult, error)
-	// Logout takes the raw refresh token read by the handler from
-	// the __Host-nyx-refresh cookie. Same wire contract as Refresh.
+	// Logout takes the raw refresh token from the request body and
+	// revokes its family (this login chain only).
 	Logout(ctx context.Context, rawRefresh string) error
+	LogoutAll(ctx context.Context, userID int) error
 	// GetByID returns the user profile identified by the access
 	// token. Used by /api/me so the SPA can reconcile its persisted
 	// user profile against the server-truth on every page load
@@ -346,15 +347,14 @@ func (s *service) Refresh(ctx context.Context, rawRefresh string) (*AuthResult, 
 	}, nil
 }
 
-// Logout revokes only the supplied refresh-token row. Idempotent:
+// Logout revokes the supplied refresh token's family. Idempotent:
 // an unknown or empty token returns nil rather than leaking that
-// the token doesn't exist. Per-device logout: killing the phone
-// session no longer drops the laptop session — each device holds its
-// own row in the refresh_tokens table, and revoking the row is
-// sufficient to invalidate that session (see SECURITY.md M1).
+// the token doesn't exist. Per-device logout is preserved because
+// each login/registration mints its own family — killing the phone
+// session leaves the laptop's family untouched, while any rotated
+// token in the same login chain dies too (see SECURITY.md M1).
 //
-// rawRefresh is read from the __Host-nyx-refresh cookie by the
-// handler.
+// rawRefresh is supplied in the request body by the handler.
 func (s *service) Logout(ctx context.Context, rawRefresh string) error {
 	ctx, span := s.tracer.Start(ctx, "user.Logout", trace.WithSpanKind(trace.SpanKindInternal))
 	defer span.End()
@@ -371,7 +371,16 @@ func (s *service) Logout(ctx context.Context, rawRefresh string) error {
 		}
 		return err
 	}
-	return s.repo.RevokeRefreshTokenByID(ctx, row.ID)
+	_, err = s.repo.RevokeRefreshTokenFamily(ctx, row.FamilyID)
+	return err
+}
+
+func (s *service) LogoutAll(ctx context.Context, userID int) error {
+	ctx, span := s.tracer.Start(ctx, "user.LogoutAll", trace.WithSpanKind(trace.SpanKindInternal))
+	defer span.End()
+
+	_, err := s.repo.RevokeRefreshTokensByUser(ctx, userID)
+	return err
 }
 
 // GetByID returns the user profile for the access token's subject.

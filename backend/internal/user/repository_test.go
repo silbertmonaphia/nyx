@@ -403,6 +403,22 @@ func TestRevokeRefreshTokenFamily_SkipsAlreadyRevoked(t *testing.T) {
 	}
 }
 
+func TestRevokeRefreshTokensByUser_ReportsRowsAffected(t *testing.T) {
+	stub := &stubQuerier{execResp: pgconn.NewCommandTag("UPDATE 3")}
+	repo := NewRepositoryFromQuerier(db.New(stub))
+
+	n, err := repo.RevokeRefreshTokensByUser(context.Background(), 42)
+	if err != nil {
+		t.Fatalf("RevokeRefreshTokensByUser: %v", err)
+	}
+	if n != 3 {
+		t.Errorf("rows affected = %d, want 3", n)
+	}
+	if stub.execCalls != 1 {
+		t.Errorf("expected 1 Exec call, got %d", stub.execCalls)
+	}
+}
+
 // TestGetRefreshTokenByHash_NoRowsMapsToSentinel exercises the
 // pgx.ErrNoRows → ErrRefreshTokenNotFound translation. A missing
 // refresh token (e.g. caller garbage or already-rotated-and-deleted)

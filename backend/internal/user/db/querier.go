@@ -49,6 +49,7 @@ type Querier interface {
 	PurgeRefreshTokensOlderThan(ctx context.Context, cutoff pgtype.Timestamptz) (int64, error)
 	RevokeRefreshTokenByID(ctx context.Context, id int64) error
 	RevokeRefreshTokenFamily(ctx context.Context, familyID int64) (int64, error)
+	RevokeRefreshTokensByUser(ctx context.Context, userID int32) (int64, error)
 	// Single CTE: insert new row tied to old via replaced_by_id, then mark
 	// the old row revoked and link it back. Atomic — concurrent rotations
 	// will see the second one with revoked_at NOT NULL and trigger reuse
