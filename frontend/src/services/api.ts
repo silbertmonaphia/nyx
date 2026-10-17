@@ -511,7 +511,6 @@ api.interceptors.response.use(
           // path as a hard 401.
         }
 
-        tokenStore.clear();
         useAuthStore.getState().logout();
         message = t('errors.sessionExpired');
       } else {

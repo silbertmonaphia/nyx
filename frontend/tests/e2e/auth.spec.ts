@@ -1,6 +1,8 @@
 import { expect } from '@playwright/test';
 import { test } from './fixtures/e2e-fixtures';
 
+const API_URL = process.env.E2E_API_URL ?? 'http://localhost:8080/api';
+
 test.describe('Authentication', () => {
   const testUser = {
     username: `user_${Math.floor(Math.random() * 10000)}`,
@@ -63,6 +65,43 @@ test.describe('Authentication', () => {
 
     await expect(reopened.getByRole('button', { name: /^Logout$/i })).toBeVisible();
     await expect(reopened.getByText(username)).toBeVisible();
+  });
+
+  test('should revoke the session on normal logout', async ({ page }) => {
+    const username = `logout_${Date.now()}_${Math.floor(Math.random() * 10000)}`;
+
+    await page.goto('/');
+    await page.getByRole('button', { name: /Login \/ Register/i }).click();
+    await page.getByRole('button', { name: /Register/i }).last().click();
+    await page.getByLabel(/Username/i).fill(username);
+    await page.getByLabel(/Password/i).fill('password123');
+    await page.getByRole('button', { name: /^Register$/i }).click();
+    await expect(page.getByRole('button', { name: /^Logout$/i })).toBeVisible();
+
+    const refreshToken = await page.evaluate(() => {
+      const raw =
+        window.localStorage.getItem('nyx-token-store') ??
+        window.sessionStorage.getItem('nyx-token-store');
+      return raw ? (JSON.parse(raw) as { refreshToken: string }).refreshToken : null;
+    });
+    expect(refreshToken).not.toBeNull();
+
+    const logoutPosted = page.waitForResponse(
+      (r) =>
+        new URL(r.url()).pathname.endsWith('/api/logout') &&
+        r.request().method() === 'POST',
+    );
+    await page.getByRole('button', { name: /^Logout$/i }).click();
+    expect((await logoutPosted).status()).toBe(204);
+
+    await expect(
+      page.getByRole('button', { name: /Login \/ Register/i }),
+    ).toBeVisible();
+
+    const refreshed = await page.request.post(`${API_URL}/refresh`, {
+      data: { refresh_token: refreshToken },
+    });
+    expect(refreshed.status()).toBe(401);
   });
 
 

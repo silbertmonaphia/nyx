@@ -129,11 +129,14 @@ describe('useAuthStore', () => {
       await Promise.resolve();
 
       expect(postSpy).toHaveBeenCalledTimes(1);
-      const [url, body] = postSpy.mock.calls[0];
+      const [url, body, config] = postSpy.mock.calls[0];
       expect(url).toBe('/logout');
+      expect(config).toEqual({
+        headers: { Authorization: 'Bearer access.token' },
+      });
       // Body carries the refresh token so the backend can revoke
-      // exactly that row (SECURITY.md M1 — per-session, not
-      // family-wide).
+      // that token's family (SECURITY.md M1 — this login chain,
+      // not other devices).
       expect(body).toEqual({ refresh_token: 'refresh.token' });
 
       // Bearer transport: no withCredentials, no cookies.

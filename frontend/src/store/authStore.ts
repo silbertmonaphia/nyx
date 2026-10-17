@@ -97,8 +97,8 @@ export const useAuthStore = create<AuthState>()(
       // in-memory token pair is discarded immediately.
       //
       // The request uses a bare axios instance so the main client's
-      // 401-handling interceptor doesn't loop back into a refresh
-      // attempt we're trying to terminate.
+      // 401-handling interceptor doesn't loop; the captured access
+      // token is stamped explicitly below.
       logout: () => {
         set({
           user: null,
@@ -113,9 +113,14 @@ export const useAuthStore = create<AuthState>()(
         // but ES modules tolerate the cycle because both sides
         // reach the imported bindings lazily inside function bodies.
         const rt = tokenStore.getRefreshToken();
+        const at = tokenStore.getAccessToken();
         tokenStore.clear();
         void loginAxios
-          .post("/logout", rt ? { refresh_token: rt } : {})
+          .post(
+            "/logout",
+            rt ? { refresh_token: rt } : {},
+            at ? { headers: { Authorization: `Bearer ${at}` } } : {},
+          )
           .catch(() => {
             // Intentional swallow: the local clear above is the
             // authoritative UX step. Network/server failures here
