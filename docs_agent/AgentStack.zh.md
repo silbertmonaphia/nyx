@@ -53,7 +53,7 @@
 
 ---
 
-## 二、切片状态(截至 2026-10-14)
+## 二、切片状态(截至 2026-10-17)
 
 | 项 | 状态 | 落点 |
 |---|---|---|
@@ -62,8 +62,8 @@
 | **partial-failure banner** (失败步骤可视化) | 已落地 | `frontend/src/features/chat/components/PartialFailureBanner.tsx`(同切片) |
 | **stale-run sweeper** (心跳/lease 回收 `running` 僵尸行) | 已落地(0a9b8f5) | `agent/sweeper.py` + 迁移 `0003_add_run_heartbeat` |
 | **adelete_thread on retention** (LangGraph checkpoint_* 真 GC) | 已落地(0a9b8f5) | `agent/retention.py`(同切片;旧注释已修正) |
-| **`/agent/runs` 查询端点** + 对话历史持久化 | 未做 | `agent.run_metadata.list_runs_for_user` 已经写好,只缺 endpoint |
-| **`chat_sessions` / `chat_messages` 表** + per-thread 历史注入 | 未做 | P2.1 路线图 |
+| **`chat_sessions` / `chat_messages` 表** + per-thread 历史注入 | 已落地 | Slice 1/2(`agent-chat-history-storage` + `agent-chat-history-ui`,归档 2026-10-14);`/agent/sessions*` 走 Go 代理,侧边栏 flag 门控;剩会话 summary 与跨 session recall |
+| **`/agent/runs` 查询端点** | 未做 | `agent.run_metadata.list_runs_for_user` 已经写好,只缺 endpoint(sessions 端点已由 Slice 2 落地) |
 | **Task routing** (意图 → 计划模板) | 未做 | P0.4 明确推迟到 plan 模板收敛后 |
 
 ---
@@ -94,13 +94,13 @@
 
 | 社区方案 | 我们有什么 / 没有 |
 |---|---|
-| **Mem0** / **Zep** / **Letta** (MemGPT) / **LangChain CompositeBackend** | 只有 Postgres checkpointer (thread 维度)。跨 session 没法 recall 用户偏好 |
+| **Mem0** / **Zep** / **Letta** (MemGPT) / **LangChain CompositeBackend** | checkpointer + chat history 持久化(AgentMemoryRoadmap Slice 1/2)+ 偏好记忆(Slice 3,`PYTHON_AGENT_PREFS_ENABLED`)+ GDPR 封口(Slice 4)已落地归档;还差会话 summary 与跨 session top-K recall |
 
 ### E. Guardrails / 安全
 
 | 社区方案 | 我们有什么 / 没有 |
 |---|---|
-| **NeMo Guardrails** / **Guardrails AI** / **Lakera** (prompt injection / PII 过滤) | 只有 Pydantic 校验 planner 输出。Python 内层对 prompt injection、内容审核、敏感词 0 防御,全靠 Go chat handler 那侧挡 |
+| **NeMo Guardrails** / **Guardrails AI** / **Lakera** (prompt injection / PII 过滤) | Pydantic 校验 planner 输出;golden-eval security 注入线(`evals/cases/security.yaml`,8 条用例:RAG / 工具结果注入、prompt 泄漏、跨用户删除)把注入面变成可回归测量。但仍无程序化防御层(注入过滤 / PII / 审核),拦截靠 system prompt 纪律 + Go 侧 MCP tool 授权 |
 
 ### F. 现代 agent framework 选择
 
@@ -128,19 +128,24 @@
 
 ---
 
-## 四、按 ROI 排的落地顺序(状态截至 2026-10-16)
+## 四、按 ROI 排的落地顺序(状态截至 2026-10-17)
 
 **已落地(原列表第 1、4、5 项 + Golden Set 套件)**:
 - **Langfuse 自托管** (A 类) — `agent-langfuse-tracing` 切片:callback 挂在 graph_config 一处接缝即得结构化 trace(step/tool 观测另加 wrap),planner 调优从盲调变成数据驱动;配套 `-rollout` 兄弟(PM 执行)
 - `adelete_thread` 联动 retention + stale-run sweeper — 同属 `agent-stale-run-sweeper` 切片(已落地 0a9b8f5,配套 `-rollout` 兄弟;旧文档与代码不符的注释已一并修正)
 - **Golden Set/Eval 套件** (A 类延伸) — `agent-golden-eval` 切片(实现落地):`evals/` promptfoo 套件,`make eval-golden` / `make eval-security`(串行、不启服务);custom provider 打 `POST /agent/run` 真 SSE,确定性 grader,主回归线与 `security` 注入线分开出率,基线报告入库。v0 = 21 条用例(五形态:rag-only / tool-only / 多步 / 拒答 / budget-unavailable);react 形态与扩容到 30-50 条留 v0.1。Inspect AI 升级路径不变(同一份数据集可共存);红队生成仍可用 `promptfoo redteam`
 
-**仍然排队的(按 ROI)**:
-  1. **LiteLLM seam** (B 类) — 不接的话每个新 provider 都要在 `langchain-openai` 与 vLLM `hermes` parser 之间打补丁,vLLM tool-call 一致性问题会反复咬人
-  2. **GPTCache / Redis LangCache** (C 类) — 同 prompt 直出秒回,降本路径里 cost-per-token 直接砍
-  3. **Prompt registry + A/B harness** (F 类) — Langfuse 已落地,prompt 版本化 / 分流现在有落点(配 Langfuse 用)
+**仍然排队的(按 ROI,2026-10-17 重排)**:
+  1. **Prompt registry + A/B harness** (F 类) — prompt 是 4B 小模型场景的主要质量杠杆,改动高频且现在是盲改(`PLANNER_SYSTEM_PROMPT` 硬编码在 `planner.py`,零版本化);前置已齐(Langfuse 落盘 + Golden Set 量化),剩余工作量小:prompt 外置 + 变体选择器 + eval 套件对比。同时解开 Task routing(P0.4)的锁——它推迟到 plan 模板收敛,而收敛靠可测量才快
+  2. **LiteLLM seam** (B 类) — agent 路径目前没有 provider failover(Go `llm.Router` 只盖旧 Go 路径,Python agent 直连 vLLM 单点,vLLM 崩则 agent 全瘫),LiteLLM 的 router/fallback 给 agent 补上 Go 已有的韧性;仍是接任何第二家 provider 前的排序约束。vLLM tool-call 咬人的痛已被 tool-args retry budget 止了一半(malformed call 有界 re-prompt)
+  3. **Guardrails 子集:Langfuse 数据卫生** (E 类) — 注入面已有三层纵深:mutating 工具确认门(`executor.py`,agent-feed-tools D5/D6)+ Go 侧 per-user MCP 授权 + security eval 回归线,残余风险有界(泄漏 system prompt 给用户本人、操纵用户本要点头的动作);NeMo 式全量过滤层不划算(加延迟 / 误杀 / 依赖)。值得做的子集:prompt / response 全文进自托管 Langfuse 前的 PII 卫生,可并入第 1 项
 
-> 更长的视野:跨 session 记忆(D)与 guardrails(E)是高门槛低频次,P2.1 已经在排期;code-execution 沙箱(G)按需开启。
+**降出队列**:
+- **GPTCache / Redis LangCache** (C 类) — 命中率假设未验证:最终 prompt 拼 RAG 上下文 + 历史,exact-match 几乎不命中;feeds per-user 使缓存 key 必须带 `user_id`,跨用户复用归零;语义缓存 false-hit 对 tool 流危险。前置动作是拉 Langfuse 数据统计相似 query 占比,数据不支持就除名
+- **跨 session summary + recall** (D 类剩余) — roadmap 原话 not needed for v1;prefs 记忆(Slice 3)已给 planner 跨 session 连续性;四个 `*-rollout` 兄弟仍活跃,是 PM 的活,不占开发队列
+- **`/agent/runs` 查询端点** — 不占队列位:`list_runs_for_user` 已写好,哪天 UI 要 run 历史,顺手补 endpoint(约一小时)
+
+> code-execution 沙箱(G)不变:按需开启,现有工具面(feed CRUD / RAG / web)没有执行任意代码的场景。
 
 ---
 
