@@ -152,10 +152,10 @@ export const useAuthStore = create<AuthState>()(
       storage: safeLocalStorage,
       // Only `user` persists. Tokens used to live here too
       // (token / refreshToken / expiresAt) and before that
-      // httpOnly cookies carried them; persisting them to
-      // localStorage would defeat the migration's whole point (XSS
-      // exfiltration). partialize is the single source of truth for
-      // what gets written to disk — DO NOT add tokens here.
+      // httpOnly cookies carried them; token persistence now lives
+      // in the tokenStore, including the opt-in Remember me
+      // localStorage path. partialize is the single source of truth
+      // for what gets written to disk — DO NOT add tokens here.
       partialize: (state) => ({
         user: state.user,
       }),
