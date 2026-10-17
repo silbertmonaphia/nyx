@@ -95,6 +95,7 @@ interface ChatState {
    * the token store (design.md D4).
    */
   currentSessionId: string | null;
+  ownerUserId: number | null | undefined;
   /** Sidebar rows, newest-first; pages append via `loadMore`. */
   sessionList: SessionSummary[];
   /** Opaque cursor for the next page; `null` when the list is complete. */
@@ -152,6 +153,7 @@ interface ChatState {
    * no persisted id, when messages are already on screen, or mid-stream.
    */
   hydrateSession: () => Promise<void>;
+  resetForUser: (userId: number | null) => void;
   /**
    * Soft-delete a session and drop it from the sidebar. Deleting the
    * active session also clears the panel.
@@ -168,6 +170,7 @@ let controller: AbortController | null = null;
 // Monotonic id handed to each `send()`. A stream may write into the
 // store only while its token is the attached one — see `attachedToken`.
 let streamSeq = 0;
+let identityEpoch = 0;
 // Token of the stream that currently owns the panel — the only one
 // whose frames render and whose callbacks mutate session state.
 // Cleared when a stream ends, or by a detach (navigation) / abort.
@@ -373,6 +376,8 @@ async function loadSessionInto(
     await chatService.resumeSession(id);
   } catch (err) {
     if (isSessionGone(err)) {
+      if (replay !== replaySeq) return;
+      if (get().currentSessionId !== id) return;
       get().clearActiveSession();
       return;
     }
@@ -392,6 +397,8 @@ async function loadSessionInto(
     set({ messages: rows.map(toReplayMessage) });
   } catch (err) {
     if (isSessionGone(err)) {
+      if (replay !== replaySeq) return;
+      if (get().currentSessionId !== id) return;
       get().clearActiveSession();
       return;
     }
@@ -412,6 +419,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
   isStreaming: false,
   error: null,
   currentSessionId: readPersistedSessionId(),
+  ownerUserId: undefined,
   sessionList: [],
   sessionListNextCursor: null,
   isFetchingMore: false,
@@ -462,6 +470,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
     // below compares against THIS value, not the live store (review M2,
     // 2026-10-14).
     const sentSessionId = get().currentSessionId;
+    const sendEpoch = identityEpoch;
     // The session this run is actually writing to: the echoed id until
     // the server's `run_id` frame says otherwise (a fresh mint when the
     // echoed id was unknown / soft-deleted). Tracked even while
@@ -511,6 +520,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
           onRunId: (id) => {
             runSessionId = id;
             if (!isAttached()) {
+              if (sendEpoch !== identityEpoch) return;
               railMark(id);
               // The rail may not carry this id yet — a run detached
               // before its first frame (navigation within ms of send)
@@ -967,22 +977,27 @@ export const useChatStore = create<ChatState>((set, get) => ({
     // and duplicate every row.
     if (sessionListNextCursor === null && sessionList.length > 0) return;
 
+    const epoch = identityEpoch;
     set({ isFetchingMore: true });
     try {
       const page = await chatService.listSessions({
         before: sessionListNextCursor,
       });
-      set((state) => ({
-        sessionList: [...state.sessionList, ...page.sessions],
-        sessionListNextCursor: page.nextCursor,
-      }));
+      set((state) =>
+        epoch === identityEpoch
+          ? {
+              sessionList: [...state.sessionList, ...page.sessions],
+              sessionListNextCursor: page.nextCursor,
+            }
+          : state,
+      );
     } catch (err) {
       // Quiet failure: the sidebar keeps its empty state instead of a
       // toast (spec "no error toast on list failure"); the next mount
       // or scroll retries.
       logger.warn("chat.session.list_failed", { error: String(err) });
     } finally {
-      set({ isFetchingMore: false });
+      if (epoch === identityEpoch) set({ isFetchingMore: false });
     }
   },
 
@@ -995,9 +1010,11 @@ export const useChatStore = create<ChatState>((set, get) => ({
     // shows up in the rail immediately. Merging (rather than
     // reset-and-replace) means a concurrently resolving mount/scroll
     // fetch cannot duplicate or reorder what is already on screen.
+    const epoch = identityEpoch;
     try {
       const page = await chatService.listSessions({});
       set((state) => {
+        if (epoch !== identityEpoch) return state;
         const freshIds = new Set(page.sessions.map((s) => s.id));
         const tail = state.sessionList.filter((s) => !freshIds.has(s.id));
         return {
@@ -1045,8 +1062,10 @@ export const useChatStore = create<ChatState>((set, get) => ({
     detachLiveStream();
     persistSessionId(null);
     set({ currentSessionId: null, messages: [], isStreaming: false, error: null });
+    const epoch = identityEpoch;
     try {
       const { session_id } = await chatService.createSession();
+      if (epoch !== identityEpoch) return;
       // If a session got picked (or a message started streaming and will
       // adopt its own id from the run_id frame) while this POST was in
       // flight, the just-created session is an empty orphan — drop it so
@@ -1085,6 +1104,30 @@ export const useChatStore = create<ChatState>((set, get) => ({
     // screen (or mid-stream) must not be refetched and replaced.
     if (get().messages.length > 0 || get().isStreaming) return;
     await loadSessionInto(get, set, id);
+  },
+
+  resetForUser: (userId) => {
+    const owner = get().ownerUserId;
+    if (owner === undefined) {
+      set({ ownerUserId: userId });
+      return;
+    }
+    if (owner === userId) return;
+    set({ ownerUserId: userId });
+    abortLiveStream();
+    replaySeq++;
+    identityEpoch++;
+    persistSessionId(null);
+    set({
+      messages: [],
+      isStreaming: false,
+      error: null,
+      currentSessionId: null,
+      sessionList: [],
+      sessionListNextCursor: null,
+      isFetchingMore: false,
+      runningSessionIds: [],
+    });
   },
 
   deleteSession: async (id) => {

@@ -167,6 +167,52 @@ test.describe('Chat history sidebar (browser-level, live backend)', { tag: '@liv
     expect(await persistedSessionId(page)).toBeNull();
   });
 
+  test('a second user in the same tab inherits no rail rows or session id', async ({
+    page,
+  }) => {
+    await registerAndOpenChat(page);
+
+    await page.getByTestId('chat-new-session').click();
+    const sessionId = await waitForPersistedSessionId(page);
+    await page.getByRole('button', { name: /^Close$/i }).click();
+    await reopenChat(page);
+    const row = page.locator(
+      `[data-testid="chat-session-row"][data-session-id="${sessionId}"]`,
+    );
+    await expect(row).toBeVisible({ timeout: 15000 });
+
+    await page.getByRole('button', { name: /^Close$/i }).click();
+    await page.getByRole('button', { name: /^Logout$/i }).click();
+    await expect(
+      page.getByRole('button', { name: /Login \/ Register/i }),
+    ).toBeVisible();
+
+    const secondUser = makeTestUser();
+    await page.getByRole('button', { name: /Login \/ Register/i }).click();
+    await page.getByRole('button', { name: /Register/i }).last().click();
+    await page.getByLabel(/Username/i).fill(secondUser.username);
+    await page.getByLabel(/Password/i).fill(secondUser.password);
+    await page.getByRole('button', { name: /^Register$/i }).click();
+    await expect(page.getByText(/Successfully registered!/i)).toBeVisible();
+
+    await expect.poll(() => persistedSessionId(page)).toBeNull();
+
+    await page.getByRole('button', { name: 'Open chat' }).click();
+    await expect(page.getByTestId('chat-form')).toBeVisible();
+    await expect(page.getByTestId('chat-session-empty')).toHaveText(
+      'No conversations yet',
+    );
+    await expect(page.getByTestId('chat-session-row')).toHaveCount(0);
+
+    await page.reload();
+    await reopenChat(page);
+    await expect(page.getByTestId('chat-session-empty')).toHaveText(
+      'No conversations yet',
+    );
+    await expect(page.getByTestId('chat-session-row')).toHaveCount(0);
+    expect(await persistedSessionId(page)).toBeNull();
+  });
+
   test('a reload restores the active session and replays its messages', async ({
     page,
   }) => {

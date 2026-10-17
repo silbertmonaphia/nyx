@@ -33,6 +33,7 @@ function resetStore() {
     isStreaming: false,
     error: null,
     currentSessionId: null,
+    ownerUserId: undefined,
     sessionList: [],
     sessionListNextCursor: null,
     isFetchingMore: false,
@@ -2407,6 +2408,262 @@ describe('useChatStore', () => {
       await waitFor(() => {
         expect(useChatStore.getState().runningSessionIds).toEqual([]);
       });
+    });
+  });
+
+  describe('resetForUser', () => {
+    it('adopts the first identity without clearing the restored tab state', () => {
+      useChatStore.setState({
+        messages: [{ role: 'user', content: 'hello' }],
+        currentSessionId: 'sess-a',
+        sessionList: [makeSession('sess-a')],
+      });
+
+      useChatStore.getState().resetForUser(1);
+
+      expect(useChatStore.getState().messages).toEqual([
+        { role: 'user', content: 'hello' },
+      ]);
+      expect(useChatStore.getState().currentSessionId).toBe('sess-a');
+      expect(useChatStore.getState().sessionList).toEqual([
+        makeSession('sess-a'),
+      ]);
+    });
+
+    it('is a no-op for the same identity', () => {
+      useChatStore.getState().resetForUser(1);
+      useChatStore.setState({
+        messages: [{ role: 'user', content: 'hello' }],
+        currentSessionId: 'sess-a',
+        sessionList: [makeSession('sess-a')],
+      });
+
+      useChatStore.getState().resetForUser(1);
+
+      expect(useChatStore.getState().messages).toHaveLength(1);
+      expect(useChatStore.getState().currentSessionId).toBe('sess-a');
+      expect(useChatStore.getState().sessionList).toHaveLength(1);
+    });
+
+    it('clears the panel, rail, and persisted id when the identity changes', () => {
+      useChatStore.getState().resetForUser(1);
+      sessionStorage.setItem(CURRENT_SESSION_KEY, 'sess-a');
+      useChatStore.setState({
+        messages: [{ role: 'user', content: 'old user message' }],
+        isStreaming: true,
+        error: 'boom',
+        currentSessionId: 'sess-a',
+        sessionList: [makeSession('sess-a')],
+        sessionListNextCursor: 'cursor',
+        isFetchingMore: true,
+        runningSessionIds: ['sess-a'],
+      });
+
+      useChatStore.getState().resetForUser(2);
+
+      expect(useChatStore.getState()).toMatchObject({
+        messages: [],
+        isStreaming: false,
+        error: null,
+        currentSessionId: null,
+        sessionList: [],
+        sessionListNextCursor: null,
+        isFetchingMore: false,
+        runningSessionIds: [],
+      });
+      expect(sessionStorage.getItem(CURRENT_SESSION_KEY)).toBeNull();
+    });
+
+    it('clears on logout (null identity)', () => {
+      useChatStore.getState().resetForUser(1);
+      sessionStorage.setItem(CURRENT_SESSION_KEY, 'sess-b');
+      useChatStore.setState({
+        messages: [{ role: 'assistant', content: 'old answer' }],
+        currentSessionId: 'sess-b',
+        sessionList: [makeSession('sess-b')],
+      });
+
+      useChatStore.getState().resetForUser(null);
+
+      expect(useChatStore.getState().messages).toEqual([]);
+      expect(useChatStore.getState().currentSessionId).toBeNull();
+      expect(useChatStore.getState().sessionList).toEqual([]);
+      expect(sessionStorage.getItem(CURRENT_SESSION_KEY)).toBeNull();
+    });
+
+    it('drops a list page that resolves after the identity changed', async () => {
+      useChatStore.getState().resetForUser(3);
+      let resolveList!: (page: {
+        sessions: ReturnType<typeof makeSession>[];
+        nextCursor: string | null;
+      }) => void;
+      mockedService.listSessions.mockReturnValueOnce(
+        new Promise((resolve) => {
+          resolveList = resolve;
+        }),
+      );
+
+      const pending = useChatStore.getState().loadMore();
+      await Promise.resolve();
+      useChatStore.getState().resetForUser(4);
+      resolveList({ sessions: [makeSession('old-user-session')], nextCursor: null });
+      await act(async () => {
+        await pending;
+      });
+
+      expect(useChatStore.getState().sessionList).toEqual([]);
+      expect(useChatStore.getState().isFetchingMore).toBe(false);
+    });
+
+    it('drops a page-one refresh that resolves after the identity changed', async () => {
+      useChatStore.getState().resetForUser(1);
+      let resolveList!: (page: {
+        sessions: ReturnType<typeof makeSession>[];
+        nextCursor: string | null;
+      }) => void;
+      mockedService.listSessions.mockReturnValueOnce(
+        new Promise((resolve) => {
+          resolveList = resolve;
+        }),
+      );
+
+      const pending = useChatStore.getState().refreshSessionList();
+      await Promise.resolve();
+      useChatStore.getState().resetForUser(2);
+      resolveList({ sessions: [makeSession('old-user-session')], nextCursor: null });
+      await act(async () => {
+        await pending;
+      });
+
+      expect(useChatStore.getState().sessionList).toEqual([]);
+    });
+
+    it('does not adopt a session created for the previous identity', async () => {
+      useChatStore.getState().resetForUser(1);
+      let resolveCreate!: (value: {
+        session_id: string;
+        started_at: string;
+      }) => void;
+      mockedService.createSession.mockReturnValueOnce(
+        new Promise((resolve) => {
+          resolveCreate = resolve;
+        }),
+      );
+
+      let pending!: Promise<void>;
+      await act(async () => {
+        pending = useChatStore.getState().startNewSession();
+        await Promise.resolve();
+      });
+      useChatStore.getState().resetForUser(2);
+      resolveCreate({
+        session_id: 'old-user-session',
+        started_at: '2026-10-14T00:00:00Z',
+      });
+      await act(async () => {
+        await pending;
+      });
+
+      expect(useChatStore.getState().currentSessionId).toBeNull();
+      expect(sessionStorage.getItem(CURRENT_SESSION_KEY)).toBeNull();
+      expect(mockedService.deleteSession).not.toHaveBeenCalled();
+    });
+
+    it('aborts the attached stream when the identity changes', async () => {
+      useChatStore.getState().resetForUser(1);
+      let capturedSignal: AbortSignal | null = null;
+      mockedService.streamMessage.mockImplementationOnce(
+        (_messages: unknown, signal: AbortSignal) => {
+          capturedSignal = signal;
+          return (async function* () {
+            await new Promise<void>((resolve) => {
+              signal.addEventListener('abort', () => resolve(), { once: true });
+            });
+          })();
+        },
+      );
+
+      await act(async () => {
+        void useChatStore.getState().send('hi');
+        await Promise.resolve();
+      });
+      await waitFor(() => {
+        expect(useChatStore.getState().isStreaming).toBe(true);
+      });
+
+      useChatStore.getState().resetForUser(2);
+
+      expect(capturedSignal!.aborted).toBe(true);
+      expect(useChatStore.getState().messages).toEqual([]);
+      expect(useChatStore.getState().isStreaming).toBe(false);
+    });
+
+    it('ignores a run_id frame delivered after the identity changed', async () => {
+      useChatStore.getState().resetForUser(1);
+      let fireRunId!: () => void;
+      const runIdGate = new Promise<void>((resolve) => {
+        fireRunId = resolve;
+      });
+      mockedService.streamMessage.mockImplementationOnce(
+        (
+          _messages: unknown,
+          _signal: AbortSignal,
+          opts?: { onRunId?: (id: string) => void },
+        ) =>
+          (async function* () {
+            await runIdGate;
+            opts?.onRunId?.('old-user-session');
+            await new Promise<void>(() => {});
+          })(),
+      );
+
+      act(() => {
+        void useChatStore.getState().send('hi');
+      });
+      await waitFor(() => {
+        expect(useChatStore.getState().isStreaming).toBe(true);
+      });
+      await act(async () => {
+        await useChatStore.getState().startNewSession();
+      });
+      useChatStore.getState().resetForUser(2);
+      const callsBefore = mockedService.listSessions.mock.calls.length;
+
+      await act(async () => {
+        fireRunId();
+        await Promise.resolve();
+      });
+
+      expect(useChatStore.getState().runningSessionIds).toEqual([]);
+      expect(mockedService.listSessions.mock.calls.length).toBe(callsBefore);
+    });
+
+    it('does not clear the new identity panel when a stale replay 404s', async () => {
+      useChatStore.getState().resetForUser(1);
+      let rejectResume!: (err: Error) => void;
+      mockedService.resumeSession.mockReturnValueOnce(
+        new Promise((_resolve, reject) => {
+          rejectResume = reject;
+        }),
+      );
+
+      act(() => {
+        void useChatStore.getState().setCurrentSession('sess-a');
+      });
+      useChatStore.getState().resetForUser(2);
+      await act(async () => {
+        useChatStore.setState({
+          currentSessionId: 'sess-b',
+          messages: [{ role: 'user', content: 'bob message' }],
+        });
+        rejectResume(new ChatApiError(404, 'gone'));
+        await Promise.resolve();
+      });
+
+      expect(useChatStore.getState().currentSessionId).toBe('sess-b');
+      expect(useChatStore.getState().messages).toEqual([
+        { role: 'user', content: 'bob message' },
+      ]);
     });
   });
 });
