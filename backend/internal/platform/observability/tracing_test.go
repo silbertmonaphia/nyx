@@ -2,7 +2,11 @@ package observability
 
 import (
 	"context"
+	"io"
+	"net/http"
+	"net/http/httptest"
 	"testing"
+	"time"
 
 	"nyx/internal/platform/config"
 
@@ -61,6 +65,44 @@ func TestFirstSQLVerb(t *testing.T) {
 	for _, tc := range cases {
 		if got := firstSQLVerb(tc.in); got != tc.want {
 			t.Errorf("firstSQLVerb(%q) = %q, want %q", tc.in, got, tc.want)
+		}
+	}
+}
+
+func TestSetup_BareEndpointTargetsTracesPath(t *testing.T) {
+	gotPath := make(chan string, 4)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.Copy(io.Discard, r.Body)
+		w.WriteHeader(http.StatusOK)
+		gotPath <- r.URL.Path
+	}))
+	defer srv.Close()
+
+	for _, endpoint := range []string{srv.URL, srv.URL + "/"} {
+		cfg := &config.Config{
+			OTelEnabled:              true,
+			OTelServiceName:          "nyx-test",
+			OTelExporterOTLPEndpoint: endpoint,
+		}
+		tr, err := Setup(context.Background(), cfg)
+		if err != nil {
+			t.Fatalf("Setup(%q): %v", endpoint, err)
+		}
+		_, span := tr.Provider.Tracer("test").Start(context.Background(), "regression")
+		span.End()
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		if err := tr.Shutdown(shutdownCtx); err != nil {
+			cancel()
+			t.Fatalf("Shutdown(%q): %v", endpoint, err)
+		}
+		cancel()
+		select {
+		case p := <-gotPath:
+			if p != "/v1/traces" {
+				t.Fatalf("endpoint %q: export hit %q, want /v1/traces", endpoint, p)
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatalf("endpoint %q: no export received", endpoint)
 		}
 	}
 }

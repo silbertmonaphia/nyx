@@ -16,6 +16,8 @@ package observability
 import (
 	"context"
 	"fmt"
+	"net/url"
+	"strings"
 	"time"
 
 	"nyx/internal/platform/config"
@@ -81,8 +83,12 @@ func Setup(ctx context.Context, cfg *config.Config) (*Tracing, error) {
 	// "http" — we do NOT append a separate WithInsecure() here, since
 	// doing so after WithEndpointURL would silently downgrade an
 	// https URL to plaintext if a separate flag were ever flipped on.
+	endpoint := cfg.OTelExporterOTLPEndpoint
+	if u, perr := url.Parse(endpoint); perr == nil && (u.Path == "" || u.Path == "/") {
+		endpoint = strings.TrimSuffix(endpoint, "/") + "/v1/traces"
+	}
 	exporter, err := otlptrace.New(ctx, otlptracehttp.NewClient(
-		otlptracehttp.WithEndpointURL(cfg.OTelExporterOTLPEndpoint),
+		otlptracehttp.WithEndpointURL(endpoint),
 	))
 	if err != nil {
 		return nil, fmt.Errorf("observability: create OTLP exporter: %w", err)
@@ -102,7 +108,7 @@ func Setup(ctx context.Context, cfg *config.Config) (*Tracing, error) {
 	)
 
 	log.Info().
-		Str("endpoint", cfg.OTelExporterOTLPEndpoint).
+		Str("endpoint", endpoint).
 		Str("service_name", cfg.OTelServiceName).
 		Msg("OpenTelemetry tracing enabled")
 
