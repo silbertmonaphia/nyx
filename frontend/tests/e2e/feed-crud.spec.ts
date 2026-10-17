@@ -36,16 +36,16 @@ test.describe('Feed CRUD', () => {
     await page.getByLabel(/Username/i).fill(testUser.username);
     await page.getByLabel(/Password/i).fill(testUser.password);
     await page.getByRole('button', { name: /^Register$/i }).click();
-    await expect(page.getByRole('button', { name: /Logout/i })).toBeVisible();
+    await expect(page.getByRole('button', { name: /^Logout$/i })).toBeVisible();
 
     // Log out, then log back in to verify the Login path too.
-    await page.getByRole('button', { name: /Logout/i }).click();
-    await expect(page.getByRole('button', { name: /Logout/i })).toHaveCount(0);
+    await page.getByRole('button', { name: /^Logout$/i }).click();
+    await expect(page.getByRole('button', { name: /^Logout$/i })).toHaveCount(0);
     await page.getByRole('button', { name: /Login \/ Register/i }).click();
     await page.getByLabel(/Username/i).fill(testUser.username);
     await page.getByLabel(/Password/i).fill(testUser.password);
     await page.getByRole('button', { name: /^Login$/i }).click();
-    await expect(page.getByRole('button', { name: /Logout/i })).toBeVisible();
+    await expect(page.getByRole('button', { name: /^Logout$/i })).toBeVisible();
 
     // 1. Create
     const feedTitle = `Test Feed ${Date.now()}`;
@@ -77,6 +77,14 @@ test.describe('Feed CRUD', () => {
     await createSettled;
 
     await expect(page.getByText(feedTitle)).toBeVisible();
+
+    const count = page.getByTestId('feed-count');
+    const list = page.getByTestId('feed-list');
+    await expect(count).toBeVisible();
+    const countBox = await count.boundingBox();
+    const listBox = await list.boundingBox();
+    expect(await count.evaluate((el) => getComputedStyle(el).fontSize)).toBe('14px');
+    expect(Math.abs(countBox!.x - listBox!.x)).toBeLessThan(1);
 
     // 2. Read (Search)
     await page.getByPlaceholder(/Search for feeds/i).fill(feedTitle);

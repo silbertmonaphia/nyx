@@ -141,7 +141,7 @@ const FeedCount: React.FC<{ loaded: number; total: number }> = ({ loaded, total 
   return (
     <div
       data-testid="feed-count"
-      className="text-xs text-muted-foreground self-start w-full max-w-[600px] mb-2"
+      className="text-sm text-muted-foreground w-full max-w-[600px] mb-2"
       aria-live="polite"
     >
       {moreOnTheWay
