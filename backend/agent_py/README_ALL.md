@@ -3,7 +3,7 @@
 > Short version: [`README.md`](README.md) · 中文 (brief): [`README.zh.md`](README.zh.md) — this file is the full reference.
 
 Python Plan-and-Execute agent orchestrator for Nyx. Replaces the Go `internal/agent/` package
-that shipped in the first OpenSpec change (`openspec/changes/agent-loop/`). RAG stays in Go
+that shipped in the first OpenSpec change (`openspec/changes/archive/2026-10-13-agent-loop/`). RAG stays in Go
 (unchanged); tools dispatch through the existing MCP JSON-RPC endpoint; the chat SSE wire
 contract is byte-for-byte identical to what the Go chat handler emits today.
 
@@ -69,7 +69,7 @@ behaviour:
 - `retry="exhausted"` — retry budget exhausted; run terminated with
   `error{code:"plan_invalid"}`.
 
-See `openspec/changes/agent-planner-structured/` for the full rationale
+See `openspec/changes/archive/2026-10-13-agent-planner-structured/` for the full rationale
 (why `json.loads` on free text fails at every model tier; how retries
 inject the validator's last error; cross-provider parity with vLLM
 `hermes` parser).
@@ -120,7 +120,7 @@ surrounding `agent.step.tool` span).
 ## Web tools: agent-native search + fetch (opt-in)
 
 Two agent-native tools dispatched through the same retry funnel as the
-MCP registry tools (openspec/changes/agent-web-tools):
+MCP registry tools (openspec/changes/archive/2026-10-14-agent-web-tools):
 
 - **`web_fetch`** — fetches a public http(s) URL and returns its readable
   text (stdlib HTML→text extraction, byte + char caps, ports 80/443 only,
@@ -225,7 +225,7 @@ Reaping does **not** delete langGraph checkpoint data — a reaped run's
 checkpoint thread is collected by the retention cron when it later
 deletes the terminal row, so a crashed run's state survives the same
 retention window as any other run (see
-`openspec/changes/agent-stale-run-sweeper/` for the full rationale).
+`openspec/changes/archive/2026-10-14-agent-stale-run-sweeper/` for the full rationale).
 
 ## Run retention: pruning terminal rows + checkpoints
 
@@ -247,9 +247,9 @@ OTel span `agent.run.retention`.
 ## Chat history, session API, and user preferences
 
 Coupled surfaces sharing the same DB and lifecycle (see
-`openspec/changes/agent-chat-history-storage/`,
-`agent-chat-history-ui/`, `agent-user-preferences/`, and
-`agent-chat-fixes/`):
+`openspec/changes/archive/2026-10-14-agent-chat-history-storage/`,
+`2026-10-14-agent-chat-history-ui/`, `2026-10-14-agent-user-preferences/`, and
+`2026-10-16-agent-chat-fixes/`):
 
 - **Chat history** — every turn is persisted (`agent.chat_sessions` /
   `agent.chat_messages`); a two-phase retention (soft-delete + grace,
@@ -286,7 +286,7 @@ Coupled surfaces sharing the same DB and lifecycle (see
   per-table counts, idempotent on a second call. Every served
   operation appends a counts-only row to `agent.data_audit_log`, whose
   own retention window is separate (3y default). See
-  `openspec/changes/agent-gdpr-compliance/`; operator playbook in
+  `openspec/changes/archive/2026-10-14-agent-gdpr-compliance/`; operator playbook in
   `docs/agent-deployment.md` » GDPR data handling.
 
 | Env var                              | Default | Purpose                                                                 |
@@ -334,7 +334,7 @@ Traces are keyed by run: `run_id` (= langGraph `thread_id`) is the
 session id and the verified `X-Nyx-User-Id` is the trace user, so a run
 is replayable end-to-end from the UI and filterable per user.
 Credential-shaped strings in tool arguments/results are masked before
-export. See `openspec/changes/agent-langfuse-tracing/` for the design
+export. See `openspec/changes/archive/2026-10-14-agent-langfuse-tracing/` for the design
 (including why the Langfuse client uses its own isolated OTel provider:
 the global provider belongs to the Jaeger export pipeline).
 

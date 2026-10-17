@@ -1,7 +1,7 @@
 # RAG app lack abilities
 
-> 状态同步(2026-10-14): 本文件是最初的能力缺口需求拆解,原文保留;每项下加 ✅/🟡/⬜ 标注 —
-> ✅ 已落地、🟡 部分/在飞、⬜ 未做。现状盘点见 `AgentStack.zh.md`,故障面见 `AgentFaultTolerance.md`。
+> 状态同步(2026-10-17): 本文件是最初的能力缺口需求拆解,原文保留;每项下加 ✅/🟡/⬜ 标注 —
+> ✅ 已落地、🟡 部分/在飞、⬜ 未做。文中的仓库路径均相对仓库根目录。现状盘点见 `AgentStack.zh.md`,故障面见 `AgentFaultTolerance.md`。
 
 最开始的最Naive的想法：LangChain[编排] + WebShaper[搜索] + Mem0[记忆] + Milvus[RAG]  
 然后的想法: LangGraph[编排] + Pgvector/Milvus[RAG] + MCP&Tool + Langfuse[OTel&Eval] + Tavily[搜索] + Mem0[记忆]  
@@ -41,7 +41,7 @@ Plan-and-Execute 嵌套 ReAct? → 是:`react` step kind 嵌套 model→tool→m
 2、容错 Fault Tolerance 🟡
 针对单个子 Agent 调用超时或 LLM 吐出非法 JSON 时的 Retry、Fallback 机制
 → planner 结构化输出 + 有界 retry、tool dispatch 分类退避 retry、partial-failure banner 已落地;
-stale-run sweeper 已落地(0a9b8f5);剩余(ReAct 模型调用无 transient retry、cycle detection)见 `AgentFaultTolerance.md` #19
+stale-run sweeper 已落地(0a9b8f5);剩余(ReAct 模型调用无 transient retry)见 `AgentFaultTolerance.md` #19
 
 3、可观测性 Observability ✅
 - 埋点记录 Trace ID
@@ -53,15 +53,15 @@ p.s. 可用 OpenTelemetry / Langfuse API
 Langfuse 式 prompt/response 级 trace 已落地(agent-langfuse-tracing):每 run 的 prompt / reply / provider usage / tool span 落自托管 Langfuse(见 `AgentStack.zh.md` §三-A)
 
 ## P2 高级自治: 记忆与自我反思
-1、记忆系统 Cross-Session Memory ⬜
+1、记忆系统 Cross-Session Memory 🟡
 短期会话记忆 + 长期知识记忆，跨会话保持状态
 - 用户偏好
 - 历史 Agent 执行结果结晶
-→ thread 级 checkpoint 已有;跨 session recall 未做(P2.1 排期)
+→ thread 级 checkpoint + chat history 持久化(agent-chat-history-storage/ui)+ 偏好记忆跨 session 注入(agent-user-preferences)已落地;会话 summary 与历史 top-K recall 未做(见 `AgentStack.zh.md` §三-D)
 
 2、自我评估反思 Self-Reflection(CRAG/Adaptive) 🟡
 Agent 执行完子任务后，自我评估输出是否符合要求，决定是否重新检索或调其他工具
-→ ReAct 内把工具失败注入上下文(第一步)已有;无 critique pass / 循环检测
+→ ReAct 内把工具失败注入上下文(第一步)已有;无 critique pass;react 仅有 max_iterations 上限,无图级 cycle 检测
 
 # user case example
 
@@ -83,7 +83,7 @@ Agent 自主规划：
 ## 当前 user case(eval 语料)
 
 来源:`AgentEvalPrompts.md`(prompt 原文)+ `AgentEvalPromptsRefine.md`(契约归一化:step kind
-与工具名分开写;工具名以 `internal/mcp/model.go` 注册为准 —— `list_feeds` / `get_feed` /
+与工具名分开写;工具名以 `backend/internal/mcp/model.go` 注册为准 —— `list_feeds` / `get_feed` /
 `create_feed` / `update_feed` / `delete_feed`,原文 "add_feed" 即 `create_feed`;plan 必须以
 `llm` 收尾)。用例跑在已落地的真实工具面上,与原始设想同构:检索 → 动作 → 带证据链回答。
 
@@ -100,15 +100,17 @@ Agent 自主规划：
 4. 全工具组合 — “基于对最近3个月我发的feed的总结，然后上网搜索相关信息，再形成一篇新feed发出去”
    → `[rag, web_search, create_feed, llm]`
 5. 边界/安全(`AgentEvalPromptsRefine.md` §5) — 问候=恰好单步 `llm`;空匹配不幻觉删除;
-   多轮“把结果发出去”;一词之差的 update/delete 近义对;“删掉我所有feed”需确认闸(开放产品
-   决策);feed 正文注入指令仍须零副作用
+   多轮“把结果发出去”;一词之差的 update/delete 近义对;破坏性调用必须过 HITL 确认闸
+   (agent-feed-tools 已落地),“删掉我所有feed”剩余的是 planner 行为决策(先规划删除交给
+   确认卡 vs 先反问);feed 正文注入指令仍须零副作用
 
-→ 现状:语料已固化(0645cca);harness 仍是设计 —— 1:1 YAML 记录 + 两层跑法(确定性 pytest:
-罐头 plan 过真 executor/DB 断言副作用;env-gated live:对 vLLM/Qwen3-4B 判
-required/forbidden/order),过渡形态是 `test_smoke_live.py` + e2e `chat-agent-planner.spec.ts`。
-已知阻塞(判 planner 失败前先对照 Refine §Known blockers):feed 写工具名未注入 planner
-prompt(写类用例挂 = 架构缺口,不是模型质量问题);破坏性操作无确认闸;先验数据截断
-1500/2800 chars,对 90+ feed 的长上下文(edge-06)有压力。
+→ 现状:语料已固化(0645cca);harness 已落地(agent-golden-eval,2026-10-16)——
+promptfoo 驱动真实 `POST /agent/run` SSE,transcript + 确定性 grader 判分,
+`make eval-golden` / `make eval-security` 串行跑侧栈;
+`backend/agent_py/tests/test_smoke_live.py` + e2e `frontend/tests/e2e/chat-agent-planner.spec.ts` 保留为补充。已知边界(判 planner 失败前先对照
+Refine §Known blockers):feed 工具名已注入 planner catalog(写类用例挂 = planner
+质量问题,不是架构缺口);破坏性操作已有 HITL 确认闸;先验数据截断 1500/2800 chars,
+对 90+ feed 的长上下文有压力(edge-06 仍是设计用例,未入语料)。
 
 ## 风险
 - **延迟**:N× 单轮延迟。要按 step 流式(不是按 run),否则长任务用户要等很久。

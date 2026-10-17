@@ -1,4 +1,6 @@
 # MCP RAG(list_feed) tool evel
+
+> **状态(2026-10-17)**: 本文件是套件落地前的种子草稿,保留原文不动;事实以 `evals/cases/main.yaml` / `security.yaml` 为权威,推演见 `AgentEvalPromptsRefine.md` / `AgentEvalPromptsSimplify.md`。与已落库语料的已知出入:工具名是 `list_feeds` / `create_feed`(非 `list_feed` / `add_feed`);三步用例语料规范化为 `[rag, create_feed|update_feed|delete_feed, llm]`(planner 自动补 terminal llm 步);weather 用例无 rag(on 模式 `[web_search, llm]` / off 模式 `[llm]`,见 main-web-weather-modes);memory 种子句语料用「我最爱吃秋刀鱼」(「我最近爱吃…」不触发抽取门,用例会永久 SKIP);§"这个文件建议正式化为 eval 套件"已于 2026-10-16 完成(`agent-golden-eval` 切片,基线报告入库)。
 1.总结最近3个月我发的feed
 expect: planner:[rag, llm]
 behavior: None

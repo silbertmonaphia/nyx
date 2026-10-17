@@ -10,6 +10,11 @@ Why a new file: agent capability is significant enough that scattering it across
 
 ## Current state (as of last verification)
 
+> **Historical baseline (pre-agent Go implementation).** This section records
+> what the tree looked like before the agent slices landed; the live
+> architecture is documented in `docs_agent/AgentArchitecture.md`. The P0/P1/P2
+> items below carry their own landed annotations.
+
 - **`internal/llm/provider.go`** — single-turn text completion only. `ChatRequest` has `Model / Messages / MaxTokens / Temperature / OnNote`. No `Tools`, no `ToolChoice`, no `ResponseFormat`. `Message` is `(Role, Content)` only — no `ToolCallID` / `Name` / `ToolCalls`; `RoleTool` does not exist.
 - **`internal/llm/vllm/client.go:440-443`** — explicitly drops tool-call deltas ("intentionally ignored").
 - **`internal/chat/service.go:109-195`** — one-shot: prepend system prompt → optional RAG retrieval → single `provider.Chat` → stream. No loop, no tool dispatch, no reflection.
@@ -19,7 +24,7 @@ Why a new file: agent capability is significant enough that scattering it across
 - **Provider failover** — `llm.Router` handles "provider down". Does not solve "model emits malformed tool args".
 - **Frontend** — `ChatPanel.tsx` renders tokens only; `chatStore` is ephemeral (XSS surface concern, stays that way for the streaming layer; per-user history lands in DB later).
 
-**Verdict**: today is retrieval-augmented prompt stuffing, not an agent. The first OpenSpec change (`openspec/changes/agent-loop/`) shipped the Go infra (provider seam + tool registry + MCP shim + chat SSE translator). Slice 1's agent orchestration is being implemented in **Python LangGraph** in the new OpenSpec change `agent-langgraph` (`openspec/changes/agent-langgraph/`) — the Go orchestrator was removed; RAG stays in Go unchanged.
+**Verdict**: today is retrieval-augmented prompt stuffing, not an agent. The first OpenSpec change (`openspec/changes/archive/2026-10-13-agent-loop/`) shipped the Go infra (provider seam + tool registry + MCP shim + chat SSE translator). Slice 1's agent orchestration was implemented in **Python LangGraph** (`openspec/changes/archive/2026-10-13-agent-langgraph/`) — the Go orchestrator was removed; RAG stays in Go unchanged.
 
 ---
 
@@ -27,12 +32,12 @@ Why a new file: agent capability is significant enough that scattering it across
 
 ### 0.1 Provider seam: tool calls and structured output
 
-- [ ] **`llm.Provider.Chat` carries `Tools` / `ToolChoice`** (`internal/llm/provider.go`). `ChatRequest` gains `Tools []Tool` and `ToolChoice any` (string enum or struct). `Message` gains `ToolCallID`, `Name`, `ToolCalls []ToolCall`. New `RoleTool` role.
-- [ ] **Typed streaming `Delta` union** — `onDelta` callback carries `Delta { Kind: content|tool_call|usage|note, … }` instead of plain strings. Old callers treat `Delta{content}` as today's `(string, nil)`.
-- [ ] **OpenAI client implements tool call streaming** (`internal/llm/openai/client.go`). Maps OpenAI `tool_calls` deltas into the union.
-- [ ] **vLLM client implements tool call streaming** (`internal/llm/vllm/client.go`). Rewrite the SSE parser — currently drops tool-call deltas at `vllm/client.go:440-443`.
-- [ ] **Both providers get tool-call integration tests** (`backend/internal/llm/openai/client_test.go` + `vllm/client_test.go`). Use `httptest.Server` replaying canned SSE — no live API needed. **Risk note: vLLM tool_calls wire format has historically diverged from OpenAI's; both providers must be exercised even when OpenAI passes.**
-- [ ] **`llm.Router` (OpenAI ⇄ vLLM failover) preserved** — tool-call support lands symmetrically on both providers before failover is enabled for tool-bearing requests (`LLM_FALLBACK_TOOLS_ENABLED` default `false`).
+- [x] **`llm.Provider.Chat` carries `Tools` / `ToolChoice`** (`internal/llm/provider.go`). `ChatRequest` gains `Tools []Tool` and `ToolChoice any` (string enum or struct). `Message` gains `ToolCallID`, `Name`, `ToolCalls []ToolCall`. New `RoleTool` role.
+- [x] **Typed streaming `Delta` union** — `onDelta` callback carries `Delta { Kind: content|tool_call|usage|note, … }` instead of plain strings. Old callers treat `Delta{content}` as today's `(string, nil)`.
+- [x] **OpenAI client implements tool call streaming** (`internal/llm/openai/client.go`). Maps OpenAI `tool_calls` deltas into the union.
+- [x] **vLLM client implements tool call streaming** (`internal/llm/vllm/client.go`). The SSE parser now emits `DeltaToolCall` frames (the pre-seam parser dropped them).
+- [x] **Both providers get tool-call integration tests** (`backend/internal/llm/openai/client_test.go` + `vllm/client_test.go`). Use `httptest.Server` replaying canned SSE — no live API needed. **Risk note: vLLM tool_calls wire format has historically diverged from OpenAI's; both providers must be exercised even when OpenAI passes.**
+- [x] **`llm.Router` (OpenAI ⇄ vLLM failover) preserved** — tool-call support landed symmetrically on both providers. The tool-bearing failover flag (`failoverToolsEnabled`) is still hard-coded off; the Python agent path does not use `llm.Router` at all.
 
 **Why this is P0**: nothing else on the roadmap works without `Provider` carrying tool calls. Existing single-turn callers (the RAG path) keep working — zero-tools requests are no-ops in the new code.
 
@@ -83,12 +88,12 @@ Recommendation: the second. Each step has a stable `id` so SSE frames can be cor
 
 ## P1 — Production engineering: state, observability, fault tolerance
 
-### 1.1 Agent state — **landed in `openspec/changes/agent-run-state/`**
+### 1.1 Agent state — **landed in `openspec/changes/archive/2026-10-13-agent-run-state/`**
 
 - [x] **`Run` / `Step` structs flowed through `context.Context`** — *(N/A: implementation moved to Python; the Go-side typed values in `internal/reqctx/` are no longer relevant to the agent runtime.)*
-- [x] **DB-backed run state for crash recovery** — `agent.runs` (in the `agent.*` schema) + langGraph's `checkpoint_*` tables (in `langgraph.*`); run state survives Python-service restart. Resume from the last checkpoint via `graph.get_state(config)`. See `openspec/changes/agent-run-state/proposal.md` and `docs/agent-deployment.md`.
-- [x] **Run TTL** — `RetentionCron` (in `backend/agent_py/agent/retention.py`) hard-deletes `agent.runs` rows where `status IN ('completed','failed')` AND `ended_at < now() - interval '<RETENTION_DAYS> day'`. Default 30 days. For every deleted run the cron also deletes its langGraph checkpoint thread via `adelete_thread` — langGraph ships no retention of its own, so this is the only path that prunes `langgraph.checkpoint_*` (added in `agent-stale-run-sweeper`).
-- [x] **Stale-run sweeper** — heartbeat (`agent.runs.last_heartbeat_at`, touched every `PYTHON_AGENT_HEARTBEAT_INTERVAL_SECONDS` while a run streams) + a reaper cron that flips zombie `running` rows (crash / kill / `agent_unavailable`) to `failed`/`stale_run` after `PYTHON_AGENT_STALE_RUN_TIMEOUT_SECONDS` of heartbeat silence. The timeout doubles as the window in which a crashed run can still be resumed by echoing its `run_id`; after reaping, resume follows the terminal-row path (fresh run). Reaped runs' checkpoints are deliberately preserved until retention collects them with the row. Landed in `openspec/changes/agent-stale-run-sweeper/`; counter `agent_runs_swept_total`; rollback via `PYTHON_AGENT_SWEEP_ENABLED=false`.
+- [x] **DB-backed run state for crash recovery** — `agent.runs` (in the `agent.*` schema) + langGraph's `checkpoint_*` tables (in `langgraph.*`); run state survives Python-service restart. Resume from the last checkpoint by passing `astream(None, config={"configurable":{"thread_id": run_id}})` when the echoed id is a live run; resume decisions come from `agent.runs` + `chat_sessions`, not a `get_state` probe. See `openspec/changes/archive/2026-10-13-agent-run-state/proposal.md` and `docs/agent-deployment.md`.
+- [x] **Run TTL** — `RetentionCron` (in `backend/agent_py/agent/retention.py`) hard-deletes `agent.runs` rows where `status IN ('completed','failed')` AND `ended_at < now() - interval '<RETENTION_DAYS> day'`. Default 30 days. For every deleted run the cron also deletes its langGraph checkpoint thread via `adelete_thread` — langGraph ships no retention of its own, so this cron plus the chat-retention and GDPR-erasure paths are the only things that prune `langgraph.checkpoint_*` (added in `agent-stale-run-sweeper`; chat deletion and GDPR erasure also call `adelete_thread`).
+- [x] **Stale-run sweeper** — heartbeat (`agent.runs.last_heartbeat_at`, touched every `PYTHON_AGENT_HEARTBEAT_INTERVAL_SECONDS` while a run streams) + a reaper cron that flips zombie `running` rows (crash / kill / `agent_unavailable`) to `failed`/`stale_run` after `PYTHON_AGENT_STALE_RUN_TIMEOUT_SECONDS` of heartbeat silence. The timeout doubles as the window in which a crashed run can still be resumed by echoing its `run_id`; after reaping, resume follows the terminal-row path (fresh run). Reaped runs' checkpoints are deliberately preserved until retention collects them with the row. Landed in `openspec/changes/archive/2026-10-14-agent-stale-run-sweeper/`; counter `agent_runs_swept_total`; rollback via `PYTHON_AGENT_SWEEP_ENABLED=false`.
 
 **Why defer**: in-memory state is fine for slice 1; DB persistence lands when the slice-1 loop is exercised enough to reveal which state shape actually needs persistence (plan, partial step output, tool results, etc.).
 
@@ -100,7 +105,7 @@ Recommendation: the second. Each step has a stable `id` so SSE frames can be cor
 - [x] **Prometheus counters** — `agent_runs_total{kind,status}`, `agent_steps_total{kind,status}`, `agent_tool_calls_total{tool,ok}`, `agent_tokens_total{role,model}`.
 - [x] **Per-user budget guard** — Redis-backed counter `agent:budget:u={user_id}:h={hour}` consulted before each `provider.Chat` call inside the loop. Cap: `AGENT_BUDGET_PER_USER_PER_HOUR` (default 200000). Exhaustion emits `error {code:"budget_exceeded"}` and terminates the run. **Fails closed.**
 - [x] **OTel span for the budget check** — `agent.budget` so we can correlate budget exhaustion with run traces.
-- [x] **LLM-level traces (Langfuse)** — opt-in export of every model call (planner structured/legacy, executor `llm`, `react` iterations, tool re-prompt) as a Langfuse generation with prompts, replies, and provider-reported token usage, plus plan/step/tool spans with durations; `run_id` = session, verified `X-Nyx-User-Id` = user; credential-shaped strings masked before export; best-effort delivery (a Langfuse outage never affects a run). Self-hosted stack via `make up-langfuse`; off by default (`PYTHON_AGENT_LANGFUSE_ENABLED=false`). Landed in `openspec/changes/agent-langfuse-tracing/`.
+- [x] **LLM-level traces (Langfuse)** — opt-in export of every model call (planner structured/legacy, executor `llm`, `react` iterations, tool re-prompt) as a Langfuse generation with prompts, replies, and provider-reported token usage, plus plan/step/tool spans with durations; `run_id` = session, verified `X-Nyx-User-Id` = user; credential-shaped strings masked before export; best-effort delivery (a Langfuse outage never affects a run). Self-hosted stack via `make up-langfuse`; off by default (`PYTHON_AGENT_LANGFUSE_ENABLED=false`). Landed in `openspec/changes/archive/2026-10-14-agent-langfuse-tracing/`.
 
 **Why this is P1.2 not P0**: the loop works without it; observability is the difference between "answer" and "production answer". But the per-user budget guard is **load-bearing for cost** (see Risks below) — lands with slice 1.
 
@@ -116,13 +121,13 @@ Recommendation: the second. Each step has a stable `id` so SSE frames can be cor
 
 ## P2 — Advanced autonomy
 
-### 2.1 Cross-session memory — **deferred to a follow-up change**
+### 2.1 Cross-session memory — **landed (Slices 1–4 + follow-ups)**
 
-- [ ] **`chat_sessions` + `chat_messages` tables** — move from FUTURE.md:84 into this roadmap. Soft-delete + retention cron.
-  - **Landed (storage layer) in `openspec/changes/archive/2026-10-14-agent-chat-history-storage/`** (Slice 1 of `docs_agent/AgentMemoryRoadmap.md`). Two tables + ChatStore + retention cron extension with soft-delete + grace; the read-side (Slice 2), preference memory (Slice 3), and GDPR seal (Slice 4) have since landed per `docs_agent/AgentMemoryRoadmap.md`.
-- [ ] **Conversation summary on session end** — when a session goes idle for `AGENT_SESSION_IDLE_MIN` (default 30m), summarize into `chat_summaries` (or a `summary` column on `chat_sessions`) for fast re-hydration.
-- [ ] **User preferences memory** — short structured facts ("user is an ad ops analyst at Acme") distilled from prior sessions. Stored as `chat_user_prefs(user_id, key, value, updated_at)`. Injected into planner prompt.
-  - **Landed in `openspec/changes/archive/2026-10-14-agent-user-preferences/`** (Slice 3 of `docs_agent/AgentMemoryRoadmap.md`): `agent.chat_user_prefs` + async per-turn extraction (conservative EN/ZH gate, bounded keys/values, never budget-charged) + planner prompt injection with byte-parity for the empty case; derived rows follow chat-history retention (with an orphan-sweep backstop). Remaining: the rollout sibling's gates (`*-rollout`).
+- [x] **`chat_sessions` + `chat_messages` tables** — move from FUTURE.md:84 into this roadmap. Soft-delete + retention cron.
+  - **Landed (storage layer) in `openspec/changes/archive/2026-10-14-agent-chat-history-storage/`** (Slice 1 of `docs_agent/AgentMemoryRoadmap.md`). Two tables + ChatStore + retention cron extension with soft-delete + grace; the read-side (Slice 2), preference memory (Slice 3), and GDPR seal (Slice 4) have since landed per `docs_agent/AgentMemoryRoadmap.md`. Background runs + chat fixes followed in `openspec/changes/archive/2026-10-15-agent-chat-background-runs/` and `openspec/changes/archive/2026-10-16-agent-chat-fixes/`.
+- [ ] **Conversation summary on session end** — summarize into `chat_summaries` (or a `summary` column on `chat_sessions`) for fast re-hydration. There is no idle-based session splitting today; the trigger would be an explicit "+ New chat" or a future idle policy.
+- [x] **User preferences memory** — short structured facts ("user is an ad ops analyst at Acme") distilled from prior sessions. Stored as `chat_user_prefs(user_id, key, value, updated_at)`. Injected into planner and executor prompts.
+  - **Landed in `openspec/changes/archive/2026-10-14-agent-user-preferences/`** (Slice 3 of `docs_agent/AgentMemoryRoadmap.md`): `agent.chat_user_prefs` + async per-turn extraction (conservative EN/ZH gate, bounded keys/values, never budget-charged) + prompt injection (planner, then executor `llm`/`react` via `agent-chat-fixes`) with byte-parity for the empty case; derived rows follow chat-history retention (with an orphan-sweep backstop). Remaining: the rollout sibling's gates (`*-rollout`).
 - [ ] **Cross-session recall** — when a new session starts, top-K retrieval over past sessions for the same user. Optional (`AGENT_MEMORY_RECALL_ENABLED` default `false` until retention + privacy review passes).
 - [x] **Right to erasure + data export (GDPR)** — `GET /agent/me/export` (full subject dump: sessions incl. soft-deleted, messages, prefs, runs, checkpoint thread ids) and `DELETE /agent/me` (physical erasure across all five stores + langGraph threads, audited with counts only, idempotent) behind `PYTHON_AGENT_GDPR_ENABLED`; the audit trail lives in `agent.data_audit_log` with its own 3-year retention window.
   - **Landed in `openspec/changes/archive/2026-10-14-agent-gdpr-compliance/`** (Slice 4 of `docs_agent/AgentMemoryRoadmap.md`): both endpoints + `AuditLog` + migration 0006 + the audit-retention iteration (independent of the kill switch) + operator docs (`docs/agent-deployment.md` » GDPR data handling); remaining: the rollout sibling's gates (`*-rollout`).
@@ -133,11 +138,11 @@ Recommendation: the second. Each step has a stable `id` so SSE frames can be cor
 
 - [ ] **Not planned.** Per the project's "portability + minimalism" stance, add only when a concrete user-visible need appears.
 
-### 2.3 Web tools (agent-native search + fetch) — **landed in `openspec/changes/agent-web-tools/`**
+### 2.3 Web tools (agent-native search + fetch) — **landed in `openspec/changes/archive/2026-10-14-agent-web-tools/`**
 
-- [x] **`web_fetch` + `web_search`** — agent-native tools dispatched through the executor's existing retry funnel (SSRF-guarded fetch with dial pinning; Brave-backed search). Default off via `PYTHON_AGENT_WEB_FETCH_ENABLED` / `PYTHON_AGENT_WEB_SEARCH_ENABLED` (search needs `PYTHON_AGENT_BRAVE_API_KEY`). Deliberately NOT in the Go MCP registry — egress stays inside the Python orchestrator (see the change's `design.md` » Spec overlap for the `agent-tool-registry` boundary note).
+- [x] **`web_fetch` + `web_search`** — agent-native tools dispatched through the executor's existing retry funnel (SSRF-guarded fetch with dial pinning; Tavily-backed search, keyless tier by default). Default off via `PYTHON_AGENT_WEB_FETCH_ENABLED` / `PYTHON_AGENT_WEB_SEARCH_ENABLED` (optional `PYTHON_AGENT_TAVILY_API_KEY` raises rate limits; `PYTHON_AGENT_TAVILY_BASE_URL` points tests at a stub). Deliberately NOT in the Go MCP registry — egress stays inside the Python orchestrator (see the change's `design.md` » Spec overlap for the `agent-tool-registry` boundary note).
 
-### 2.4 Feed tools in the planner + confirmation gate — **landed in `openspec/changes/agent-feed-tools/`**
+### 2.4 Feed tools in the planner + confirmation gate — **landed in `openspec/changes/archive/2026-10-14-agent-feed-tools/`**
 
 - [x] **MCP feed tools become agent-visible** — the Python agent normalizes the Go MCP registry's `tools/list` schemas at the dispatcher boundary (`inputSchema` → the bound function's `parameters`; annotations on a side map), advertises the live registry surface to the planner in a "Registry tools available" block (omitted — prompt byte-identical — when the list fails or is empty), and gates every non-read-only registry call behind an in-chat approve/deny card: the run pauses inside the same SSE stream (`confirm_request` frame) until the decision lands in a Redis-brokered store (`POST /api/chat/approvals` → `POST /agent/approvals`), so a decision recorded on any replica resolves the waiting run. Deny / TTL expiry / broker outage all close as model-visible denials — never auto-approve. Rides the existing `MCP_ENABLED` gate (no new agent flag); `PYTHON_AGENT_APPROVAL_TTL_SECONDS` (default 300) tunes the window.
 
@@ -171,15 +176,15 @@ Long runs inflate the model's context window. **Compression (older-step summaris
 
 | Slice | OpenSpec change | Capabilities | Lands |
 |---|---|---|---|
-| 1a | `openspec/changes/agent-loop/` | `llm-structured-output`, `agent-tool-registry` (Go infra: provider seam + tool registry + MCP shim + chat SSE translator) | shipped |
-| 1b | `openspec/changes/agent-langgraph/` | `agent-python-service`, `agent-budget-guard-py`, `agent-rag-bridge`, `chat-agent-proxy` (Python orchestrator + Go chat proxy + Go RAG bridge) | when Python service lands |
-| 2 | `agent-run-state` | DB-backed Run/Step persistence (Python-side or Go-side — TBD) | when slice 1 is exercised |
+| 1a | `openspec/changes/archive/2026-10-13-agent-loop/` | `llm-structured-output`, `agent-tool-registry` (Go infra: provider seam + tool registry + MCP shim + chat SSE translator) | shipped |
+| 1b | `openspec/changes/archive/2026-10-13-agent-langgraph/` | `agent-python-service`, `agent-budget-guard-py`, `agent-rag-bridge`, `chat-agent-proxy` (Python orchestrator + Go chat proxy + Go RAG bridge) | landed |
+| 2 | `openspec/changes/archive/2026-10-13-agent-run-state/` | DB-backed Run/Step persistence (Python-side or Go-side — TBD) | landed |
 | 3 | `agent-task-routing` | intent → plan template plan | when recurring plan shapes emerge |
-| 4 | `agent-tool-dispatch-retry` | retry on malformed tool args / transient tool execution + partial-failure banner | after slice 1 has failure data |
-| 5 | `agent-cross-session-memory` | `chat_sessions` / `chat_messages` + retention + summary + prefs | after privacy review |
-| 6 | `agent-web-tools` | agent-native `web_fetch` (SSRF-guarded) + `web_search` (Brave) via the existing tool funnel | shipped (default off) |
+| 4 | `openspec/changes/archive/2026-10-13-agent-tool-dispatch-retry/` | retry on malformed tool args / transient tool execution + partial-failure banner | landed |
+| 5 | `agent-chat-history-storage` + `agent-chat-history-ui` + `agent-user-preferences` + `agent-gdpr-compliance` | `chat_sessions` / `chat_messages` + retention + prefs + GDPR seal; summary/recall still open | landed (summary/recall open) |
+| 6 | `openspec/changes/archive/2026-10-14-agent-web-tools/` | agent-native `web_fetch` (SSRF-guarded) + `web_search` (Tavily, keyless default) via the existing tool funnel | shipped (default off) |
 
-Tick the `[ ]` items above as each slice lands. Archive-after rule: both `agent-loop` (Go infra) and `agent-langgraph` (Python orchestrator) close together once the Python service is wired in prod.
+Tick the `[ ]` items above as each slice lands. Archive-after rule: both `agent-loop` (Go infra) and `agent-langgraph` (Python orchestrator) closed together once the Python service was wired in prod — both are archived.
 ---
 
 ## Lessons from `agent-langgraph` slice 1

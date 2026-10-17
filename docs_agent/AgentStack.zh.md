@@ -11,22 +11,22 @@
 
 ### 1. 编排层 (LangGraph Plan-and-Execute)
 
-- **StateGraph** (`agent/graph.py:80`) — `START → planner → executor → END`
-- **planner** (`agent/planner.py`) — 单次 LLM 调用,通过 OpenAI `response_format.json_schema` 显式 bind (`strict: false`) 输出 Pydantic `Plan`,配合 `JsonOutputParser | RunnableLambda(Plan.model_validate)`。`PYTHON_AGENT_PLANNER_RETRY_MAX=1` 的有界重试兜底截断 / schema drift
+- **StateGraph** (`agent/graph.py:97`) — `START → planner → executor → END`
+- **planner** (`agent/planner.py`) — 单次 LLM 调用,通过 OpenAI `response_format.json_schema` 显式 bind (`strict: false`) 输出 Pydantic `Plan`,配合 `JsonOutputParser | RunnableLambda(Plan.model_validate)`。`PYTHON_AGENT_PLANNER_RETRY_MAX=1` 的有界重试兜底截断 / schema drift;prompt 注入用户偏好与 live MCP 工具目录(registry 不可用时退化为无工具 prompt)
 - **executor** (`agent/executor.py`) — 顺序遍历 `Plan.steps`,四种 step kind:
   - `rag` → 调 Go `/internal/rag/retrieve`
-  - `tool` → 调 Go MCP `tools/call` (JSON-RPC)
+  - `tool` → `ToolDispatcher`(先本地 `web_search`/`web_fetch`,否则 Go MCP `tools/call` JSON-RPC)
   - `llm` → 单次模型补全,作为一个 `delta` 流出去
-  - `react` → 嵌套子图 (`model → tool → model`),上限 `PYTHON_AGENT_STEP_REACT_MAX_ITERATIONS=5`
-- SSE wire contract:11 个 kind(run_id 为 run-state 新增;其余 10 个与 Go 旧版字节级兼容,旧客户端零感知)
+  - `react` → 嵌套子图 (`model → tool → model`),上限 `step.max_iterations` 或 `PYTHON_AGENT_STEP_REACT_MAX_ITERATIONS=5`
+- SSE wire contract:12 个 kind(`run_id` 为 run-state 新增、`confirm_request` 为 agent-feed-tools 新增;其余 10 个与 Go 旧版字节级兼容,旧客户端零感知)
 
 ### 2. 持久化 / 状态
 
 - **LangGraph Postgres checkpointer** (`langgraph-checkpoint-postgres>=3.0`),`thread_id = run_id` 维度的 checkpoint 恢复
 - **`agent.runs` 元数据表** (`agent/run_metadata.py`,alembic 管理) — `user_id` / `status` / `total_tokens` / `error_code` / `last_heartbeat_at` / 时间戳,可索引查询
-- **会话内 resume** — `POST /agent/run` 带 `run_id` 命中未终态行 → 从 checkpoint 续跑;心跳超时被 sweeper 回收后按终态行处理(新 run)
+- **会话内 resume** — `POST /agent/run` 带 `run_id` 分三种:命中 live `agent.runs` 行(非终态)→ 从 checkpoint 续跑;否则若该 id 命中 live `chat_sessions` 行 → 同 session 续轮(新 graph、`persist_run_state=False`、不新建 run 行);否则新 run。心跳超时被 sweeper 回收后按终态行处理(新 run)
 - **stale-run sweeper**(已落地 0a9b8f5,`agent/sweeper.py`)— 运行中每 30s touch `last_heartbeat_at`(失败仅 WARN),每 300s 扫描,心跳静默超 900s 的 `running` 行翻成 `failed`/`error_code='stale_run'`;该 timeout 同时是 crashed-run 的 resume 窗口。`PYTHON_AGENT_SWEEP_ENABLED=false` 是回滚开关
-- **retention cron** (`agent/retention.py`) — 每小时清理终态行 30 天前数据(`DELETE ... RETURNING id`),再逐行 `adelete_thread` GC LangGraph checkpoint(单行 GC 失败仅 WARN,删行照旧)——全服务唯一的 checkpoint GC 路径;sweeper 有意保留被回收行的 checkpoint,由 retention 随行一并回收
+- **retention cron** (`agent/retention.py`) — 每小时清理终态行 30 天前数据(`DELETE ... RETURNING id`),再逐行 `adelete_thread` GC LangGraph checkpoint(单行 GC 失败仅 WARN,删行照旧);chat retention 按 session 回收、GDPR erasure 也调用 `adelete_thread`,checkpoint GC 不再只有 run-retention 一条路径。sweeper 有意保留被回收行的 checkpoint,由 retention 随行一并回收
 
 ### 3. 资源治理
 
@@ -35,8 +35,8 @@
 
 ### 4. 可观测
 
-- **OTel spans** — `agent.run` / `agent.step.{plan,tool,llm,react}` / `agent.planner.structured|retry` / `agent.budget` / `agent.run.retention` / `agent.run.sweep` → OTLP/HTTP → Jaeger,跟 Go 后端同链路,SPA 通过 W3C `traceparent` 串联
-- **Prometheus counters** (`agent/observability.py`) — `agent_runs_total` / `agent_steps_total` / `agent_tool_calls_total` / `agent_tokens_total` / `agent_planner_parse_failures_total{retry}` / `agent_tool_retries_total` / `agent_run_retention_deleted_total` / `agent_runs_swept_total`,`:9001` 暴露
+- **OTel spans** — `agent.run` / `agent.step.{plan,tool,llm,react}` / `agent.planner.structured|retry|legacy` / `agent.budget` / `agent.run.retention` / `agent.run.sweep` / `agent.chat.retention` / `agent.audit.retention` / `agent.sessions.*` / `agent.approvals.decide` / `agent.gdpr.export|erase` → OTLP/HTTP → Jaeger,跟 Go 后端同链路,SPA 通过 W3C `traceparent` 串联
+- **Prometheus counters** (`agent/observability.py`) — `agent_runs_total` / `agent_steps_total` / `agent_tool_calls_total` / `agent_tokens_total` / `agent_planner_parse_failures_total{retry}` / `agent_tool_retries_total` / `agent_run_retention_deleted_total` / `agent_runs_swept_total` / `agent_chat_retention_deleted_total` / `agent_chat_prefs_deleted_total` / `agent_audit_retention_deleted_total`,`:9001` 暴露
 - **`/healthz`** — 同时 ping Redis 和 LLM `GET {base}/models` 取最差结果
 
 ### 5. 安全 / 隔离
@@ -49,7 +49,7 @@
 - `pytest-asyncio` (`asyncio_mode = "auto"`)
 - `fakeredis` + `httpx.MockTransport` — 无需活网络
 - `testcontainers[postgres]` 跑真库场景
-- 跨 runtime SSE wire-contract 测试 — 解析前端实际 `chatService.ts`,不只测生成端
+- 跨 runtime SSE wire-contract 测试 — 解析前端实际 `frontend/src/features/chat/services/chatService.ts`,不只测生成端
 
 ---
 
@@ -62,7 +62,7 @@
 | **partial-failure banner** (失败步骤可视化) | 已落地 | `frontend/src/features/chat/components/PartialFailureBanner.tsx`(同切片) |
 | **stale-run sweeper** (心跳/lease 回收 `running` 僵尸行) | 已落地(0a9b8f5) | `agent/sweeper.py` + 迁移 `0003_add_run_heartbeat` |
 | **adelete_thread on retention** (LangGraph checkpoint_* 真 GC) | 已落地(0a9b8f5) | `agent/retention.py`(同切片;旧注释已修正) |
-| **`chat_sessions` / `chat_messages` 表** + per-thread 历史注入 | 已落地 | Slice 1/2(`agent-chat-history-storage` + `agent-chat-history-ui`,归档 2026-10-14);`/agent/sessions*` 走 Go 代理,侧边栏 flag 门控;剩会话 summary 与跨 session recall |
+| **`chat_sessions` / `chat_messages` 表** + per-thread 历史注入 | 已落地 | Slice 1/2(`agent-chat-history-storage` + `agent-chat-history-ui`,归档 2026-10-14);SPA 经 Go `/api/chat/sessions*` 代理到 Python `/agent/sessions*`,侧边栏 flag 门控;剩会话 summary 与跨 session recall |
 | **`/agent/runs` 查询端点** | 未做 | `agent.run_metadata.list_runs_for_user` 已经写好,只缺 endpoint(sessions 端点已由 Slice 2 落地) |
 | **Task routing** (意图 → 计划模板) | 未做 | P0.4 明确推迟到 plan 模板收敛后 |
 
@@ -100,7 +100,7 @@
 
 | 社区方案 | 我们有什么 / 没有 |
 |---|---|
-| **NeMo Guardrails** / **Guardrails AI** / **Lakera** (prompt injection / PII 过滤) | Pydantic 校验 planner 输出;golden-eval security 注入线(`evals/cases/security.yaml`,8 条用例:RAG / 工具结果注入、prompt 泄漏、跨用户删除)把注入面变成可回归测量。但仍无程序化防御层(注入过滤 / PII / 审核),拦截靠 system prompt 纪律 + Go 侧 MCP tool 授权 |
+| **NeMo Guardrails** / **Guardrails AI** / **Lakera** (prompt injection / PII 过滤) | Pydantic 校验 planner 输出;golden-eval security 注入线(`evals/cases/security.yaml`,9 条用例:RAG / 工具结果注入、prompt 泄漏、跨用户删除)把注入面变成可回归测量;程序化防线已有 mutating-tool HITL 确认门(agent-feed-tools)+ Go 侧 per-user MCP tool 授权。仍未做注入过滤 / PII / 审核层,残余拦截靠 system prompt 纪律 |
 
 ### F. 现代 agent framework 选择
 
@@ -136,9 +136,11 @@
 - **Golden Set/Eval 套件** (A 类延伸) — `agent-golden-eval` 切片(实现落地):`evals/` promptfoo 套件,`make eval-golden` / `make eval-security`(串行、不启服务);custom provider 打 `POST /agent/run` 真 SSE,确定性 grader,主回归线与 `security` 注入线分开出率,基线报告入库。v0 = 21 条用例(五形态:rag-only / tool-only / 多步 / 拒答 / budget-unavailable);react 形态与扩容到 30-50 条留 v0.1。Inspect AI 升级路径不变(同一份数据集可共存);红队生成仍可用 `promptfoo redteam`
 
 **仍然排队的(按 ROI,2026-10-17 重排)**:
-  1. **Prompt registry + A/B harness** (F 类) — prompt 是 4B 小模型场景的主要质量杠杆,改动高频且现在是盲改(`PLANNER_SYSTEM_PROMPT` 硬编码在 `planner.py`,零版本化);前置已齐(Langfuse 落盘 + Golden Set 量化),剩余工作量小:prompt 外置 + 变体选择器 + eval 套件对比。同时解开 Task routing(P0.4)的锁——它推迟到 plan 模板收敛,而收敛靠可测量才快
-  2. **LiteLLM seam** (B 类) — agent 路径目前没有 provider failover(Go `llm.Router` 只盖旧 Go 路径,Python agent 直连 vLLM 单点,vLLM 崩则 agent 全瘫),LiteLLM 的 router/fallback 给 agent 补上 Go 已有的韧性;仍是接任何第二家 provider 前的排序约束。vLLM tool-call 咬人的痛已被 tool-args retry budget 止了一半(malformed call 有界 re-prompt)
-  3. **Guardrails 子集:Langfuse 数据卫生** (E 类) — 注入面已有三层纵深:mutating 工具确认门(`executor.py`,agent-feed-tools D5/D6)+ Go 侧 per-user MCP 授权 + security eval 回归线,残余风险有界(泄漏 system prompt 给用户本人、操纵用户本要点头的动作);NeMo 式全量过滤层不划算(加延迟 / 误杀 / 依赖)。值得做的子集:prompt / response 全文进自托管 Langfuse 前的 PII 卫生,可并入第 1 项
+  1. **Eval 强制执行点** — golden / security 两条线目前是纯手动 make 目标,`.github/workflows/` 零引用,prompt 安全网靠"有人记得跑"。拆两半落地:CI 加 `make eval-unit` 跑 `evals/tests/` 的 11 个 harness 单测(GPU-free,防 grader / corpus schema / wire-contract 腐烂,现状零接线);真模型的 `eval-security` 落在改动时刻——pre-push hook 或 drift-check 式 skill,检测 agent-py / prompt / eval cases 变更且 side stack 活着时跑(9 条,几分钟;栈没开降级为警告不硬卡)。GitHub-hosted runner 无 GPU 起不了 vLLM,self-hosted nightly 依赖 box 常开,均不设
+  2. **每用户并发 run 上限** — 治理缺口:per-IP rate limit 管吞吐、hourly budget 管用量,没有东西限制同时 running 的 run 数;单卡 4B vLLM 下一个用户多开即可排队占满 GPU,其他用户全饿。修法照抄 budget 计数器模式(Redis `agent:running:u={id}` INCR/DECR + 上限返 429),约一天的活
+  3. **Prompt registry + A/B harness** (F 类) — prompt 是 4B 小模型场景的主要质量杠杆,改动高频且现在是盲改(`PLANNER_SYSTEM_PROMPT` 硬编码在 `planner.py`,零版本化);前置已齐(Langfuse 落盘 + Golden Set 量化),剩余工作量小:prompt 外置 + 变体选择器 + eval 套件对比。同时解开 Task routing(P0.4)的锁——它推迟到 plan 模板收敛,而收敛靠可测量才快
+  4. **Guardrails 子集:Langfuse 数据卫生** (E 类) — 注入面已有三层纵深:mutating 工具确认门(`executor.py`,agent-feed-tools D5/D6)+ Go 侧 per-user MCP 授权 + security eval 回归线,残余风险有界(泄漏 system prompt 给用户本人、操纵用户本要点头的动作);NeMo 式全量过滤层不划算(加延迟 / 误杀 / 依赖)。值得做的子集:prompt / response 全文进自托管 Langfuse 前的 PII 卫生,可并入第 3 项
+  5. **LiteLLM seam** (B 类) — agent 路径目前没有 provider failover(Go `llm.Router` 只盖旧 Go 路径,Python agent 直连 vLLM 单点,vLLM 崩则 agent 全瘫),LiteLLM 的 router/fallback 给 agent 补上 Go 已有的韧性;仍是接任何第二家 provider 前的排序约束。降位理由:vLLM tool-call 咬人的痛已被 tool-args retry budget 止了一半(malformed call 有界 re-prompt),且无接第二家 provider 的计划时它纯是保险
 
 **降出队列**:
 - **GPTCache / Redis LangCache** (C 类) — 命中率假设未验证:最终 prompt 拼 RAG 上下文 + 历史,exact-match 几乎不命中;feeds per-user 使缓存 key 必须带 `user_id`,跨用户复用归零;语义缓存 false-hit 对 tool 流危险。前置动作是拉 Langfuse 数据统计相似 query 占比,数据不支持就除名

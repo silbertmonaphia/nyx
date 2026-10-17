@@ -185,7 +185,7 @@ as a per-run eval user and grades with deterministic assertions — no LLM judge
 - Unit gate (no model, no network): `backend/agent_py/.venv/bin/python -m pytest evals/tests -q` from the
   repo root. CI runs no `backend/agent_py` pytest today, so this is a local gate.
 - Harness internals (provider contract, corpus schema, grading semantics) → the change spec at
-  `openspec/changes/agent-golden-eval/specs/agent-golden-eval/spec.md`. promptfoo is pinned in the Makefile
+  `openspec/changes/archive/2026-10-16-agent-golden-eval/specs/agent-golden-eval/spec.md`. promptfoo is pinned in the Makefile
   (`EVAL_PROMPTFOO_VERSION`).
 - Web-shaped cases should run against the bundled Tavily stub (`evals/stubs/tavily_stub.py`), not the live
   search API: point the eval stack at it with `PYTHON_AGENT_TAVILY_BASE_URL=http://127.0.0.1:8899/search`
