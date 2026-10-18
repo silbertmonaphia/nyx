@@ -206,6 +206,88 @@ async def test_pre_split_row_reads_null_split(pool: asyncpg.Pool) -> None:
     assert legacy.completion_tokens is None
 
 
+async def test_populated_steps_round_trip_through_replay_and_export(
+    pool: asyncpg.Pool,
+) -> None:
+    from agent.chat_store import ChatStore
+
+    store = ChatStore(pool)
+    user_id = 1
+    run_id = str(_uuid.uuid4())
+    await store.create_session(user_id, run_id)
+
+    steps = [
+        {"id": "step_1", "kind": "rag", "status": "ok"},
+        {
+            "id": "step_2",
+            "kind": "tool",
+            "status": "ok",
+            "tool_name": "list_feeds",
+            "tool_args": {"limit": 5},
+            "tool_result": {"items": []},
+            "retry_count": 1,
+        },
+        {"id": "step_3", "kind": "llm", "status": "ok"},
+    ]
+    assistant_id = await store.record_message(
+        run_id,
+        user_id,
+        role="assistant",
+        content="done",
+        steps=steps,
+    )
+    user_id_row = await store.record_message(
+        run_id, user_id, role="user", content="go"
+    )
+
+    rows = await store.list_messages(run_id, user_id)
+    assert rows is not None
+    by_id = {row.id: row for row in rows}
+    assert by_id[assistant_id].steps == steps
+    assert by_id[user_id_row].steps is None
+
+    exported = await store.list_all_messages_for_user(user_id)
+    exported_by_id = {row.id: row for row in exported}
+    assert exported_by_id[assistant_id].steps == steps
+    assert exported_by_id[user_id_row].steps is None
+
+    async with pool.acquire() as conn:
+        raw = await conn.fetchval(
+            "SELECT steps::text FROM agent.chat_messages WHERE id=$1",
+            assistant_id,
+        )
+    assert _json.loads(raw) == steps
+
+
+async def test_null_steps_round_trip(pool: asyncpg.Pool) -> None:
+    from agent.chat_store import ChatStore
+
+    store = ChatStore(pool)
+    user_id = 1
+    run_id = str(_uuid.uuid4())
+    await store.create_session(user_id, run_id)
+
+    no_trace_id = await store.record_message(
+        run_id, user_id, role="assistant", content="planless"
+    )
+    async with pool.acquire() as conn:
+        legacy_id = await conn.fetchval(
+            "INSERT INTO agent.chat_messages "
+            "(session_id, role, content) VALUES ($1, 'assistant', 'legacy') "
+            "RETURNING id",
+            run_id,
+        )
+
+    rows = await store.list_messages(run_id, user_id)
+    assert rows is not None
+    by_id = {row.id: row for row in rows}
+    assert by_id[no_trace_id].steps is None
+    assert by_id[legacy_id].steps is None
+
+    exported = await store.list_all_messages_for_user(user_id)
+    assert all(row.steps is None for row in exported)
+
+
 async def test_soft_then_hard_delete_lifecycle(pool: asyncpg.Pool) -> None:
     from agent.chat_store import ChatStore
 

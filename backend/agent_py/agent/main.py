@@ -70,6 +70,7 @@ from .ratelimit import IpRateLimiter, RateLimitMiddleware
 from .retention import RetentionCron
 from .run_metadata import RunMetadata, RunMetadataUnavailable, build_pool
 from .state import AgentState, new_state
+from .step_trace import StepTrace
 from .sweeper import StaleRunSweeper
 from .tool_dispatch import LocalToolRegistry, ToolDispatcher
 from .tools_client import ToolsClient
@@ -1087,6 +1088,7 @@ async def _stream_agent_run(
     # warn-log and the stream is unaffected).
     assistant_text_parts: list[str] = []
     assistant_tool_calls: list[dict] = []
+    assistant_steps = StepTrace()
     pump_task: asyncio.Task[None] | None = None
     try:
         # Live drain (agent-feed-tools D2): the pump drives the graph while
@@ -1118,6 +1120,7 @@ async def _stream_agent_run(
                 yield f": {payload}\n\n".encode()
                 continue
             event = payload  # an ("event", Event) pair
+            assistant_steps.fold(event.kind, event.payload)
             yield _sse_encode(event)
             # Track terminal totals for metadata persistence.
             if event.kind == "done":
@@ -1222,6 +1225,7 @@ async def _stream_agent_run(
                         role="assistant",
                         content="".join(assistant_text_parts),
                         tool_calls=assistant_tool_calls or None,
+                        steps=assistant_steps.to_list(),
                         tokens=total_tokens,
                         prompt_tokens=prompt_tokens,
                         completion_tokens=completion_tokens,

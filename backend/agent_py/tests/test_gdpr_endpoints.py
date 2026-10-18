@@ -367,6 +367,7 @@ async def test_export_is_complete_for_one_user(app_ctx) -> None:
         m["prompt_tokens"] is None and m["completion_tokens"] is None
         for m in body["messages"]
     )
+    assert all(m["steps"] is None for m in body["messages"])
     assert sorted(p["key"] for p in body["prefs"]) == sorted(mine["pref_keys"])
     assert sorted(r["id"] for r in body["runs"]) == sorted(mine["run_ids"])
     # Thread ids are the union of run ids (single-turn threads) and
@@ -388,6 +389,40 @@ async def test_export_is_complete_for_one_user(app_ctx) -> None:
         )
     ), "another user's data leaked into the export body"
     assert _export_body_users(body) == {1}
+
+
+async def test_export_includes_the_step_trace(app_ctx) -> None:
+    """Spec scenario "Export carries the trace for agent turns": the
+    assistant row exports its persisted trace and every other row (user
+    rows included) exports `steps: null`."""
+    app, pool = app_ctx
+    mine = await _seed_user(pool, 1)
+    trace = [
+        {"id": "step_1", "kind": "rag", "status": "ok"},
+        {"id": "step_2", "kind": "llm", "status": "ok"},
+    ]
+    async with pool.acquire() as conn:
+        assistant_id = await conn.fetchval(
+            "SELECT id FROM agent.chat_messages "
+            "WHERE role='assistant' AND content=$1",
+            mine["contents"][1],
+        )
+        await conn.execute(
+            "UPDATE agent.chat_messages SET steps=$2::jsonb WHERE id=$1",
+            assistant_id,
+            _json.dumps(trace),
+        )
+
+    resp = await _call(app, "GET", "/agent/me/export", user_id=1)
+    assert resp.status_code == 200, resp.text
+    rows = {m["id"]: m for m in resp.json()["messages"]}
+
+    assert rows[assistant_id]["steps"] == trace
+    assert all(
+        row["steps"] is None
+        for message_id, row in rows.items()
+        if message_id != assistant_id
+    )
 
 
 async def test_export_empty_is_well_formed(app_ctx) -> None:

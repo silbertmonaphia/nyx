@@ -301,6 +301,7 @@ def _message_json(message: MessageRow) -> dict:
         "role": message.role,
         "content": message.content,
         "tool_calls": message.tool_calls,  # list | None, never a JSON string
+        "steps": message.steps,
         "tokens": message.tokens,
         "prompt_tokens": message.prompt_tokens,
         "completion_tokens": message.completion_tokens,

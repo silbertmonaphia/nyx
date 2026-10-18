@@ -425,6 +425,18 @@ async def test_messages_replay_order_and_tool_calls_array(app, pool, store):
             "args": {"limit": 10},
         }
     ]
+    steps = [
+        {
+            "id": "step_1",
+            "kind": "tool",
+            "status": "ok",
+            "tool_name": "list_feeds",
+            "tool_args": {"limit": 10},
+            "tool_result": {"items": []},
+            "retry_count": 0,
+        },
+        {"id": "step_2", "kind": "llm", "status": "ok"},
+    ]
     sid = await _seed_session(
         store,
         pool,
@@ -435,6 +447,7 @@ async def test_messages_replay_order_and_tool_calls_array(app, pool, store):
                 "role": "assistant",
                 "content": "here you go",
                 "tool_calls": tool_calls,
+                "steps": steps,
                 "tokens": 42,
                 "prompt_tokens": 30,
                 "completion_tokens": 12,
@@ -459,13 +472,44 @@ async def test_messages_replay_order_and_tool_calls_array(app, pool, store):
     # The wire contract: a JSON array, not a JSON-encoded string.
     assert isinstance(messages[1]["tool_calls"], list)
     assert messages[1]["tool_calls"] == tool_calls
+    assert isinstance(messages[1]["steps"], list)
+    assert messages[1]["steps"] == steps
     assert messages[1]["tokens"] == 42
     assert messages[1]["prompt_tokens"] == 30
     assert messages[1]["completion_tokens"] == 12
     assert messages[0]["tool_calls"] is None
+    assert messages[0]["steps"] is None
+    assert messages[2]["steps"] is None
     assert messages[0]["prompt_tokens"] is None
     assert messages[0]["completion_tokens"] is None
     assert datetime.fromisoformat(messages[0]["created_at"]).tzinfo is not None
+
+
+async def test_messages_replay_preserves_native_rag_and_llm_steps(
+    app, pool, store
+) -> None:
+    """A `[rag, llm]` plan dispatches no tools: `tool_calls` is NULL while
+    the persisted trace still replays both steps (spec scenario)."""
+    steps = [
+        {"id": "step_1", "kind": "rag", "status": "ok"},
+        {"id": "step_2", "kind": "llm", "status": "ok"},
+    ]
+    sid = await _seed_session(
+        store,
+        pool,
+        user_id=1,
+        messages=[
+            {"role": "user", "content": "summarize"},
+            {"role": "assistant", "content": "summary", "steps": steps},
+        ],
+    )
+
+    resp = await _call(app, "GET", f"/agent/sessions/{sid}/messages")
+    assert resp.status_code == 200, resp.text
+    messages = resp.json()["messages"]
+
+    assert messages[1]["tool_calls"] is None
+    assert messages[1]["steps"] == steps
 
 
 async def test_cross_user_messages_404(app, pool, store):
