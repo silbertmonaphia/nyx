@@ -302,5 +302,7 @@ def _message_json(message: MessageRow) -> dict:
         "content": message.content,
         "tool_calls": message.tool_calls,  # list | None, never a JSON string
         "tokens": message.tokens,
+        "prompt_tokens": message.prompt_tokens,
+        "completion_tokens": message.completion_tokens,
         "created_at": message.created_at.isoformat(),
     }

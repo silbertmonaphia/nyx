@@ -157,6 +157,8 @@ async def test_record_message_round_trip_and_touch(
         content="hi back",
         tool_calls=[{"name": "list_feeds", "args": {"limit": 10}}],
         tokens=42,
+        prompt_tokens=30,
+        completion_tokens=12,
     )
     assert isinstance(msg_id, int) and msg_id > 0
 
@@ -167,15 +169,41 @@ async def test_record_message_round_trip_and_touch(
     # The tool_calls JSON round-trips byte-faithfully.
     async with pool.acquire() as conn:
         row = await conn.fetchrow(
-            "SELECT role, content, tool_calls::text AS tc, tokens "
+            "SELECT role, content, tool_calls::text AS tc, tokens, "
+            "prompt_tokens, completion_tokens "
             "FROM agent.chat_messages WHERE id=$1",
             msg_id,
         )
     assert row["role"] == "assistant"
     assert row["content"] == "hi back"
     assert row["tokens"] == 42
+    assert row["prompt_tokens"] == 30
+    assert row["completion_tokens"] == 12
     parsed = _json.loads(row["tc"])
     assert parsed == [{"name": "list_feeds", "args": {"limit": 10}}]
+
+
+async def test_pre_split_row_reads_null_split(pool: asyncpg.Pool) -> None:
+    from agent.chat_store import ChatStore
+
+    store = ChatStore(pool)
+    run_id = str(_uuid.uuid4())
+    await store.create_session(1, run_id)
+
+    async with pool.acquire() as conn:
+        legacy_id = await conn.fetchval(
+            "INSERT INTO agent.chat_messages "
+            "(session_id, role, content, tokens) "
+            "VALUES ($1, 'assistant', 'legacy', 7) RETURNING id",
+            run_id,
+        )
+
+    rows = await store.list_messages(run_id, 1)
+    assert rows is not None
+    legacy = next(row for row in rows if row.id == legacy_id)
+    assert legacy.tokens == 7
+    assert legacy.prompt_tokens is None
+    assert legacy.completion_tokens is None
 
 
 async def test_soft_then_hard_delete_lifecycle(pool: asyncpg.Pool) -> None:

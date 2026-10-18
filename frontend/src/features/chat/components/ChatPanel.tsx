@@ -410,11 +410,16 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ open, onOpenChange }) => {
                       )}
                     {m.role === "assistant" && m.usage && (
                       <div className="mt-1 text-[10px] text-muted-foreground">
-                        {t("chat.tokens", {
-                          total: m.usage.total_tokens,
-                          prompt: m.usage.prompt_tokens,
-                          completion: m.usage.completion_tokens,
-                        })}
+                        {m.usage.prompt_tokens !== null &&
+                        m.usage.completion_tokens !== null
+                          ? t("chat.tokens", {
+                              total: m.usage.total_tokens,
+                              prompt: m.usage.prompt_tokens,
+                              completion: m.usage.completion_tokens,
+                            })
+                          : t("chat.tokensTotalOnly", {
+                              total: m.usage.total_tokens,
+                            })}
                       </div>
                     )}
                   </div>

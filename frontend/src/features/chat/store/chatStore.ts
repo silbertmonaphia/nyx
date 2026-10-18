@@ -13,15 +13,15 @@ import {
   type SessionSummary,
 } from "../types/chat";
 
-// Per-message `usage` payload delivered on `event: done`. Lives on
-// the assistant message itself so a follow-up render can show token
-// counts without holding the event out-of-band.
+// Per-message `usage` payload delivered on `event: done` or rebuilt
+// from a persisted history row so a follow-up render can show token
+// counts; a pre-split replay carries the total only (`null` split).
 export interface ChatMessage {
   role: "user" | "assistant";
   content: string;
   usage?: {
-    prompt_tokens: number;
-    completion_tokens: number;
+    prompt_tokens: number | null;
+    completion_tokens: number | null;
     total_tokens: number;
   };
   // Failover notes streamed from the backend when the primary LLM
@@ -278,9 +278,9 @@ function isApprovalExpired(err: unknown): boolean {
  * live stream produces. Rows without usable tool calls render as plain
  * assistant text; unknown roles (the schema allows `tool` / `system`)
  * fold into the assistant side — the replay surface is user-facing and
- * only distinguishes "me" from "the agent". `tokens` is deliberately
- * dropped: it's a session total, not the prompt/completion split the
- * live usage row shows.
+ * only distinguishes "me" from "the agent". The persisted usage split
+ * rebuilds the same token row the live `event: done` produced; rows
+ * written before the split columns existed keep their total only.
  */
 function toReplayMessage(row: SessionMessage): ChatMessage {
   if (row.role === "user") {
@@ -299,9 +299,20 @@ function toReplayMessage(row: SessionMessage): ChatMessage {
       toolArgs: call.args,
     });
   }
-  return steps.length > 0
-    ? { role: "assistant", content: row.content, steps }
-    : { role: "assistant", content: row.content };
+  const usage: ChatMessage["usage"] =
+    row.prompt_tokens !== null && row.completion_tokens !== null
+      ? {
+          prompt_tokens: row.prompt_tokens,
+          completion_tokens: row.completion_tokens,
+          total_tokens: row.tokens,
+        }
+      : row.tokens > 0
+        ? { prompt_tokens: null, completion_tokens: null, total_tokens: row.tokens }
+        : undefined;
+  const message: ChatMessage = { role: "assistant", content: row.content };
+  if (steps.length > 0) message.steps = steps;
+  if (usage) message.usage = usage;
+  return message;
 }
 
 // Minimal store surface the module-level session helpers need. Typed

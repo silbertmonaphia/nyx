@@ -85,6 +85,8 @@ function makeMessageRow(overrides: Partial<SessionMessage> = {}): SessionMessage
     content: 'hello',
     tool_calls: null,
     tokens: 0,
+    prompt_tokens: null,
+    completion_tokens: null,
     created_at: '2026-10-14T00:00:00Z',
     ...overrides,
   };
@@ -1176,6 +1178,8 @@ describe('useChatStore', () => {
             { step_id: 's1', call_id: 'c1', name: 'list_feeds', args: { limit: 5 } },
           ],
           tokens: 9,
+          prompt_tokens: 7,
+          completion_tokens: 2,
         }),
       ]);
 
@@ -1204,8 +1208,31 @@ describe('useChatStore', () => {
               toolArgs: { limit: 5 },
             },
           ],
+          usage: { prompt_tokens: 7, completion_tokens: 2, total_tokens: 9 },
         },
       ]);
+    });
+
+    it('replays a pre-split row with its total-only usage', async () => {
+      mockedService.getMessages.mockResolvedValueOnce([
+        makeMessageRow({ id: 1, role: 'user', content: 'hello' }),
+        makeMessageRow({
+          id: 2,
+          role: 'assistant',
+          content: 'hi there',
+          tokens: 42,
+        }),
+      ]);
+
+      await act(async () => {
+        await useChatStore.getState().setCurrentSession('sess-legacy');
+      });
+
+      expect(useChatStore.getState().messages[1]).toEqual({
+        role: 'assistant',
+        content: 'hi there',
+        usage: { prompt_tokens: null, completion_tokens: null, total_tokens: 42 },
+      });
     });
 
     it('is a no-op when the session is already active', async () => {

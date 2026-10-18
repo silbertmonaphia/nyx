@@ -363,6 +363,10 @@ async def test_export_is_complete_for_one_user(app_ctx) -> None:
 
     assert sorted(s["id"] for s in body["sessions"]) == sorted(mine["session_ids"])
     assert sorted(m["content"] for m in body["messages"]) == sorted(mine["contents"])
+    assert all(
+        m["prompt_tokens"] is None and m["completion_tokens"] is None
+        for m in body["messages"]
+    )
     assert sorted(p["key"] for p in body["prefs"]) == sorted(mine["pref_keys"])
     assert sorted(r["id"] for r in body["runs"]) == sorted(mine["run_ids"])
     # Thread ids are the union of run ids (single-turn threads) and

@@ -131,6 +131,7 @@ export const zh = {
         failed: '失败',
       },
       tokens: '令牌：{{total}}（提示 {{prompt}} · 生成 {{completion}}）',
+      tokensTotalOnly: '令牌：{{total}}',
       partialFailurePlan: '本次运行未到达终止步骤',
       partialFailureSteps: '部分步骤失败 — 下方答案可能不完整',
       confirmation: {

@@ -436,6 +436,8 @@ async def test_messages_replay_order_and_tool_calls_array(app, pool, store):
                 "content": "here you go",
                 "tool_calls": tool_calls,
                 "tokens": 42,
+                "prompt_tokens": 30,
+                "completion_tokens": 12,
             },
             {"role": "user", "content": "thanks"},
         ],
@@ -458,7 +460,11 @@ async def test_messages_replay_order_and_tool_calls_array(app, pool, store):
     assert isinstance(messages[1]["tool_calls"], list)
     assert messages[1]["tool_calls"] == tool_calls
     assert messages[1]["tokens"] == 42
+    assert messages[1]["prompt_tokens"] == 30
+    assert messages[1]["completion_tokens"] == 12
     assert messages[0]["tool_calls"] is None
+    assert messages[0]["prompt_tokens"] is None
+    assert messages[0]["completion_tokens"] is None
     assert datetime.fromisoformat(messages[0]["created_at"]).tzinfo is not None
 
 

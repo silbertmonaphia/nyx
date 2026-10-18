@@ -27,7 +27,7 @@ The service SHALL expose `GET /agent/sessions?limit=<n>&before=<cursor>` returni
 
 ### Requirement: Per-session message replay
 
-The service SHALL expose `GET /agent/sessions/{session_id}/messages` returning `{messages: [{id, role, content, tool_calls, tokens, created_at}]}` ordered by `created_at ASC, id ASC`. The session MUST belong to the requesting user (`X-Nyx-User-Id`); otherwise 404. Soft-deleted sessions return 404 (consistent with the list filter).
+The service SHALL expose `GET /agent/sessions/{session_id}/messages` returning `{messages: [{id, role, content, tool_calls, tokens, prompt_tokens, completion_tokens, created_at}]}` ordered by `created_at ASC, id ASC`. `prompt_tokens` / `completion_tokens` are `null` on rows persisted before the usage-split columns existed; a reopened chat panel then renders the total only. The session MUST belong to the requesting user (`X-Nyx-User-Id`); otherwise 404. Soft-deleted sessions return 404 (consistent with the list filter).
 
 #### Scenario: Replay a multi-message session
 

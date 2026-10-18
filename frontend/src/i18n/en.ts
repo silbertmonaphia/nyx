@@ -144,6 +144,7 @@ export const en: Translation = {
         failed: 'failed',
       },
       tokens: 'tokens: {{total}} ( prompt {{prompt}} · completion {{completion}})',
+      tokensTotalOnly: 'tokens: {{total}}',
       partialFailurePlan: 'Run did not reach a terminal step',
       partialFailureSteps:
         'Some steps failed — the answer below may be incomplete',

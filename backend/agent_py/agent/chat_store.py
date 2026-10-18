@@ -13,9 +13,9 @@ the `agent.*` schema) for user-facing chat history:
   - `list_messages(session_id, user_id)` — chronological replay of one
     session's messages; `None` when the session is unknown / foreign /
     soft-deleted (the API maps that to 404)
-  - `record_message(session_id, user_id, role, content, tool_calls, tokens)`
-    — append one row to `chat_messages` and bump `last_active_at` on the
-    parent session (D8 in `design.md`)
+  - `record_message(session_id, user_id, role, content, tool_calls, tokens,
+    prompt_tokens, completion_tokens)` — append one row to `chat_messages`
+    and bump `last_active_at` on the parent session (D8 in `design.md`)
   - `touch_session(session_id, user_id)` — refresh `last_active_at`
     without inserting a message row
   - `set_title_if_empty(session_id, user_id, title)` — first-exchange
@@ -123,6 +123,8 @@ class MessageRow:
     content: str
     tool_calls: list[dict[str, Any]] | None
     tokens: int
+    prompt_tokens: int | None
+    completion_tokens: int | None
     created_at: datetime
     session_id: str
 
@@ -349,7 +351,8 @@ class ChatStore:
                 rows = await conn.fetch(
                     "SELECT id, session_id, role, content, "
                     "tool_calls::text AS tool_calls, "
-                    "tokens, created_at FROM chat_messages "
+                    "tokens, prompt_tokens, completion_tokens, "
+                    "created_at FROM chat_messages "
                     "WHERE session_id=$1 "
                     "ORDER BY created_at ASC, id ASC",
                     str(session_id),
@@ -367,6 +370,8 @@ class ChatStore:
         *,
         tool_calls: list[dict[str, Any]] | None = None,
         tokens: int = 0,
+        prompt_tokens: int | None = None,
+        completion_tokens: int | None = None,
     ) -> int:
         """Append one row to `chat_messages` and bump `last_active_at`.
 
@@ -400,14 +405,17 @@ class ChatStore:
                 async with conn.transaction():
                     message_id: int = await conn.fetchval(
                         "INSERT INTO chat_messages "
-                        "(session_id, role, content, tool_calls, tokens) "
-                        "VALUES ($1, $2, $3, $4::jsonb, $5) "
+                        "(session_id, role, content, tool_calls, tokens, "
+                        "prompt_tokens, completion_tokens) "
+                        "VALUES ($1, $2, $3, $4::jsonb, $5, $6, $7) "
                         "RETURNING id",
                         session_id_str,
                         role,
                         content,
                         tool_calls_json,
                         tokens,
+                        prompt_tokens,
+                        completion_tokens,
                     )
                     await conn.execute(
                         "UPDATE chat_sessions SET last_active_at=now() "
@@ -735,7 +743,8 @@ class ChatStore:
         async def _select(conn: asyncpg.Connection) -> list[MessageRow]:
             rows = await conn.fetch(
                 "SELECT m.id, m.session_id, m.role, m.content, "
-                "m.tool_calls::text AS tool_calls, m.tokens, m.created_at "
+                "m.tool_calls::text AS tool_calls, m.tokens, "
+                "m.prompt_tokens, m.completion_tokens, m.created_at "
                 "FROM chat_messages m "
                 "JOIN chat_sessions s ON s.id = m.session_id "
                 "WHERE s.user_id=$1 "
@@ -781,6 +790,8 @@ def _row_to_message(row: asyncpg.Record | Any) -> MessageRow:
             _json.loads(raw_tool_calls) if raw_tool_calls is not None else None
         ),
         tokens=row["tokens"],
+        prompt_tokens=row["prompt_tokens"],
+        completion_tokens=row["completion_tokens"],
         created_at=row["created_at"],
         session_id=str(row["session_id"]),
     )

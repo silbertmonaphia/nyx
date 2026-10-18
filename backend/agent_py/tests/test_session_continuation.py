@@ -54,7 +54,7 @@ class _StubStructuredChain:
     def __or__(self, other):
         return self
 
-    async def ainvoke(self, messages):
+    async def ainvoke(self, messages, config=None):
         from agent.types import Plan
 
         return Plan.model_validate(self._payload)
@@ -75,7 +75,14 @@ class _StubLlm:
         type(self).call_count += 1
         if type(self).call_count == 1:
             return AIMessage(content=_json.dumps(self._PLAN))
-        return AIMessage(content="stub answer")
+        return AIMessage(
+            content="stub answer",
+            usage_metadata={
+                "input_tokens": 7,
+                "output_tokens": 3,
+                "total_tokens": 10,
+            },
+        )
 
     def bind(self, **kwargs):
         type(self).call_count += 1
@@ -404,3 +411,27 @@ async def test_disconnect_during_finalize_still_persists(app_ctx):
         )
     finally:
         await conn.close()
+
+
+async def test_assistant_row_persists_usage_split(app_ctx):
+    _StubLlm.call_count = 0
+    resp = await _post_chat(
+        app_ctx, {"messages": [{"role": "user", "content": "hi"}]}
+    )
+    assert resp.status_code == 200
+    assert "event: done" in resp.text
+
+    conn = await _db()
+    try:
+        row = await conn.fetchrow(
+            "SELECT tokens, prompt_tokens, completion_tokens "
+            "FROM chat_messages WHERE role='assistant' "
+            "ORDER BY id DESC LIMIT 1"
+        )
+    finally:
+        await conn.close()
+
+    assert row is not None
+    assert row["prompt_tokens"] == 7
+    assert row["completion_tokens"] == 3
+    assert row["tokens"] == 10

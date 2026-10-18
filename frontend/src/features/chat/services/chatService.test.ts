@@ -1078,6 +1078,8 @@ describe('chatService session endpoints', () => {
               { step_id: 's1', call_id: 'c1', name: 'list_feeds', args: {} },
             ],
             tokens: 12,
+            prompt_tokens: 9,
+            completion_tokens: 3,
             created_at: '2026-10-14T10:00:01Z',
           },
           // Dropped: no content.
@@ -1094,6 +1096,11 @@ describe('chatService session endpoints', () => {
       { step_id: 's1', call_id: 'c1', name: 'list_feeds', args: {} },
     ]);
     expect(messages[0].tool_calls).toBeNull();
+    expect(messages[1].tokens).toBe(12);
+    expect(messages[1].prompt_tokens).toBe(9);
+    expect(messages[1].completion_tokens).toBe(3);
+    expect(messages[0].prompt_tokens).toBeNull();
+    expect(messages[0].completion_tokens).toBeNull();
   });
 
   it('encodes the session id in the replay URL', async () => {

@@ -1076,6 +1076,8 @@ async def _stream_agent_run(
         )
 
     total_tokens = 0
+    prompt_tokens: int | None = None
+    completion_tokens: int | None = None
     error_code: str | None = None
     saw_done = False
     # Chat-history accumulation (openspec/changes/agent-chat-history-storage):
@@ -1121,6 +1123,14 @@ async def _stream_agent_run(
             if event.kind == "done":
                 usage = event.payload.get("usage") or {}
                 total_tokens = int(usage.get("total_tokens", 0))
+                prompt_raw = usage.get("prompt_tokens")
+                completion_raw = usage.get("completion_tokens")
+                prompt_tokens = (
+                    int(prompt_raw) if prompt_raw is not None else None
+                )
+                completion_tokens = (
+                    int(completion_raw) if completion_raw is not None else None
+                )
                 saw_done = True
             elif event.kind == "error":
                 error_code = event.payload.get("code")
@@ -1213,6 +1223,8 @@ async def _stream_agent_run(
                         content="".join(assistant_text_parts),
                         tool_calls=assistant_tool_calls or None,
                         tokens=total_tokens,
+                        prompt_tokens=prompt_tokens,
+                        completion_tokens=completion_tokens,
                     )
                     # Stamp the session's ended_at so the sidebar can
                     # render a "finished" state instead of "live".

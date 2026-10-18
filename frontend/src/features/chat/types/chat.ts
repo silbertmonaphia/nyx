@@ -296,6 +296,8 @@ export interface SessionMessage {
   // message carries none.
   tool_calls: unknown[] | null;
   tokens: number;
+  prompt_tokens: number | null;
+  completion_tokens: number | null;
   created_at: string;
 }
 

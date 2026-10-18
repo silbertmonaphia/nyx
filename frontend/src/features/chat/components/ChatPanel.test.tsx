@@ -36,6 +36,7 @@ function makeRow(
   role: 'user' | 'assistant',
   content: string,
   toolCalls: SessionMessage['tool_calls'] = null,
+  overrides: Partial<SessionMessage> = {},
 ): SessionMessage {
   return {
     id,
@@ -43,7 +44,10 @@ function makeRow(
     content,
     tool_calls: toolCalls,
     tokens: 0,
+    prompt_tokens: null,
+    completion_tokens: null,
     created_at: '2026-10-14T00:00:00Z',
+    ...overrides,
   };
 }
 
@@ -635,6 +639,44 @@ describe('ChatPanel chat history', () => {
     expect(screen.getByTestId('chat-agent-step-tool')).toHaveTextContent(
       'list_feeds',
     );
+  });
+
+  it('replays the persisted token usage split', async () => {
+    useChatStore.setState({
+      sessionList: [makeSession('s1', { title: 'Usage run' })],
+    });
+    mockedService.getMessages.mockResolvedValueOnce([
+      makeRow(1, 'user', 'hi'),
+      makeRow(2, 'assistant', 'hello', null, {
+        tokens: 9,
+        prompt_tokens: 7,
+        completion_tokens: 2,
+      }),
+    ]);
+
+    render(<ChatPanel open={true} onOpenChange={vi.fn()} />);
+    await userEvent.click(screen.getByTestId('chat-session-row'));
+
+    expect(await screen.findByTestId('chat-message-assistant')).toHaveTextContent(
+      /tokens: 9 \( prompt 7 · completion 2\)/,
+    );
+  });
+
+  it('replays a pre-split row with its total only', async () => {
+    useChatStore.setState({
+      sessionList: [makeSession('s1', { title: 'Legacy run' })],
+    });
+    mockedService.getMessages.mockResolvedValueOnce([
+      makeRow(1, 'user', 'hi'),
+      makeRow(2, 'assistant', 'hello', null, { tokens: 42 }),
+    ]);
+
+    render(<ChatPanel open={true} onOpenChange={vi.fn()} />);
+    await userEvent.click(screen.getByTestId('chat-session-row'));
+
+    const bubble = await screen.findByTestId('chat-message-assistant');
+    expect(bubble).toHaveTextContent(/tokens: 42/);
+    expect(bubble).not.toHaveTextContent(/prompt/);
   });
 
   it('streams a new turn below the replayed history on the active run id', async () => {

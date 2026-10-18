@@ -139,6 +139,10 @@ function toSessionMessage(raw: unknown): SessionMessage | null {
     content: row.content,
     tool_calls: Array.isArray(row.tool_calls) ? row.tool_calls : null,
     tokens: typeof row.tokens === "number" ? row.tokens : 0,
+    prompt_tokens:
+      typeof row.prompt_tokens === "number" ? row.prompt_tokens : null,
+    completion_tokens:
+      typeof row.completion_tokens === "number" ? row.completion_tokens : null,
     created_at: typeof row.created_at === "string" ? row.created_at : "",
   };
 }
