@@ -2,7 +2,7 @@
 
 > Full technical README. In a hurry? See the short version: [`README.md`](README.md).
 
-A minimalist feed application — Go 1.26.1 API, React 19 SPA, PostgreSQL, optional Redis cache.
+A minimalist feed application — Go 1.26.9 API, React 19 SPA, PostgreSQL, optional Redis cache.
 
 ## Highlights
 
@@ -166,9 +166,11 @@ go run ./cmd/api
 
 ### Frontend (manual)
 
+Node 24 is the required major, declared in the root `.nvmrc` (run `nvm use` first). Use `npm ci --workspaces=false` for clean, lockfile-exact installs; run `npm install --workspaces=false` only when adding or changing dependencies, and commit `frontend/package-lock.json` with the change.
+
 ```bash
 cd frontend
-npm install
+npm ci --workspaces=false
 npm run dev
 # http://localhost:5173
 ```
