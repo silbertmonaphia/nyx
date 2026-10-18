@@ -146,6 +146,7 @@
       "Read(**/playwright-report/**)",
       "Read(**/test-results/**)",
       "Read(**/db_data/**)",
+      "Read(**/k8s/secrets.yaml)",
       "Read(**/*.log)",
       "Edit(backend/internal/**/db/**)"
     ]
