@@ -13,3 +13,9 @@ make dev-frontend
 # inspect infra
 make dev-pgsql-inspect
 make dev-redis-inspect
+
+# Langfuse default down
+# Langfuse up (langfuse is python agent otel)
+# sudo docker compose --profile langfuse up -d
+# Langfuse down(untouch db/redis/jaeger)
+# sudo docker compose --profile langfuse down
