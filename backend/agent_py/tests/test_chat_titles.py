@@ -65,7 +65,7 @@ class _StubStructuredChain:
     def __or__(self, other):
         return self
 
-    async def ainvoke(self, messages):
+    async def ainvoke(self, messages, config=None):
         from agent.types import Plan
 
         return Plan.model_validate(self._payload)
@@ -82,7 +82,7 @@ class _StubLlm:
     def __init__(self, *args, **kwargs):
         pass
 
-    async def ainvoke(self, messages):
+    async def ainvoke(self, messages, config=None):
         from langchain_core.messages import AIMessage
 
         type(self).call_count += 1
@@ -116,7 +116,7 @@ class _StubTitleLlm:
         cls.init_kwargs = []
         cls.prompts = []
 
-    async def ainvoke(self, messages):
+    async def ainvoke(self, messages, config=None):
         from langchain_core.messages import AIMessage
 
         type(self).call_count += 1
@@ -134,7 +134,7 @@ class _BoomTitleLlm:
     def reset(cls) -> None:
         cls.call_count = 0
 
-    async def ainvoke(self, messages):
+    async def ainvoke(self, messages, config=None):
         type(self).call_count += 1
         raise RuntimeError("simulated refinement outage")
 
@@ -539,7 +539,7 @@ async def test_slow_refinement_never_delays_or_alters_the_stream(
         def __init__(self, *args, **kwargs):
             pass
 
-        async def ainvoke(self, messages):
+        async def ainvoke(self, messages, config=None):
             from langchain_core.messages import AIMessage
 
             type(self).started += 1

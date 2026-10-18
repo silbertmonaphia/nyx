@@ -49,7 +49,7 @@ class _StubStructuredChain:
     def __or__(self, other):
         return self
 
-    async def ainvoke(self, messages):
+    async def ainvoke(self, messages, config=None):
         from agent.types import Plan
 
         return Plan.model_validate(self._payload)
@@ -71,7 +71,7 @@ class _PlanLlm:
         type(self).call_count += 1
         return _StubStructuredChain(self._PLAN)
 
-    async def ainvoke(self, messages):
+    async def ainvoke(self, messages, config=None):
         from langchain_core.messages import AIMessage
 
         type(self).call_count += 1
@@ -98,7 +98,7 @@ class _GatedLlm:
         type(self).call_count += 1
         return _StubStructuredChain(self._PLAN)
 
-    async def ainvoke(self, messages):
+    async def ainvoke(self, messages, config=None):
         from langchain_core.messages import AIMessage
 
         type(self).call_count += 1

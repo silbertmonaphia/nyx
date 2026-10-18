@@ -66,7 +66,7 @@ class _StubStructuredChain:
     def __or__(self, other):
         return self
 
-    async def ainvoke(self, messages):
+    async def ainvoke(self, messages, config=None):
         from agent.types import Plan
 
         return Plan.model_validate(self._payload)
@@ -83,7 +83,7 @@ class _StubLlm:
     def __init__(self, *args, **kwargs):
         pass
 
-    async def ainvoke(self, messages):
+    async def ainvoke(self, messages, config=None):
         from langchain_core.messages import AIMessage
 
         type(self).call_count += 1
@@ -115,7 +115,7 @@ class _StubPrefsLlm:
     def reset(cls) -> None:
         cls.call_count = 0
 
-    async def ainvoke(self, messages):
+    async def ainvoke(self, messages, config=None):
         from langchain_core.messages import AIMessage
 
         type(self).call_count += 1
@@ -311,7 +311,7 @@ async def test_extraction_failure_is_invisible(
         def __init__(self, *args, **kwargs):
             pass
 
-        async def ainvoke(self, messages):
+        async def ainvoke(self, messages, config=None):
             raise RuntimeError("simulated extraction outage")
 
     monkeypatch.setattr(prefs_module, "ChatOpenAI", _BoomPrefsLlm)
@@ -527,7 +527,7 @@ class _CapturingExecutorLlm:
     def reset(cls) -> None:
         cls.captured = []
 
-    async def ainvoke(self, messages):
+    async def ainvoke(self, messages, config=None):
         from langchain_core.messages import AIMessage
 
         type(self).captured.append(list(messages))
