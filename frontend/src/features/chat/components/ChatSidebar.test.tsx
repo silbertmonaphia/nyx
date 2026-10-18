@@ -214,6 +214,7 @@ describe('ChatSidebar', () => {
         role: 'user',
         content: 'from history',
         tool_calls: null,
+        steps: null,
         tokens: 0,
         created_at: '2026-10-14T00:00:00Z',
       },

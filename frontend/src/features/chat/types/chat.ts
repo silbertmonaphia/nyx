@@ -283,6 +283,17 @@ export interface SessionSummary {
   message_count: number;
 }
 
+export interface SessionStep {
+  id: string;
+  kind: ChatStepKind;
+  status: "running" | "ok" | "failed";
+  tool_name?: string;
+  tool_args?: unknown;
+  tool_result?: unknown;
+  retry_count?: number;
+  reason?: string;
+}
+
 /** One replayed message — `GET /api/chat/sessions/{id}/messages` entry. */
 export interface SessionMessage {
   id: number;
@@ -295,6 +306,7 @@ export interface SessionMessage {
   // stream (`{step_id, call_id, name, args}`). `null` when the
   // message carries none.
   tool_calls: unknown[] | null;
+  steps: SessionStep[] | null;
   tokens: number;
   prompt_tokens: number | null;
   completion_tokens: number | null;

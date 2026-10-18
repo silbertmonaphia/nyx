@@ -272,32 +272,48 @@ function isApprovalExpired(err: unknown): boolean {
 
 /**
  * Convert a stored message row into the panel's `ChatMessage` shape.
- * Assistant rows carry their persisted `tool_calls` (the wire envelope
- * verbatim: `{step_id, call_id, name, args}`) which rehydrate as
- * `steps` so the replay renders the same "agent steps" disclosure the
- * live stream produces. Rows without usable tool calls render as plain
- * assistant text; unknown roles (the schema allows `tool` / `system`)
- * fold into the assistant side — the replay surface is user-facing and
- * only distinguishes "me" from "the agent". The persisted usage split
- * rebuilds the same token row the live `event: done` produced; rows
- * written before the split columns existed keep their total only.
+ * Assistant rows prefer their persisted `steps` trace (the same kinds
+ * and statuses the live stream rendered); rows from before that column
+ * existed fall back to `tool_calls` (the wire envelope verbatim:
+ * `{step_id, call_id, name, args}`) which rehydrate as `steps`. Rows
+ * without either render as plain assistant text; unknown roles (the
+ * schema allows `tool` / `system`) fold into the assistant side — the
+ * replay surface is user-facing and only distinguishes "me" from "the
+ * agent". The persisted usage split rebuilds the same token row the
+ * live `event: done` produced; rows written before the split columns
+ * existed keep their total only.
  */
 function toReplayMessage(row: SessionMessage): ChatMessage {
   if (row.role === "user") {
     return { role: "user", content: row.content };
   }
   const steps: ChatStep[] = [];
-  for (const raw of row.tool_calls ?? []) {
-    if (!raw || typeof raw !== "object") continue;
-    const call = raw as Record<string, unknown>;
-    if (typeof call.step_id !== "string" || call.step_id === "") continue;
-    steps.push({
-      id: call.step_id,
-      kind: "tool",
-      status: "ok",
-      toolName: typeof call.name === "string" ? call.name : undefined,
-      toolArgs: call.args,
-    });
+  if (row.steps && row.steps.length > 0) {
+    for (const step of row.steps) {
+      steps.push({
+        id: step.id,
+        kind: step.kind,
+        status: step.status,
+        toolName: step.tool_name,
+        toolArgs: step.tool_args,
+        toolResult: step.tool_result,
+        retryCount: step.retry_count,
+        reason: step.reason,
+      });
+    }
+  } else {
+    for (const raw of row.tool_calls ?? []) {
+      if (!raw || typeof raw !== "object") continue;
+      const call = raw as Record<string, unknown>;
+      if (typeof call.step_id !== "string" || call.step_id === "") continue;
+      steps.push({
+        id: call.step_id,
+        kind: "tool",
+        status: "ok",
+        toolName: typeof call.name === "string" ? call.name : undefined,
+        toolArgs: call.args,
+      });
+    }
   }
   const usage: ChatMessage["usage"] =
     row.prompt_tokens !== null && row.completion_tokens !== null

@@ -84,6 +84,7 @@ function makeMessageRow(overrides: Partial<SessionMessage> = {}): SessionMessage
     role: 'user',
     content: 'hello',
     tool_calls: null,
+    steps: null,
     tokens: 0,
     prompt_tokens: null,
     completion_tokens: null,
@@ -1233,6 +1234,159 @@ describe('useChatStore', () => {
         content: 'hi there',
         usage: { prompt_tokens: null, completion_tokens: null, total_tokens: 42 },
       });
+    });
+
+    it('replays the persisted step trace, including native rag and llm steps', async () => {
+      mockedService.getMessages.mockResolvedValueOnce([
+        makeMessageRow({ id: 1, role: 'user', content: 'hello' }),
+        makeMessageRow({
+          id: 2,
+          role: 'assistant',
+          content: 'grounded answer',
+          tool_calls: null,
+          steps: [
+            { id: 'step_1', kind: 'rag', status: 'ok' },
+            {
+              id: 'step_2',
+              kind: 'tool',
+              status: 'failed',
+              tool_name: 'list_feeds',
+              tool_args: { limit: 10 },
+              tool_result: 'tool_call_failed',
+              retry_count: 2,
+              reason: 'tool_error',
+            },
+            { id: 'step_3', kind: 'llm', status: 'ok' },
+          ],
+          tokens: 12,
+          prompt_tokens: 9,
+          completion_tokens: 3,
+        }),
+      ]);
+
+      await act(async () => {
+        await useChatStore.getState().setCurrentSession('sess-steps');
+      });
+
+      const assistant = useChatStore.getState().messages[1];
+      expect(assistant?.steps).toEqual([
+        {
+          id: 'step_1',
+          kind: 'rag',
+          status: 'ok',
+          toolName: undefined,
+          toolArgs: undefined,
+          toolResult: undefined,
+          retryCount: undefined,
+          reason: undefined,
+        },
+        {
+          id: 'step_2',
+          kind: 'tool',
+          status: 'failed',
+          toolName: 'list_feeds',
+          toolArgs: { limit: 10 },
+          toolResult: 'tool_call_failed',
+          retryCount: 2,
+          reason: 'tool_error',
+        },
+        {
+          id: 'step_3',
+          kind: 'llm',
+          status: 'ok',
+          toolName: undefined,
+          toolArgs: undefined,
+          toolResult: undefined,
+          retryCount: undefined,
+          reason: undefined,
+        },
+      ]);
+      expect(assistant?.usage).toEqual({
+        prompt_tokens: 9,
+        completion_tokens: 3,
+        total_tokens: 12,
+      });
+    });
+
+    it('prefers the persisted step trace over tool_calls when both are present', async () => {
+      mockedService.getMessages.mockResolvedValueOnce([
+        makeMessageRow({
+          id: 1,
+          role: 'assistant',
+          content: 'done',
+          tool_calls: [
+            { step_id: 'legacy', call_id: 'c1', name: 'old_tool', args: {} },
+          ],
+          steps: [{ id: 'step_1', kind: 'rag', status: 'ok' }],
+        }),
+      ]);
+
+      await act(async () => {
+        await useChatStore.getState().setCurrentSession('sess-both');
+      });
+
+      expect(useChatStore.getState().messages[0]?.steps).toEqual([
+        {
+          id: 'step_1',
+          kind: 'rag',
+          status: 'ok',
+          toolName: undefined,
+          toolArgs: undefined,
+          toolResult: undefined,
+          retryCount: undefined,
+          reason: undefined,
+        },
+      ]);
+    });
+
+    it('falls back to tool_calls when the steps trace is an empty array', async () => {
+      mockedService.getMessages.mockResolvedValueOnce([
+        makeMessageRow({
+          id: 1,
+          role: 'assistant',
+          content: 'done',
+          tool_calls: [
+            { step_id: 's1', call_id: 'c1', name: 'list_feeds', args: { limit: 5 } },
+          ],
+          steps: [],
+        }),
+      ]);
+
+      await act(async () => {
+        await useChatStore.getState().setCurrentSession('sess-legacy');
+      });
+
+      expect(useChatStore.getState().messages[0]?.steps).toEqual([
+        {
+          id: 's1',
+          kind: 'tool',
+          status: 'ok',
+          toolName: 'list_feeds',
+          toolArgs: { limit: 5 },
+        },
+      ]);
+    });
+
+    it('leaves steps absent when both steps and tool_calls are empty', async () => {
+      mockedService.getMessages.mockResolvedValueOnce([
+        makeMessageRow({
+          id: 1,
+          role: 'assistant',
+          content: 'plain answer',
+          tool_calls: null,
+          steps: null,
+        }),
+      ]);
+
+      await act(async () => {
+        await useChatStore.getState().setCurrentSession('sess-plain');
+      });
+
+      const assistant = useChatStore.getState().messages[0];
+      expect(assistant?.content).toBe('plain answer');
+      expect(
+        Object.prototype.hasOwnProperty.call(assistant, 'steps'),
+      ).toBe(false);
     });
 
     it('is a no-op when the session is already active', async () => {
