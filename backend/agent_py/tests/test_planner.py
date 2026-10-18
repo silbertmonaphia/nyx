@@ -177,7 +177,7 @@ class _ScriptedStructuredClient:
         self._call_count = 0
         self._captured_messages: list = []
 
-    async def ainvoke(self, messages):
+    async def ainvoke(self, messages, config=None):
         self._call_count += 1
         self._captured_messages.append(messages)
         if not self._script:
@@ -262,7 +262,7 @@ def test_retry_injects_validator_error(monkeypatch, scripted_settings):
     real_validation_error = first_error
 
     class _RealErrorClient(_ScriptedStructuredClient):
-        async def ainvoke(self, messages):
+        async def ainvoke(self, messages, config=None):
             self._call_count += 1
             self._captured_messages.append(messages)
             action = self._script.pop(0)
@@ -308,7 +308,7 @@ def test_retry_succeeds_after_validation_failure(monkeypatch, scripted_settings)
     )
 
     class _RecoveringClient(_ScriptedStructuredClient):
-        async def ainvoke(self, messages):
+        async def ainvoke(self, messages, config=None):
             self._call_count += 1
             self._captured_messages.append(messages)
             action = self._script.pop(0)
@@ -348,7 +348,7 @@ def test_retry_exhaustion_emits_plan_invalid(monkeypatch, scripted_settings):
     )
 
     class _AlwaysFailingClient(_ScriptedStructuredClient):
-        async def ainvoke(self, messages):
+        async def ainvoke(self, messages, config=None):
             self._call_count += 1
             self._captured_messages.append(messages)
             raise real_error
@@ -391,7 +391,7 @@ def test_retry_cap_zero_is_one_attempt(monkeypatch):
     )
 
     class _AlwaysFailingClient(_ScriptedStructuredClient):
-        async def ainvoke(self, messages):
+        async def ainvoke(self, messages, config=None):
             self._call_count += 1
             raise real_error
 
@@ -487,7 +487,7 @@ def test_plan_node_emits_error_and_done_on_retry_exhaustion(
     )
 
     class _AlwaysFailingClient(_ScriptedStructuredClient):
-        async def ainvoke(self, messages):
+        async def ainvoke(self, messages, config=None):
             self._call_count += 1
             raise real_error
 
@@ -551,7 +551,7 @@ def test_retry_increments_ok_counter(monkeypatch, scripted_settings):
     )
 
     class _RecoveringClient(_ScriptedStructuredClient):
-        async def ainvoke(self, messages):
+        async def ainvoke(self, messages, config=None):
             self._call_count += 1
             action = self._script.pop(0)
             if action == "raise_validation":
@@ -590,7 +590,7 @@ def test_retry_exhaustion_increments_exhausted_counter(monkeypatch, scripted_set
     )
 
     class _AlwaysFailingClient(_ScriptedStructuredClient):
-        async def ainvoke(self, messages):
+        async def ainvoke(self, messages, config=None):
             self._call_count += 1
             raise real_error
 
@@ -622,7 +622,7 @@ def test_terminal_plan_too_large_preserves_code_and_no_exhausted_tick(
     )
 
     class _OversizedClient(_ScriptedStructuredClient):
-        async def ainvoke(self, messages):
+        async def ainvoke(self, messages, config=None):
             self._call_count += 1
             self._captured_messages.append(messages)
             return oversized
@@ -652,7 +652,7 @@ def test_provider_error_returns_planner_failed_no_retry(monkeypatch, scripted_se
     (legacy parity) and is NOT retried."""
 
     class _ProviderErrorClient(_ScriptedStructuredClient):
-        async def ainvoke(self, messages):
+        async def ainvoke(self, messages, config=None):
             self._call_count += 1
             self._captured_messages.append(messages)
             raise RuntimeError("connection reset by peer")
@@ -710,7 +710,7 @@ def test_non_plan_return_is_retryable_and_recovers(monkeypatch, scripted_setting
     canned = Plan(steps=[PlanStep(id="s1", kind=StepKind.llm, prompt="p")])
 
     class _NoneThenPlanClient(_ScriptedStructuredClient):
-        async def ainvoke(self, messages):
+        async def ainvoke(self, messages, config=None):
             self._call_count += 1
             self._captured_messages.append(messages)
             if self._call_count == 1:
@@ -742,7 +742,7 @@ def test_non_plan_return_exhaustion_ticks_exhausted(monkeypatch, scripted_settin
     before = _counter_value("exhausted")
 
     class _AlwaysNoneClient(_ScriptedStructuredClient):
-        async def ainvoke(self, messages):
+        async def ainvoke(self, messages, config=None):
             self._call_count += 1
 
     client = _AlwaysNoneClient(script=["ok", "ok"])
@@ -779,7 +779,7 @@ def test_legacy_terminal_plan_invalid_ticks_exhausted(monkeypatch):
         def __init__(self, *args, **kwargs):
             pass
 
-        async def ainvoke(self, messages):
+        async def ainvoke(self, messages, config=None):
             return AIMessage(content="not json at all")
 
     monkeypatch.setattr("agent.planner.ChatOpenAI", _GarbageClient)
@@ -801,7 +801,7 @@ def test_legacy_terminal_plan_invalid_ticks_exhausted(monkeypatch):
         def __init__(self, *args, **kwargs):
             pass
 
-        async def ainvoke(self, messages):
+        async def ainvoke(self, messages, config=None):
             steps = ",".join(
                 f'{{"id":"s{i}","kind":"llm","prompt":"x"}}' for i in range(11)
             )
@@ -872,7 +872,7 @@ def test_structured_disabled_routes_through_legacy(monkeypatch):
 
     # Canned response from the legacy ChatOpenAI.
     class _LegacyCannedClient:
-        async def ainvoke(self, messages):
+        async def ainvoke(self, messages, config=None):
             class _Resp:
                 content = '{"steps":[{"id":"a","kind":"llm","prompt":"hi"}]}'
 

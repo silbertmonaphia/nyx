@@ -35,7 +35,7 @@ class _StubStructuredChain:
     def __or__(self, other):
         return self
 
-    async def ainvoke(self, messages):
+    async def ainvoke(self, messages, config=None):
         from agent.types import Plan
 
         return Plan.model_validate(self._payload)
@@ -62,7 +62,7 @@ class _StubLlm:
     def __init__(self, *args, **kwargs):
         pass
 
-    async def ainvoke(self, messages):
+    async def ainvoke(self, messages, config=None):
         from langchain_core.messages import AIMessage
 
         type(self).call_count += 1
@@ -101,7 +101,7 @@ class _LoopForeverLlm:
     def __init__(self, *args, **kwargs):
         pass
 
-    async def ainvoke(self, messages):
+    async def ainvoke(self, messages, config=None):
         from langchain_core.messages import AIMessage
 
         type(self).call_count += 1
@@ -143,7 +143,7 @@ class _EmptyAnswerPlanLlm:
     def __init__(self, *args, **kwargs):
         pass
 
-    async def ainvoke(self, messages):
+    async def ainvoke(self, messages, config=None):
         from langchain_core.messages import AIMessage
 
         type(self).call_count += 1
@@ -464,7 +464,7 @@ class _TooLargePlanLlm:
     def __init__(self, *args, **kwargs):
         pass
 
-    async def ainvoke(self, messages):
+    async def ainvoke(self, messages, config=None):
         raise AssertionError("executor must not run for a plan_too_large run")
 
     def bind(self, **kwargs):

@@ -26,10 +26,12 @@ from __future__ import annotations
 import json
 import logging
 
+from langchain_core.callbacks import UsageMetadataCallbackHandler
 from langchain_core.exceptions import OutputParserException
 from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_core.output_parsers import JsonOutputParser
 from langchain_core.runnables import RunnableLambda
+from langchain_core.runnables.config import ensure_config, merge_configs
 from langchain_openai import ChatOpenAI
 from opentelemetry import trace
 from pydantic import SecretStr, ValidationError
@@ -37,15 +39,17 @@ from pydantic import SecretStr, ValidationError
 from .config import Settings
 from .observability import (
     agent_planner_parse_failures_total,
+    agent_tokens_total,
     jaeger_span,
     trace_observation,
     update_observation,
 )
-from .state import AgentState
+from .state import AgentState, accumulate_usage, accumulate_usage_metadata
 from .tool_dispatch import ToolDispatcher, registry_planner_block
 from .types import (
     PLAN_LEVEL_ERROR_CODES,
     DoneEvent,
+    DoneUsage,
     ErrorEvent,
     Event,
     NoteEvent,
@@ -374,9 +378,12 @@ async def _emit_structured_plan(
         )
         with jaeger_span(tracer, span_name) as span:
             span.set_attribute("attempt", attempt)
+            usage_cb = UsageMetadataCallbackHandler()
             try:
-                plan_obj = await client.ainvoke(messages)
+                cfg = merge_configs(ensure_config(), {"callbacks": [usage_cb]})
+                plan_obj = await client.ainvoke(messages, config=cfg)
             except (OutputParserException, ValidationError, ValueError) as exc:
+                _accrue_callback_usage(state, usage_cb, settings)
                 # Schema-conformance / parse failure — retryable.
                 # (OutputParserException and ValidationError both subclass
                 # ValueError; the explicit names document intent. A bare
@@ -403,6 +410,7 @@ async def _emit_structured_plan(
                 # network, a provider that rejects `response_format`)
                 # surface as the typed `planner_failed` error instead of
                 # escaping the graph node. Retrying these is pointless.
+                _accrue_callback_usage(state, usage_cb, settings)
                 span.set_attribute("ok", False)
                 span.set_attribute("error", repr(exc)[:200])
                 log.warning("planner provider call failed: %r", exc)
@@ -410,6 +418,7 @@ async def _emit_structured_plan(
                     "planner_failed", "Plan generation failed", "provider call failed"
                 )
 
+            _accrue_callback_usage(state, usage_cb, settings)
             if not isinstance(plan_obj, Plan):
                 # Defensive: the bound chain (JsonOutputParser →
                 # Plan.model_validate) raises rather than returning a
@@ -483,6 +492,23 @@ def _extract_text(resp) -> str:
     return str(resp.content)
 
 
+def _accrue_callback_usage(
+    state: AgentState, cb: UsageMetadataCallbackHandler, settings: Settings
+) -> None:
+    """Fold the handler's per-model usage totals into the run's state counters.
+
+    The handler only records when the response carries `model_name` (real
+    providers do; stubs may not), so absent telemetry is a no-op. Failed
+    attempts accrue too — the provider billed them.
+    """
+    total = 0
+    for meta in cb.usage_metadata.values():
+        _prompt, _completion, _total = accumulate_usage_metadata(state, meta)
+        total += _total
+    if total:
+        agent_tokens_total.labels("planner", settings.planner_model).inc(total)
+
+
 async def _emit_legacy_plan(
     state: AgentState,
     settings: Settings,
@@ -518,6 +544,9 @@ async def _emit_legacy_plan(
                 "planner_failed", "Plan generation failed", "provider call failed"
             )
 
+        _prompt, _completion, _total = accumulate_usage(state, resp)
+        if _total:
+            agent_tokens_total.labels("planner", settings.planner_model).inc(_total)
         raw = _extract_text(resp)
         plan_or_error = _parse_and_validate(raw, max_steps=settings.plan_max_steps)
         if (
@@ -678,7 +707,7 @@ def _emit_error(
 
     Wire shapes per `frontend/src/features/chat/services/chatService.ts:232-258, 185-215, 169-171`:
       - error:        `{"error": "<detail>", "code": "<code>", "request_id": "<rid>"}`
-      - done:         `{"usage": {"prompt_tokens":0, "completion_tokens":0, "total_tokens":0}}`
+      - done:         `{"usage": {"prompt_tokens", "completion_tokens", "total_tokens"}}`
       - terminator:   `{"reason": "<reason>"}` (legacy clients; frontend uses [DONE])
     """
     state["terminal_status"] = "failed"
@@ -710,7 +739,18 @@ def _emit_error(
                 ).model_dump(),
             )
         )
-    state["events_so_far"].append(Event(kind="done", payload=DoneEvent().model_dump()))
+    state["events_so_far"].append(
+        Event(
+            kind="done",
+            payload=DoneEvent(
+                usage=DoneUsage(
+                    prompt_tokens=state.get("cumulative_prompt_tokens", 0),
+                    completion_tokens=state.get("cumulative_completion_tokens", 0),
+                    total_tokens=state.get("cumulative_tokens", 0),
+                )
+            ).model_dump(),
+        )
+    )
     state["events_so_far"].append(
         Event(kind="terminator", payload=TerminatorEvent(reason=reason).model_dump())
     )

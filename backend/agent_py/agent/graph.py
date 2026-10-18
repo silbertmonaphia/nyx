@@ -177,8 +177,8 @@ async def run_agent(
         status = final.get("terminal_status", "ok")
         if status == "ok":
             usage = DoneUsage(
-                prompt_tokens=0,
-                completion_tokens=final.get("cumulative_tokens", 0),
+                prompt_tokens=final.get("cumulative_prompt_tokens", 0),
+                completion_tokens=final.get("cumulative_completion_tokens", 0),
                 total_tokens=final.get("cumulative_tokens", 0),
             )
             final["events_so_far"].append(Event(kind="done", payload=DoneEvent(usage=usage).model_dump()))
@@ -292,8 +292,8 @@ async def run_agent_stream(
                 )
             )
         usage = DoneUsage(
-            prompt_tokens=0,
-            completion_tokens=final.get("cumulative_tokens", 0),
+            prompt_tokens=final.get("cumulative_prompt_tokens", 0),
+            completion_tokens=final.get("cumulative_completion_tokens", 0),
             total_tokens=final.get("cumulative_tokens", 0),
         )
         new_events.append(Event(kind="done", payload=DoneEvent(usage=usage).model_dump()))

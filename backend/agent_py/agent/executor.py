@@ -43,7 +43,7 @@ from .observability import (
     update_observation,
 )
 from .rag_client import RagAuthError, RagClient, RagUnavailableError
-from .state import AgentState
+from .state import AgentState, accumulate_usage
 from .tool_dispatch import ToolDispatcher
 from .tools_client import (
     ToolAuthError,
@@ -55,6 +55,7 @@ from .types import (
     PLAN_LEVEL_ERROR_CODES,
     DeltaEvent,
     DoneEvent,
+    DoneUsage,
     ErrorEvent,
     Event,
     NoteEvent,
@@ -321,8 +322,8 @@ async def _run_llm(
     text = _extract_text(resp)
     state["step_outputs"][step.id] = text
     state["events_so_far"].append(Event(kind="delta", payload=DeltaEvent(delta=text).model_dump()))
-    agent_tokens_total.labels("executor", model).inc(DEFAULT_ESTIMATED_TOKENS)
-    state["cumulative_tokens"] += DEFAULT_ESTIMATED_TOKENS
+    _prompt, _completion, _total = accumulate_usage(state, resp)
+    agent_tokens_total.labels("executor", model).inc(_total)
 
 
 async def _run_react(
@@ -384,8 +385,8 @@ async def _run_react(
             text = _extract_text(resp)
             if text:
                 state["events_so_far"].append(Event(kind="delta", payload=DeltaEvent(delta=text).model_dump()))
-            agent_tokens_total.labels("react", model).inc(DEFAULT_ESTIMATED_TOKENS)
-            state["cumulative_tokens"] += DEFAULT_ESTIMATED_TOKENS
+            _prompt, _completion, _total = accumulate_usage(state, resp)
+            agent_tokens_total.labels("react", model).inc(_total)
 
             if not tool_calls:
                 # Final answer — done.
@@ -724,7 +725,18 @@ def _terminate_with_error(state: AgentState, code: str, detail: str, settings: S
     # partial-failure note (with the step that tripped the budget) before
     # the terminal frames.
     _maybe_emit_partial_failure(state, settings)
-    state["events_so_far"].append(Event(kind="done", payload=DoneEvent().model_dump()))
+    state["events_so_far"].append(
+        Event(
+            kind="done",
+            payload=DoneEvent(
+                usage=DoneUsage(
+                    prompt_tokens=state.get("cumulative_prompt_tokens", 0),
+                    completion_tokens=state.get("cumulative_completion_tokens", 0),
+                    total_tokens=state.get("cumulative_tokens", 0),
+                )
+            ).model_dump(),
+        )
+    )
     state["events_so_far"].append(
         Event(kind="terminator", payload=TerminatorEvent(reason=code).model_dump())
     )
@@ -1057,8 +1069,8 @@ async def _reprompt_for_corrected_call(
         # not a retryable dispatch outcome. Class name only: no internal text.
         raise _step_runtime_error("tool", f"re-prompt failed ({type(exc).__name__})") from exc
 
-    agent_tokens_total.labels("executor", model).inc(DEFAULT_ESTIMATED_TOKENS)
-    state["cumulative_tokens"] += DEFAULT_ESTIMATED_TOKENS
+    _prompt, _completion, _total = accumulate_usage(state, resp)
+    agent_tokens_total.labels("executor", model).inc(_total)
 
     tool_calls = _extract_tool_calls(resp)
     if not tool_calls:
