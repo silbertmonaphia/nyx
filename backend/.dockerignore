@@ -1,0 +1,11 @@
+agent_py/
+**/.env
+**/.env.*
+**/.git
+**/.cache
+**/__pycache__
+**/*.pyc
+coverage.out
+coverage.html
+**/*.test
+main

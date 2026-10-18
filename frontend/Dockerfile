@@ -1,5 +1,5 @@
 # Build stage
-FROM node:22-alpine AS build
+FROM node:24-alpine@sha256:44fce696f38ba8c987c4db89954051000bbd05ffd8d8659ba15ed4a8602e937f AS build
 
 WORKDIR /app
 
@@ -35,7 +35,7 @@ ENV VITE_OTEL_ENABLED=$VITE_OTEL_ENABLED \
 RUN npm run build
 
 # Production stage
-FROM nginx:stable-alpine
+FROM nginx:stable-alpine@sha256:970364228b1e4f932abc22d321932816782cca8a20b85a77552a7cfe9acfb3b5
 
 # ARGs are scoped to the stage they're declared in; redeclare the
 # values the sed substitutions below need so the nginx config

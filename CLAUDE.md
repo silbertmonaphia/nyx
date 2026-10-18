@@ -1,7 +1,7 @@
 CLAUDE.md
 
 # Repo shape
-Nyx: Go 1.26.1 API (`backend/`, `chi v5` + `huma v2`) + React 19 + Vite 8 SPA (`frontend/`), talking REST. PostgreSQL is source of truth; Redis is opt-in cache-aside for `GET /api/feeds`. SQL is type-safe via `sqlc` over `pgx/v5` + `pgxpool`. Migrations in `backend/migrations/`, applied automatically on backend boot via `golang-migrate`.
+Nyx: Go 1.26.9 API (`backend/`, `chi v5` + `huma v2`) + React 19 + Vite 8 SPA (`frontend/`), talking REST. PostgreSQL is source of truth; Redis is opt-in cache-aside for `GET /api/feeds`. SQL is type-safe via `sqlc` over `pgx/v5` + `pgxpool`. Migrations in `backend/migrations/`, applied automatically on backend boot via `golang-migrate`.
 
 Roadmap lives in `FUTURE.md`, `FUTURE_BACKEND.md`, `FUTURE_FRONTEND.md` — tick an item when the work lands.
 
@@ -11,6 +11,7 @@ Roadmap lives in `FUTURE.md`, `FUTURE_BACKEND.md`, `FUTURE_FRONTEND.md` — tick
 
 Backend (from repo root):
 - Build: `cd backend && go build ./...`
+- Toolchain: `backend/go.mod` requires Go 1.26.9; align a local machine with `gvm install go1.26.9 && gvm use go1.26.9 --default`
 - Unit tests (no Docker): `cd backend && SKIP_CONTAINERS=true go test ./...`
 - Full tests (needs Docker/testcontainers): `cd backend && go test ./...`
 - Lint: `cd backend && golangci-lint run --timeout=5m`
@@ -22,9 +23,11 @@ Backend (from repo root):
 - Run: `DB_URL=... JWT_SECRET=... go run ./cmd/api` — add `REDIS_ENABLED=true REDIS_URL=redis://localhost:6379 CACHE_TTL=5m` to enable cache
 
 Frontend:
+- Node 24 is the required major (root `.nvmrc`; run `nvm use` first)
 - Dev: `cd frontend && npm run dev` → http://localhost:5173
 - Build / lint / unit tests: `npm run build` / `npm run lint` / `npm test`
 - E2E: `npm run test:e2e` (agent-free specs only — the `@live` tests need the live stack + vLLM and are excluded; CI runs this) / `npm run test:e2e:live` (the `@live` set; serial `--workers=1` against a side stack)
+- Install: `cd frontend && npm ci --workspaces=false` for clean, lockfile-exact installs; `npm install --workspaces=false` only when adding/changing dependencies (then commit `frontend/package-lock.json`)
 - Adding a dep? Run `cd frontend && npm install --workspaces=false --package-lock-only` and commit `frontend/package-lock.json` alongside `package.json`. The pre-commit lint-staged hook does this automatically when it sees `frontend/package.json` staged; the `--workspaces=false` flag is required because `frontend` is declared as a workspace at the monorepo root.
 
 Full stack: `cp .env.example .env && cp backend/.env.example backend/.env && cp frontend/.env.example frontend/.env && sudo docker compose up --build -d` boots `db` + `redis` + `jaeger`; backend and frontend run locally. To bring the app containers up via compose instead, use `sudo docker compose --profile app up --build -d` (combine with `--profile vllm` to add the LLM). DB host port is **5433** (mapped from container 5432). The three `.env` files split infra (root), backend (`backend/.env`), and frontend (`frontend/.env`) so each service can be developed independently.
