@@ -10,6 +10,7 @@ import {
   type ChatRequest,
   type Message,
   type SessionMessage,
+  type SessionStep,
   type SessionSummary,
 } from "../types/chat";
 
@@ -121,6 +122,38 @@ function toSessionSummary(raw: unknown): SessionSummary | null {
   };
 }
 
+function toSessionStep(raw: unknown): SessionStep | null {
+  if (!raw || typeof raw !== "object") return null;
+  const row = raw as Record<string, unknown>;
+  if (typeof row.id !== "string" || row.id === "") return null;
+  if (
+    row.kind !== "rag" &&
+    row.kind !== "tool" &&
+    row.kind !== "llm" &&
+    row.kind !== "react"
+  ) {
+    return null;
+  }
+  if (
+    row.status !== "running" &&
+    row.status !== "ok" &&
+    row.status !== "failed"
+  ) {
+    return null;
+  }
+  return {
+    id: row.id,
+    kind: row.kind,
+    status: row.status,
+    tool_name: typeof row.tool_name === "string" ? row.tool_name : undefined,
+    tool_args: row.tool_args,
+    tool_result: row.tool_result,
+    retry_count:
+      typeof row.retry_count === "number" ? row.retry_count : undefined,
+    reason: typeof row.reason === "string" ? row.reason : undefined,
+  };
+}
+
 /**
  * Coerce a replayed message off the wire. Rows without a role or
  * content are dropped: rendering a half-read row would misrepresent the
@@ -133,11 +166,17 @@ function toSessionMessage(raw: unknown): SessionMessage | null {
   if (typeof row.role !== "string" || typeof row.content !== "string") {
     return null;
   }
+  const steps = Array.isArray(row.steps)
+    ? row.steps
+        .map(toSessionStep)
+        .filter((s): s is SessionStep => s !== null)
+    : [];
   return {
     id: typeof row.id === "number" ? row.id : 0,
     role: row.role,
     content: row.content,
     tool_calls: Array.isArray(row.tool_calls) ? row.tool_calls : null,
+    steps: steps.length > 0 ? steps : null,
     tokens: typeof row.tokens === "number" ? row.tokens : 0,
     prompt_tokens:
       typeof row.prompt_tokens === "number" ? row.prompt_tokens : null,

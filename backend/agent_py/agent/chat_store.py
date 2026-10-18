@@ -13,9 +13,10 @@ the `agent.*` schema) for user-facing chat history:
   - `list_messages(session_id, user_id)` — chronological replay of one
     session's messages; `None` when the session is unknown / foreign /
     soft-deleted (the API maps that to 404)
-  - `record_message(session_id, user_id, role, content, tool_calls, tokens,
-    prompt_tokens, completion_tokens)` — append one row to `chat_messages`
-    and bump `last_active_at` on the parent session (D8 in `design.md`)
+  - `record_message(session_id, user_id, role, content, tool_calls, steps,
+    tokens, prompt_tokens, completion_tokens)` — append one row to
+    `chat_messages` and bump `last_active_at` on the parent session
+    (D8 in `design.md`)
   - `touch_session(session_id, user_id)` — refresh `last_active_at`
     without inserting a message row
   - `set_title_if_empty(session_id, user_id, title)` — first-exchange
@@ -108,7 +109,12 @@ class SessionSummary:
 
 @dataclass(slots=True)
 class MessageRow:
-    """One replayed message. `tool_calls` is the decoded JSON array (or None).
+    """One replayed message.
+
+    `tool_calls` and `steps` are the decoded JSON arrays (or None).
+    `steps` carries the assistant row's step trace; it stays None for
+    rows persisted before the column existed, non-assistant rows, and
+    runs that planned no steps.
 
     `session_id` (string form) links the message to its conversation —
     needed by the GDPR export dump so message rows are interpretable
@@ -127,6 +133,7 @@ class MessageRow:
     completion_tokens: int | None
     created_at: datetime
     session_id: str
+    steps: list[dict[str, Any]] | None = None
 
 
 class ChatStore:
@@ -333,9 +340,9 @@ class ChatStore:
         keeps a concurrent retention purge from slipping between the
         probe and the read (which would turn a would-be 404 into `[]`).
 
-        `tool_calls::text` + `json.loads`: asyncpg hands jsonb back as a
-        raw string by default, and the wire contract wants a JSON array
-        (or null), not a quoted string.
+        `tool_calls::text` / `steps::text` + `json.loads`: asyncpg hands
+        jsonb back as a raw string by default, and the wire contract
+        wants a JSON array (or null), not a quoted string.
         """
 
         async def _select(conn: asyncpg.Connection) -> list[MessageRow] | None:
@@ -351,6 +358,7 @@ class ChatStore:
                 rows = await conn.fetch(
                     "SELECT id, session_id, role, content, "
                     "tool_calls::text AS tool_calls, "
+                    "steps::text AS steps, "
                     "tokens, prompt_tokens, completion_tokens, "
                     "created_at FROM chat_messages "
                     "WHERE session_id=$1 "
@@ -369,6 +377,7 @@ class ChatStore:
         content: str,
         *,
         tool_calls: list[dict[str, Any]] | None = None,
+        steps: list[dict[str, Any]] | None = None,
         tokens: int = 0,
         prompt_tokens: int | None = None,
         completion_tokens: int | None = None,
@@ -399,20 +408,37 @@ class ChatStore:
         tool_calls_json = (
             _json.dumps(tool_calls) if tool_calls is not None else None
         )
+        try:
+            steps_json = (
+                _json.dumps(steps, allow_nan=False)
+                if steps is not None
+                else None
+            )
+        except (TypeError, ValueError) as exc:
+            log.warning(
+                "chat_store record_message: steps payload is not JSON-safe; "
+                "persisting steps=NULL (session_id=%s, err=%r)",
+                session_id_str,
+                exc,
+            )
+            steps_json = None
 
-        async def _tx(conn: asyncpg.Connection) -> int:
+        async def _tx(
+            conn: asyncpg.Connection, steps_payload: str | None
+        ) -> int:
             try:
                 async with conn.transaction():
                     message_id: int = await conn.fetchval(
                         "INSERT INTO chat_messages "
-                        "(session_id, role, content, tool_calls, tokens, "
-                        "prompt_tokens, completion_tokens) "
-                        "VALUES ($1, $2, $3, $4::jsonb, $5, $6, $7) "
+                        "(session_id, role, content, tool_calls, steps, "
+                        "tokens, prompt_tokens, completion_tokens) "
+                        "VALUES ($1, $2, $3, $4::jsonb, $5::jsonb, $6, $7, $8) "
                         "RETURNING id",
                         session_id_str,
                         role,
                         content,
                         tool_calls_json,
+                        steps_payload,
                         tokens,
                         prompt_tokens,
                         completion_tokens,
@@ -435,7 +461,22 @@ class ChatStore:
                     "longer exists (erased or hard-deleted mid-run)"
                 ) from exc
 
-        return await self._with_retry("record_message", _tx)
+        try:
+            return await self._with_retry(
+                "record_message", lambda conn: _tx(conn, steps_json)
+            )
+        except asyncpg.exceptions.DataError as exc:
+            if steps_json is None:
+                raise
+            log.warning(
+                "chat_store record_message: Postgres rejected the steps "
+                "jsonb; retrying without the trace (session_id=%s, err=%r)",
+                session_id_str,
+                exc,
+            )
+            return await self._with_retry(
+                "record_message", lambda conn: _tx(conn, None)
+            )
 
     async def touch_session(
         self, session_id: str | uuid_lib.UUID, user_id: int
@@ -736,15 +777,15 @@ class ChatStore:
         export completeness) rather than taking session ids as an
         argument, so the owner predicate lives in the SQL. Ordered
         `(created_at ASC, id ASC)`, the same chronological order as
-        `list_messages`; `tool_calls::text` + `json.loads` decodes the
-        jsonb the same way.
+        `list_messages`; `tool_calls::text` / `steps::text` +
+        `json.loads` decode the jsonb the same way.
         """
 
         async def _select(conn: asyncpg.Connection) -> list[MessageRow]:
             rows = await conn.fetch(
                 "SELECT m.id, m.session_id, m.role, m.content, "
-                "m.tool_calls::text AS tool_calls, m.tokens, "
-                "m.prompt_tokens, m.completion_tokens, m.created_at "
+                "m.tool_calls::text AS tool_calls, m.steps::text AS steps, "
+                "m.tokens, m.prompt_tokens, m.completion_tokens, m.created_at "
                 "FROM chat_messages m "
                 "JOIN chat_sessions s ON s.id = m.session_id "
                 "WHERE s.user_id=$1 "
@@ -782,6 +823,7 @@ def _row_to_summary(row: asyncpg.Record | Any) -> SessionSummary:
 
 def _row_to_message(row: asyncpg.Record | Any) -> MessageRow:
     raw_tool_calls = row["tool_calls"]
+    raw_steps = row["steps"]
     return MessageRow(
         id=row["id"],
         role=row["role"],
@@ -794,6 +836,7 @@ def _row_to_message(row: asyncpg.Record | Any) -> MessageRow:
         completion_tokens=row["completion_tokens"],
         created_at=row["created_at"],
         session_id=str(row["session_id"]),
+        steps=_json.loads(raw_steps) if raw_steps is not None else None,
     )
 
 

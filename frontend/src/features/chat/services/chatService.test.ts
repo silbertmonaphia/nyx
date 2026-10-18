@@ -23,6 +23,7 @@ import * as telemetry from '~/services/telemetry';
 // `import.meta.url` is not an option (jsdom rewrites it to an `http://`
 // URL, which `fileURLToPath` rejects).
 import CONFIRM_FRAME from './__fixtures__/confirm_request.sse?raw';
+import STEP_TRACE_WIRE from './__fixtures__/step_trace.json';
 
 // The chatService uses raw `fetch` for SSE (axios can't stream), and
 // `refreshTokensAndReplay` for the 401-retry contract. Mock both.
@@ -1101,6 +1102,211 @@ describe('chatService session endpoints', () => {
     expect(messages[1].completion_tokens).toBe(3);
     expect(messages[0].prompt_tokens).toBeNull();
     expect(messages[0].completion_tokens).toBeNull();
+  });
+
+  it('parses a populated steps trace and maps it field by field', async () => {
+    fetchMock.mockResolvedValueOnce(
+      jsonResponse(200, {
+        messages: [
+          {
+            id: 1,
+            role: 'user',
+            content: 'hello',
+            tool_calls: null,
+            steps: null,
+            tokens: 0,
+            created_at: '2026-10-14T10:00:00Z',
+          },
+          {
+            id: 2,
+            role: 'assistant',
+            content: 'grounded answer',
+            tool_calls: null,
+            steps: [
+              { id: 'step_1', kind: 'rag', status: 'ok' },
+              {
+                id: 'step_2',
+                kind: 'tool',
+                status: 'failed',
+                tool_name: 'list_feeds',
+                tool_args: { limit: 10 },
+                tool_result: 'tool_call_failed',
+                retry_count: 2,
+                reason: 'tool_error',
+              },
+              { id: 'step_3', kind: 'llm', status: 'ok' },
+            ],
+            tokens: 12,
+            prompt_tokens: 9,
+            completion_tokens: 3,
+            created_at: '2026-10-14T10:00:01Z',
+          },
+        ],
+      }),
+    );
+
+    const messages = await chatService.getMessages('sess-1');
+
+    expect(messages[0].steps).toBeNull();
+    expect(messages[1].steps).toEqual([
+      {
+        id: 'step_1',
+        kind: 'rag',
+        status: 'ok',
+        tool_name: undefined,
+        tool_args: undefined,
+        tool_result: undefined,
+        retry_count: undefined,
+        reason: undefined,
+      },
+      {
+        id: 'step_2',
+        kind: 'tool',
+        status: 'failed',
+        tool_name: 'list_feeds',
+        tool_args: { limit: 10 },
+        tool_result: 'tool_call_failed',
+        retry_count: 2,
+        reason: 'tool_error',
+      },
+      {
+        id: 'step_3',
+        kind: 'llm',
+        status: 'ok',
+        tool_name: undefined,
+        tool_args: undefined,
+        tool_result: undefined,
+        retry_count: undefined,
+        reason: undefined,
+      },
+    ]);
+    expect(messages[1].tool_calls).toBeNull();
+    expect(messages[1].prompt_tokens).toBe(9);
+    expect(messages[1].completion_tokens).toBe(3);
+  });
+
+  it('parses the Python-produced step trace fixture through the real parser', async () => {
+    fetchMock.mockResolvedValueOnce(jsonResponse(200, STEP_TRACE_WIRE));
+
+    const messages = await chatService.getMessages('sess-wire');
+
+    expect(messages).toHaveLength(2);
+    expect(messages[0].steps).toBeNull();
+    expect(messages[1].steps).toEqual([
+      {
+        id: 'step_1',
+        kind: 'tool',
+        status: 'ok',
+        tool_name: 'web_search',
+        tool_args: { query: 'rust blog' },
+        tool_result: 'Rust blog feed',
+        retry_count: 0,
+        reason: undefined,
+      },
+      {
+        id: 'step_2',
+        kind: 'llm',
+        status: 'ok',
+        tool_name: undefined,
+        tool_args: undefined,
+        tool_result: undefined,
+        retry_count: undefined,
+        reason: undefined,
+      },
+    ]);
+    expect(messages[1].tool_calls).toEqual([
+      {
+        step_id: 'step_1',
+        call_id: 'call_1',
+        name: 'web_search',
+        args: { query: 'rust blog' },
+      },
+    ]);
+    expect(messages[1].tokens).toBe(1128);
+    expect(messages[1].prompt_tokens).toBe(994);
+    expect(messages[1].completion_tokens).toBe(134);
+  });
+
+  it('drops malformed steps entries and nulls a non-array steps field', async () => {
+    fetchMock.mockResolvedValueOnce(
+      jsonResponse(200, {
+        messages: [
+          {
+            id: 1,
+            role: 'assistant',
+            content: 'mixed',
+            tool_calls: null,
+            steps: [
+              { id: 'step_1', kind: 'rag', status: 'ok' },
+              null,
+              'not-an-object',
+              { kind: 'llm', status: 'ok' },
+              { id: '', kind: 'llm', status: 'ok' },
+              { id: 'step_2', kind: 'unknown', status: 'ok' },
+              { id: 'step_3', kind: 'rag', status: 'weird' },
+            ],
+            tokens: 0,
+            created_at: '2026-10-14T10:00:00Z',
+          },
+          {
+            id: 2,
+            role: 'assistant',
+            content: 'string steps',
+            tool_calls: null,
+            steps: 'nope',
+            tokens: 0,
+            created_at: '2026-10-14T10:00:01Z',
+          },
+          {
+            id: 3,
+            role: 'assistant',
+            content: 'all malformed',
+            tool_calls: null,
+            steps: [{ id: 'step_9', kind: 'rag', status: 'gone' }],
+            tokens: 0,
+            created_at: '2026-10-14T10:00:02Z',
+          },
+          {
+            id: 4,
+            role: 'assistant',
+            content: 'legacy',
+            tool_calls: null,
+            tokens: 0,
+            created_at: '2026-10-14T10:00:03Z',
+          },
+          {
+            id: 5,
+            role: 'assistant',
+            content: 'empty steps',
+            tool_calls: null,
+            steps: [],
+            tokens: 0,
+            created_at: '2026-10-14T10:00:04Z',
+          },
+        ],
+      }),
+    );
+
+    const messages = await chatService.getMessages('sess-1');
+
+    expect(messages.map((m) => m.steps)).toEqual([
+      [
+        {
+          id: 'step_1',
+          kind: 'rag',
+          status: 'ok',
+          tool_name: undefined,
+          tool_args: undefined,
+          tool_result: undefined,
+          retry_count: undefined,
+          reason: undefined,
+        },
+      ],
+      null,
+      null,
+      null,
+      null,
+    ]);
   });
 
   it('encodes the session id in the replay URL', async () => {

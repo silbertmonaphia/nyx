@@ -43,6 +43,7 @@ function makeRow(
     role,
     content,
     tool_calls: toolCalls,
+    steps: null,
     tokens: 0,
     prompt_tokens: null,
     completion_tokens: null,

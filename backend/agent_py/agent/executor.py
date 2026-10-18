@@ -210,8 +210,18 @@ async def executor_node(
                 return _terminate_with_error(state, "budget_unavailable", "Budget guard unavailable", settings)
             except Exception as exc:  # noqa: BLE001
                 ok = False
-                reason = repr(exc)
+                reason = (
+                    str(exc)
+                    if isinstance(exc, _StepRuntimeError)
+                    else type(exc).__name__
+                )
                 span.record_exception(exc)
+                log.warning(
+                    "agent step failed: step_id=%s kind=%s err=%r",
+                    step.id,
+                    step.kind.value,
+                    exc,
+                )
 
             state["events_so_far"].append(
                 Event(
@@ -242,7 +252,7 @@ async def _run_rag(state: AgentState, step, rag: RagClient, span: trace.Span) ->
     try:
         result = await rag.retrieve(query)
     except RagAuthError as exc:
-        raise _step_runtime_error("RAG auth", repr(exc)) from exc
+        raise _step_runtime_error("RAG auth", type(exc).__name__) from exc
     except RagUnavailableError:
         # Per spec: empty context is acceptable; not a hard failure.
         state["step_outputs"][step.id] = {"context_block": "", "citations": []}
@@ -317,7 +327,7 @@ async def _run_llm(
     try:
         resp = await client.ainvoke(msgs)
     except Exception as exc:
-        raise _step_runtime_error("llm", repr(exc)) from exc
+        raise _step_runtime_error("llm", type(exc).__name__) from exc
 
     text = _extract_text(resp)
     state["step_outputs"][step.id] = text
@@ -379,7 +389,7 @@ async def _run_react(
             try:
                 resp = await client.ainvoke(messages)
             except Exception as exc:
-                raise _step_runtime_error("react", repr(exc)) from exc
+                raise _step_runtime_error("react", type(exc).__name__) from exc
 
             tool_calls = _extract_tool_calls(resp)
             text = _extract_text(resp)
@@ -477,8 +487,12 @@ class _BudgetUnavailableError(Exception):
     pass
 
 
-def _step_runtime_error(kind: str, msg: str) -> Exception:
-    return RuntimeError(f"{kind}: {msg}")
+class _StepRuntimeError(RuntimeError):
+    pass
+
+
+def _step_runtime_error(kind: str, msg: str) -> _StepRuntimeError:
+    return _StepRuntimeError(f"{kind}: {msg}")
 
 
 def _state_messages_to_lc(messages) -> list:

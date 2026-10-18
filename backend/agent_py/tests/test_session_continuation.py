@@ -399,12 +399,16 @@ async def test_disconnect_during_finalize_still_persists(app_ctx):
     conn = await _db()
     try:
         rows = await conn.fetch(
-            "SELECT role FROM chat_messages ORDER BY id"
+            "SELECT role, steps::text AS steps FROM chat_messages ORDER BY id"
         )
         roles = [r["role"] for r in rows]
         assert "assistant" in roles, (
             f"assistant row must survive a client disconnect mid-finalize; got {roles}"
         )
+        assistant = next(r for r in rows if r["role"] == "assistant")
+        assert _json.loads(assistant["steps"]) == [
+            {"id": "step_1", "kind": "llm", "status": "ok"}
+        ]
         status = await conn.fetchval("SELECT status FROM runs LIMIT 1")
         assert status == "completed", (
             f"the terminal run transition must survive the disconnect; got {status}"
@@ -435,3 +439,163 @@ async def test_assistant_row_persists_usage_split(app_ctx):
     assert row["prompt_tokens"] == 7
     assert row["completion_tokens"] == 3
     assert row["tokens"] == 10
+
+
+async def test_planned_run_persists_step_trace(app_ctx):
+    """A completed run folds the frames it forwarded into the assistant
+    row's `steps`; the user row stays NULL (agent-chat-step-replay 3.2)."""
+    _StubLlm.call_count = 0
+    resp = await _post_chat(
+        app_ctx, {"messages": [{"role": "user", "content": "hi"}]}
+    )
+    assert resp.status_code == 200
+    assert "event: plan" in resp.text
+    assert "event: step_end" in resp.text
+
+    conn = await _db()
+    try:
+        rows = await conn.fetch(
+            "SELECT role, steps::text AS steps FROM chat_messages "
+            "ORDER BY id ASC"
+        )
+    finally:
+        await conn.close()
+
+    assistant = next(row for row in rows if row["role"] == "assistant")
+    user = next(row for row in rows if row["role"] == "user")
+    assert _json.loads(assistant["steps"]) == [
+        {"id": "step_1", "kind": "llm", "status": "ok"}
+    ]
+    assert user["steps"] is None
+
+
+async def test_no_plan_run_persists_null_steps(app_ctx, monkeypatch):
+    """A completed run that forwarded no plan frame leaves `steps` NULL
+    while still persisting its assistant text."""
+    from agent import main as main_module
+    from agent.types import Event
+
+    async def _stub_pump(state, *, sink, **kwargs):
+        try:
+            await sink.flush(
+                [
+                    Event(kind="delta", payload={"delta": "plain answer"}),
+                    Event(
+                        kind="done",
+                        payload={
+                            "usage": {
+                                "prompt_tokens": 1,
+                                "completion_tokens": 1,
+                                "total_tokens": 2,
+                            }
+                        },
+                    ),
+                ]
+            )
+        finally:
+            await sink.close()
+
+    monkeypatch.setattr(main_module, "_pump_events", _stub_pump)
+    _StubLlm.call_count = 0
+    resp = await _post_chat(
+        app_ctx, {"messages": [{"role": "user", "content": "hi"}]}
+    )
+    assert resp.status_code == 200
+    assert "event: plan" not in resp.text
+
+    conn = await _db()
+    try:
+        row = await conn.fetchrow(
+            "SELECT content, steps::text AS steps FROM chat_messages "
+            "WHERE role='assistant' ORDER BY id DESC LIMIT 1"
+        )
+    finally:
+        await conn.close()
+
+    assert row is not None
+    assert row["content"] == "plain answer"
+    assert row["steps"] is None
+
+
+async def test_step_trace_serialization_failure_degrades_to_null(
+    app_ctx, monkeypatch
+):
+    """A non-JSON-safe trace is dropped with a WARN; the assistant row and
+    its text still persist (design.md D6)."""
+    from agent.step_trace import StepTrace
+
+    monkeypatch.setattr(
+        StepTrace,
+        "to_list",
+        lambda self: [
+            {
+                "id": "step_1",
+                "kind": "llm",
+                "status": "ok",
+                "tool_result": {1, 2},
+            }
+        ],
+    )
+
+    _StubLlm.call_count = 0
+    resp = await _post_chat(
+        app_ctx, {"messages": [{"role": "user", "content": "hi"}]}
+    )
+    assert resp.status_code == 200
+    assert "event: done" in resp.text
+
+    conn = await _db()
+    try:
+        row = await conn.fetchrow(
+            "SELECT content, steps::text AS steps FROM chat_messages "
+            "WHERE role='assistant' ORDER BY id DESC LIMIT 1"
+        )
+    finally:
+        await conn.close()
+
+    assert row is not None
+    assert row["content"] == "stub answer"
+    assert row["steps"] is None
+
+
+async def test_step_trace_db_rejection_degrades_to_null_and_ends_session(
+    app_ctx, monkeypatch
+):
+    """Postgres rejects a NUL escape in the steps jsonb (SQLSTATE 22P05);
+    the store retries without the trace and the session still ends."""
+    from agent.step_trace import StepTrace
+
+    monkeypatch.setattr(
+        StepTrace,
+        "to_list",
+        lambda self: [
+            {
+                "id": "step_1",
+                "kind": "llm",
+                "status": "ok",
+                "tool_result": "boom\x00",
+            }
+        ],
+    )
+
+    _StubLlm.call_count = 0
+    resp = await _post_chat(
+        app_ctx, {"messages": [{"role": "user", "content": "hi"}]}
+    )
+    assert resp.status_code == 200
+    assert "event: done" in resp.text
+
+    conn = await _db()
+    try:
+        row = await conn.fetchrow(
+            "SELECT m.content, m.steps::text AS steps, s.ended_at "
+            "FROM chat_messages m JOIN chat_sessions s ON s.id = m.session_id "
+            "WHERE m.role='assistant' ORDER BY m.id DESC LIMIT 1"
+        )
+    finally:
+        await conn.close()
+
+    assert row is not None
+    assert row["content"] == "stub answer"
+    assert row["steps"] is None
+    assert row["ended_at"] is not None

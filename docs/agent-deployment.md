@@ -133,7 +133,7 @@ Both are scoped to the numeric user id in the `X-Nyx-User-Id` header — the sam
 | Table / store | Holds | Retention window | Covered by `DELETE /agent/me` |
 | --- | --- | --- | --- |
 | `agent.chat_sessions` | session rows, soft-deleted included | 365d (soft-delete + 7d grace, then hard-delete) | yes — every row, soft-deleted included |
-| `agent.chat_messages` | every message turn (content, tool calls, tokens) | follows its session (FK ON DELETE CASCADE) | yes — deleted with its session |
+| `agent.chat_messages` | every message turn (content, tool calls, step trace, tokens) | follows its session (FK ON DELETE CASCADE) | yes — deleted with its session |
 | `agent.chat_user_prefs` | derived preference rows (`key` / `value`) | follows the source session; orphan-sweep backstop collects stragglers | yes — every row for the user |
 | `agent.runs` | run metadata (status, tokens, timings) | 30d (terminal rows) | yes — every row, any status |
 | `langgraph.checkpoint_*` | langGraph checkpoint state, keyed by thread id: the run id for single-turn runs, the **session id** for continuation turns (which carry no `agent.runs` row) | run-keyed threads GC with their `agent.runs` row; session-keyed threads GC when the chat-retention cron hard-deletes the session | yes — `adelete_thread` once per run id AND per deleted session id (the deduped union) |
@@ -153,7 +153,7 @@ curl -fsS -X GET http://localhost:9000/agent/me/export \
   -H "X-Nyx-User-Id: 42" | jq .
 # → {"user_id": 42, "exported_at": "2026-10-14T12:00:00+00:00",
 #    "sessions": [{"id": "…", "title": "…", "started_at": "…", "deleted_at": null, …}],
-#    "messages": [{"id": 123, "session_id": "…", "role": "user", "content": "…", "tool_calls": null, "tokens": 8, "created_at": "…"}],
+#    "messages": [{"id": 123, "session_id": "…", "role": "user", "content": "…", "tool_calls": null, "steps": null, "tokens": 8, "prompt_tokens": null, "completion_tokens": null, "created_at": "…"}],
 #    "prefs": [{"key": "…", "value": …, "source_session_id": "…", "updated_at": "…"}],
 #    "runs": [{"id": "…", "status": "completed", "total_tokens": 1234, …}],
 #    "checkpoint_thread_ids": ["<run-id or session-id uuid>", …],

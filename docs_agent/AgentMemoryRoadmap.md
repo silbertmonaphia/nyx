@@ -43,7 +43,7 @@ Each slice produces an `../openspec/changes/agent-<slice>/` (impl) + a sibling `
 
 **Scope.** The data plane. Nothing user-visible.
 
-- alembic migration: `agent.chat_sessions(id, user_id, title, started_at, last_active_at, ended_at, deleted_at)` + `agent.chat_messages(id, session_id, role, content, tool_calls jsonb, tokens, created_at)` with index on `(user_id, last_active_at desc) WHERE deleted_at IS NULL`.
+- alembic migration: `agent.chat_sessions(id, user_id, title, started_at, last_active_at, ended_at, deleted_at)` + `agent.chat_messages(id, session_id, role, content, tool_calls jsonb, steps jsonb NULL, tokens, prompt_tokens int NULL, completion_tokens int NULL, created_at)` with index on `(user_id, last_active_at desc) WHERE deleted_at IS NULL`.
 - Python agent writes one row per session start; user messages are written at request entry, the assistant message at terminal `done` (synchronous writes before async extraction kicks off in Slice 3).
 - Retention cron: `PYTHON_AGENT_CHAT_RETENTION_DAYS=365` (default), soft-delete + 7-day grace, hard-delete via SQL.
 - **No new HTTP endpoints**, no frontend changes.
