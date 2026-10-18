@@ -85,13 +85,19 @@ standalone:
 ```bash
 cd backend/agent_py
 cp .env.example .env        # fill in PYTHON_AGENT_LLM_BASE_URL + PYTHON_AGENT_LLM_API_KEY
-pip install -e '.[dev]'
+uv sync --locked --extra dev
 python -m agent.main        # or: uvicorn agent.main:app --port 9000 --reload
 ```
 
 Needs Postgres (alembic migrations run on boot) and Redis (budget guard — unreachable Redis
 fails runs closed). In compose, the `agent` service builds from this directory (the `app`
 profile).
+
+## Dependency lock
+
+`uv.lock` is committed and pins every package. After editing `pyproject.toml`, run `uv lock` and
+commit the result; installs use `--locked`, so a stale lock fails instead of silently resolving
+fresh.
 
 ## Tests
 
@@ -101,7 +107,7 @@ cd backend/agent_py && pytest tests/ -v
 
 ## Dependency audit
 
-`pip install -e '.[ci]'` adds `pip-audit`. CI runs it on every change under
+`uv sync --locked --extra ci` adds `pip-audit`. CI runs it on every change under
 `backend/agent_py/**` through `scripts/ci/pip_audit_with_allowlist.py`, which
 applies `.pip-audit-allowlist.toml` (one dated, rationale-carrying entry per
 deferred advisory; entries expire after 90 days):

@@ -15,20 +15,24 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libpq5 \
     && rm -rf /var/lib/apt/lists/*
 
-# Create a venv so deps live in a single, easy-to-copy tree.
-RUN python -m venv /opt/venv
-ENV PATH="/opt/venv/bin:$PATH"
+COPY --from=ghcr.io/astral-sh/uv:0.10.9 /uv /uvx /bin/
+
+ENV UV_PROJECT_ENVIRONMENT=/opt/venv \
+    UV_PYTHON_DOWNLOADS=never
 
 WORKDIR /app
 
 # Copy project metadata first for layer caching.
-COPY pyproject.toml ./
+COPY pyproject.toml uv.lock ./
+RUN uv sync --locked --no-install-project
+
 COPY alembic.ini ./
 COPY migrations ./migrations
 COPY agent ./agent
 
-# Install the package itself (no editable mode in the image).
-RUN pip install --upgrade pip && pip install . && pip install "httpx>=0.27"
+RUN uv sync --locked --no-editable
+
+ENV PATH="/opt/venv/bin:$PATH"
 
 EXPOSE 9000 9001
 

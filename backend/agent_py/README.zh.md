@@ -58,11 +58,15 @@ flowchart TB
 ```bash
 cd backend/agent_py
 cp .env.example .env        # 填入 PYTHON_AGENT_LLM_BASE_URL + PYTHON_AGENT_LLM_API_KEY
-pip install -e '.[dev]'
+uv sync --locked --extra dev
 python -m agent.main        # 或：uvicorn agent.main:app --port 9000 --reload
 ```
 
 需要 Postgres（启动时自动跑 alembic 迁移）和 Redis（预算护栏 —— Redis 不可达时运行会 fail-closed）。compose 里 `agent` 服务从本目录构建（`app` profile）。
+
+## 依赖锁定
+
+`uv.lock` 已提交，锁定全部依赖版本。修改 `pyproject.toml` 后运行 `uv lock` 并提交；安装使用 `--locked`，锁文件过期会直接失败，而不是静默重新解析。
 
 ## 测试
 

@@ -357,7 +357,7 @@ budget guard ── Redis counter `agent:budget:u={user_id}:h={utc_hour}`,
 ```
 cp .env.example .env
 # fill in PYTHON_AGENT_LLM_BASE_URL + PYTHON_AGENT_LLM_API_KEY
-pip install -e '.[dev]'
+uv sync --locked --extra dev
 python -m agent.main
 # or
 uvicorn agent.main:app --port 9000 --reload

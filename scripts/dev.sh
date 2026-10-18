@@ -183,7 +183,7 @@ if needs_agent || $agent_enabled_in_env; then
 
   if [[ ! -d backend/agent_py/.venv ]]; then
     echo "backend/agent_py/.venv missing — create it with:" >&2
-    echo "  cd backend/agent_py && python3 -m venv .venv && .venv/bin/pip install -e '.[dev]'" >&2
+    echo "  cd backend/agent_py && uv sync --locked --extra dev" >&2
     exit 1
   fi
 

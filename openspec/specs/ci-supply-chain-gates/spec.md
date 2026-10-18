@@ -60,7 +60,7 @@ emulate (TCP reconnect, real TTL timing, `SCAN+UNLINK` under load,
 ### Requirement: Python agent dependency vulnerability scan
 
 A `py-audit` job MUST run `pip-audit` against the installed
-`backend/agent_py/.venv` after `pip install -e '.[ci]'`, on every PR whose
+`backend/agent_py/.venv` after `uv sync --locked --extra ci`, on every PR whose
 diff touches `backend/agent_py/**` (gated by `dorny/paths-filter`). The
 job MUST fail when `pip-audit` reports any advisory that is not present in
 the documented allowlist, and MUST also fail when pip-audit could not

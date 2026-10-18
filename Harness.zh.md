@@ -57,7 +57,7 @@
 - **怎么做**：在 `.github/workflows/ci.yml` 加独立 job（与 backend-test / frontend-test 并行，e2e-test + release 把它们列入 `needs`）：
   - `govulncheck`：setup-go v5.6.0 (SHA pinned)、`go install golang.org/x/vuln/cmd/govulncheck@v1.1.4`、`govulncheck ./...`（默认 source 模式，只报从项目代码可达的漏洞，减少假阳）。
   - `npm-audit`：setup-node v4.4.0 (SHA pinned)、`npm ci` 锁 lockfile、`npm audit --audit-level=high`（high/critical 才 fail gate，moderate 仅 log）。
-  - `py-audit`：`dorny/paths-filter` 只在 `backend/agent_py/**` 变更时触发；新建 venv + `pip install --upgrade pip` + `pip install -e '.[ci]'`，再由 `scripts/ci/pip_audit_with_allowlist.py` 解析 `pip-audit --format=json`。pip-audit 的 JSON 没有 severity 字段、也没有 severity 过滤开关，所以**所有 advisory 一律 gate**；唯一延期机制是 dated allowlist（`backend/agent_py/.pip-audit-allowlist.toml`，每条带 `id`/`date`/`rationale`，>90 天即过期重新失败），角色等同 npm-audit 的 `--audit-level=high`。注意不要用没升过级的 venv 跑：本地 agent venv 的 pip 23.2.1 会带出 14 条全来自 pip 自身的 advisory，CI 的 `--upgrade pip` 正是为了消掉这层假阳（全新 venv 实测 0 条）。
+  - `py-audit`：`dorny/paths-filter` 只在 `backend/agent_py/**` 变更时触发；`uv sync --locked --extra ci` 按 `uv.lock` 建 venv，再由 `scripts/ci/pip_audit_with_allowlist.py` 解析 `pip-audit --format=json`。pip-audit 的 JSON 没有 severity 字段、也没有 severity 过滤开关，所以**所有 advisory 一律 gate**；唯一延期机制是 dated allowlist（`backend/agent_py/.pip-audit-allowlist.toml`，每条带 `id`/`date`/`rationale`，>90 天即过期重新失败），角色等同 npm-audit 的 `--audit-level=high`。uv 创建的 venv 默认不含 pip，旧 pip 自身 advisory 的假阳随之消失。
   - 三个 job 各 3-5 分钟 timeout，独立失败 → 阻断 release。
 
 ### 5. ✅ Prompt injection 防御 (2026-09-24)
