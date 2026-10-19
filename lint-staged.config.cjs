@@ -16,13 +16,14 @@ const repoRoot = __dirname;
 const frontendLockfile = path.join(frontendDir, 'package-lock.json');
 
 module.exports = {
-  'frontend/src/**/*.{js,jsx,ts,tsx}': [
+  'frontend/src/**/*.{js,jsx,ts,tsx}': (files) => [
     // eslint v9 auto-discovers eslint.config.js in cwd; we run
     // lint-staged from the repo root (per .husky/pre-commit) so the
     // config has to be passed explicitly. `--no-warn-ignored` keeps
     // the output clean when a staged file is outside eslint's ts
     // scope (vitest's `related` already filters by relatedness).
-    './frontend/node_modules/.bin/eslint --config frontend/eslint.config.js --fix --no-warn-ignored',
+    `./frontend/node_modules/.bin/eslint --config frontend/eslint.config.js --fix --no-warn-ignored ${files.map((f) => `"${f}"`).join(' ')}`,
+    './frontend/node_modules/.bin/tsc -p frontend/tsconfig.json --noEmit',
     // Architecture boundary linter (see Harness.zh.md #2 + frontend/.dependency-cruiser.cjs).
     // depcruise resolves the whole src/ dep graph regardless of the staged
     // file list — feature boundaries are global, so a single staged file
