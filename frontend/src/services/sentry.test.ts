@@ -58,7 +58,7 @@ describe('sentry', () => {
     expect(initSentry()).toBe(true);
 
     expect(Sentry.init).toHaveBeenCalledTimes(1);
-    const call = Sentry.init.mock.calls[0];
+    const call = vi.mocked(Sentry.init).mock.calls[0];
     const config = call[0];
     expect(config.dsn).toBe('https://public@sentry.io/1');
     expect(config.sendDefaultPii).toBe(false);
@@ -73,12 +73,9 @@ describe('sentry', () => {
     // tracePropagationTargets covers same-origin /api/* plus the
     // API base host. The exact host regex/string is opaque to the
     // test, but the array length should be at least 2.
-    const targets = (
-      Sentry.browserTracingIntegration.mock.calls[0][0] as {
-        tracePropagationTargets: unknown[];
-      }
-    ).tracePropagationTargets;
-    expect(targets.length).toBeGreaterThanOrEqual(2);
+    const targets = (config as { tracePropagationTargets?: unknown[] })
+      .tracePropagationTargets;
+    expect(targets?.length ?? 0).toBeGreaterThanOrEqual(2);
   });
 
   it('initSentry is idempotent (never re-inits)', async () => {

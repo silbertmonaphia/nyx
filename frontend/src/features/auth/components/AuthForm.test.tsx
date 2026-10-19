@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, vi, type Mock } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { AuthForm } from './AuthForm';
@@ -43,8 +43,8 @@ const authResponse: AuthResponse = {
 describe('AuthForm', () => {
   let setAuth: ReturnType<typeof vi.fn>;
   let logout: ReturnType<typeof vi.fn>;
-  let onSuccess: ReturnType<typeof vi.fn>;
-  let onCancel: ReturnType<typeof vi.fn>;
+  let onSuccess: Mock<() => void>;
+  let onCancel: Mock<() => void>;
 
   beforeEach(() => {
     mockedPost.mockReset();

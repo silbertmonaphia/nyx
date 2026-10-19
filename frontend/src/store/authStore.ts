@@ -18,7 +18,7 @@ export type User = ApiUser;
 // this shape keeps the Zustand snapshot free of secrets.
 type AuthPayload = Pick<AuthResponse, "user">;
 
-interface AuthState {
+export interface AuthState {
   user: User | null;
   // `isAuthenticated` is derived from the presence of a user record;
   // a more accurate signal would be a server round-trip, but for the
@@ -36,7 +36,7 @@ interface AuthState {
 // unavailable we fall back to a noop in-memory store so the app
 // still works, but `user` will not persist across reloads in that
 // environment.
-const safeLocalStorage = createJSONStorage<AuthState>(() => {
+const safeLocalStorage = createJSONStorage<{ user: User | null }>(() => {
   if (typeof window === "undefined") {
     return {
       getItem: () => null,

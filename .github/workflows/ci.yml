@@ -194,7 +194,7 @@ jobs:
     - name: Install agent deps
       if: steps.filter.outputs.agent == 'true'
       working-directory: backend/agent_py
-      run: uv sync --locked
+      run: uv sync --locked --extra dev
     - name: Ruff check
       if: steps.filter.outputs.agent == 'true'
       working-directory: backend/agent_py
@@ -251,6 +251,8 @@ jobs:
         cache-dependency-path: frontend/package-lock.json
     - name: Install dependencies
       run: cd frontend && npm ci --workspaces=false
+    - name: Type check
+      run: cd frontend && npm run typecheck
     - name: Lint
       run: cd frontend && npm run lint
     - name: Architecture boundary check

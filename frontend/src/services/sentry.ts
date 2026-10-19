@@ -46,13 +46,12 @@ export function initSentry(): boolean {
     Sentry.init({
       dsn,
       integrations: [
-        Sentry.browserTracingIntegration({
-          tracePropagationTargets: [
-            /^\/api\//,
-            ...(apiOrigin ? [apiOrigin] : []),
-          ],
-        }),
+        Sentry.browserTracingIntegration(),
         Sentry.replayIntegration(),
+      ],
+      tracePropagationTargets: [
+        /^\/api\//,
+        ...(apiOrigin ? [apiOrigin] : []),
       ],
       tracesSampleRate: 1.0,
       // Session replay: only record when an error fires (not every

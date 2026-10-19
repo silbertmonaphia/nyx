@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest';
 import { useAuthStore, loginAxios } from './authStore';
+import type { AuthState } from './authStore';
 import api from '~/services/api';
 import type { User } from '~/api/openapi';
 
@@ -235,14 +236,14 @@ describe('useAuthStore', () => {
         isAuthenticated: true,
       };
 
-      const migrated = options.migrate!(staleState, 1);
+      const migrated = options.migrate!(staleState, 1) as AuthState;
 
       // user survives (non-secret profile data)
       expect(migrated.user).toEqual(baseUser);
       // every token-shaped field is gone
-      expect((migrated as Record<string, unknown>).token).toBeUndefined();
-      expect((migrated as Record<string, unknown>).refreshToken).toBeUndefined();
-      expect((migrated as Record<string, unknown>).expiresAt).toBeUndefined();
+      expect((migrated as unknown as Record<string, unknown>).token).toBeUndefined();
+      expect((migrated as unknown as Record<string, unknown>).refreshToken).toBeUndefined();
+      expect((migrated as unknown as Record<string, unknown>).expiresAt).toBeUndefined();
       // isAuthenticated is recomputed, not carried over — fail-safe:
       // we don't trust a stale "true" from before the migration.
       expect(migrated.isAuthenticated).toBe(false);

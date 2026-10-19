@@ -329,10 +329,10 @@ describe('App', () => {
     // `isPending` reads true on every render. `mutateAsync` would
     // normally resolve; we override it to a never-resolving
     // promise so the disabled-button assertion is meaningful.
-    let resolveDelete: (() => void) | null = null;
+    let resolveDelete!: (() => void) | null;
     const deleteFeedMock = vi.fn(
       () => new Promise<void>((resolve) => {
-        resolveDelete = resolve;
+        resolveDelete = () => resolve();
       }),
     );
     const feeds = [{ id: 1, user_id: 1, title: 'Feed to Delete', description: 'Desc' }];

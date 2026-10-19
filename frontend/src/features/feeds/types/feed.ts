@@ -17,6 +17,8 @@ export const feedSchema = z.object({
 
 // Derive TypeScript types from the schema
 export type FeedFormData = z.infer<typeof feedSchema>;
+export type FeedFormInput = z.input<typeof feedSchema>;
+export type FeedFormOutput = z.output<typeof feedSchema>;
 
 export type NewFeed = FeedFormData;
 

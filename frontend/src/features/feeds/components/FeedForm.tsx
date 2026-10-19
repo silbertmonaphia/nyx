@@ -2,7 +2,7 @@ import React, { useEffect } from 'react';
 import { useForm } from 'react-hook-form';
 import { useTranslation } from 'react-i18next';
 import { zodResolver } from '@hookform/resolvers/zod';
-import { Feed, feedSchema, FeedFormData } from '../types/feed';
+import { Feed, feedSchema, FeedFormData, FeedFormInput, FeedFormOutput } from '../types/feed';
 import { Button } from '~/components/ui/Button';
 import { Input } from '~/components/ui/Input';
 import { Textarea } from '~/components/ui/Textarea';
@@ -23,7 +23,7 @@ export const FeedForm: React.FC<FeedFormProps> = ({ feed, onSubmit, onCancel, ti
     handleSubmit,
     reset,
     formState: { errors },
-  } = useForm<FeedFormData>({
+  } = useForm<FeedFormInput, undefined, FeedFormOutput>({
     resolver: zodResolver(feedSchema),
     defaultValues: {
       title: '',

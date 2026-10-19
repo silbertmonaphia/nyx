@@ -147,11 +147,11 @@ describe('ChatPanel', () => {
     // Hold the stream open so we can observe the disabled state.
     // The mock honors the AbortSignal so clicking Cancel actually
     // unblocks the store's for-await loop.
-    let abortListener: (() => void) | null = null;
+    let abortListener!: (() => void) | null;
     mockedService.streamMessage.mockImplementationOnce(async function* () {
       yield { kind: 'delta', delta: '...' };
       await new Promise<void>((resolve) => {
-        abortListener = resolve;
+        abortListener = () => resolve();
       });
     });
 
@@ -169,7 +169,7 @@ describe('ChatPanel', () => {
 
     // Cancel aborts the stream — isStreaming flips back to false.
     await userEvent.click(screen.getByTestId('chat-cancel'));
-    if (abortListener) abortListener();
+    abortListener?.();
 
     // After cancel: isStreaming is false. The draft is also empty
     // (the store's send() clears it on submit), so Send is disabled
@@ -558,11 +558,11 @@ describe('ChatPanel chat history', () => {
   });
 
   it('blanks the panel for the new chat before the POST resolves', async () => {
-    let resolveCreate: ((v: { session_id: string }) => void) | null = null;
+    let resolveCreate!: ((v: { session_id: string }) => void) | null;
     mockedService.createSession.mockImplementationOnce(
       () =>
         new Promise<{ session_id: string }>((resolve) => {
-          resolveCreate = resolve;
+          resolveCreate = (v) => resolve(v);
         }),
     );
     useChatStore.setState({

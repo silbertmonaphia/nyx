@@ -9,7 +9,7 @@ import { initSentry, captureSentryException } from './services/sentry'
 import { logger } from './services/logger'
 import { ErrorBoundary } from './components/app/ErrorBoundary'
 import { queryClient } from './services/queryClient'
-import App from './App.tsx'
+import App from './App'
 
 initTelemetry()
 initSentry()
