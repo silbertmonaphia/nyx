@@ -23,6 +23,20 @@ if command -v python3 >/dev/null 2>&1 && git cat-file -e HEAD:scripts/check_no_c
   python3 scripts/check_no_comments.py --staged || exit 1
 fi
 
+# Agent Py lint gate: ruff check --no-fix on the agent_py tree. CI's
+# agent-lint job is the authoritative gate; this hook is the local
+# fast path so a finding never reaches a remote branch. The venv is
+# not in git — fresh clones / worktrees skip with a warning (CI still
+# scans). The CLAUDE.md `Worktree husky needs frontend devDeps` memory
+# applies analogously: bootstrap the venv before relying on this.
+if [ -x backend/agent_py/.venv/bin/ruff ]; then
+  (cd backend/agent_py && ./.venv/bin/ruff check --no-fix .) || exit 1
+else
+  echo "warning: backend/agent_py/.venv/bin/ruff not found; pre-commit lint skipped"
+  echo "  install with: cd backend/agent_py && uv sync"
+  echo "  CI still scans (see .github/workflows/ci.yml agent-lint job)"
+fi
+
 # lint-staged config lives at lint-staged.config.cjs at the repo
 # root; patterns are repo-relative (e.g. `frontend/src/**`,
 # `frontend/package.json`). Run the binary directly from the repo

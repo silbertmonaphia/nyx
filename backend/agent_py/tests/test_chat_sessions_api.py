@@ -32,7 +32,7 @@ import asyncio
 import base64
 import os
 import uuid as _uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import asyncpg
 import httpx
@@ -45,7 +45,7 @@ pytestmark = pytest.mark.skipif(
     reason="TEST_ASYNC_PG_DSN not set; needs a live Postgres",
 )
 
-_EPOCH = datetime(1970, 1, 1, tzinfo=timezone.utc)
+_EPOCH = datetime(1970, 1, 1, tzinfo=UTC)
 
 
 # ---------------------------------------------------------------------------

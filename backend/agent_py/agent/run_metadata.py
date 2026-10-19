@@ -99,7 +99,7 @@ class RunMetadata:
             try:
                 async with self._pool.acquire(timeout=self._acquire_timeout) as conn:
                     return await fn(conn)
-            except asyncio.TimeoutError as exc:
+            except TimeoutError as exc:
                 log.warning(
                     "run_metadata %s: pool acquire timeout after %.1fs (%r)",
                     op_name,
@@ -202,7 +202,7 @@ class RunMetadata:
 
         async def _select(conn: asyncpg.Connection) -> RunSummary | None:
             row = await conn.fetchrow(
-                f"SELECT {_RUN_COLUMNS} FROM runs WHERE id=$1 AND user_id=$2",
+                f"SELECT {_RUN_COLUMNS} FROM runs WHERE id=$1 AND user_id=$2",  # noqa: S608
                 run_id,
                 user_id,
             )
@@ -217,7 +217,7 @@ class RunMetadata:
 
         async def _select(conn: asyncpg.Connection) -> list[RunSummary]:
             rows = await conn.fetch(
-                f"SELECT {_RUN_COLUMNS} FROM runs WHERE user_id=$1 "
+                f"SELECT {_RUN_COLUMNS} FROM runs WHERE user_id=$1 "  # noqa: S608
                 "ORDER BY started_at DESC LIMIT $2 OFFSET $3",
                 user_id,
                 limit,
@@ -239,7 +239,7 @@ class RunMetadata:
 
         async def _select(conn: asyncpg.Connection) -> list[RunSummary]:
             rows = await conn.fetch(
-                f"SELECT {_RUN_COLUMNS} FROM runs WHERE user_id=$1 "
+                f"SELECT {_RUN_COLUMNS} FROM runs WHERE user_id=$1 "  # noqa: S608
                 "ORDER BY started_at ASC, id ASC",
                 user_id,
             )

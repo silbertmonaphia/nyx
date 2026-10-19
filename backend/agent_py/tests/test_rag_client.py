@@ -11,7 +11,7 @@ from agent.rag_client import RagAuthError, RagClient, RagUnavailableError
 def _patched_async_client(handler, original):
     """Returns a factory that builds an httpx.AsyncClient with MockTransport, calling `original` (the real AsyncClient) so monkeypatch doesn't recurse."""
     def _factory(*args, **kwargs):
-        return original(transport=httpx.MockTransport(handler), *args, **kwargs)
+        return original(transport=httpx.MockTransport(handler), *args, **kwargs)  # noqa: B026
     return _factory
 
 

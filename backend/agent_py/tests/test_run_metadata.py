@@ -16,9 +16,10 @@ Gated on `TEST_ASYNC_PG_DSN` (self-skips without a live Postgres).
 from __future__ import annotations
 
 import asyncio
+import itertools
 import os
 import uuid as _uuid
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import asyncpg
 import pytest
@@ -50,7 +51,7 @@ async def _build_pool() -> asyncpg.Pool:
 async def app_with_metadata(monkeypatch):
     """Drive the real lifespan so RunMetadata is on app.state and the
     `agent.runs` table exists."""
-    _StubLlm_call_count = 0  # noqa: F841 — placeholder; fixture only
+    _StubLlm_call_count = 0
     await _drop_schemas()
 
     import agent.config as config_module
@@ -86,7 +87,7 @@ async def test_retention_deletes_only_old_terminal_rows(app_with_metadata):
     rm = app_with_metadata.state.run_metadata
     # Reach the underlying pool to insert rows with controlled timestamps.
     pool = rm._pool
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     old = now - timedelta(days=60)
     recent = now - timedelta(days=1)
 
@@ -160,7 +161,7 @@ async def test_list_paginates_and_scopes_to_user(app_with_metadata):
     async with pool.acquire() as conn:
         await conn.execute("DELETE FROM runs")
         # 25 runs for user 1, spaced 1 hour apart so started_at order is unique.
-        base = datetime.now(timezone.utc) - timedelta(hours=25)
+        base = datetime.now(UTC) - timedelta(hours=25)
         for i in range(25):
             await conn.execute(
                 "INSERT INTO runs (id, user_id, status, started_at, total_tokens) "
@@ -192,7 +193,7 @@ async def test_list_paginates_and_scopes_to_user(app_with_metadata):
     # Order is started_at DESC across pages — the first row of page 2
     # must come right after the last row of page 1.
     all_rows = page1 + page2 + page3
-    for prev, nxt in zip(all_rows, all_rows[1:]):
+    for prev, nxt in itertools.pairwise(all_rows):
         assert prev.started_at >= nxt.started_at, (
             f"order broken: {prev.started_at} < {nxt.started_at}"
         )
@@ -422,7 +423,7 @@ async def test_pool_exhaustion_raises_run_metadata_unavailable():
 
         config_module._settings = settings
 
-        from agent.main import lifespan, create_app
+        from agent.main import create_app, lifespan
 
         app = create_app()
         async with lifespan(app):

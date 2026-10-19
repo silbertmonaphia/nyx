@@ -14,13 +14,14 @@ from __future__ import annotations
 
 import logging
 import re
+from collections.abc import Iterator
 from contextlib import contextmanager
 from contextvars import ContextVar
-from typing import Any, Iterator, Optional
+from typing import Any
 
 import requests
-from opentelemetry.context import Context
 from opentelemetry import trace
+from opentelemetry.context import Context
 from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
 from opentelemetry.sdk.resources import Resource
 from opentelemetry.sdk.trace import TracerProvider
@@ -183,7 +184,7 @@ def _scrub_otel_attribute(value: Any) -> Any:
     return value
 
 
-def mask_langfuse_otel_spans(*, params: Any) -> Optional[Any]:
+def mask_langfuse_otel_spans(*, params: Any) -> Any | None:
     """`mask_otel_spans=` hook: export-stage scrub of the final OTel batch.
 
     Runs on the span-processor worker thread — kept synchronous and cheap
@@ -227,7 +228,7 @@ def _build_langfuse_span_exporter(settings: Settings) -> SpanExporter:
 
     auth = base64.b64encode(
         f"{settings.langfuse_public_key}:"
-        f"{settings.langfuse_secret_key.get_secret_value()}".encode("utf-8")
+        f"{settings.langfuse_secret_key.get_secret_value()}".encode()
     ).decode("ascii")
     export_session = requests.Session()
     export_session.trust_env = False
@@ -244,7 +245,7 @@ def _build_langfuse_span_exporter(settings: Settings) -> SpanExporter:
 
 
 def setup_langfuse(
-    settings: Settings, span_exporter: Optional[SpanExporter] = None
+    settings: Settings, span_exporter: SpanExporter | None = None
 ) -> Any:
     """Build the Langfuse client once. Idempotent — safe from FastAPI lifespan.
 
@@ -329,14 +330,14 @@ def get_langfuse_handler() -> Any:
 # Parent observation for NESTED trace_observation calls (step → tool_call).
 # ContextVar, not a plain stack: concurrent runs in one process must not
 # see each other's parents.
-_langfuse_parent: ContextVar[Optional[str]] = ContextVar(
+_langfuse_parent: ContextVar[str | None] = ContextVar(
     "nyx_langfuse_parent", default=None
 )
 
 # Trace id for the current run's Langfuse tree — captured once at the first
 # observation (where the handler's span is innermost) and reused by nested
 # ones, so nested calls never have to consult the ambient OTel context.
-_langfuse_trace_id: ContextVar[Optional[str]] = ContextVar(
+_langfuse_trace_id: ContextVar[str | None] = ContextVar(
     "nyx_langfuse_trace_id", default=None
 )
 
@@ -367,7 +368,7 @@ def jaeger_span(tracer: trace.Tracer, name: str) -> Iterator[trace.Span]:
         ambient OTel context, so this fallback is defensive only.
     """
     parent = _jaeger_parent.get()
-    ctx: Optional[Context] = None
+    ctx: Context | None = None
     if parent is not None:
         ctx = trace.set_span_in_context(parent)
     else:
@@ -394,7 +395,7 @@ def trace_observation(
     name: str,
     *,
     input: Any = None,
-    metadata: Optional[dict[str, Any]] = None,
+    metadata: dict[str, Any] | None = None,
 ) -> Iterator[Any]:
     """Langfuse span around one unit of work; no-op when tracing is disabled.
 

@@ -28,7 +28,6 @@ from __future__ import annotations
 import time
 from collections import deque
 from threading import Lock
-from typing import Deque, Dict
 
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
@@ -46,7 +45,7 @@ class IpRateLimiter:
         self.rps = requests_per_second
         self.burst = burst
         self.window_seconds = 1.0
-        self._visitors: Dict[str, Deque[float]] = {}
+        self._visitors: dict[str, deque[float]] = {}
         self._lock = Lock()
 
     def allow(self, client_ip: str) -> bool:

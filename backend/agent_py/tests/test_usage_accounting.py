@@ -419,17 +419,17 @@ async def test_done_frame_carries_real_usage(tracer, monkeypatch):
     monkeypatch.setattr("agent.graph.executor_node", fake_executor_node)
 
     state = _state()
-    events = []
-    async for ev in run_agent_stream(
-        state,
-        settings=_settings(),
-        tracer=tracer,
-        budget=_StubBudget(),
-        rag=RagClient("http://stub", "t"),
-        tools=_StubTools(),
-    ):
-        events.append(ev)
-
+    events = [
+        ev
+        async for ev in run_agent_stream(
+            state,
+            settings=_settings(),
+            tracer=tracer,
+            budget=_StubBudget(),
+            rag=RagClient("http://stub", "t"),
+            tools=_StubTools(),
+        )
+    ]
     done = [e for e in events if e.kind == "done"]
     assert done and done[0].payload["usage"] == {
         "prompt_tokens": 120,

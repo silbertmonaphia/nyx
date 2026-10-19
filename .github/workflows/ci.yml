@@ -159,6 +159,51 @@ jobs:
         # error here means a migration isn't safe to re-apply.
         .venv/bin/alembic upgrade head
 
+  agent-lint:
+    # Fail the build if a PR under backend/agent_py/** introduces a
+    # new ruff finding or a new mypy error (vs .mypy-known-errors.txt).
+    # Same paths-filter + uv sync pattern as agent-alembic-check so a
+    # non-Python change doesn't pay the Python install cost. Mypy runs
+    # in baseline-diff mode: 43 pre-existing errors live in the baseline
+    # today; net-new errors fail the gate. Once the baseline is fully
+    # clean, swap `make lint-mypy` for an unconditional `mypy agent` and
+    # delete .mypy-known-errors.txt + mypy-baseline.
+    runs-on: ubuntu-latest
+    needs: [backend-test]
+    steps:
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      with:
+        fetch-depth: 0
+    - name: Detect agent changes
+      id: filter
+      uses: dorny/paths-filter@de90cc6fb38fc0963ad72b210f1f284cd68cea36 # v3.0.2
+      with:
+        filters: |
+          agent:
+            - 'backend/agent_py/**'
+    - name: Set up Python
+      if: steps.filter.outputs.agent == 'true'
+      uses: actions/setup-python@e797f83bcb11b83ae66e0230d6156d7c80228e7c # v6.0.0
+      with:
+        python-version: '3.12'
+    - name: Set up uv
+      if: steps.filter.outputs.agent == 'true'
+      uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
+      with:
+        version: '0.10.9'
+    - name: Install agent deps
+      if: steps.filter.outputs.agent == 'true'
+      working-directory: backend/agent_py
+      run: uv sync --locked
+    - name: Ruff check
+      if: steps.filter.outputs.agent == 'true'
+      working-directory: backend/agent_py
+      run: make lint-ruff
+    - name: Mypy baseline diff
+      if: steps.filter.outputs.agent == 'true'
+      working-directory: backend/agent_py
+      run: make lint-mypy
+
   no-new-comments:
     runs-on: ubuntu-latest
     steps:

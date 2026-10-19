@@ -103,7 +103,7 @@ async def executor_node(
     # A dict here would be the only way for this assertion to fire — and
     # that would mean the planner regressed to its legacy dict-only path
     # without the executor-side machinery being updated to match.
-    assert isinstance(plan, Plan), f"executor expected Plan, got {type(plan).__name__}"
+    assert isinstance(plan, Plan), f"executor expected Plan, got {type(plan).__name__}"  # noqa: S101 — defensive type check guarded by structured-output migration
 
     for step in plan.steps:
         # Resume-aware skip (absorbed into agent-stale-run-sweeper,
@@ -683,11 +683,11 @@ def _extract_tool_calls(resp) -> list:
     if hasattr(resp, "tool_calls") and resp.tool_calls:
         return resp.tool_calls
     if isinstance(resp.content, list):
-        out = []
-        for block in resp.content:
-            if isinstance(block, dict) and block.get("type") == "tool_use":
-                out.append(block)
-        return out
+        return [
+            block
+            for block in resp.content
+            if isinstance(block, dict) and block.get("type") == "tool_use"
+        ]
     return []
 
 
@@ -1139,7 +1139,7 @@ def _safe_tool_error_text(exc: Exception) -> str:
 def _compute_backoff_ms(attempt: int, settings: Settings) -> float:
     """Jittered exponential backoff: min(base · 2^attempt · jitter, ceiling)."""
     raw = float(settings.tool_retry_backoff_base_ms) * (2**attempt)
-    jittered = raw * (1.0 + random.uniform(-0.2, 0.2))
+    jittered = raw * (1.0 + random.uniform(-0.2, 0.2))  # noqa: S311 — jitter for retry backoff, non-crypto
     return min(max(jittered, 0.0), float(settings.tool_retry_backoff_ceiling_ms))
 
 

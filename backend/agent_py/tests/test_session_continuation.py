@@ -24,6 +24,7 @@ from __future__ import annotations
 import json as _json
 import os
 import uuid as _uuid
+from typing import Any, ClassVar
 
 import asyncpg
 import fakeredis.aioredis as fakeaioredis
@@ -63,7 +64,7 @@ class _StubStructuredChain:
 class _StubLlm:
     """One llm step + a canned answer text (planner call 1, executor 2+)."""
 
-    _PLAN = {"steps": [{"id": "step_1", "kind": "llm", "prompt": "answer"}]}
+    _PLAN: ClassVar[dict[str, Any]] = {"steps": [{"id": "step_1", "kind": "llm", "prompt": "answer"}]}
     call_count = 0
 
     def __init__(self, *args, **kwargs):
@@ -190,7 +191,7 @@ async def _post_session(app, user_id: int = 42) -> str:
 def _first_run_id(sse_text: str) -> str:
     for frame in sse_text.split("\n\n"):
         if frame.startswith("event: run_id"):
-            data_line = [l for l in frame.splitlines() if l.startswith("data: ")][0]
+            data_line = next(l for l in frame.splitlines() if l.startswith("data: "))
             return _json.loads(data_line[len("data: ") :])["run_id"]
     raise AssertionError(f"no run_id frame in SSE text: {sse_text[:400]!r}")
 
@@ -390,7 +391,7 @@ async def test_disconnect_during_finalize_still_persists(app_ctx):
         task.cancel()  # the client went away mid-finalize
         try:
             await task
-        except BaseException:  # noqa: BLE001 — the cancel is the point
+        except BaseException:  # noqa: BLE001, S110 — the cancel is the point
             pass
 
     # Give the detached finalize task time to finish its shielded write.

@@ -13,9 +13,9 @@ openspec/changes/agent-langfuse-tracing: tasks 3.3 (generations + identity),
 from __future__ import annotations
 
 import json
+import os
 import uuid
 from contextlib import asynccontextmanager
-import os
 from typing import Any, ClassVar
 
 import httpx
@@ -47,7 +47,7 @@ class _FakeChatModel(BaseChatModel):
     and a summary afterwards (`llm` step). Carries provider-reported usage so
     the generation-capture test can assert it end to end."""
 
-    model_config = {"arbitrary_types_allowed": True, "extra": "allow"}
+    model_config: ClassVar[dict[str, Any]] = {"arbitrary_types_allowed": True, "extra": "allow"}
 
     call_count: ClassVar[int] = 0
 
@@ -64,7 +64,7 @@ class _FakeChatModel(BaseChatModel):
         message = AIMessage(content=content, usage_metadata=dict(_USAGE))
         return ChatResult(generations=[ChatGeneration(message=message)])
 
-    def bind_tools(self, tools, **kwargs):  # noqa: ANN001
+    def bind_tools(self, tools, **kwargs):
         # BaseChatModel.bind_tools raises NotImplementedError in
         # langchain-core 1.x (ChatOpenAI implements it); the executor's
         # react + re-prompt paths call it, so fakes must too. Bound kwargs
@@ -78,7 +78,7 @@ class _ReactFakeChatModel(BaseChatModel):
     its own generation (design D3 names the react loop as the propagation
     risk this pins)."""
 
-    model_config = {"arbitrary_types_allowed": True, "extra": "allow"}
+    model_config: ClassVar[dict[str, Any]] = {"arbitrary_types_allowed": True, "extra": "allow"}
 
     call_count: ClassVar[int] = 0
     _PLAN: ClassVar[dict[str, Any]] = {
@@ -112,14 +112,14 @@ class _ReactFakeChatModel(BaseChatModel):
             message = AIMessage(content="react summary", usage_metadata=dict(_USAGE))
         return ChatResult(generations=[ChatGeneration(message=message)])
 
-    def bind_tools(self, tools, **kwargs):  # noqa: ANN001
+    def bind_tools(self, tools, **kwargs):
         return self.bind(tools=tools, **kwargs)
 
 
 class _RaisingExporter(SpanExporter):
     """Every export attempt fails — simulates an unreachable Langfuse."""
 
-    def export(self, spans):  # noqa: ANN001
+    def export(self, spans):
         raise RuntimeError("langfuse unreachable (test)")
 
     def shutdown(self):
@@ -184,13 +184,13 @@ async def _app_ctx(
     import agent.tools_client as tools_module
 
     class _StubRag:
-        async def retrieve(self, query):  # noqa: ANN001
+        async def retrieve(self, query):
             from agent.rag_client import RagResult
 
             return RagResult(context_block="stub context", citations=[])
 
     class _StubTools:
-        async def call(self, name, arguments):  # noqa: ANN001
+        async def call(self, name, arguments):
             if fail_tools == "arg":
                 from agent.tools_client import ToolError
 
@@ -244,7 +244,7 @@ async def _app_ctx(
     # does not matter here.
     jaeger_exporter = InMemorySpanExporter()
 
-    def _capturing_setup(settings):  # noqa: ANN001
+    def _capturing_setup(settings):
         from opentelemetry import trace as otel_trace
         from opentelemetry.sdk.trace import TracerProvider
         from opentelemetry.sdk.trace.export import SimpleSpanProcessor
@@ -254,7 +254,7 @@ async def _app_ctx(
         otel_trace.set_tracer_provider(provider)
         return provider.get_tracer("nyx-agent-test")
 
-    def _setup_langfuse_with_exporter(settings):  # noqa: ANN001
+    def _setup_langfuse_with_exporter(settings):
         return obs_module.setup_langfuse(settings, span_exporter=exporter)
 
     # Patch BOTH bindings: `main` did a from-import, so replacing the
@@ -288,7 +288,7 @@ async def _app_ctx(
             from langfuse._client.resource_manager import LangfuseResourceManager
 
             LangfuseResourceManager._instances.clear()
-        except Exception:  # pragma: no cover - SDK internals moved
+        except Exception:  # pragma: no cover - SDK internals moved  # noqa: BLE001, S110
             pass
         await redis.aclose()
 
@@ -299,7 +299,7 @@ async def traced_app(monkeypatch):
         yield app
 
 
-async def _post_chat(app, body, user_id: int = 42):  # noqa: ANN001
+async def _post_chat(app, body, user_id: int = 42):
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
         return await client.post(
@@ -333,7 +333,7 @@ def _frame_kinds(text: str) -> list[str]:
     ]
 
 
-def _attr(span, key: str):  # noqa: ANN001
+def _attr(span, key: str):
     return span.attributes.get(key)
 
 

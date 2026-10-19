@@ -49,7 +49,7 @@ def _langfuse_cleanup():
         from langfuse._client.resource_manager import LangfuseResourceManager
 
         LangfuseResourceManager._instances.clear()
-    except Exception:  # pragma: no cover - SDK internals moved
+    except Exception:  # pragma: no cover - SDK internals moved  # noqa: BLE001, S110
         pass
 
 
@@ -61,16 +61,16 @@ def _settings(**overrides) -> Settings:
     (shut-down) manager leak into the next lookup.
     """
     key_suffix = uuid.uuid4().hex[:8]
-    base = dict(
-        _env_file=None,
-        llm_base_url="http://vllm:8000/v1",
-        langfuse_enabled=True,
-        langfuse_public_key=f"pk-lf-test-{key_suffix}",
-        langfuse_secret_key=f"sk-lf-test-{key_suffix}",
+    base = {
+        "_env_file": None,
+        "llm_base_url": "http://vllm:8000/v1",
+        "langfuse_enabled": True,
+        "langfuse_public_key": f"pk-lf-test-{key_suffix}",
+        "langfuse_secret_key": f"sk-lf-test-{key_suffix}",
         # Unreachable host: the injected in-memory exporter below means no
         # real network call should ever happen; the port guards against it.
-        langfuse_host="http://127.0.0.1:9",
-    )
+        "langfuse_host": "http://127.0.0.1:9",
+    }
     base.update(overrides)
     return Settings(**base)
 
@@ -148,9 +148,8 @@ def test_trace_observation_is_noop_when_disabled():
     wrapped body runs — and an exception from the body still propagates."""
     with trace_observation("noop", input={"a": 1}) as span:
         assert span is None
-    with pytest.raises(RuntimeError):
-        with trace_observation("noop"):
-            raise RuntimeError("body errors stay untouched")
+    with pytest.raises(RuntimeError), trace_observation("noop"):
+        raise RuntimeError("body errors stay untouched")
 
 
 def test_trace_observation_records_span_when_enabled():
@@ -158,11 +157,10 @@ def test_trace_observation_records_span_when_enabled():
     nested under it (explicit parenting, not ambient OTel context)."""
     exporter = InMemorySpanExporter()
     client = setup_langfuse(_settings(), span_exporter=exporter)
-    with client.start_as_current_observation(as_type="span", name="root"):
-        with trace_observation(
-            "agent.step.tool", input={"tool": "list_feeds"}, metadata={"ok": True}
-        ) as obs:
-            assert obs is not None
+    with client.start_as_current_observation(as_type="span", name="root"), trace_observation(
+        "agent.step.tool", input={"tool": "list_feeds"}, metadata={"ok": True}
+    ) as obs:
+        assert obs is not None
     client.flush()
     spans = {s.name: s for s in exporter.get_finished_spans()}
     assert "agent.step.tool" in spans
@@ -179,8 +177,7 @@ def test_trace_observation_does_not_hijack_the_otel_context():
     created inside the wrapped block onto a langfuse-only span id."""
     exporter = InMemorySpanExporter()
     client = setup_langfuse(_settings(), span_exporter=exporter)
-    with client.start_as_current_observation(as_type="span", name="root") as root:
-        with trace_observation("lf-step") as obs:
+    with client.start_as_current_observation(as_type="span", name="root") as root, trace_observation("lf-step") as obs:
             assert obs is not None
             current = trace.get_current_span()
             assert current.get_span_context().span_id == int(root.id, 16), (

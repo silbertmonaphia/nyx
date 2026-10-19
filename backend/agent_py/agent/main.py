@@ -481,7 +481,7 @@ async def lifespan(app: FastAPI):
         if checkpointer is not None:
             try:
                 await checkpointer.__aexit__(None, None, None)
-            except Exception:  # noqa: BLE001
+            except Exception:  # noqa: BLE001, S110 — best-effort cleanup
                 pass
         if run_metadata is not None:
             # `pool` is local to the `if settings.database_url:` branch above;
@@ -1387,7 +1387,7 @@ if __name__ == "__main__":
     settings = get_settings()
     uvicorn.run(
         "agent.main:app",
-        host="0.0.0.0",
+        host="0.0.0.0",  # noqa: S104 — intentional bind-all for uvicorn entrypoint
         port=settings.port,
         log_level="info",
     )

@@ -18,7 +18,6 @@ from typing import Any, ClassVar
 
 import asyncpg
 import pytest
-import langchain_openai
 
 _DSN = os.environ.get("TEST_ASYNC_PG_DSN")
 
@@ -160,8 +159,8 @@ async def app_with_checkpointer(monkeypatch):
     monkeypatch.setattr(config_module, "get_settings", lambda: settings)
 
     # Stub LLM / RAG / tools so the planner + executor don't reach the wire.
-    import agent.planner as planner_module
     import agent.executor as executor_module
+    import agent.planner as planner_module
     import agent.rag_client as rag_module
     import agent.tools_client as tools_module
 
@@ -173,7 +172,7 @@ async def app_with_checkpointer(monkeypatch):
     # Short-circuit OTel export — no Jaeger in test env.
     from agent import observability as obs_module
 
-    def _noop_setup(settings):  # noqa: ARG001
+    def _noop_setup(settings):
         from opentelemetry import trace
         from opentelemetry.sdk.trace import TracerProvider
 

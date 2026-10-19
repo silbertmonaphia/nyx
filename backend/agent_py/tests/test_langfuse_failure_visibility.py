@@ -86,7 +86,7 @@ class _FakeChatModel(BaseChatModel):
     generations it captures are what lands in the export batch this smoke
     watches fail."""
 
-    model_config = {"arbitrary_types_allowed": True, "extra": "allow"}
+    model_config: ClassVar[dict[str, Any]] = {"arbitrary_types_allowed": True, "extra": "allow"}
 
     call_count: ClassVar[int] = 0
 
@@ -94,7 +94,7 @@ class _FakeChatModel(BaseChatModel):
     def _llm_type(self) -> str:
         return "fake-langfuse-visibility"
 
-    def _generate(self, messages, stop=None, run_manager=None, **kwargs) -> ChatResult:  # noqa: ANN001
+    def _generate(self, messages, stop=None, run_manager=None, **kwargs) -> ChatResult:
         type(self).call_count += 1
         content = (
             json.dumps(_PLAN) if type(self).call_count == 1 else "summary: no feeds"
@@ -102,7 +102,7 @@ class _FakeChatModel(BaseChatModel):
         message = AIMessage(content=content, usage_metadata=dict(_USAGE))
         return ChatResult(generations=[ChatGeneration(message=message)])
 
-    def bind_tools(self, tools, **kwargs):  # noqa: ANN001
+    def bind_tools(self, tools, **kwargs):
         return self.bind(tools=tools, **kwargs)
 
 
@@ -130,27 +130,27 @@ def _capture_records() -> Iterator[list[logging.LogRecord]]:
 
 def _settings(**overrides: Any) -> Settings:
     suffix = uuid.uuid4().hex[:8]
-    base: dict[str, Any] = dict(
-        _env_file=None,
-        port=9000,
-        metrics_port=9004,
-        llm_base_url="http://stub",
-        llm_api_key="stub",
-        llm_model="stub-model",
-        llm_planner_model="",
-        plan_max_steps=10,
-        step_react_max_iterations=2,
-        mcp_url="http://mcp.test",
-        rag_bridge_url="http://rag.test",
-        redis_url="redis://stub:6379",
-        otel_endpoint="http://jaeger:4318",
-        otel_service_name="nyx-agent-test",
-        database_url="",
-        langfuse_enabled=True,
-        langfuse_public_key=f"pk-lf-visibility-{suffix}",
-        langfuse_secret_key=f"sk-lf-visibility-{suffix}",
-        langfuse_host=_UNRESOLVABLE_HOST,
-    )
+    base: dict[str, Any] = {
+        "_env_file": None,
+        "port": 9000,
+        "metrics_port": 9004,
+        "llm_base_url": "http://stub",
+        "llm_api_key": "stub",
+        "llm_model": "stub-model",
+        "llm_planner_model": "",
+        "plan_max_steps": 10,
+        "step_react_max_iterations": 2,
+        "mcp_url": "http://mcp.test",
+        "rag_bridge_url": "http://rag.test",
+        "redis_url": "redis://stub:6379",
+        "otel_endpoint": "http://jaeger:4318",
+        "otel_service_name": "nyx-agent-test",
+        "database_url": "",
+        "langfuse_enabled": True,
+        "langfuse_public_key": f"pk-lf-visibility-{suffix}",
+        "langfuse_secret_key": f"sk-lf-visibility-{suffix}",
+        "langfuse_host": _UNRESOLVABLE_HOST,
+    }
     base.update(overrides)
     return Settings(**base)
 
@@ -160,7 +160,7 @@ def _clear_sdk_registry() -> None:
         from langfuse._client.resource_manager import LangfuseResourceManager
 
         LangfuseResourceManager._instances.clear()
-    except Exception:  # pragma: no cover - SDK internals moved
+    except Exception:  # pragma: no cover - SDK internals moved  # noqa: BLE001, S110
         pass
 
 
@@ -191,13 +191,13 @@ async def _boot_app(
     import agent.tools_client as tools_module
 
     class _StubRag:
-        async def retrieve(self, query):  # noqa: ANN001
+        async def retrieve(self, query):
             from agent.rag_client import RagResult
 
             return RagResult(context_block="stub context", citations=[])
 
     class _StubTools:
-        async def call(self, name, arguments):  # noqa: ANN001
+        async def call(self, name, arguments):
             return {"items": [1, 2, 3]}
 
         async def list_tools(self):
@@ -222,7 +222,7 @@ async def _boot_app(
     for module in (planner_module, executor_module):
         monkeypatch.setattr(module, "ChatOpenAI", _FakeChatModel)
 
-    def _no_jaeger(settings):  # noqa: ANN001
+    def _no_jaeger(settings):
         from opentelemetry import trace as otel_trace
         from opentelemetry.sdk.trace import TracerProvider
 
@@ -421,8 +421,7 @@ def _boot_lines(argv: list[str], env: dict[str, str]) -> list[str]:
 
     def _read() -> None:
         assert proc.stdout is not None
-        for line in proc.stdout:
-            lines.append(line.rstrip("\n"))
+        lines.extend(line.rstrip("\n") for line in proc.stdout)
 
     reader = threading.Thread(target=_read, daemon=True)
     reader.start()

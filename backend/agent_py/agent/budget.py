@@ -14,7 +14,7 @@ OTel span `agent.budget` wraps every check with attributes:
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from opentelemetry import trace
 from redis.asyncio import Redis
@@ -37,7 +37,7 @@ _TTL_SECONDS = 90 * 60
 
 def utc_hour_key(user_id: int, now: datetime | None = None) -> str:
     """`agent:budget:u={user_id}:h={YYYYMMDDHH}` in UTC."""
-    when = now or datetime.now(timezone.utc)
+    when = now or datetime.now(UTC)
     return f"agent:budget:u={user_id}:h={when.strftime('%Y%m%d%H')}"
 
 
@@ -97,7 +97,7 @@ class BudgetGuard:
             if tokens_used > self._cap:
                 try:
                     await self._redis.decrby(key, estimated_tokens)
-                except Exception:  # noqa: BLE001 — rollback is best-effort
+                except Exception:  # noqa: BLE001, S110 — rollback is best-effort
                     pass
                 tokens_used -= estimated_tokens  # local view; the real counter may differ
                 tokens_remaining = self._cap - tokens_used

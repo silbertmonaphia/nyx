@@ -333,10 +333,7 @@ async def test_planner_does_not_rerun_on_resume(monkeypatch):
 
 async def _drain(graph, state, config):
     """Helper: drain a graph into a list. Lets the test cancel the task."""
-    out = []
-    async for chunk in graph.astream(state, config=config, stream_mode="values"):
-        out.append(chunk)
-    return out
+    return [chunk async for chunk in graph.astream(state, config=config, stream_mode="values")]
 
 
 async def test_executor_skips_completed_steps_on_resume(monkeypatch):

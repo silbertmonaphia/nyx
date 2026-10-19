@@ -18,7 +18,7 @@ from agent.tools_client import (
 
 def _patched_async_client(handler, original):
     def _factory(*args, **kwargs):
-        return original(transport=httpx.MockTransport(handler), *args, **kwargs)
+        return original(transport=httpx.MockTransport(handler), *args, **kwargs)  # noqa: B026
     return _factory
 
 

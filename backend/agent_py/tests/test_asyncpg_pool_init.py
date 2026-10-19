@@ -12,16 +12,15 @@ returns an *uninitialized* `Pool`; the first `acquire()` raises
 """
 from __future__ import annotations
 
-import pytest
-
-import asyncpg
-from asyncpg.exceptions import InterfaceError
-
 # These guards need a live Postgres. They self-skip when the env var is
 # not set — same posture as the Go integration tests (`t.Skip()` on
 # missing `dbURL`). CI with Docker sets it; local runs without Docker
 # skip.
 import os
+
+import asyncpg
+import pytest
+from asyncpg.exceptions import InterfaceError
 
 _DSN = os.environ.get("TEST_ASYNC_PG_DSN")
 
