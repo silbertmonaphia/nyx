@@ -1,35 +1,35 @@
-# PostgreSQL DML Review — 2026-10-18
+# PostgreSQL DML 审查 — 2026-10-18
 
-## Scope & method
+## 范围与方法
 
-Reviewed every SQL statement and transaction that reads or writes row data:
+审查了读写行数据的所有 SQL 语句与事务:
 
-- **Go backend** — `backend/queries/*.sql` plus the repository / service call sites that execute them, the refresh-token rotation and cleanup paths, the RAG indexer/retriever, and the migrations whose DDL is applied on top of existing rows (`000015`).
-- **Python agent** — `agent/chat_store.py`, `prefs.py`, `run_metadata.py`, `audit.py`, `retention.py`, `api/chat_sessions.py`, `api/gdpr.py`, the Alembic chain where it matters for data safety, and the checkpointer/pool wiring.
-- **Cross-runtime** — schema/version-table ownership between golang-migrate and Alembic, `search_path`, and the shared `AsyncPostgresSaver` connection.
+- **Go 后端** —— `backend/queries/*.sql` 以及执行它们的 repository / service 调用点、refresh token 轮换与清理路径、RAG 索引器/检索器,以及在已有数据之上应用 DDL 的迁移(`000015`)。
+- **Python agent** —— `agent/chat_store.py`、`prefs.py`、`run_metadata.py`、`audit.py`、`retention.py`、`api/chat_sessions.py`、`api/gdpr.py`,以及涉及数据安全的 Alembic 链,与 checkpointer/pool 的连接装配。
+- **跨 runtime** —— golang-migrate 与 Alembic 之间的 schema/版本表归属、`search_path`、共享的 `AsyncPostgresSaver` 连接。
 
-Method: code trace against the actual SQL, plus live reproduction on a throwaway `pgvector/pgvector:pg17` container (PostgreSQL 17.11, pgvector 0.8.6). The container was stopped afterwards; no repository files were modified.
+方法:对照真实 SQL 做代码溯源,再加一次在临时 `pgvector/pgvector:pg17` 容器(PostgreSQL 17.11,pgvector 0.8.6)上的实地复现。容器随后停止,没有修改任何仓库文件。
 
-Verification commands run:
+已运行的验证命令:
 
-- `go build ./...` — pass
-- `SKIP_CONTAINERS=true go test ./...` — pass
-- `golangci-lint run --timeout=5m` — pass
-- `sqlc diff` — pass (no generated-code drift)
-- `make migration-check` — pass
-- Python agent suite without a DB DSN — 427 passed, 151 skipped. The skipped set includes every DB-backed suite (chat store, prefs, GDPR stores, retention, run metadata, session API, graph persistence), so the Python concurrency findings below are static analysis against READ COMMITTED semantics, not live reproductions.
+- `go build ./...` —— 通过
+- `SKIP_CONTAINERS=true go test ./...` —— 通过
+- `golangci-lint run --timeout=5m` —— 通过
+- `sqlc diff` —— 通过(生成代码无漂移)
+- `make migration-check` —— 通过
+- Python agent 测试套件(无 DB DSN):427 通过,151 跳过。跳过的集合包含所有依赖 DB 的套件(chat store、prefs、GDPR 存储、retention、run metadata、会话 API、graph 持久化),因此以下 Python 并发相关发现是基于 READ COMMITTED 语义的静态分析,而非实地复现。
 
-Companion document: `reviews/postgresql_ddl_2026-10-18.md` already covers index/type/constraint design. This review focuses on query semantics, transaction boundaries, races, and migration data safety; overlapping index findings are cross-referenced rather than repeated in full.
+配套文档:`reviews/postgresql_ddl_2026-10-18.md` 已覆盖索引/类型/约束设计。本审查聚焦于查询语义、事务边界、竞态以及迁移的数据安全;重叠的索引发现以交叉引用代替重复。
 
-**Overall verdict: request changes.** Two high-severity defects (a migration that bricks startup on non-empty data, and a refresh-token rotation hole that defeats reuse detection), plus six medium-severity correctness / compliance issues.
+**总体结论:建议 reject。** 两个高危缺陷(一个迁移在非空数据上会让启动崩溃;一个 refresh token 轮换存在破洞,会让重放检测失效),外加六个中危的合规/正确性问题。
 
 ---
 
-## High
+## 高危
 
-### H1. `000015` fails on any non-empty `feed_embeddings` table; the next deploy boot-loops
+### H1. `000015` 在任何非空 `feed_embeddings` 表上都失败;新部署会启动死循环
 
-`backend/migrations/000015_resize_feed_embedding.up.sql:26-29` (down: `.down.sql:6-9`)
+`backend/migrations/000015_resize_feed_embedding.up.sql:26-29`(down:.down.sql:6-9)
 
 ```sql
 ALTER TABLE feed_embeddings DROP COLUMN embedding;
@@ -37,17 +37,17 @@ ALTER TABLE feed_embeddings
     ADD COLUMN embedding vector(1024) NOT NULL;
 ```
 
-`DROP COLUMN` removes the column but leaves every row in place. `ADD COLUMN ... NOT NULL` without a default then fails immediately on a non-empty table:
+`DROP COLUMN` 删除列后会保留所有行。紧接着无默认值的 `ADD COLUMN ... NOT NULL` 在非空表上立即失败:
 
 ```
 ERROR: column "embedding" of relation "feed_embeddings" contains null values
 ```
 
-Reproduced live on PostgreSQL 17.11. The comment at the top of the migration claims the operation “wipes every row” — it does not. `backend/cmd/api/main.go:120` calls `log.Fatal` on migration failure, so an existing deployment that ever used RAG fails to boot after upgrading. The down migration has the identical shape for `vector(1536)`.
+在 PostgreSQL 17.11 上实地复现成功。迁移文件顶部的注释声称该操作会"清空所有行"——并不会。`backend/cmd/api/main.go:120` 在迁移失败时调用 `log.Fatal`,因此曾经使用过 RAG 的部署在升级后将无法启动。down 迁移针对 `vector(1536)` 的形态完全一样。
 
-CI cannot catch this: testcontainers and the integration suite always start from an empty database, so the column is added to zero rows and the migration succeeds.
+CI 抓不到这个:testcontainers 与集成测试都从空库开始,因此列被加到零行上,迁移自然成功。
 
-Fix: delete the derived rows before the column swap, in both directions:
+修复:列交换前先删除派生行,两个方向都要:
 
 ```sql
 DELETE FROM feed_embeddings;
@@ -58,13 +58,13 @@ CREATE INDEX feed_embeddings_embedding_hnsw_idx
     ON feed_embeddings USING hnsw (embedding vector_cosine_ops);
 ```
 
-Embeddings are rebuildable via the RAG backfill. Also add a CI job that applies the migration chain over a database seeded at the previous release, not only over an empty one.
+嵌入向量可通过 RAG backfill 重建。再加一个 CI job,在用上一版本预填数据的库上(而非空库)应用迁移链。
 
-### H2. Refresh-token rotation is not atomic; concurrent replay yields multiple live tokens
+### H2. Refresh token 轮换并非原子;并发重放会产生多个有效 token
 
-`backend/queries/users.sql:47-68`, `backend/internal/user/service.go:286-348`
+`backend/queries/users.sql:47-68`、`backend/internal/user/service.go:286-348`
 
-`RotateRefreshToken` inserts the replacement **unconditionally** and the driving `UPDATE` only matches on id:
+`RotateRefreshToken` **无条件**插入 replacement,驱动的 `UPDATE` 仅按 id 匹配:
 
 ```sql
 WITH new_row AS (
@@ -79,11 +79,11 @@ WHERE refresh_tokens.id = @old_id
 RETURNING new_row.*;
 ```
 
-There is no `AND revoked_at IS NULL`. `Service.Refresh` reads the old row (`GetRefreshTokenByHash`), checks `row.RevokedAt == nil`, then rotates — a classic TOCTOU. Two concurrent refresh requests with the same token both observe `NULL`, both insert a new row, and both succeed. Reproduced live by executing the CTE twice against the same old row: the result is two new rows with `revoked_at IS NULL`, i.e. two valid sessions from one token, with the reuse-detection path never firing. The old row's `replaced_by_id` points at the second replacement, so the rotation chain is also broken.
+没有 `AND revoked_at IS NULL`。`Service.Refresh` 先读取旧行(`GetRefreshTokenByHash`),检查 `row.RevokedAt == nil`,再轮换——经典的 TOCTOU。两个并发的 refresh 请求持有同一个 token,都观察到 `NULL`,都插入新行,且都成功。实地复现:对同一旧行执行两次 CTE,结果是两行 `revoked_at IS NULL`,也就是一个 token 衍生出两个有效会话,而重放检测分支从未触发。旧行的 `replaced_by_id` 指向第二个 replacement,轮换链也断了。
 
-The existing tests do not model this: the service tests are sequential and mock the repository; the integration test only rotates a row once.
+已有测试未覆盖这个场景:service 测试是顺序的,且对 repository 打了桩;集成测试只轮换一次。
 
-Fix: make the old-row update the driver and let the insert depend on it:
+修复:让旧行的更新作为驱动,并让插入依赖于它:
 
 ```sql
 WITH old_row AS (
@@ -104,27 +104,27 @@ WHERE refresh_tokens.id = @old_id
 RETURNING new_row.*;
 ```
 
-A second concurrent rotation blocks on the row lock, re-evaluates `revoked_at IS NULL`, matches zero rows, inserts nothing, and returns `pgx.ErrNoRows`; the service must map that back to the reuse branch (revoke family + `ErrRefreshTokenReuse`). Add a real-database two-goroutine test asserting exactly one new active row.
+第二个并发轮换会阻塞在行锁上,重新评估 `revoked_at IS NULL`,匹配零行,不再插入,并返回 `pgx.ErrNoRows`;service 必须把它映射回重放分支(吊销家族 + `ErrRefreshTokenReuse`)。加一个基于真实数据库的双 goroutine 测试,断言恰好一条新的 active 行。
 
-Residual race (lower severity): `RevokeRefreshTokenFamily` cannot see a token inserted concurrently by a rotation, so logout racing refresh can still leave one live token. Closing that requires locking the family (or a family-level revocation timestamp).
+剩余竞态(较低严重度):`RevokeRefreshTokenFamily` 看不到轮换并发刚插入的 token,因此 logout 与 refresh 抢跑仍可能留下一条有效 token。要关掉这点,需要锁住 family(或加一个 family 级的吊销时间戳)。
 
 ---
 
-## Medium — Go backend
+## 中危 —— Go 后端
 
-### M1. Filtered HNSW scan under-fills RAG results
+### M1. 带过滤的 HNSW 扫描会让 RAG 检索结果不足
 
-`backend/queries/rag.sql:25-37`, `backend/migrations/000014_add_feed_embeddings.up.sql:38-43`
+`backend/queries/rag.sql:25-37`、`backend/migrations/000014_add_feed_embeddings.up.sql:38-43`
 
-`RetrieveFeedPassages` filters on `fe.user_id`, `f.user_id` and `f.deleted_at` after ordering by cosine distance. With the default `hnsw.iterative_scan=off`, pgvector collects `ef_search` candidates from the **global** index before the SQL filter runs, so other users' rows can exhaust the candidate set.
+`RetrieveFeedPassages` 在按 cosine 距离排序后再过滤 `fe.user_id`、`f.user_id` 与 `f.deleted_at`。在默认 `hnsw.iterative_scan=off` 下,pgvector 从 **全局** 索引收齐 `ef_search` 候选后,SQL 过滤才开始执行,因此其他用户的行可能耗尽候选集。
 
-Reproduced live: one row for the target user and 2,000 rows for another user, `ORDER BY embedding <=> $1 LIMIT 5` returned **zero** rows for the target user. `hnsw.iterative_scan=relaxed_order` and `strict_order` (with `max_scan_tuples=100000`) did not recover the row in this reproduction.
+实地复现:为某用户一行、为另一用户 2000 行,`ORDER BY embedding <=> $1 LIMIT 5` 对目标用户返回 **零** 行。`hnsw.iterative_scan=relaxed_order` 与 `strict_order`(配 `max_scan_tuples=100000`)在本次复现中也没有找回该行。
 
-User-visible effect: RAG silently retrieves fewer passages than exist, and answers lose context precisely for users whose corpus is small relative to the global index.
+用户可见影响:RAG 静默地少检索了实际存在的段落,而恰好在小语料用户身上,回答会丢掉上下文。
 
-Fix options, in order of confidence:
+修复选项(按把握度排序):
 
-1. Materialize the user's rows before ordering:
+1. 在排序前先物化用户行:
    ```sql
    WITH user_embeddings AS MATERIALIZED (
        SELECT fe.feed_id, fe.embedding, f.title, f.description
@@ -137,27 +137,27 @@ Fix options, in order of confidence:
    ORDER BY embedding <=> $1
    LIMIT $3;
    ```
-   Per-user corpora are small, so exact KNN over the `user_id` btree is cheap.
-2. Verify `hnsw.iterative_scan = relaxed_order` on the actual query plan before relying on it.
-3. Partition the embedding table by user (heavier).
+   每用户语料都小,在 `user_id` btree 上做精确 KNN 成本很低。
+2. 在真实查询计划上验证 `hnsw.iterative_scan = relaxed_order`,再决定依赖它。
+3. 按用户对嵌入表做分区(代价更高)。
 
-Correct the migration comment that calls the post-filter overhead negligible.
+同时修正迁移注释中"post-filter 开销可忽略"的描述。
 
-### M2. Unbounded `page` overflows `int32`; negative `OFFSET` returns 500
+### M2. `page` 无上限会溢出 `int32`;负 `OFFSET` 返回 500
 
-`backend/internal/feed/huma_handler.go:190`, `backend/internal/feed/repository.go:34,142`, `backend/internal/tool/feeds.go:127-138`
+`backend/internal/feed/huma_handler.go:190`、`backend/internal/feed/repository.go:34,142`、`backend/internal/tool/feeds.go:127-138`
 
-`Page` has `minimum:"1"` but no maximum; only `pageSize` is clamped. `offset := (page - 1) * pageSize` is computed in `int` and then narrowed by `toInt32`. `GET /api/feeds?page=200000000&page_size=20` produces 3,999,999,980, which wraps to a negative `int32`; PostgreSQL rejects it with `ERROR: OFFSET must not be negative`, surfaced as a 500. The MCP tool path applies the same normalization and is equally reachable. The code comment claiming handler-side caps keep the value within `int32` is false.
+`Page` 只有 `minimum:"1"` 没有 maximum;只有 `pageSize` 被夹紧。`offset := (page - 1) * pageSize` 用 `int` 计算,然后被 `toInt32` 截断。`GET /api/feeds?page=200000000&page_size=20` 得到 3,999,999,980,折回成负的 `int32`;PostgreSQL 报 `ERROR: OFFSET must not be negative`,被映射成 500。MCP tool 路径套用同一套归一化,同样可达。代码注释声称 handler 端的 cap 让值落在 `int32` 内,这是错的。
 
-Fix: cap `page` (e.g. 1,000,000) at both entry points and/or floor the offset at zero before conversion; return 400 for out-of-range input. If a Huma tag changes, regenerate `api/openapi.json`.
+修复:在两个入口都限制 `page`(例如 1,000,000),或转换前把 offset 钳到 0;越界输入应返回 400。若改了 Huma tag,记得重新生成 `api/openapi.json`。
 
-### M3. Feed-list index does not match the list predicate
+### M3. feed 列表的索引与列表谓词不匹配
 
 `backend/migrations/000006_add_movies_indexes.up.sql`
 
-Already raised in the DDL review: there is no `(user_id, created_at DESC, id DESC) WHERE deleted_at IS NULL`; `idx_movies_active ON (id) WHERE deleted_at IS NULL` is redundant with the PK; index names are stale after the `movies → feeds` rename. Current data volumes make this a sort, not a correctness bug.
+DDL 审查中已经指出:没有 `(user_id, created_at DESC, id DESC) WHERE deleted_at IS NULL`;`idx_movies_active ON (id) WHERE deleted_at IS NULL` 与主键冗余;`movies → feeds` 重命名后,索引名仍陈旧。当下数据量下这只是排序问题,不算正确性 bug。
 
-### M4. Refresh-token purge can evict recently revoked rows; unindexed columns
+### M4. refresh token 清理会误删最近刚吊销的行;列无索引
 
 `backend/queries/users.sql:111-120`
 
@@ -167,51 +167,51 @@ WHERE created_at < @cutoff
   AND (revoked_at IS NOT NULL OR expires_at < now());
 ```
 
-Retention is anchored on `created_at`, so a row created ten days ago and revoked one minute ago is deleted on the next hourly sweep — contradicting the comment that revoked rows stay available for incident investigation. There is no index on `created_at`, and the self-referencing FK (`replaced_by_id ON DELETE SET NULL`) has no index either, so each purge scans.
+保留锚点是 `created_at`,因此一行十天前创建、一分钟前刚吊销,在下一次每小时扫描就会被删除——与"已吊销行保留供事件调查"的注释相反。`created_at` 上无索引,自引用外键(`replaced_by_id ON DELETE SET NULL`)上也没有索引,所以每次清理都在扫。
 
-Fix: anchor retention on `COALESCE(revoked_at, expires_at)` and add `(created_at)` plus `(replaced_by_id)` indexes (the DDL review already lists both indexes).
+修复:将保留锚点改为 `COALESCE(revoked_at, expires_at)`,并加上 `(created_at)` 与 `(replaced_by_id)` 索引(DDL 审查已列出这两个索引)。
 
-### M5. `GetAll` count/page consistency claim is false
+### M5. `GetAll` "count/page 一致"的注释与代码不符
 
 `backend/internal/feed/repository.go:126-130,135-215`
 
-`BeginTx(ctx, pgx.TxOptions{})` uses READ COMMITTED; each statement takes a new snapshot, so a concurrent insert can make `total` disagree with the returned page (and with `has_more`). Either use `pgx.TxOptions{IsoLevel: pgx.RepeatableRead, AccessMode: pgx.ReadOnly}` for this read or correct the comment.
+`BeginTx(ctx, pgx.TxOptions{})` 使用 READ COMMITTED;每条语句都取新快照,因此并发插入可以让 `total` 与返回的分页(包括 `has_more`)不一致。改用 `pgx.TxOptions{IsoLevel: pgx.RepeatableRead, AccessMode: pgx.ReadOnly}` 做只读,或修正注释。
 
-### M6. pg_trgm “graceful skip” does not skip anything (reproduced live)
+### M6. pg_trgm "温和跳过"实际上啥也没跳过(实地复现)
 
-`backend/migrations/000006_add_movies_indexes.up.sql:16-22` and the same pattern in `000007_add_movies_description_trgm_index.up.sql`
+`backend/migrations/000006_add_movies_indexes.up.sql:16-22`,`000007_add_movies_description_trgm_index.up.sql` 中相同模式
 
-The `DO` block catches `insufficient_privilege` from `CREATE EXTENSION pg_trgm` and raises a NOTICE, but the following `CREATE INDEX ... USING GIN (title gin_trgm_ops)` runs unconditionally. Reproduced as a non-superuser: the NOTICE fires, then the migration aborts with `operator class "gin_trgm_ops" does not exist`. Move the index creation inside the guarded block (or into a second block guarded by a `pg_extension` check), or fail loudly with an actionable message.
+`DO` 块捕获 `CREATE EXTENSION pg_trgm` 抛出的 `insufficient_privilege`,并把它降级为 NOTICE,但紧随其后的 `CREATE INDEX ... USING GIN (title gin_trgm_ops)` 是无条件执行的。以非超级用户实地复现:NOTICE 先出,然后迁移以 `operator class "gin_trgm_ops" does not exist` 中止。把建索引放进受保护块内(或放进第二个用 `pg_extension` 检查守卫的块),或用一个可操作的报错信息显式失败。
 
-### M7. Other low-severity Go findings
+### M7. 其他 Go 低危发现
 
-- **`CREATE EXTENSION vector` is unguarded** (`000014_add_feed_embeddings.up.sql:27`). A managed Postgres without pgvector or CREATE privilege fails all migrations at boot even when RAG is disabled. Document the hard prerequisite or wrap with an explicit actionable error.
-- **Down migrations do not reverse their up**: `000002` deletes seeded rows by title (can delete user-created rows with the same title); `000009`/`000010` rollback fails if any NULL email exists; `000012` leaves the placeholder user; `000016` is a no-op.
-- **`make sqlc-diff` misses the RAG package** (`backend/Makefile:43-46` only diffs `internal/feed/db internal/user/db`; CI runs the same target). Use `sqlc diff`, or add `internal/rag/db`. Also update `sqlc.yaml`: the RAG schema list stops at `000014`, so generated code is validated against `vector(1536)` while runtime is `vector(1024)`.
-- **`BackfillOnce` is a per-process, per-user `sync.Once`** (`backend/internal/rag/service.go:207-220`). A failed backfill, or a user with more than `maxBackfill × maxBackfillIterations` feeds, is not retried until the process restarts. The inline comment saying a future chat request retries is false. This matters more once H1’s fix empties the embedding table.
-- Cross-type IDs (`users.id INTEGER` vs `feeds.user_id BIGINT`) are legal but inconsistent; covered in the DDL review.
+- **`CREATE EXTENSION vector` 未受保护**(`000014_add_feed_embeddings.up.sql:27`)。托管 Postgres 缺少 pgvector 或缺 CREATE 权限时,即使 RAG 关闭,启动时所有迁移也会失败。文档写明硬性前置条件,或用显式的可操作错误包裹。
+- **Down 迁移没有真正回滚 up:** `000002` 按 title 删除种子行(可能误删同名用户行);`000009`/`000010` 一旦存在 NULL email 回滚失败;`000012` 会留下占位用户;`000016` 是 no-op。
+- **`make sqlc-diff` 漏掉 RAG 包**(`backend/Makefile:43-46` 只 diff 了 `internal/feed/db internal/user/db`;CI 跑同一目标)。改用 `sqlc diff`,或加入 `internal/rag/db`。同时 `sqlc.yaml` 中 RAG schema 列表停留在 `000014`,导致生成的代码按 `vector(1536)` 校验,而运行时是 `vector(1024)`。
+- **`BackfillOnce` 是进程级、用户级的 `sync.Once`**(`backend/internal/rag/service.go:207-220`)。失败的 backfill,或超过 `maxBackfill × maxBackfillIterations` 个 feed 的用户,需等到进程重启才会重试。内联注释所谓"下一次 chat 请求会重试"是错的。在 H1 修复清空嵌入表后,这点影响更大。
+- 跨类型的 ID(`users.id INTEGER` 对 `feeds.user_id BIGINT`)合法但不一致;DDL 审查已覆盖。
 
 ---
 
 ## Python agent
 
-### P1. HIGH (compliance) — GDPR erase races in-flight checkpoint writes
+### P1. 高危(合规)—— GDPR erase 会与进行中的 checkpoint 写入产生竞态
 
 `backend/agent_py/agent/api/gdpr.py:223-279`
 
-The erase path deletes `agent.runs` and `agent.chat_sessions`, then calls `checkpointer.adelete_thread` for the union of run ids and session ids. An SSE run already in flight for the same user is not cancelled or fenced. Every subsequent graph step writes `langgraph.checkpoint_*` rows for the deleted thread again.
+erase 路径会删除 `agent.runs` 与 `agent.chat_sessions`,然后对 run id 与 session id 的并集调用 `checkpointer.adelete_thread`。同一用户一个已经在飞的 SSE run 不会被取消或围栏。其后每一个图步骤都会再次为已删除的 thread 写 `langgraph.checkpoint_*`。
 
-Those rows contain conversation state, but the `agent.runs` / `chat_sessions` rows that named the thread are gone. Neither the export path nor a later retention / erase pass can discover the id, and retention only GCs ids returned by the deletes it just performed. The erased content therefore persists indefinitely.
+这些行包含会话状态,但命名该 thread 的 `agent.runs` / `chat_sessions` 行已经没了。导出路径或随后的保留/erase 轮次都无法再发现该 id,而 retention 只 GC 它刚刚执行的 delete 涉及的 id。因此被擦除的内容会无限期残留。
 
-Fix: pick one —
+修复:三选一 ——
 
-- track active run ids per user and cancel / defer / re-GC on erase;
-- have the erase path record a per-user tombstone that the run lifecycle honors;
-- add an orphan-thread sweep to the retention cron: GC `langgraph` threads whose id has neither an `agent.runs` row nor a `chat_sessions` row. This also covers threads stranded by a failed checkpoint GC.
+- 跟踪每个用户的活跃 run id,在 erase 时取消/延期/再次 GC;
+- 让 erase 路径写入一个 per-user tombstone,run 生命周期遵守它;
+- 给 retention cron 增加孤儿 thread 扫描:GC `langgraph` 中既无 `agent.runs` 行也无 `chat_sessions` 行的 thread(这也覆盖失败 checkpoint GC 留下的悬空 thread)。
 
-Add a test where erase runs while a stream is mid-step. (Static analysis; live reproduction was not possible because the Python DB suite requires `TEST_ASYNC_PG_DSN`.)
+加一个 erase 在 stream 进行中执行的测试。(静态分析;实地复现不可行,因为 Python DB 套件需要 `TEST_ASYNC_PG_DSN`。)
 
-### P2. MEDIUM — Preference upsert can resurrect an erased row
+### P2. 中危 —— 偏好 upsert 可能复活已擦除的行
 
 `backend/agent_py/agent/prefs.py:175-193`
 
@@ -224,134 +224,134 @@ WHERE $4::uuid IS NULL OR EXISTS (
 ON CONFLICT (user_id, key) DO UPDATE SET ...
 ```
 
-The docstring claims the guard “cannot be raced between a check and the write”; it can. The `EXISTS` is a plain READ COMMITTED snapshot with no lock, and it does not check `s.user_id = $1` or `s.deleted_at IS NULL`.
+docstring 称该守卫"无法在检查与写入之间被竞态击穿"——可以。`EXISTS` 只是裸的 READ COMMITTED 快照,既没加锁,也没检查 `s.user_id = $1` 或 `s.deleted_at IS NULL`。
 
-Race: the detached preference-extraction task (fired after `[DONE]`, `main.py:1279-1289`) takes its snapshot while `delete_all_for_user` is uncommitted, sees the old session row, inserts; the erase’s `DELETE FROM chat_user_prefs WHERE user_id = $1` has already scanned or is ordered before the new row, and both commit. The `ON CONFLICT DO UPDATE` variant can wait on the erased row and then insert once the conflict is gone. `delete_orphaned` collects the row on the next retention tick **only if chat retention is enabled**; otherwise it persists.
+竞态:detached 偏好抽取任务(`[DONE]` 后触发,`main.py:1279-1289`)在 `delete_all_for_user` 尚未提交时取快照,看到旧的 session 行,执行 insert;erase 的 `DELETE FROM chat_user_prefs WHERE user_id = $1` 已经扫过或排在它之前,二者都提交成功。`ON CONFLICT DO UPDATE` 变体会等到已擦除的行,在冲突解除后插入。`delete_orphaned` 在下一次 retention tick 上收走该行,**仅当 chat retention 启用时**才会;否则永久残留。
 
-Fix: add `AND s.user_id = $1 AND s.deleted_at IS NULL` to the `EXISTS`, and serialize with the erase (`FOR KEY SHARE` on the session row, or a per-user advisory lock held by both erase and upsert). Add a two-connection race test.
+修复:在 `EXISTS` 中加 `AND s.user_id = $1 AND s.deleted_at IS NULL`,并与 erase 串行(对 session 行 `FOR KEY SHARE`,或双方持有的 per-user advisory lock)。加一个双连接竞态测试。
 
-### P3. MEDIUM — `record_message` can kill the stream on unsanitized text
+### P3. 中危 —— `record_message` 对未净化的文本会让 stream 失效
 
 `backend/agent_py/agent/chat_store.py:431-451,468-479`
 
-The retry-on-`DataError` path only re-executes with `steps = NULL`; when `steps_json is None` it re-raises. `content` and `tool_calls` are not sanitized, and every call site catches only `ChatStoreUnavailable` (`main.py:900-913` before the first `run_id` frame; `main.py:1222-1242` in the shielded finalize task).
+retry-on-`DataError` 路径只会用 `steps = NULL` 重试;当 `steps_json is None` 时重新抛出。`content` 与 `tool_calls` 未做净化,每个调用点只捕获 `ChatStoreUnavailable`(`main.py:900-913` 在首个 `run_id` 帧前;`main.py:1222-1242` 在 shielded finalize 任务中)。
 
-A JSON request containing `\u0000` (valid JSON) produces a Python string with NUL; asyncpg raises `CharacterNotInRepertoireError` (verified subclass of `DataError`). Lone surrogates similarly raise `UnicodeEncodeError`. Result: the user-message write fails before streaming starts, or the finalize task raises after the stream, instead of the documented best-effort behavior.
+一个含 `\u0000`(合法 JSON)的 JSON 请求会产生带 NUL 的 Python 字符串;asyncpg 抛 `CharacterNotInRepertoireError`(已验证是 `DataError` 的子类)。孤立 surrogate 也会抛 `UnicodeEncodeError`。结果:用户消息写入在流开始前失败,或 finalize 任务在流之后抛错,而不是文档所述的尽力而为行为。
 
-Fix: strip NUL / encode with `errors="replace"` at the trust boundary, and translate any residual `DataError` / `UnicodeEncodeError` to `ChatStoreUnavailable` after the steps-only retry. Test `\x00` in content, steps, and tool_calls.
+修复:在信任边界处剥离 NUL / 用 `errors="replace"` 编码,并把残留的 `DataError` / `UnicodeEncodeError` 转译为 `ChatStoreUnavailable`(在 steps-only 重试之后)。为 content、steps、tool_calls 中的 `\x00` 各加测试。
 
-### P4. LOW — `list_messages` does not provide the claimed 404 guarantee
+### P4. 低危 —— `list_messages` 没有提供文档声称的 404 保证
 
 `backend/agent_py/agent/chat_store.py:335-341,349-368`
 
-The docstring says the transaction keeps a concurrent purge from turning a would-be 404 into `[]`. Under READ COMMITTED each statement takes a new snapshot and the ownership probe takes no lock, so a concurrent GDPR erase can commit between the probe and the message read, yielding `200 {"messages": []}` instead of 404. Use `SELECT 1 ... FOR SHARE` on the probe or REPEATABLE READ.
+docstring 称该事务能让并发的 purge 不把"应该是 404"的结果变成 `[]`。在 READ COMMITTED 下,每条语句取新快照,ownership probe 也不加锁,因此并发 GDPR erase 可以在 probe 与消息读取之间提交,结果返回 `200 {"messages": []}` 而不是 404。用 `SELECT 1 ... FOR SHARE` 锁住 probe,或用 REPEATABLE READ。
 
-### P5. LOW — `record_message` INSERT is not user-scoped
+### P5. 低危 —— `record_message` 的 INSERT 没有用户范围限制
 
 `backend/agent_py/agent/chat_store.py:432-451`
 
-The INSERT relies solely on the FK; the `user_id` guard lives on the follow-up `UPDATE`, whose affected-row count is ignored and whose failure does not roll back the insert. No current request path is exploitable — the resume decision (`main.py:837-859`) is user-scoped and `POST /agent/sessions` mints server-side UUIDs — but the invariant is broken for any future caller. Worse, `tests/test_chat_store.py:122-132` pins the foreign-user insert as succeeding.
+INSERT 仅靠外键约束,`user_id` 守卫放在后续的 `UPDATE` 上,其受影响行数被忽略,且失败时不会回滚 insert。当下没有可被利用的请求路径——resume 判定(`main.py:837-859`)是用户范围的,`POST /agent/sessions` 在服务端生成 UUID——但任何未来调用者都会破坏这个不变量。更糟的是,`tests/test_chat_store.py:122-132` 把"跨用户 insert 成功"固化为预期。
 
-Fix: `INSERT INTO chat_messages (...) SELECT ... FROM chat_sessions WHERE id=$1 AND user_id=$N AND deleted_at IS NULL RETURNING id`, map zero rows to `ChatStoreUnavailable`, and flip the test to assert rejection.
+修复:`INSERT INTO chat_messages (...) SELECT ... FROM chat_sessions WHERE id=$1 AND user_id=$N AND deleted_at IS NULL RETURNING id`,把零行映射为 `ChatStoreUnavailable`,并把测试翻成断言拒绝。
 
-### P6. LOW — Saver teardown is a silent no-op
+### P6. 低危 —— Saver 的 teardown 是静默 no-op
 
 `backend/agent_py/agent/main.py:481-485,536-539`
 
-Installed `AsyncPostgresSaver` has no `__aenter__` / `__aexit__` (verified against the installed langgraph package); `from_conn_string` is an `@asynccontextmanager`. The lifespan calls `await checkpointer.__aexit__(...)`, catches the resulting `AttributeError` with a bare `except`, and never exits the stashed `saver._cm` — the psycopg connection is not closed on shutdown. Fix: `await checkpointer._cm.__aexit__(None, None, None)` and do not swallow unexpected errors.
+已安装的 `AsyncPostgresSaver` 没有 `__aenter__` / `__aexit__`(已用安装的 langgraph 包核对);`from_conn_string` 是 `@asynccontextmanager`。lifespan 调用 `await checkpointer.__aexit__(...)`,用裸 `except` 捕获产生的 `AttributeError`,从不退出 stash 的 `saver._cm`——psycopg 连接在 shutdown 时没有关闭。修复:`await checkpointer._cm.__aexit__(None, None, None)`,且不要吞掉意料之外的错误。
 
-### P7. LOW — Pre-stream `get_run` is unguarded
+### P7. 低危 —— 流开始前的 `get_run` 未做防御
 
 `backend/agent_py/agent/main.py:838`
 
-`get_run` can raise `RunMetadataUnavailable` after retries; every neighboring call on the resume path (`get_session`, `create_run`) is best-effort. A transient pool blip during a resume attempt returns 500 before the `run_id` frame instead of falling back to a fresh run. Catch and treat as fresh (warn-log).
+`get_run` 在重试后仍可能抛 `RunMetadataUnavailable`;邻近的 resume 路径调用(`get_session`、`create_run`)都是尽力而为。resume 期间一次短暂的 pool 抖动会返回 500,而非退化为走 fresh run,在 `run_id` 帧之前。捕获并视为 fresh(warn-log)。
 
-### P8. LOW — Alembic logs the full DSN, including the password
+### P8. 低危 —— Alembic 日志会输出完整 DSN,包括密码
 
 `backend/agent_py/migrations/env.py:86`
 
-`logger.info("alembic: DSN %s", url)` emits the credential if any INFO-level logging configuration (or `fileConfig`) is added. Today the app sets root to WARNING and the CLI has no logging config, so it is latent, not active. Drop the line or render with `hide_password=True`.
+`logger.info("alembic: DSN %s", url)` 一旦加了任何 INFO 级 logging 配置(或 `fileConfig`),就会外泄凭据。当下应用把 root 设为 WARNING,CLI 无 logging 配置,因此是潜伏的、不是激活的。删掉这一行,或用 `hide_password=True` 渲染。
 
-### P9. LOW — Retention predicates have no supporting indexes
+### P9. 低危 —— retention 谓词缺少支撑索引
 
-- `backend/agent_py/agent/run_metadata.py:268-274` — `ended_at < cutoff AND status IN ('completed','failed')`; only `(user_id, started_at DESC)` exists → sequential scan per tick.
-- `backend/agent_py/agent/chat_store.py:640-647` — `last_active_at < cutoff AND deleted_at IS NULL`; the existing partial index leads with `user_id` → full scan.
-- `backend/agent_py/agent/chat_store.py:666-673` — `deleted_at IS NOT NULL AND deleted_at < cutoff`; the partial index excludes exactly those rows → full scan.
-- `backend/agent_py/agent/prefs.py:319-330` — anti-join over `chat_user_prefs`; `source_session_id` has no index → full scan.
+- `backend/agent_py/agent/run_metadata.py:268-274` —— `ended_at < cutoff AND status IN ('completed','failed')`;只有 `(user_id, started_at DESC)`,每个 tick 都是顺序扫描。
+- `backend/agent_py/agent/chat_store.py:640-647` —— `last_active_at < cutoff AND deleted_at IS NULL`;现有偏索引以 `user_id` 开头,是全表扫描。
+- `backend/agent_py/agent/chat_store.py:666-673` —— `deleted_at IS NOT NULL AND deleted_at < cutoff`;偏索引恰好排除了这些行,是全表扫描。
+- `backend/agent_py/agent/prefs.py:319-330` —— 对 `chat_user_prefs` 做 anti-join;`source_session_id` 没有索引,全表扫描。
 
-Both retention phases are also single unbounded `UPDATE` / `DELETE` statements. Add the partial indexes listed in the DDL review; if these tables can grow large, batch with `LIMIT` / `ctid` loops.
+两阶段 retention 也都是单条无界的 `UPDATE` / `DELETE`。加 DDL 审查中列出的偏索引;若表可能长成大表,用 `LIMIT` / `ctid` 循环做分批。
 
-### P10. MEDIUM (tests/CI) — the agent test suite does not run in CI
+### P10. 中危(测试/CI)—— agent 测试套件不在 CI 中运行
 
-`.github/workflows/ci.yml:89-154` runs only `alembic upgrade head` twice against a fresh database. There is no `pytest` job for `backend/agent_py`; without `TEST_ASYNC_PG_DSN` every DB-backed suite self-skips (427 passed / 151 skipped locally). The schema check proves the chain runs, not that any query or transaction behaves. Add a Postgres-service pytest job, including at least one two-connection test for the erase / rotation races above.
+`.github/workflows/ci.yml:89-154` 只在空库上跑两次 `alembic upgrade head`。没有 `backend/agent_py` 的 `pytest` job;没有 `TEST_ASYNC_PG_DSN` 时每个依赖 DB 的套件都自我 skip(本地 427 通过 / 151 跳过)。schema check 只能证明链能跑,不能证明任何查询/事务行为正确。加一个 Postgres-service 的 pytest job,至少包括上面 erase / rotation 竞态的一个双连接测试。
 
-### P11. Other low-severity Python findings
+### P11. 其他 Python 低危发现
 
-- `_normalize_database_url` (`backend/agent_py/agent/config.py:319-369`) accepts `postgresql+asyncpg://` (the scheme CI uses for Alembic); asyncpg rejects it at app boot. Normalize the scheme or raise a clear configuration error.
-- `create_run` mints the UUID inside the retried function (`run_metadata.py:139-149`). A `PostgresConnectionError` after the server committed leaves an orphaned `running` row on the retry (new id). Mint outside the retry loop; the same duplicate-insert class applies to `record_message` and `audit.record` on post-commit connection loss.
-- `_with_retry` catches any `TimeoutError`, including one raised by the operation itself, and misclassifies it as pool exhaustion. Prefer `asyncio.TimeoutError` scoped around `pool.acquire`.
-
----
-
-## Cross-runtime
-
-- **Schema isolation is clean.** Go owns `public.*` (`schema_migrations` via golang-migrate); Python owns `agent.*` (`alembic_version` via `version_table_schema="agent"`) and `langgraph.*`. The Python `search_path` is `langgraph,agent` and excludes `public`, so an unqualified Go table name fails closed. No table-name or version-table collision.
-- **`options=-c search_path=langgraph,agent` in the DSN works for asyncpg**: unknown query parameters become `server_settings`, and PostgreSQL’s startup packet recognizes `options`; Alembic re-SETs its own path in `env.py`. The psycopg-based saver strips the option and sets the path explicitly, correctly before `setup()`.
-- **Sharing one `AsyncPostgresSaver` connection across concurrent runs is safe**: the installed langgraph `_cursor()` wraps every operation in `self.lock` (`asyncio.Lock`), so concurrent runs serialize rather than interleave transactions. The subagent-flagged risk does not reproduce from the installed source.
-- No Python code references a `public.*` table.
+- `_normalize_database_url`(`backend/agent_py/agent/config.py:319-369`)接受 `postgresql+asyncpg://`(这是 CI 中 Alembic 用的 scheme);asyncpg 在应用启动时拒绝它。统一 scheme,或抛清晰的配置错误。
+- `create_run` 在被重试的函数内生成 UUID(`run_metadata.py:139-149`)。服务器已经提交后若发生 `PostgresConnectionError`,重试会留下一条"幽灵"的 `running` 行(新 id)。应在 retry loop 外面生成 UUID;同样的"重复插入"类问题在 `record_message` 与 `audit.record` 提交后断连时也存在。
+- `_with_retry` 捕获任何 `TimeoutError`(包括操作自身抛出的),并把它误归为 pool exhaustion。建议仅捕获 `asyncio.TimeoutError`,且作用域限定在 `pool.acquire` 周围。
 
 ---
 
-## Confirmed clean
+## 跨 runtime
 
-- No string-built SQL. Go uses sqlc parameterization throughout; Python builds SQL only from constant column lists plus bound parameters (`_RUN_COLUMNS`, the two `list_sessions` fragments), and the only DDL identifier interpolation is a constant schema name.
-- Owner scoping in `feeds` queries is complete; every read/write filters `user_id`, and cross-owner access collapses to `ErrNotFound`. MCP/tool paths route through `feed.Service` with `reqctx` scoping; no direct SQL.
-- sqlc annotations and generated output are in sync (`sqlc diff` exit 0); `RETURNING *` column order matches the generated structs; nullable columns use `pgtype` correctly.
-- The refresh-token self-stamp (`InsertRefreshToken` + `StampRefreshTokenFamily`) is correctly wrapped in a transaction.
-- `000016`’s `setval(pg_get_serial_sequence('users','id'), COALESCE(MAX(id),1), MAX(id) IS NOT NULL)` handles both the empty and non-empty cases correctly.
-- pgxpool configuration, `pgxvec.RegisterTypes` in `AfterConnect`, `ErrNoRows` mapping, and `ErrNoChange` handling in the migration runner are sound.
-- The cache-aside invariant holds: every cache call swallows with `log.Warn`, and the cache key includes `user_id` (`feeds:u=%d:q=%s:p=%d:s=%d:o=%s`). Note that `CLAUDE.md` still documents the old user-less key format.
-- Alembic chain: single head `0008_chat_message_steps`, linear `down_revision` links, every table/index explicitly in the `agent` schema, `timestamptz` / `jsonb` / `uuid` / identity / `ON DELETE CASCADE` used correctly.
-- `asyncpg.create_pool` is awaited before use (`build_pool`), matching the asyncpg 0.32+ contract.
+- **Schema 隔离是干净的。** Go 持有 `public.*`(`schema_migrations` 经 golang-migrate);Python 持有 `agent.*`(`alembic_version` 经 `version_table_schema="agent"`)与 `langgraph.*`。Python 的 `search_path` 是 `langgraph,agent`,排除了 `public`,因此任何非限定的 Go 表名都会失败关闭。不存在表名或版本表冲突。
+- **DSN 中 `options=-c search_path=langgraph,agent` 对 asyncpg 是有效的:** 未知查询参数会变成 `server_settings`,PostgreSQL 的启动包识别 `options`;Alembic 在 `env.py` 中再次 SET 自己的 search_path。基于 psycopg 的 saver 会剥离该 option,并在 `setup()` 前显式设置 search_path,正确。
+- **共享一个 `AsyncPostgresSaver` 连接并发运行是安全的:** 安装的 langgraph `_cursor()` 把每次操作都包在 `self.lock`(`asyncio.Lock`)中,因此并发运行是序列化而非交错事务。子代理曾标记的风险在已安装源码中不复现。
+- 没有 Python 代码引用 `public.*` 表。
 
 ---
 
-## Prioritized recommendations
+## 确认无误之处
 
-### P0 — release blockers
-
-1. Fix `000015` up/down: `DELETE FROM feed_embeddings;` before the column swap; add a seeded-upgrade CI test.
-2. Make `RotateRefreshToken` atomic (`revoked_at IS NULL` as the driving predicate); map zero rows to the reuse branch; add a concurrent-replay test.
-
-### P1 — security / compliance / data integrity
-
-3. Fence GDPR erase against in-flight runs, or add an orphan-thread sweep to retention (Python P1).
-4. Add `user_id` + `deleted_at` to the prefs `EXISTS` guard and serialize against erase (Python P2).
-5. Scope the `chat_messages` INSERT by `user_id`; fix the test that pins the cross-user insert (Python P5).
-6. Sanitize NUL / lone surrogates in `record_message` and map residual `DataError` to `ChatStoreUnavailable` (Python P3).
-7. Cap `page` / guard the offset conversion in the HTTP and MCP entry points (Go M2).
-
-### P2 — correctness under concurrency and scale
-
-8. Replace the filtered-HNSW retrieval with a per-user materialized exact scan (or verify iterative scan on a real plan) (Go M1).
-9. Use REPEATABLE READ (or `FOR SHARE`) for the count/page and ownership-probe transactions (Go M5, Python P4).
-10. Key refresh-token retention on `COALESCE(revoked_at, expires_at)` and add the missing indexes (Go M4).
-11. Add the retention indexes and consider batching the sweeps (Python P9).
-12. Run the agent pytest suite (with `TEST_ASYNC_PG_DSN`) in CI, including concurrency tests (Python P10).
-
-### P3 — hardening / cleanup
-
-13. Fix the pg_trgm guard, guard/`document` the vector extension, and repair the down-migration asymmetries (Go M6/M7).
-14. Extend `make sqlc-diff` to `internal/rag/db`, update `sqlc.yaml` to the latest migration, and stop `BackfillOnce` from being a once-per-process no-retry gate (Go M7).
-15. Fix saver teardown, pre-stream `get_run` handling, DSN logging, and non-idempotent insert retries (Python P6/P7/P8/P11).
+- 无字面拼接 SQL。Go 端 sqlc 参数化贯穿始终;Python 只从常量列名+绑定参数构建 SQL(`_RUN_COLUMNS`、两段 `list_sessions`),唯一的 DDL 标识符插值是常量 schema 名。
+- `feeds` 查询中的 owner scoping 是完备的;每一次读写都带 `user_id` 过滤,跨 owner 访问收敛为 `ErrNotFound`。MCP/tool 路径走 `feed.Service` 并带 `reqctx` scoping,无直接 SQL。
+- sqlc 注解与生成代码同步(`sqlc diff` exit 0);`RETURNING *` 列序与生成 struct 匹配;可空列正确使用 `pgtype`。
+- refresh token 自 stamp(`InsertRefreshToken` + `StampRefreshTokenFamily`)正确包在事务中。
+- `000016` 的 `setval(pg_get_serial_sequence('users','id'), COALESCE(MAX(id),1), MAX(id) IS NOT NULL)` 同时正确处理空与非空两种情况。
+- pgxpool 配置、`AfterConnect` 中的 `pgxvec.RegisterTypes`、`ErrNoRows` 映射、迁移 runner 中的 `ErrNoChange` 处理都无误。
+- cache-aside 不变量成立:每次 cache 调用都用 `log.Warn` 吞错,cache key 包含 `user_id`(`feeds:u=%d:q=%s:p=%d:s=%d:o=%s`)。注意 `CLAUDE.md` 中仍写着旧的、不带 user 的 key 格式。
+- Alembic 链:单一 head `0008_chat_message_steps`,线性 `down_revision` 链接,每张表/索引明确在 `agent` schema 中,`timestamptz` / `jsonb` / `uuid` / identity / `ON DELETE CASCADE` 使用正确。
+- `asyncpg.create_pool` 在使用前已 `await`(`build_pool`),匹配 asyncpg 0.32+ 契约。
 
 ---
 
-## Reproduction appendix
+## 优先级建议
 
-All four Go-side reproductions ran on `pgvector/pgvector:pg17` (PostgreSQL 17.11, pgvector 0.8.6).
+### P0 —— 上线阻塞项
 
-**1. `000015` on a non-empty table**
+1. 修 `000015` 的 up/down:列交换前先 `DELETE FROM feed_embeddings;`;加一个"种子升级版库"的 CI 测试。
+2. 让 `RotateRefreshToken` 原子化(`revoked_at IS NULL` 作为驱动谓词);零行时映射到重放分支;加并发重放测试。
+
+### P1 —— 安全 / 合规 / 数据完整性
+
+3. 把 GDPR erase 与进行中的 run 隔离,或在 retention 中增加孤儿 thread 扫描(Python P1)。
+4. 在 prefs 的 `EXISTS` 守卫中加 `user_id` + `deleted_at`,并与 erase 串行(Python P2)。
+5. 把 `chat_messages` 的 INSERT 限定 `user_id`;修那个把"跨用户 insert 成功"固化的测试(Python P5)。
+6. 在 `record_message` 中净化 NUL/孤立 surrogate,并把残留 `DataError` 转译为 `ChatStoreUnavailable`(Python P3)。
+7. 在 HTTP 与 MCP 入口都限制 `page` / 守住 offset 转换(Go M2)。
+
+### P2 —— 并发与规模下的正确性
+
+8. 用每用户物化的精确扫描(或在真实计划上验证 iterative scan)替换带过滤的 HNSW 检索(Go M1)。
+9. 对 count/page 与 ownership-probe 事务使用 REPEATABLE READ(或 `FOR SHARE`)(Go M5、Python P4)。
+10. 把 refresh token 保留锚到 `COALESCE(revoked_at, expires_at)`,并补齐缺失的索引(Go M4)。
+11. 加 retention 索引,并考虑把扫描分批(Python P9)。
+12. 在 CI 中运行 agent pytest 套件(配 `TEST_ASYNC_PG_DSN`),包括并发测试(Python P10)。
+
+### P3 —— 加固 / 清理
+
+13. 修 pg_trgm 守卫;守卫/文档化 vector 扩展;修复 down 迁移的不对称性(Go M6/M7)。
+14. 把 `make sqlc-diff` 扩展到 `internal/rag/db`,更新 `sqlc.yaml` 到最新迁移,并让 `BackfillOnce` 不再是"一次性、不重试"的进程级闸门(Go M7)。
+15. 修 saver teardown、流前的 `get_run` 处理、DSN 日志,以及非幂等的 insert 重试(Python P6/P7/P8/P11)。
+
+---
+
+## 复现附录
+
+四个 Go 端复现全部在 `pgvector/pgvector:pg17`(PostgreSQL 17.11,pgvector 0.8.6)上完成。
+
+**1. `000015` 在非空表上的失败**
 
 ```sql
 CREATE TABLE feed_embeddings (
@@ -367,7 +367,7 @@ ALTER TABLE feed_embeddings ADD COLUMN embedding vector(1024) NOT NULL;
 -- ERROR: column "embedding" of relation "feed_embeddings" contains null values
 ```
 
-**2. Refresh rotation replay**
+**2. Refresh 轮换重放**
 
 ```sql
 -- old row id = 1, family_id = 1
@@ -384,7 +384,7 @@ FROM new_row WHERE refresh_tokens.id = 1 RETURNING new_row.id;
 -- succeeded again → two rows with revoked_at IS NULL
 ```
 
-**3. Filtered HNSW under-return**
+**3. 带过滤 HNSW 返回数量不足**
 
 ```sql
 -- 2,000 rows for user 2, one row for user 1; HNSW index on embedding
@@ -399,14 +399,14 @@ SELECT count(*) FROM (
 -- 0
 ```
 
-**4. Negative OFFSET**
+**4. 负 OFFSET**
 
 ```sql
 SELECT 1 OFFSET -1;
 -- ERROR: OFFSET must not be negative
 ```
 
-The page overflow that produces this value:
+产生该值的 page 上溢:
 
 ```text
 page = 21474837, page_size = 100
