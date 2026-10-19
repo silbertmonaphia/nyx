@@ -32,6 +32,8 @@ playwright-report/
 # report is committed as evidence via a forced add)
 evals/**/artifacts/
 .promptfoo/
+evals/tests/fixtures/
+evals/graders/security.py
 
 # Docker / local data
 .docker/
