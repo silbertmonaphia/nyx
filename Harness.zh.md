@@ -1,5 +1,7 @@
 # AI Coding Harness 优先级
 
+English version: [Harness.md](Harness.md)
+
 本文档基于 `doc/AI-Harness.md` 的 6 类方法 + 业界补充方法，按"对这个项目投入产出比"排序。每条标注：**是什么 / 为什么 / 怎么做**。
 
 ---

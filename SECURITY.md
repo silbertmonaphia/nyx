@@ -1,5 +1,7 @@
 # Security
 
+中文版本: [SECURITY.zh.md](SECURITY.zh.md)
+
 ## Reporting vulnerabilities
 
 Use GitHub Security Advisories (private disclosure) on this repository. Expect acknowledgement within 72 hours. Please do not file public issues for security bugs.
