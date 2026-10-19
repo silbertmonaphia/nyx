@@ -1,4 +1,4 @@
-.PHONY: sqlc sqlc-diff sqlc-version openapi openapi-diff coverage coverage-check coverage-html migration-check stream-budget-check help
+.PHONY: sqlc sqlc-diff sqlc-version openapi openapi-diff coverage coverage-check coverage-html migration-check stream-budget-check lint help
 
 # COVERAGE_MIN is the per-package floor that `make coverage-check`
 # enforces. Each package's coverage must be at or above this number;
@@ -104,6 +104,9 @@ migration-check:
 
 stream-budget-check:
 	@python3 $(CURDIR)/../scripts/check_stream_budget.py
+
+lint:
+	golangci-lint run --timeout=5m
 
 help:
 	@echo "Targets:"
