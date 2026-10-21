@@ -17,8 +17,13 @@ then per-step `PlanStep.model_validate`. Same enrichment rules at the end
 (empty-plan synthesis, appending an answering `llm` step when the model
 ends on a data step).
 
-Both paths feed the same `_enforce_plan_shape` post-parse enrichment, so
-the on-wire `plan` frame is identical regardless of which path produced it.
+Both paths produce the same on-wire `plan` frame for the same model
+output. The deterministic write-routing guard lives in the structured
+post-parse call: `_enforce_plan_shape` receives the latest raw user
+message and rejects a plan that omits a required write tool or writes
+before composing. The legacy free-text path does not call the guard and
+has no retry, so a `plan_invalid` there would terminate the run; it is
+deliberately structured-only until the paths are unified.
 """
 
 from __future__ import annotations
@@ -36,6 +41,7 @@ from langchain_openai import ChatOpenAI
 from opentelemetry import trace
 from pydantic import SecretStr, ValidationError
 
+from .arg_refs import has_reference_to
 from .config import Settings
 from .observability import (
     agent_planner_parse_failures_total,
@@ -81,7 +87,11 @@ Rules:
 - the plan MUST contain at least one step; for greetings, small talk, or anything needing no retrieval or tools, emit exactly one `llm` step that answers the user
 - prefer the minimum number of steps; don't insert filler
 - use `rag` only when the request is clearly about the user's own data
-- when unsure, prefer a single `llm` step
+- when the user explicitly asks to change their feeds — create or publish (发布 / 发出去 / 创建), update (更新 / 修改), or delete (删除 / 删掉) — the plan MUST contain a `tool` step calling the matching write tool (`create_feed` / `update_feed` / `delete_feed`) before the answering `llm` step; an `llm` step composes text and never performs the write
+- do NOT plan a write tool when the user asks to compose, draft, review, suggest, or preview content, when the message says not to publish yet (草稿 / 先别发 / 不要发布 / 仅供预览), or when an ambiguous request could be either composing or publishing — such requests are draft-and-report
+- when the write's content must be composed from earlier results, plan the composing `llm` step BEFORE the write step and make the write's content argument reference that step's output; never pass a plan-time placeholder as the created or updated content
+- `tool` step `args` may reference an earlier step's output by setting the ENTIRE argument value to the literal `{{step:<step_id>}}` with no surrounding text, for example `"description": "{{step:llm_1}}"`; the executor replaces it with that step's output, and only a step earlier in the same plan can be referenced
+- when unsure whether the user wants a state change, prefer a single `llm` step (a draft-and-report answer) and do not emit a write tool; an explicit state-change request is not ambiguous and requires the matching write tool
 """
 
 # Sentinel marker for the appended validator-error block. The model keys off
@@ -91,6 +101,67 @@ PREVIOUS_ATTEMPT_FAILED_HEADER = "PREVIOUS_ATTEMPT_FAILED"
 
 # Legacy fallback: sentinel markers we accept when the upstream wraps JSON in fences.
 _FENCE_PREFIX = "```"
+
+_AUTO_ANSWER_PROMPT = (
+    "Write the final answer to the user's most recent request, "
+    "using the data gathered by earlier steps."
+)
+
+_CREATE_INTENT_MARKERS = (
+    "发出去",
+    "发布",
+    "发表",
+    "创建",
+    "新建",
+    "形成一篇",
+    "形成一条",
+    "发一篇",
+    "发一条",
+)
+_UPDATE_INTENT_MARKERS = ("更新", "修改", "改为", "改成", "编辑")
+_DELETE_INTENT_MARKERS = ("删除", "删掉", "删了", "移除")
+_DRAFT_OR_NEGATION_MARKERS = (
+    "别发",
+    "不要发",
+    "先不发",
+    "先别发",
+    "别发布",
+    "不要发布",
+    "暂不发布",
+    "别创建",
+    "不要创建",
+    "别更新",
+    "不要更新",
+    "别删除",
+    "不要删除",
+    "草稿",
+    "初稿",
+    "仅供预览",
+    "仅预览",
+    "预览",
+)
+_WRITE_TOOLS_BY_INTENT = {
+    "create": ("create_feed",),
+    "update": ("update_feed", "update_feeds"),
+    "delete": ("delete_feed", "delete_feeds"),
+}
+_COMPOSITION_MARKERS = (
+    "撰写",
+    "编写",
+    "起草",
+    "拟写",
+    "创作",
+    "生成",
+    "形成",
+    "总结成",
+    "整理成",
+    "写一篇",
+    "写一条",
+    "写个",
+    "写出",
+    "输出",
+    "发布给",
+)
 
 
 class _PlanError:
@@ -370,6 +441,7 @@ async def _emit_structured_plan(
         return _PlanError("planner_failed", "Plan generation failed", "provider call failed")
 
     messages = _initial_messages(state, settings, prefs_text, registry_block)
+    latest_user_message = _latest_user_message(state.get("messages", []))
     had_validation_failure = False
 
     for attempt in range(settings.planner_retry_max + 1):
@@ -440,7 +512,11 @@ async def _emit_structured_plan(
                 messages = _append_error_to_messages(messages, last_error)
                 continue
 
-            enriched = _enforce_plan_shape(plan_obj, settings.plan_max_steps)
+            enriched = _enforce_plan_shape(
+                plan_obj,
+                settings.plan_max_steps,
+                latest_user_message=latest_user_message,
+            )
             if isinstance(enriched, _PlanError):
                 reason = enriched.reason or enriched.code
                 span.set_attribute("ok", False)
@@ -478,6 +554,21 @@ def _messages_to_prompt(messages: list) -> str:
         if content:
             parts.append(f"[{role}] {content}")
     return "\n".join(parts) or "(no prior messages)"
+
+
+def _latest_user_message(messages: list) -> str:
+    """The most recent raw user message, never the flattened conversation.
+
+    The write-routing guard keys off the latest request only: an earlier
+    turn that asked to publish must not trigger a rejection for a later
+    read/greeting turn.
+    """
+    for m in reversed(messages or []):
+        role = m.role if hasattr(m, "role") else m.get("role", "user")
+        content = m.content if hasattr(m, "content") else m.get("content", "")
+        if role == "user" and isinstance(content, str) and content.strip():
+            return content
+    return ""
 
 
 def _extract_text(resp) -> str:
@@ -519,8 +610,10 @@ async def _emit_legacy_plan(
     """Legacy free-text path: fence-strip + `json.loads` + post-parse enrichment.
 
     Reachable only when `PYTHON_AGENT_PLANNER_STRUCTURED_ENABLED=false`. Kept
-    symmetric with the structured path on the post-parse shape — both paths
-    call `_enforce_plan_shape` so the wire-format output is identical.
+    symmetric with the structured path on the post-parse enrichment. This
+    path does not call the write-routing guard and has no retry, so it can
+    return a plan the structured path would reject with `plan_invalid`;
+    wiring the guard here would terminate the run on its first rejection.
     """
     client = ChatOpenAI(
         base_url=settings.llm_base_url,
@@ -624,10 +717,7 @@ def _parse_and_validate(raw: str, max_steps: int) -> Plan | _PlanError:
                 PlanStep(
                     id=answer_id,
                     kind=StepKind.llm,
-                    prompt=(
-                        "Write the final answer to the user's most recent "
-                        "request, using the data gathered by earlier steps."
-                    ),
+                    prompt=_AUTO_ANSWER_PROMPT,
                 )
             )
         return Plan(steps=parsed_steps)
@@ -638,7 +728,110 @@ def _parse_and_validate(raw: str, max_steps: int) -> Plan | _PlanError:
 # --- post-parse enrichment (shared) -------------------------------------
 
 
-def _enforce_plan_shape(plan: Plan, max_steps: int) -> Plan | _PlanError:
+def _state_change_intents(message: str) -> list[str]:
+    intents: list[str] = []
+    if any(marker in message for marker in _CREATE_INTENT_MARKERS):
+        intents.append("create")
+    if any(marker in message for marker in _UPDATE_INTENT_MARKERS):
+        intents.append("update")
+    if any(marker in message for marker in _DELETE_INTENT_MARKERS):
+        intents.append("delete")
+    return intents
+
+
+def _is_feed_composition_prompt(prompt: str | None) -> bool:
+    if not isinstance(prompt, str):
+        return False
+    text = prompt.strip()
+    if not text or text == _AUTO_ANSWER_PROMPT:
+        return False
+    return "feed" in text.lower() and any(
+        marker in text for marker in _COMPOSITION_MARKERS
+    )
+
+
+def _enforce_compose_before_write(steps: list[PlanStep]) -> _PlanError | None:
+    for index, step in enumerate(steps):
+        if step.kind != StepKind.tool or step.tool != "create_feed":
+            continue
+        earlier = steps[:index]
+        args = step.args if step.args is not None else {}
+        if any(
+            earlier_step.kind == StepKind.llm
+            and has_reference_to(args, earlier_step.id)
+            for earlier_step in earlier
+        ):
+            continue
+        composing = [
+            earlier_step
+            for earlier_step in earlier
+            if earlier_step.kind == StepKind.llm
+            and _is_feed_composition_prompt(earlier_step.prompt)
+        ]
+        if not composing:
+            return _PlanError(
+                "plan_invalid",
+                "Plan is invalid",
+                (
+                    f"create_feed (step {step.id!r}) must be preceded by an "
+                    "llm step that composes the feed content from earlier "
+                    "results; otherwise the write publishes a placeholder"
+                ),
+            )
+        composing_ids = ", ".join(repr(s.id) for s in composing)
+        return _PlanError(
+            "plan_invalid",
+            "Plan is invalid",
+            (
+                f"create_feed (step {step.id!r}) must reference the composing "
+                "step's output in its args with the whole-value reference "
+                "{{step:<step_id>}} instead of a plan-time placeholder "
+                f"(composing steps: {composing_ids})"
+            ),
+        )
+    return None
+
+
+def _enforce_write_routing(
+    steps: list[PlanStep], latest_user_message: str | None
+) -> _PlanError | None:
+    message = (latest_user_message or "").strip()
+    if not message:
+        return None
+    if any(marker in message for marker in _DRAFT_OR_NEGATION_MARKERS):
+        return None
+    intents = _state_change_intents(message)
+    if not intents:
+        return None
+    tools = {s.tool for s in steps if s.kind == StepKind.tool and s.tool}
+    missing = [
+        intent
+        for intent in intents
+        if not any(tool in tools for tool in _WRITE_TOOLS_BY_INTENT[intent])
+    ]
+    if missing and _is_feed_composition_prompt(steps[-1].prompt):
+        intent = missing[0]
+        required = _WRITE_TOOLS_BY_INTENT[intent][0]
+        return _PlanError(
+            "plan_invalid",
+            "Plan is invalid",
+            (
+                f"the user asked to {intent} a feed, but the plan has no "
+                f"{required} tool step; add a tool step calling {required} "
+                "before the final llm step"
+            ),
+        )
+    if "create" in intents:
+        return _enforce_compose_before_write(steps)
+    return None
+
+
+def _enforce_plan_shape(
+    plan: Plan,
+    max_steps: int,
+    *,
+    latest_user_message: str | None = None,
+) -> Plan | _PlanError:
     """Same enrichment as the legacy parser, on a typed `Plan` instance.
 
     - Empty plans become a single direct-answer `llm` step (small models
@@ -648,6 +841,16 @@ def _enforce_plan_shape(plan: Plan, max_steps: int) -> Plan | _PlanError:
     - Plans whose last step is a data step (`rag`, `tool`) get a final
       answering `llm` step appended so the run produces a user-visible
       answer (the 2026-10 "summarize my feeds" bug).
+
+    The write-routing guard runs last and only when the latest raw user
+    message is supplied (the structured path supplies it). It is a narrow
+    lexical trigger, not an intent classifier: an explicit Chinese
+    state-change phrase with no draft/negation qualifier is required, and
+    the missing-write branch additionally needs a model-authored final
+    `llm` prompt that asks for feed-shaped composition. Read/summary
+    requests, greetings, refusals, and web lookups therefore pass through
+    unchanged. A `create_feed` plan must also compose before it writes:
+    an earlier `llm` step whose output the write's args reference.
     """
     steps = list(plan.steps)
     if not steps:
@@ -691,12 +894,12 @@ def _enforce_plan_shape(plan: Plan, max_steps: int) -> Plan | _PlanError:
             PlanStep(
                 id=answer_id,
                 kind=StepKind.llm,
-                prompt=(
-                    "Write the final answer to the user's most recent "
-                    "request, using the data gathered by earlier steps."
-                ),
+                prompt=_AUTO_ANSWER_PROMPT,
             )
         )
+    guard_error = _enforce_write_routing(steps, latest_user_message)
+    if guard_error is not None:
+        return guard_error
     return Plan(steps=steps)
 
 

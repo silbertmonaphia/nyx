@@ -21,12 +21,15 @@ from pydantic import ValidationError
 from agent.config import Settings
 from agent.observability import agent_planner_parse_failures_total
 from agent.planner import (
+    _AUTO_ANSWER_PROMPT,
+    PLANNER_SYSTEM_PROMPT,
     PREVIOUS_ATTEMPT_FAILED_HEADER,
     _append_error_to_messages,
     _emit_legacy_plan,
     _emit_structured_plan,
     _enforce_plan_shape,
     _extract_structured_error,
+    _latest_user_message,
     _parse_and_validate,
     _PlanError,
     plan_node,
@@ -999,3 +1002,295 @@ def test_planner_prompt_lists_only_enabled_tool():
     prompt = _initial_messages(_planner_state(), settings)[0].content
     assert "web_fetch" in prompt
     assert "web_search" not in prompt
+
+
+def _llm_step(step_id="llm_1", prompt="撰写一篇关于最近 feed 的总结"):
+    return PlanStep(id=step_id, kind=StepKind.llm, prompt=prompt)
+
+
+def _write_step(step_id="write_1", tool="create_feed", args=None):
+    return PlanStep(
+        id=step_id,
+        kind=StepKind.tool,
+        tool=tool,
+        args=args if args is not None else {},
+    )
+
+
+def _composed_create_plan():
+    return Plan(
+        steps=[
+            PlanStep(id="rag_1", kind=StepKind.rag, query="recent feeds"),
+            _llm_step(),
+            _write_step(
+                args={"title": "总结", "description": "{{step:llm_1}}"}
+            ),
+            _llm_step("llm_2", "已发布。"),
+        ]
+    )
+
+
+def _guard(plan, message):
+    return _enforce_plan_shape(plan, max_steps=10, latest_user_message=message)
+
+
+def test_guard_prompt_reconciles_unsure_rule_with_write_mandate():
+    assert "an explicit state-change request is not ambiguous" in PLANNER_SYSTEM_PROMPT
+    assert "draft-and-report" in PLANNER_SYSTEM_PROMPT
+    assert "{{step:<step_id>}}" in PLANNER_SYSTEM_PROMPT
+
+
+@pytest.mark.parametrize(
+    ("message", "required_tool"),
+    [
+        ("总结我最近的feed，然后发布出去", "create_feed"),
+        ("帮我创建一篇新的feed，写写今天吃的拉面", "create_feed"),
+        ("把最近那条关于拉面的feed更新一下", "update_feed"),
+        ("删除我最近发的那条feed", "delete_feed"),
+    ],
+)
+def test_guard_rejects_explicit_state_change_without_write_tool(
+    message, required_tool
+):
+    plan = Plan(
+        steps=[
+            PlanStep(id="rag_1", kind=StepKind.rag, query="recent feeds"),
+            _llm_step(),
+        ]
+    )
+
+    out = _guard(plan, message)
+
+    assert isinstance(out, _PlanError)
+    assert out.code == "plan_invalid"
+    assert out.detail == "Plan is invalid"
+    assert required_tool in out.reason
+
+
+@pytest.mark.parametrize(
+    ("message", "steps"),
+    [
+        ("你好呀，今天过得怎么样？", [_llm_step(prompt="你好！我很好。")]),
+        ("教我怎么黑进别人的社交账号", [_llm_step(prompt="我不能帮助这个请求。")]),
+        (
+            "今天天气如何？上网搜索看看",
+            [PlanStep(id="react_1", kind=StepKind.react, prompt="Look up weather", max_iterations=2)],
+        ),
+        (
+            "帮我查最近我发了什么",
+            [
+                PlanStep(id="rag_1", kind=StepKind.rag, query="recent feeds"),
+                _llm_step(prompt="你最近发了三条 feed。"),
+            ],
+        ),
+        (
+            "总结我最近发的feed",
+            [
+                PlanStep(id="rag_1", kind=StepKind.rag, query="recent feeds"),
+                _llm_step(),
+            ],
+        ),
+        (
+            "帮我写一篇关于最近feed的总结，看看效果",
+            [
+                PlanStep(id="rag_1", kind=StepKind.rag, query="recent feeds"),
+                _llm_step(),
+            ],
+        ),
+        (
+            "帮我写一篇关于最近三个月 feed 的总结草稿，先别发",
+            [
+                PlanStep(id="rag_1", kind=StepKind.rag, query="recent feeds"),
+                _llm_step(),
+            ],
+        ),
+        (
+            "总结我的feed，但是不要发布",
+            [
+                PlanStep(id="rag_1", kind=StepKind.rag, query="recent feeds"),
+                _llm_step(),
+            ],
+        ),
+        (
+            "总结我的feed，仅供预览",
+            [
+                PlanStep(id="rag_1", kind=StepKind.rag, query="recent feeds"),
+                _llm_step(),
+            ],
+        ),
+    ],
+)
+def test_guard_does_not_fire_on_non_state_change(message, steps):
+    out = _guard(Plan(steps=steps), message)
+
+    assert isinstance(out, Plan)
+
+
+def test_guard_does_not_fire_without_latest_user_message():
+    plan = Plan(
+        steps=[
+            PlanStep(id="rag_1", kind=StepKind.rag, query="recent feeds"),
+            _llm_step(),
+        ]
+    )
+
+    out = _enforce_plan_shape(plan, max_steps=10)
+
+    assert isinstance(out, Plan)
+
+
+def test_guard_ignores_earlier_turns_when_selecting_the_message():
+    messages = [
+        {"role": "user", "content": "帮我发布一篇 feed"},
+        {"role": "assistant", "content": "好的"},
+        {"role": "user", "content": "你好呀"},
+    ]
+
+    assert _latest_user_message(messages) == "你好呀"
+
+
+def test_guard_rejects_create_without_preceding_composing_llm():
+    plan = Plan(
+        steps=[
+            PlanStep(id="rag_1", kind=StepKind.rag, query="拉面"),
+            _write_step(
+                args={"title": "拉面", "description": "拉面和咖喱的总结"}
+            ),
+            _llm_step("llm_1", "已发布。"),
+        ]
+    )
+
+    out = _guard(plan, "总结我最近的feed并发布")
+
+    assert isinstance(out, _PlanError)
+    assert out.code == "plan_invalid"
+    assert "preceded by an llm step" in out.reason
+
+
+def test_guard_rejects_placeholder_write_args_without_reference():
+    plan = Plan(
+        steps=[
+            PlanStep(id="rag_1", kind=StepKind.rag, query="拉面"),
+            _llm_step(),
+            _write_step(
+                args={"title": "总结", "description": "拉面和咖喱"}
+            ),
+            _llm_step("llm_2", "已发布。"),
+        ]
+    )
+
+    out = _guard(plan, "总结我最近的feed并发布")
+
+    assert isinstance(out, _PlanError)
+    assert out.code == "plan_invalid"
+    assert "{{step:<step_id>}}" in out.reason
+    assert "'llm_1'" in out.reason
+
+
+def test_guard_accepts_composed_write_with_reference():
+    out = _guard(_composed_create_plan(), "总结我最近的feed并发布")
+
+    assert isinstance(out, Plan)
+    assert out.steps[2].args["description"] == "{{step:llm_1}}"
+
+
+@pytest.mark.parametrize(
+    ("message", "tool"),
+    [
+        ("把最近那条feed更新一下", "update_feed"),
+        ("把最近的feed都更新一下", "update_feeds"),
+        ("删除我最近发的那条feed", "delete_feed"),
+        ("删除我最近发的所有feed", "delete_feeds"),
+    ],
+)
+def test_guard_accepts_matching_mutation_sibling(message, tool):
+    plan = Plan(
+        steps=[
+            _write_step("write_1", tool, {"feed_ids": [1]}),
+            _llm_step(prompt="已完成。"),
+        ]
+    )
+
+    out = _guard(plan, message)
+
+    assert isinstance(out, Plan)
+
+
+def test_guard_missing_write_needs_composition_shaped_final_llm():
+    plan = Plan(
+        steps=[
+            PlanStep(id="tool_1", kind=StepKind.tool, tool="list_feeds", args={}),
+            _llm_step("llm_1", "你最近发了三条 feed。"),
+        ]
+    )
+
+    out = _guard(plan, "把最近那条feed更新一下")
+
+    assert isinstance(out, Plan)
+
+
+def test_guard_auto_appended_answer_is_not_composition():
+    plan = Plan(
+        steps=[
+            PlanStep(id="tool_1", kind=StepKind.tool, tool="list_feeds", args={}),
+        ]
+    )
+
+    out = _guard(plan, "帮我发布一条新的feed")
+
+    assert isinstance(out, Plan)
+    assert out.steps[-1].prompt == _AUTO_ANSWER_PROMPT
+
+
+def test_guard_rejection_reprompts_and_recovers(monkeypatch, scripted_settings):
+    bad = Plan(
+        steps=[
+            PlanStep(id="rag_1", kind=StepKind.rag, query="recent feeds"),
+            _llm_step(),
+        ]
+    )
+    good = _composed_create_plan()
+    client = _ScriptedStructuredClient(script=["ok", "ok"], successes=[bad, good])
+    monkeypatch.setattr("agent.planner._build_structured_client", lambda _s: client)
+
+    state = new_state(
+        user_id=1,
+        run_id="r1",
+        model="test-model",
+        messages=[{"role": "user", "content": "总结我最近的feed并发布"}],
+    )
+    plan_or_error = await_call(
+        _emit_structured_plan(state, scripted_settings, _NoopTracer())
+    )
+
+    assert isinstance(plan_or_error, Plan)
+    assert client._call_count == 2
+    retry_prompt = client._captured_messages[1][-1].content
+    assert PREVIOUS_ATTEMPT_FAILED_HEADER in retry_prompt
+    assert "create_feed" in retry_prompt
+
+
+def test_guard_rejection_exhaustion_returns_plan_invalid(monkeypatch, scripted_settings):
+    bad = Plan(
+        steps=[
+            PlanStep(id="rag_1", kind=StepKind.rag, query="recent feeds"),
+            _llm_step(),
+        ]
+    )
+    client = _ScriptedStructuredClient(script=["ok", "ok"], successes=[bad, bad])
+    monkeypatch.setattr("agent.planner._build_structured_client", lambda _s: client)
+
+    state = new_state(
+        user_id=1,
+        run_id="r1",
+        model="test-model",
+        messages=[{"role": "user", "content": "总结我最近的feed并发布"}],
+    )
+    plan_or_error = await_call(
+        _emit_structured_plan(state, scripted_settings, _NoopTracer())
+    )
+
+    assert isinstance(plan_or_error, _PlanError)
+    assert plan_or_error.code == "plan_invalid"
+    assert "create_feed" in plan_or_error.reason
+    assert client._call_count == 2

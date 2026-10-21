@@ -43,6 +43,21 @@ RAG_FIXTURE = {
     ),
 }
 
+MOOD_FIXTURES = [
+    {
+        "title": "eval-main-mood-stressed",
+        "description": "这一周加班到很晚，好烦，压力大到睡不着，感觉自己快撑不住了。",
+    },
+    {
+        "title": "eval-main-mood-anxious",
+        "description": "项目又延期了，心里很焦虑，总觉得要出问题，做什么都提不起劲。",
+    },
+    {
+        "title": "eval-main-mood-happy",
+        "description": "今天和朋友聚餐，心情很好，吃了烤肉，聊到很晚才回家。",
+    },
+]
+
 SHAPES: list[dict[str, Any]] = [
     {
         "name": "rag_only",
@@ -63,6 +78,21 @@ SHAPES: list[dict[str, Any]] = [
             "看看我的收藏里有没有关于威士忌的内容。如果没有，帮我新建一个 feed，"
             "标题是 eval-威士忌入门，描述是单一麦芽与调和威士忌的区别。"
         ),
+    },
+    {
+        "name": "rag_update_feed",
+        "fixture": "sse_rag_update_feed",
+        "fixtures": MOOD_FIXTURES,
+        "prompt": (
+            "更新我近3个月的所有关于不好情绪的feed为积极情绪（比如开心、幸福），"
+            "我不想别人觉得我是个负面情绪的人"
+        ),
+    },
+    {
+        "name": "rag_delete_feed",
+        "fixture": "sse_rag_delete_feed",
+        "fixtures": MOOD_FIXTURES,
+        "prompt": "删掉我近3个月的所有关于不好情绪的feed，我不想别人觉得我是个负面情绪的人",
     },
     {
         "name": "weather",

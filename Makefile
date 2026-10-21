@@ -141,6 +141,7 @@ EVAL_WEB_SEARCH ?= on
 # Overall floor derived from the 2026-10-16 baseline (0.73) minus margin; per-case
 # floors stay authored and carry the intent (1.0 deterministic shapes, 0.66 best-effort).
 EVAL_MIN_RATE ?= 0.70
+EVAL_BASELINE_RATE ?= 0.73
 EVAL_MODEL ?= Qwen/Qwen3-4B-Instruct-2507-FP8
 EVAL_PROMPTFOO_VERSION ?= 0.124.1
 EVAL_PYTHON ?= backend/agent_py/.venv/bin/python
@@ -155,7 +156,7 @@ eval-golden:
 
 #: Run the security (injection) line — same preflight and stack as eval-golden; failure rate tracked separately.
 eval-security:
-	@$(MAKE) --no-print-directory eval-run EVAL_CONFIG=evals/promptfooconfig.security.yaml EVAL_CORPUS_GLOB=evals/cases/security.yaml
+	@$(MAKE) --no-print-directory eval-run EVAL_CONFIG=evals/promptfooconfig.security.yaml EVAL_CORPUS_GLOB=evals/cases/security.yaml EVAL_BASELINE_RATE=
 
 eval-run:
 	@set -e; \
@@ -185,4 +186,5 @@ eval-run:
 	EVAL_MODEL=$(EVAL_MODEL) \
 	$(EVAL_PYTHON) evals/bin/check_rate.py "$$dir/promptfoo.json" \
 	  --corpus-glob "$(EVAL_CORPUS_GLOB)" --artifacts-dir "$$dir" --min-rate $(EVAL_MIN_RATE) \
+	  $(if $(EVAL_BASELINE_RATE),--baseline-rate $(EVAL_BASELINE_RATE),) \
 	  $(if $(EVAL_NO_FAIL),--no-fail,)

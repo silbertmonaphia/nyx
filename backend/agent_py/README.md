@@ -40,6 +40,10 @@ flowchart TB
 
 - **Plan-and-Execute** — the planner makes one LLM call (provider structured output, validated
   by Pydantic, with a bounded re-prompt on failure), then the executor runs the steps in order.
+- **Write routing** — state-change requests must plan the matching write tool; a composing `llm`
+  step precedes the write and its id is referenced from the write args. Draft/preview/negation
+  requests do not plan a write. The deterministic guard's lexical triggers are Chinese-only in this
+  change, and it covers only the structured planner path; the legacy free-text path has no retry.
 - **Step kinds** — `rag` (your feed via the Go RAG bridge), `tool` (the MCP tool surface),
   `llm` (single call), `react` (nested model ↔ tool loop, iteration-capped).
 - **Robust by default** — bounded retries on both tool-dispatch failure classes (validator
@@ -189,7 +193,10 @@ as a per-run eval user and grades with deterministic assertions — no LLM judge
 - `EVAL_FILTER=<regex>` narrows a run to matching cases (diagnostics only: the exit code then covers
   just the sampled cases — run the unfiltered line before trusting a green).
 - Unit gate (no model, no network): `backend/agent_py/.venv/bin/python -m pytest evals/tests -q` from the
-  repo root. CI runs no `backend/agent_py` pytest today, so this is a local gate.
+  repo root. The `agent-lint` CI job runs it from the repo root under the agent venv
+  (`uv sync --locked --extra dev`), and its path filter covers `evals/**`, so a grader, corpus-validation,
+  or transcript-parsing change fails the pull request. It never calls the model — answer and plan quality
+  still require a live `make eval-golden` run.
 - Harness internals (provider contract, corpus schema, grading semantics) → the change spec at
   `openspec/changes/archive/2026-10-16-agent-golden-eval/specs/agent-golden-eval/spec.md`. promptfoo is pinned in the Makefile
   (`EVAL_PROMPTFOO_VERSION`).
@@ -198,3 +205,37 @@ as a per-run eval user and grades with deterministic assertions — no LLM judge
   (+ `PYTHON_AGENT_WEB_SEARCH_ENABLED=true`). The stub serves the hostile payloads the security line keys
   on and a canned result set for everything else; the keyless Tavily tier IP-rate-limits after a handful of
   runs and stalls web samples for minutes, which is external noise in a rate.
+
+### Manual live-run runbook
+
+Run before a release and after any planner / executor / tool / prompt change. The suite is serial by
+contract: one 4B vLLM serves every sample (`make eval-golden` pins `--max-concurrency 1`; the live
+Playwright set pins `--workers=1`). Never run two live suites against the same model concurrently.
+
+1. **Infra.** `make up` starts Postgres `:5433`, Redis `:6380`, and Jaeger `:16686`.
+2. **Models.** In separate terminals run `make dev-vllm-main` (chat `:8000`) and `make dev-vllm-embed`
+   (embeddings `:8001`), then wait for `curl -fsS http://localhost:8000/v1/models` and
+   `curl -fsS http://localhost:8001/v1/models`. Do not race the cold start.
+3. **Tavily stub.** `backend/agent_py/.venv/bin/python evals/stubs/tavily_stub.py --port 8899 &`, then
+   export `PYTHON_AGENT_WEB_SEARCH_ENABLED=true` and
+   `PYTHON_AGENT_TAVILY_BASE_URL=http://127.0.0.1:8899/search` before starting the side stack.
+4. **Side stack.** `./scripts/e2e-side-stack.sh up`; defaults are Go `:8180`, agent `:9100`. Check Go
+   `/api/feeds` returns `401` (up and protected), agent `/healthz` returns `{"status":"ok"}`, and curl the
+   embedding endpoint yourself. For a second stack set `E2E_STACK_SUFFIX` and spare
+   `E2E_GO_PORT` / `E2E_AGENT_PORT` / `E2E_AGENT_METRICS_PORT` / `E2E_VITE_PORT`.
+5. **Main line.** `EVAL_WEB_SEARCH=on make eval-golden`; run `make eval-security` on the same stack.
+6. **Budget line.** Start a second stack with a tiny cap, then run only the budget case:
+   `AGENT_BUDGET_PER_USER_PER_HOUR=500 E2E_STACK_SUFFIX=-budget E2E_GO_PORT=8280 E2E_AGENT_PORT=9200 E2E_AGENT_METRICS_PORT=9201 ./scripts/e2e-side-stack.sh up`
+   then
+   `EVAL_GO_API_URL=http://localhost:8280 EVAL_AGENT_URL=http://localhost:9200 EVAL_BUDGET_STACK=1 EVAL_FILTER=main-budget-exceeded make eval-golden`.
+   The filtered run's overall rate is not a suite baseline.
+7. **Read the artifacts.** `evals/artifacts/<UTC-stamp>/summary.md` carries the per-case rates, the
+   applied floor and its baseline provenance, the SKIPPED set, and the answer-coverage marking. A run with
+   NOT RUN cases is labeled `PARTIAL RUN (not a baseline)`; do not cite its overall rate as a suite
+   baseline. To land a baseline, force-add only `report.json` and `summary.md`.
+8. **Cleanup.** Stop only the stacks you started (`E2E_STACK_SUFFIX=-budget ./scripts/e2e-side-stack.sh stop`,
+   then `./scripts/e2e-side-stack.sh stop`); `make stop` if you started the host vLLM targets.
+
+Known reds at this slice, not new regressions: `main-rag-update-feed` / `main-rag-delete-feed` are recorded
+red pending `agent-feed-bulk-write-tools`; `main-web-force-search` is deferred to slice 2;
+`main-budget-exceeded` is SKIPPED on the normal stack by design.

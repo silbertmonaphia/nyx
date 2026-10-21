@@ -10,6 +10,15 @@ samples, compares each rate to the case's corpus `min_rate` floor and the
 overall rate to `--min-rate`, and writes `<artifacts-dir>/report.json` +
 `summary.md` plus one transcript artifact per sample.
 
+The report records the applied overall floor together with the baseline rate it
+was derived from (`--baseline-rate`), so a run can never be cited against a
+floor the runner did not enforce. A run that leaves corpus cases NOT RUN — or
+entirely SKIPPED — beyond their declared prerequisites is flagged as not a
+baseline: its overall rate is still reported, but it is not evidence the suite
+passed. Each case also reports `answer_coverage`: a case that declares no
+answer-content assertion is marked `ungraded`, so a plan-shape-only green is
+never read as answer-text evidence.
+
 Exit codes: 0 within floors (or with `--no-fail`), 1 when a floor is breached,
 when a sample cannot be attributed to the corpus, or when nothing was graded at
 all, 2 when the promptfoo file or the corpus cannot be read. Samples whose
@@ -40,6 +49,7 @@ DEFAULT_CORPUS_GLOB = "evals/cases/*.yaml"
 DEFAULT_MIN_RATE = 0.85
 SKIPPED_PREFIX = "SKIPPED:"
 RATE_EPSILON = 1e-9
+ANSWER_ASSERTION_KEYS = ("answer_contains", "answer_forbidden")
 
 _OBSERVED_RE = re.compile(r"observed=\[([^\]]*)\]")
 _UNSAFE_NAME_RE = re.compile(r"[^A-Za-z0-9._-]+")
@@ -102,11 +112,20 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help=f"overall pass-rate floor (default: {DEFAULT_MIN_RATE})",
     )
     parser.add_argument(
+        "--baseline-rate",
+        type=float,
+        default=None,
+        help="baseline overall pass rate the --min-rate floor was derived from (recorded for provenance)",
+    )
+    parser.add_argument(
         "--no-fail",
         action="store_true",
         help="report floor breaches without failing (trend runs); input errors still exit non-zero",
     )
-    return parser.parse_args(argv)
+    args = parser.parse_args(argv)
+    if args.baseline_rate is not None and not 0.0 <= args.baseline_rate <= 1.0:
+        parser.error(f"--baseline-rate must be in [0, 1], got {args.baseline_rate}")
+    return args
 
 
 def read_promptfoo(path: str) -> dict:
@@ -283,6 +302,19 @@ def rate_of(passed: int, graded: int) -> float | None:
     return round(passed / graded, 4) if graded else None
 
 
+def answer_coverage_of(case: Case) -> str:
+    """`graded` only when the case asserts on answer text, else `ungraded`."""
+    expect = case.expect if isinstance(case.expect, Mapping) else {}
+    if any(key in expect for key in ANSWER_ASSERTION_KEYS):
+        return "graded"
+    turns = expect.get("turns")
+    if isinstance(turns, list):
+        for turn in turns:
+            if isinstance(turn, dict) and any(key in turn for key in ANSWER_ASSERTION_KEYS):
+                return "graded"
+    return "ungraded"
+
+
 def build_case_entry(case: Case, samples: list[dict]) -> dict:
     graded = [sample for sample in samples if not sample["skipped"]]
     passed = [sample for sample in graded if sample["success"]]
@@ -302,11 +334,30 @@ def build_case_entry(case: Case, samples: list[dict]) -> dict:
         "failed": len(failed),
         "skipped": len(skipped),
         "not_run": not samples,
+        "answer_coverage": answer_coverage_of(case),
         "breach": rate is not None and rate + RATE_EPSILON < case.min_rate,
         "samples": samples,
         "skipped_samples": [
             {"index": sample["index"], "reason": sample["skip_reason"]} for sample in skipped
         ],
+    }
+
+
+def baseline_status(entries: Iterable[Mapping[str, Any]]) -> dict:
+    """A baseline requires every case to execute or be covered by a declared prerequisite."""
+    entries = list(entries)
+    not_run = [
+        entry["id"] for entry in entries if entry["not_run"] and entry["requires"] is None
+    ]
+    skipped = [
+        entry["id"]
+        for entry in entries
+        if not entry["not_run"] and entry["rate"] is None and entry["requires"] is None
+    ]
+    return {
+        "is_baseline": not not_run and not skipped,
+        "not_run_beyond_prerequisites": not_run,
+        "skipped_beyond_prerequisites": skipped,
     }
 
 
@@ -360,6 +411,7 @@ def build_report(
             "budget_stack": scrub_optional(os.environ.get("EVAL_BUDGET_STACK")),
         },
         "min_rate": args.min_rate,
+        "baseline_rate": args.baseline_rate,
         "promptfoo_results": str(Path(args.promptfoo_json)),
         "corpus_glob": args.corpus_glob,
         "artifacts_dir": str(Path(args.artifacts_dir)),
@@ -371,6 +423,7 @@ def build_report(
             "skipped": skipped_total,
             "breach": overall_breach,
         },
+        "baseline": baseline_status(entries),
         "cases": entries,
         "skipped": [
             {"case_id": entry["id"], "index": item["index"], "reason": item["reason"]}
@@ -387,12 +440,40 @@ def render_rate(rate: float | None) -> str:
     return "—" if rate is None else f"{rate:.2f}"
 
 
-def render_overall_verdict(overall: Mapping[str, Any]) -> str:
+def render_overall_verdict(report: Mapping[str, Any]) -> str:
+    overall = report["overall"]
     if overall["breach"]:
         return "BREACH"
     if overall["rate"] is None:
         return "NO GRADED SAMPLES"
+    if not report["baseline"]["is_baseline"]:
+        return "PARTIAL RUN (not a baseline)"
     return "within floor"
+
+
+def render_floor_provenance(report: Mapping[str, Any]) -> str:
+    floor = report["overall"]["floor"]
+    baseline_rate = report.get("baseline_rate")
+    if baseline_rate is None:
+        return f"- floor provenance: applied floor {floor}; baseline rate not recorded"
+    return f"- floor provenance: applied floor {floor} derived from baseline rate {baseline_rate:.2f}"
+
+
+def render_baseline(report: Mapping[str, Any]) -> str:
+    baseline = report["baseline"]
+    if baseline["is_baseline"]:
+        return "- baseline: yes — every corpus case executed or is excluded by a declared prerequisite"
+    details = []
+    if baseline["not_run_beyond_prerequisites"]:
+        cases = ", ".join(f"`{case_id}`" for case_id in baseline["not_run_beyond_prerequisites"])
+        details.append(f"NOT RUN: {cases}")
+    if baseline["skipped_beyond_prerequisites"]:
+        cases = ", ".join(f"`{case_id}`" for case_id in baseline["skipped_beyond_prerequisites"])
+        details.append(f"SKIPPED: {cases}")
+    return (
+        f"- baseline: NO — partial run ({'; '.join(details)}); "
+        "the overall rate is not evidence the suite passed"
+    )
 
 
 def render_summary(report: Mapping[str, Any]) -> str:
@@ -410,13 +491,15 @@ def render_summary(report: Mapping[str, Any]) -> str:
         (
             f"- overall: {render_rate(overall['rate'])} "
             f"({overall['passed']}/{overall['graded']} graded, {overall['skipped']} skipped) "
-            f"vs floor {overall['floor']} — {render_overall_verdict(overall)}"
+            f"vs floor {overall['floor']} — {render_overall_verdict(report)}"
         ),
+        render_floor_provenance(report),
+        render_baseline(report),
         "",
         "## Cases",
         "",
-        "| case | line | rate | pass | fail | skip | floor | verdict |",
-        "| --- | --- | --- | --- | --- | --- | --- | --- |",
+        "| case | line | rate | pass | fail | skip | floor | verdict | answer |",
+        "| --- | --- | --- | --- | --- | --- | --- | --- | --- |",
     ]
     for entry in report["cases"]:
         if entry["not_run"]:
@@ -430,8 +513,15 @@ def render_summary(report: Mapping[str, Any]) -> str:
         lines.append(
             f"| {entry['id']} | {entry['line']} | {render_rate(entry['rate'])} | "
             f"{entry['passed']} | {entry['failed']} | {entry['skipped']} | "
-            f"{entry['floor']} | {verdict} |"
+            f"{entry['floor']} | {verdict} | {entry['answer_coverage']} |"
         )
+    lines += [
+        "",
+        (
+            "Answer coverage `ungraded` marks a case with no answer-content assertion; "
+            "its rate is not evidence about the answer text."
+        ),
+    ]
 
     all_skipped = [
         entry["id"] for entry in report["cases"] if entry["rate"] is None and not entry["not_run"]
@@ -465,13 +555,18 @@ def render_summary(report: Mapping[str, Any]) -> str:
                     f"- `{entry['id']}` sample {sample['index']}:{tokens}{artifact} — {detail}"
                 )
 
-    not_run = [entry["id"] for entry in report["cases"] if entry["not_run"]]
+    not_run = [entry for entry in report["cases"] if entry["not_run"]]
     if not_run:
         lines += ["", "## Not run", ""]
         lines.append("Cases in the corpus with no samples in this promptfoo output:")
         lines.append("")
-        for case_id in not_run:
-            lines.append(f"- `{case_id}`")
+        for entry in not_run:
+            if entry["requires"]:
+                lines.append(f"- `{entry['id']}` — declared prerequisite: {entry['requires']}")
+            else:
+                lines.append(
+                    f"- `{entry['id']}` — beyond declared prerequisites; the run is not a baseline"
+                )
 
     if report["errors"]:
         lines += ["", "## Harness errors", ""]
@@ -522,6 +617,12 @@ def main(argv: list[str] | None = None) -> int:
         f"({overall['passed']}/{overall['graded']} graded, {overall['skipped']} skipped) "
         f"vs floor {overall['floor']}"
     )
+    if not report["baseline"]["is_baseline"]:
+        print(
+            "warning: partial run — cases NOT RUN or SKIPPED beyond declared prerequisites; "
+            "the overall rate is not a suite baseline",
+            file=sys.stderr,
+        )
     for entry in report["cases"]:
         if entry["breach"]:
             print(

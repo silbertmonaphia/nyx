@@ -31,6 +31,7 @@ from .approvals import (
     ApprovalGate,
     denial_text_for,
 )
+from .arg_refs import ArgReference, iter_references, scan_args
 from .budget import BudgetGuard
 from .config import Settings
 from .observability import (
@@ -274,7 +275,7 @@ async def _run_tool(
 ) -> None:
     if not step.tool:
         raise _step_runtime_error("tool", "step has no tool name")
-    args = step.args or {}
+    args = _resolve_tool_args(state, step)
     ok, result, error_text = await _dispatch_tool_with_retries(
         state,
         step_id=step.id,
@@ -491,8 +492,16 @@ class _StepRuntimeError(RuntimeError):
     pass
 
 
+class _UnresolvedReferenceError(_StepRuntimeError):
+    pass
+
+
 def _step_runtime_error(kind: str, msg: str) -> _StepRuntimeError:
     return _StepRuntimeError(f"{kind}: {msg}")
+
+
+def _unresolved_reference(reason: str) -> _UnresolvedReferenceError:
+    return _UnresolvedReferenceError(f"unresolved_reference:{reason}")
 
 
 def _state_messages_to_lc(messages) -> list:
@@ -570,6 +579,94 @@ def _strip_markers_recursive(value):
     if isinstance(value, list):
         return [_strip_markers_recursive(v) for v in value]
     return value
+
+
+def _reference_targets(step) -> set[str]:
+    return {
+        item.step_id
+        for item in iter_references(step.args or {})
+        if isinstance(item, ArgReference)
+    }
+
+
+def _plan_reaches(plan_steps, start_id: str, target_id: str) -> bool:
+    by_id = {s.id: s for s in plan_steps}
+    seen: set[str] = set()
+    pending = [start_id]
+    while pending:
+        step_id = pending.pop()
+        if step_id == target_id:
+            return True
+        if step_id in seen:
+            continue
+        seen.add(step_id)
+        target = by_id.get(step_id)
+        if target is not None:
+            pending.extend(_reference_targets(target))
+    return False
+
+
+def _substitute_args(value, path, by_path, outputs):
+    if isinstance(value, str):
+        step_id = by_path.get(path)
+        if step_id is None:
+            return value
+        return _strip_markers_recursive(outputs[step_id])
+    if isinstance(value, dict):
+        return {
+            key: _substitute_args(child, path + (key,), by_path, outputs)
+            for key, child in value.items()
+        }
+    if isinstance(value, list):
+        return [
+            _substitute_args(child, path + (index,), by_path, outputs)
+            for index, child in enumerate(value)
+        ]
+    return value
+
+
+def _resolve_tool_args(state: AgentState, step) -> dict:
+    """Resolve whole-value ``{{step:<id>}}`` references before dispatch.
+
+    Only references to strictly earlier steps in the same plan whose
+    output is present in ``step_outputs`` resolve. Everything else fails
+    closed with ``unresolved_reference:<reason>`` before any dispatch:
+    unknown, forward, self/cyclic, incomplete, or malformed references.
+    A plan whose args carry no reference is returned unchanged, so
+    planner-authored literals keep their exact value and representation.
+
+    Substituted values are the earlier step's output, stripped of
+    untrusted-content framing exactly once: the resolved text is treated
+    as untrusted data, while the planner's own literal args are not
+    rescanned or rewritten.
+    """
+    raw = step.args if step.args is not None else {}
+    scan = scan_args(raw)
+    if not scan.has_references:
+        return raw
+    if scan.malformed:
+        raise _unresolved_reference("malformed_reference")
+    plan = state.get("plan")
+    plan_steps = list(plan.steps) if plan is not None else []
+    positions = {s.id: index for index, s in enumerate(plan_steps)}
+    current = positions.get(step.id)
+    if current is None:
+        raise _unresolved_reference("unknown_step")
+    outputs = state.get("step_outputs") or {}
+    for reference in scan.references:
+        target = positions.get(reference.step_id)
+        if target is None:
+            raise _unresolved_reference("unknown_step")
+        if target == current:
+            raise _unresolved_reference("cycle")
+        if target > current:
+            if _plan_reaches(plan_steps, reference.step_id, step.id):
+                raise _unresolved_reference("cycle")
+            raise _unresolved_reference("forward_reference")
+        if reference.step_id not in outputs:
+            raise _unresolved_reference("incomplete_output")
+    by_path = {reference.path: reference.step_id for reference in scan.references}
+    return _substitute_args(raw, (), by_path, outputs)
 
 
 def _render_prior_data(state: AgentState, current_step_id: str) -> str:

@@ -46,6 +46,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from _common import (  # noqa: E402
+    DESTRUCTIVE_TOOLS,
     clip,
     expect_of,
     frame_data,
@@ -71,8 +72,6 @@ Reconciled against a recorded transcript at integration time
 (agent-golden-eval task 3.3 / D7) — if the planner prompt is reworded, this
 constant is what a leak-grader failure will point at.
 """
-
-DESTRUCTIVE_TOOLS = frozenset({"create_feed", "update_feed", "delete_feed"})
 
 
 def _allowed_tools(expect: dict) -> set[str]:

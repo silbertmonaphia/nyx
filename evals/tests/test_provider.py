@@ -71,12 +71,14 @@ class StubTransport:
         sse: str = "",
         json_responses: dict | None = None,
         existing_feeds: list | None = None,
+        feeds_pages: list | None = None,
         status_code: int = 200,
         log: list | None = None,
     ) -> None:
         self.sse = sse
         self.json_responses = dict(json_responses or {})
         self.existing_feeds = list(existing_feeds or [])
+        self.feeds_pages = list(feeds_pages) if feeds_pages is not None else None
         self.status_code = status_code
         self.log: list[tuple] = log if log is not None else []
 
@@ -87,6 +89,9 @@ class StubTransport:
     def get_json(self, path: str, *, headers: dict, timeout: float) -> dict:
         self.log.append(("get", path))
         if path.startswith("/api/feeds"):
+            if self.feeds_pages is not None:
+                assert self.feeds_pages, f"unexpected extra feeds GET: {path}"
+                return self.feeds_pages.pop(0)
             return {"data": [{"title": t} for t in self.existing_feeds]}
         return self.json_responses.get(path, {})
 
@@ -460,6 +465,146 @@ class TestFixtureSeeding:
     def test_non_list_fixtures_are_rejected(self) -> None:
         with pytest.raises(agent_run.ProviderError):
             agent_run.fixture_entries({"title": "oops"})
+
+
+class TestFeedsSnapshots:
+    TOOL_EFFECT = {"tool": "create_feed", "effect": "created", "description_any_of": ["拉面"]}
+
+    def variables(self, **extra) -> dict:
+        return {
+            "case_id": "write-case",
+            "expect": {"tool_effect": self.TOOL_EFFECT},
+            **extra,
+        }
+
+    def test_snapshots_are_recorded_only_for_write_cases(self, tmp_path: Path) -> None:
+        api = StubTransport(
+            json_responses={agent_run.LOGIN_PATH: auth_payload()},
+            feeds_pages=[
+                {"data": [{"id": 1, "title": "eval-a"}], "has_more": False},
+                {"data": [{"id": 1, "title": "eval-a"}, {"id": 2, "title": "eval-b"}], "has_more": False},
+            ],
+        )
+        transcript, _, _ = run_single_prompt(
+            tmp_path,
+            agent=StubTransport(sse=simple_turn("run-1", "hi")),
+            api=api,
+            variables=self.variables(),
+        )
+        assert transcript["status"] == "completed"
+        assert transcript["meta"]["feeds_before"] == [{"id": 1, "title": "eval-a"}]
+        assert transcript["meta"]["feeds_after"] == [
+            {"id": 1, "title": "eval-a"},
+            {"id": 2, "title": "eval-b"},
+        ]
+        assert "feeds_snapshot_error" not in transcript["meta"]
+        assert api.feeds_pages == []
+
+    def test_no_snapshot_without_a_tool_effect(self, tmp_path: Path) -> None:
+        api = StubTransport(
+            json_responses={agent_run.LOGIN_PATH: auth_payload()},
+            existing_feeds=["eval-a"],
+        )
+        transcript, _, _ = run_single_prompt(tmp_path, api=api)
+        assert "feeds_before" not in transcript["meta"]
+        assert "feeds_after" not in transcript["meta"]
+        assert "feeds_snapshot_error" not in transcript["meta"]
+        assert not [
+            entry
+            for entry in api.log
+            if entry[0] == "get" and entry[1].startswith(agent_run.FEEDS_PATH)
+        ]
+
+    def test_snapshot_follows_has_more_pagination(self, tmp_path: Path) -> None:
+        api = StubTransport(
+            json_responses={agent_run.LOGIN_PATH: auth_payload()},
+            feeds_pages=[
+                {"data": [{"id": 1}], "has_more": True},
+                {"data": [{"id": 2}], "has_more": False},
+                {"data": [{"id": 1}, {"id": 2}, {"id": 3}], "has_more": False},
+            ],
+        )
+        transcript, _, _ = run_single_prompt(
+            tmp_path, api=api, variables=self.variables()
+        )
+        assert transcript["meta"]["feeds_before"] == [{"id": 1}, {"id": 2}]
+        assert transcript["meta"]["feeds_after"] == [{"id": 1}, {"id": 2}, {"id": 3}]
+        feeds_gets = [
+            entry[1]
+            for entry in api.log
+            if entry[0] == "get" and entry[1].startswith(agent_run.FEEDS_PATH)
+        ]
+        assert feeds_gets == [
+            f"{agent_run.FEEDS_PATH}?page=1&page_size={agent_run.FEEDS_PAGE_SIZE}",
+            f"{agent_run.FEEDS_PATH}?page=2&page_size={agent_run.FEEDS_PAGE_SIZE}",
+            f"{agent_run.FEEDS_PATH}?page=1&page_size={agent_run.FEEDS_PAGE_SIZE}",
+        ]
+
+    def test_snapshot_is_taken_after_fixtures_are_seeded(self, tmp_path: Path) -> None:
+        api = StubTransport(
+            json_responses={agent_run.LOGIN_PATH: auth_payload()},
+            feeds_pages=[
+                {"data": [], "has_more": False},
+                {"data": [{"id": 1, "title": "eval-x"}], "has_more": False},
+                {"data": [{"id": 1, "title": "eval-x"}], "has_more": False},
+            ],
+        )
+        run_single_prompt(
+            tmp_path,
+            api=api,
+            variables=self.variables(fixtures=["x"]),
+        )
+        log = api.log
+        post_at = next(
+            index
+            for index, entry in enumerate(log)
+            if entry[0] == "post" and entry[1] == agent_run.FEEDS_PATH
+        )
+        feed_gets = [
+            index
+            for index, entry in enumerate(log)
+            if entry[0] == "get" and entry[1].startswith(agent_run.FEEDS_PATH)
+        ]
+        assert len(feed_gets) == 3
+        assert feed_gets[0] < post_at < feed_gets[1] < feed_gets[2]
+
+    def test_snapshot_error_is_recorded_and_does_not_abort(self, tmp_path: Path) -> None:
+        class FailingFeeds(StubTransport):
+            def get_json(self, path, *, headers, timeout):
+                if path.startswith(agent_run.FEEDS_PATH):
+                    self.log.append(("get", path))
+                    raise agent_run.ProviderError("GET /api/feeds failed: ConnectError")
+                return super().get_json(
+                    path, headers=headers, timeout=timeout
+                )
+
+        agent = StubTransport(sse=simple_turn("run-1", "hi"))
+        api = FailingFeeds(json_responses={agent_run.LOGIN_PATH: auth_payload()})
+        transcript, _, _ = run_single_prompt(
+            tmp_path, agent=agent, api=api, variables=self.variables()
+        )
+        assert transcript["status"] == "completed"
+        assert transcript["turns"][0]["answer"] == "hi"
+        assert "feeds_before" not in transcript["meta"]
+        assert "feeds_after" not in transcript["meta"]
+        error = transcript["meta"]["feeds_snapshot_error"]
+        assert error.startswith("before: page 1:")
+        assert "after: page 1:" in error
+
+    def test_malformed_snapshot_page_records_the_error(self, tmp_path: Path) -> None:
+        api = StubTransport(
+            json_responses={agent_run.LOGIN_PATH: auth_payload()},
+            feeds_pages=[
+                {"has_more": False},
+                {"data": [{"id": 1}], "has_more": False},
+            ],
+        )
+        transcript, _, _ = run_single_prompt(
+            tmp_path, api=api, variables=self.variables()
+        )
+        assert "feeds_before" not in transcript["meta"]
+        assert transcript["meta"]["feeds_after"] == [{"id": 1}]
+        assert "no data list" in transcript["meta"]["feeds_snapshot_error"]
 
 
 class TestDialogueRunIds:

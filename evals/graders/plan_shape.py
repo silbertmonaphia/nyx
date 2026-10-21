@@ -26,9 +26,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from _common import (  # noqa: E402
     clip,
     expect_of,
-    frame_data,
-    frames_of,
     grader,
+    last_plan_steps,
     skipped_verdict,
     token_list,
     turns_of,
@@ -64,19 +63,6 @@ def strip_answer_tail(tokens: list[str]) -> list[str]:
     if tokens and tokens[-1] == ANSWER_TAIL_TOKEN:
         return tokens[:-1]
     return list(tokens)
-
-
-def last_plan_steps(transcript: dict) -> tuple[int, list | None]:
-    """Steps of the last turn's last `plan` frame: `(turn index, steps|None)`."""
-    turns = turns_of(transcript)
-    if not turns:
-        return 0, None
-    turn_index = len(turns)
-    steps = None
-    for frame in frames_of(turns[-1]):
-        if frame.get("event") == "plan":
-            steps = frame_data(frame).get("steps")
-    return turn_index, steps
 
 
 def select_expectation(expect: dict, context: dict) -> tuple[list[str] | None, dict | None]:

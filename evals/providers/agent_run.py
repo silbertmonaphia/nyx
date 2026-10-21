@@ -101,6 +101,8 @@ GO_HEALTH_PATH = "/api/health"
 AGENT_HEALTH_PATH = "/healthz"
 
 PACE_SECONDS = 0.2
+FEEDS_PAGE_SIZE = 100
+FEEDS_SNAPSHOT_MAX_PAGES = 100
 PREFLIGHT_TIMEOUT_SECONDS = 5.0
 RUN_READ_TIMEOUT_SECONDS = 600.0
 APPROVAL_TIMEOUT_SECONDS = 15.0
@@ -689,6 +691,41 @@ def _existing_feed_titles(runtime: Runtime, user: EvalUser) -> set[str]:
     return titles
 
 
+def tool_effect_declared(variables: Mapping[str, Any]) -> bool:
+    """True when the case declares `expect.tool_effect` (the snapshot opt-in)."""
+    expect = variables.get("expect")
+    return isinstance(expect, dict) and isinstance(expect.get("tool_effect"), dict)
+
+
+def snapshot_feeds(
+    runtime: Runtime, user: EvalUser
+) -> tuple[list[dict[str, Any]] | None, str | None]:
+    """All of the eval user's feeds, following `has_more` pagination.
+
+    Returns `(rows, None)` on success and `(None, error)` on any failure;
+    snapshot failures are recorded, never raised, so a payload-only
+    assertion can still grade the sample.
+    """
+    rows: list[dict[str, Any]] = []
+    page = 1
+    while page <= FEEDS_SNAPSHOT_MAX_PAGES:
+        path = f"{FEEDS_PATH}?page={page}&page_size={FEEDS_PAGE_SIZE}"
+        try:
+            payload = runtime.api.get_json(
+                path, headers=auth_headers(user), timeout=30.0
+            )
+        except ProviderError as exc:
+            return None, f"page {page}: {exc}"
+        data = payload.get("data")
+        if not isinstance(data, list):
+            return None, f"page {page}: response carries no data list"
+        rows.extend(row for row in data if isinstance(row, dict))
+        if payload.get("has_more") is not True:
+            return rows, None
+        page += 1
+    return None, f"pagination exceeded {FEEDS_SNAPSHOT_MAX_PAGES} pages"
+
+
 def assemble_answer(frames: list[Frame]) -> str:
     """Concatenate the `delta` frames' text in wire order."""
     parts: list[str] = []
@@ -947,8 +984,16 @@ def execute_case(
     user = ensure_eval_user(config, runtime)
     seed_fixtures(runtime, user, variables.get("fixtures"))
 
+    snapshot_requested = tool_effect_declared(variables)
+    snapshot_errors: list[str] = []
     started_at = runtime.clock().isoformat()
     transcript = empty_transcript(user, started_at, started_at)
+    if snapshot_requested:
+        rows, error = snapshot_feeds(runtime, user)
+        if rows is not None:
+            transcript["meta"]["feeds_before"] = rows
+        if error is not None:
+            snapshot_errors.append(f"before: {error}")
     sample_blocks: list[str] = []
     sample_index = next_sample_index(config.artifacts_dir, case_id)
     previous_run_id: str | None = None
@@ -991,6 +1036,15 @@ def execute_case(
             transcript["status"] = "skipped"
             transcript["skip_reason"] = SKIP_PREFS_TIMEOUT
             break
+
+    if snapshot_requested:
+        rows, error = snapshot_feeds(runtime, user)
+        if rows is not None:
+            transcript["meta"]["feeds_after"] = rows
+        if error is not None:
+            snapshot_errors.append(f"after: {error}")
+        if snapshot_errors:
+            transcript["meta"]["feeds_snapshot_error"] = "; ".join(snapshot_errors)
 
     transcript["meta"]["finished_at"] = runtime.clock().isoformat()
     write_samples(config, case_id, sample_index, sample_blocks, transcript)

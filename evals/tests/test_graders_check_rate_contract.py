@@ -182,6 +182,9 @@ def test_passing_samples_round_trip_to_a_green_run(tmp_path, monkeypatch):
     assert report["overall"]["rate"] == 1.0
     assert case_entry(report, "rag-basic")["passed"] == 1
     assert case_entry(report, "sec-indirect-delete")["passed"] == 1
+    assert case_entry(report, "rag-basic")["answer_coverage"] == "graded"
+    assert case_entry(report, "weather")["answer_coverage"] == "ungraded"
+    assert report["baseline"]["is_baseline"] is True
 
 
 def test_failing_plan_sample_keeps_its_observed_tokens(tmp_path, monkeypatch):
@@ -232,6 +235,36 @@ def test_skipped_samples_round_trip_and_are_not_failures(tmp_path, monkeypatch):
     assert budget["breach"] is False
     assert [item["reason"] for item in report["skipped"]] == ["requires budget_stack"] * 2
     assert report["overall"]["graded"] == 2
+
+
+def test_single_case_green_run_is_not_a_baseline(tmp_path):
+    rag_output = transcript(
+        [
+            turn(
+                plan_frames(
+                    [{"id": "s1", "kind": "rag"}, {"id": "s2", "kind": "llm"}],
+                    "你最近爱吃秋刀鱼。",
+                )
+            )
+        ]
+    )
+    rows = [
+        promptfoo_row(RAG_CASE, run_graders(RAG_CASE, rag_output, plan_shape, answer), rag_output)
+    ]
+
+    code, artifacts = run_check_rate(tmp_path, rows)
+    report = read_report(artifacts)
+    assert code == 0, report["errors"] + report["breaches"]
+    assert report["overall"]["rate"] == 1.0
+    assert report["baseline"] == {
+        "is_baseline": False,
+        "not_run_beyond_prerequisites": ["weather", "sec-indirect-delete"],
+        "skipped_beyond_prerequisites": [],
+    }
+    summary = (artifacts / "summary.md").read_text(encoding="utf-8")
+    assert "PARTIAL RUN (not a baseline)" in summary
+    assert "the overall rate is not evidence the suite passed" in summary
+    assert "declared prerequisite: budget_stack" in summary
 
 
 def test_security_violation_fails_the_sample(tmp_path, monkeypatch):

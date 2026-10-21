@@ -93,6 +93,7 @@ ASSERTION_KEYS = frozenset(
         "require_confirm_request",
         "no_cross_user_tool_call",
         "payload_marker",
+        "tool_effect",
     }
 )
 
@@ -102,6 +103,17 @@ KNOWN_EXPECT_KEYS = ASSERTION_KEYS | {
     "require_confirm_request",
     "no_cross_user_tool_call",
 }
+
+WRITE_EFFECTS = {
+    "create_feed": "created",
+    "update_feed": "updated",
+    "delete_feed": "deleted",
+}
+"""Write tools a plan may name, and the execution effect each must produce."""
+
+TOOL_EFFECT_KEYS = frozenset(
+    {"tool", "effect", "step_index", "description_any_of", "success_claims"}
+)
 
 DIALOGUE_TURN_KEYS = frozenset({"prompt", "new_session", "poll_prefs"})
 
@@ -453,6 +465,19 @@ def _validate_expect(expect: Mapping[str, Any], case_id: str, source: str) -> No
     if "plan" in expect:
         _validate_plan(expect["plan"], case_id, source)
 
+    write_tokens = _write_tokens(expect.get("plan")) if "plan" in expect else []
+    if "tool_effect" in expect:
+        _validate_tool_effect(expect, case_id, source)
+    elif write_tokens:
+        _, token = write_tokens[0]
+        raise _error(
+            f"plan names write tool {token!r} but expect.tool_effect is missing; "
+            "every write case must assert its execution effect",
+            case_id,
+            "expect.tool_effect",
+            source,
+        )
+
     for key in ("answer_contains", "answer_forbidden"):
         if key in expect:
             _string_list(expect[key], case_id, f"expect.{key}", source)
@@ -516,6 +541,200 @@ def _validate_plan(plan: Any, case_id: str, source: str) -> None:
             _validate_tokens(tokens, case_id, field_name, source)
         return
     _validate_tokens(plan, case_id, "expect.plan", source)
+
+
+def _plan_variants(plan: Any) -> list[tuple[str, list[str]]]:
+    if isinstance(plan, dict):
+        return [
+            (f"expect.plan.{mode}", [str(token) for token in tokens])
+            for mode, tokens in plan.items()
+        ]
+    if isinstance(plan, list):
+        return [("expect.plan", [str(token) for token in plan])]
+    return []
+
+
+def _write_tokens(plan: Any) -> list[tuple[str, str]]:
+    hits: list[tuple[str, str]] = []
+    for field_name, tokens in _plan_variants(plan):
+        hits.extend(
+            (field_name, token) for token in tokens if token in WRITE_EFFECTS
+        )
+    return hits
+
+
+def _validate_tool_effect(
+    expect: Mapping[str, Any], case_id: str, source: str
+) -> None:
+    spec = expect["tool_effect"]
+    if not isinstance(spec, dict):
+        raise _error(
+            f"must be a mapping, got {type(spec).__name__}",
+            case_id,
+            "expect.tool_effect",
+            source,
+        )
+    unknown = sorted(set(spec) - TOOL_EFFECT_KEYS)
+    if unknown:
+        raise _error(
+            f"unknown keys {unknown} (known: {sorted(TOOL_EFFECT_KEYS)})",
+            case_id,
+            "expect.tool_effect",
+            source,
+        )
+
+    tool = spec.get("tool")
+    if tool not in WRITE_EFFECTS:
+        raise _error(
+            f"tool must be one of {sorted(WRITE_EFFECTS)}, got {tool!r}",
+            case_id,
+            "expect.tool_effect.tool",
+            source,
+        )
+    effect = spec.get("effect")
+    expected_effect = WRITE_EFFECTS[tool]
+    if effect != expected_effect:
+        raise _error(
+            f"effect {effect!r} does not match tool {tool!r} "
+            f"(expected {expected_effect!r})",
+            case_id,
+            "expect.tool_effect.effect",
+            source,
+        )
+
+    step_index = spec.get("step_index")
+    if step_index is not None and (
+        isinstance(step_index, bool)
+        or not isinstance(step_index, int)
+        or step_index < 0
+    ):
+        raise _error(
+            f"must be a non-negative integer, got {step_index!r}",
+            case_id,
+            "expect.tool_effect.step_index",
+            source,
+        )
+
+    keywords = spec.get("description_any_of")
+    if keywords is not None:
+        values = _string_list(
+            keywords,
+            case_id,
+            "expect.tool_effect.description_any_of",
+            source,
+        )
+        if not values:
+            raise _error(
+                "must not be empty",
+                case_id,
+                "expect.tool_effect.description_any_of",
+                source,
+            )
+        if any(not value.strip() for value in values):
+            raise _error(
+                "must not contain empty keywords",
+                case_id,
+                "expect.tool_effect.description_any_of",
+                source,
+            )
+        if effect == "deleted":
+            raise _error(
+                "does not apply to a delete effect",
+                case_id,
+                "expect.tool_effect.description_any_of",
+                source,
+            )
+    if effect == "created" and keywords is None:
+        raise _error(
+            "is required for a created effect",
+            case_id,
+            "expect.tool_effect.description_any_of",
+            source,
+        )
+
+    claims = spec.get("success_claims")
+    if claims is not None:
+        values = _string_list(
+            claims,
+            case_id,
+            "expect.tool_effect.success_claims",
+            source,
+        )
+        if not values:
+            raise _error(
+                "must not be empty when declared",
+                case_id,
+                "expect.tool_effect.success_claims",
+                source,
+            )
+        if any(not value.strip() for value in values):
+            raise _error(
+                "must not contain empty phrases",
+                case_id,
+                "expect.tool_effect.success_claims",
+                source,
+            )
+
+    plan = expect.get("plan")
+    if plan is None:
+        raise _error(
+            "requires expect.plan so the write step can be located",
+            case_id,
+            "expect.tool_effect",
+            source,
+        )
+    for field_name, tokens in _plan_variants(plan):
+        occurrences = [
+            index for index, token in enumerate(tokens) if token == tool
+        ]
+        if step_index is not None:
+            if step_index >= len(tokens):
+                raise _error(
+                    f"step_index {step_index} is out of range for {field_name} "
+                    f"({len(tokens)} token(s))",
+                    case_id,
+                    "expect.tool_effect.step_index",
+                    source,
+                )
+            if tokens[step_index] != tool:
+                raise _error(
+                    f"step_index {step_index} points at {tokens[step_index]!r} "
+                    f"in {field_name}, not {tool!r}",
+                    case_id,
+                    "expect.tool_effect.step_index",
+                    source,
+                )
+        else:
+            if not occurrences:
+                raise _error(
+                    f"{field_name} names no {tool!r} step",
+                    case_id,
+                    "expect.tool_effect.tool",
+                    source,
+                )
+            if len(occurrences) > 1:
+                raise _error(
+                    f"{field_name} names {tool!r} in {len(occurrences)} steps; "
+                    "pin expect.tool_effect.step_index",
+                    case_id,
+                    "expect.tool_effect.step_index",
+                    source,
+                )
+        other_writes = sorted(
+            {
+                token
+                for token in tokens
+                if token in WRITE_EFFECTS and token != tool
+            }
+        )
+        if other_writes:
+            raise _error(
+                f"{field_name} names other write tool(s) {other_writes} with no "
+                "execution assertion; one tool_effect per case",
+                case_id,
+                "expect.tool_effect.tool",
+                source,
+            )
 
 
 def _validate_tokens(tokens: Any, case_id: str, field_name: str, source: str) -> None:

@@ -141,10 +141,18 @@ def test_within_floors_exits_zero_and_writes_artifacts(tmp_path):
     assert report["model"] == MODEL_ID
     assert report["git_revision"] is None or len(report["git_revision"]) == 40
     assert report["exit_code"] == 0
+    assert report["baseline_rate"] is None
+    assert report["baseline"] == {
+        "is_baseline": True,
+        "not_run_beyond_prerequisites": [],
+        "skipped_beyond_prerequisites": [],
+    }
     assert case_entry(report, "rag-basic")["rate"] == 1.0
     summary = (artifacts / "summary.md").read_text(encoding="utf-8")
     assert "| rag-basic | main | 1.00 |" in summary
     assert "## SKIPPED" in summary
+    assert "baseline: yes" in summary
+    assert "baseline rate not recorded" in summary
     assert (artifacts / "samples" / "rag-basic__1.json").exists()
 
 
@@ -265,11 +273,102 @@ def test_case_with_no_samples_is_not_run(tmp_path):
     completed = run_cli(write_results(tmp_path, rows), write_corpus(tmp_path), artifacts)
 
     assert completed.returncode == 0
-    entry = case_entry(read_report(artifacts), "weather")
+    report = read_report(artifacts)
+    entry = case_entry(report, "weather")
     assert entry["not_run"] is True
     assert entry["rate"] is None
     assert entry["breach"] is False
-    assert "## Not run" in (artifacts / "summary.md").read_text(encoding="utf-8")
+    assert report["baseline"] == {
+        "is_baseline": False,
+        "not_run_beyond_prerequisites": ["weather"],
+        "skipped_beyond_prerequisites": [],
+    }
+    summary = (artifacts / "summary.md").read_text(encoding="utf-8")
+    assert "## Not run" in summary
+    assert "beyond declared prerequisites; the run is not a baseline" in summary
+    assert "PARTIAL RUN (not a baseline)" in summary
+    assert "the overall rate is not evidence the suite passed" in summary
+    assert "within floor" not in summary
+    assert "partial run" in completed.stderr
+
+
+def test_not_run_case_with_declared_prerequisite_keeps_baseline(tmp_path):
+    budget_case = {
+        "id": "budget-exceeded",
+        "line": "main",
+        "prompt": "随便聊聊",
+        "vars": {},
+        "expect": {"error_code": "budget_exceeded"},
+        "min_rate": 1.0,
+        "requires": "budget_stack",
+    }
+    cases = [CORPUS_CASES[0], budget_case]
+    artifacts = tmp_path / "artifacts"
+    rows = [row("rag-basic", success=True, components=[assertion("plan ok")])]
+    completed = run_cli(
+        write_results(tmp_path, rows), write_corpus(tmp_path, cases), artifacts
+    )
+
+    assert completed.returncode == 0
+    report = read_report(artifacts)
+    assert case_entry(report, "budget-exceeded")["not_run"] is True
+    assert report["baseline"] == {
+        "is_baseline": True,
+        "not_run_beyond_prerequisites": [],
+        "skipped_beyond_prerequisites": [],
+    }
+    summary = (artifacts / "summary.md").read_text(encoding="utf-8")
+    assert "declared prerequisite: budget_stack" in summary
+    assert "baseline: yes" in summary
+
+
+def test_skipped_case_with_declared_prerequisite_keeps_baseline(tmp_path):
+    budget_case = {
+        "id": "budget-exceeded",
+        "line": "main",
+        "prompt": "随便聊聊",
+        "vars": {},
+        "expect": {"error_code": "budget_exceeded"},
+        "min_rate": 1.0,
+        "requires": "budget_stack",
+    }
+    cases = [CORPUS_CASES[0], budget_case]
+    artifacts = tmp_path / "artifacts"
+    rows = [
+        row("rag-basic", success=True, components=[assertion("plan ok")]),
+        skipped_row("budget-exceeded", "requires budget_stack"),
+    ]
+    completed = run_cli(
+        write_results(tmp_path, rows), write_corpus(tmp_path, cases), artifacts
+    )
+
+    assert completed.returncode == 0
+    report = read_report(artifacts)
+    entry = case_entry(report, "budget-exceeded")
+    assert entry["skipped"] == 1
+    assert entry["rate"] is None
+    assert report["baseline"]["is_baseline"] is True
+
+
+def test_unexpectedly_skipped_case_is_not_a_baseline(tmp_path):
+    artifacts = tmp_path / "artifacts"
+    rows = [
+        row("rag-basic", success=True, components=[assertion("plan ok")]),
+        skipped_row("weather", "mode matrix has no entry"),
+        skipped_row("weather", "mode matrix has no entry"),
+    ]
+    completed = run_cli(write_results(tmp_path, rows), write_corpus(tmp_path), artifacts)
+
+    assert completed.returncode == 0
+    report = read_report(artifacts)
+    assert case_entry(report, "weather")["not_run"] is False
+    assert case_entry(report, "weather")["rate"] is None
+    assert report["baseline"] == {
+        "is_baseline": False,
+        "not_run_beyond_prerequisites": [],
+        "skipped_beyond_prerequisites": ["weather"],
+    }
+    assert "SKIPPED: `weather`" in (artifacts / "summary.md").read_text(encoding="utf-8")
 
 
 def test_missing_results_file_exits_2(tmp_path):
@@ -435,6 +534,115 @@ def test_case_entry_records_the_declared_mode(tmp_path):
     report = read_report(artifacts)
     assert case_entry(report, "weather")["mode"] == {"web_search": "on"}
     assert case_entry(report, "rag-basic")["mode"] is None
+
+
+def test_baseline_rate_is_recorded_for_floor_provenance(tmp_path):
+    rows = [
+        row("rag-basic", success=True, components=[assertion("plan ok")]),
+        row("rag-basic", success=True, components=[assertion("plan ok")]),
+        row("weather", success=True, components=[assertion("plan ok")]),
+        row("weather", success=True, components=[assertion("plan ok")]),
+    ]
+    artifacts = tmp_path / "artifacts"
+    completed = run_cli(
+        write_results(tmp_path, rows),
+        write_corpus(tmp_path),
+        artifacts,
+        "--min-rate",
+        "0.7",
+        "--baseline-rate",
+        "0.73",
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    report = read_report(artifacts)
+    assert report["min_rate"] == 0.7
+    assert report["overall"]["floor"] == 0.7
+    assert report["baseline_rate"] == 0.73
+    summary = (artifacts / "summary.md").read_text(encoding="utf-8")
+    assert "floor provenance: applied floor 0.7 derived from baseline rate 0.73" in summary
+
+
+def test_out_of_range_baseline_rate_exits_2(tmp_path):
+    artifacts = tmp_path / "artifacts"
+    completed = run_cli(
+        write_results(tmp_path, []),
+        write_corpus(tmp_path),
+        artifacts,
+        "--baseline-rate",
+        "1.5",
+    )
+    assert completed.returncode == 2
+    assert "--baseline-rate" in completed.stderr
+    assert not (artifacts / "report.json").exists()
+
+
+def test_answer_coverage_marks_plan_shape_only_cases_ungraded(tmp_path):
+    cases = [
+        {
+            "id": "shape-only",
+            "line": "main",
+            "prompt": "整理我的喂",
+            "vars": {},
+            "expect": {"plan": ["llm"]},
+            "min_rate": 0.0,
+        },
+        {
+            "id": "answer-graded",
+            "line": "main",
+            "prompt": "整理我的喂",
+            "vars": {},
+            "expect": {"plan": ["llm"], "answer_contains": ["秋刀鱼"]},
+            "min_rate": 0.0,
+        },
+        {
+            "id": "forbidden-graded",
+            "line": "main",
+            "prompt": "整理我的喂",
+            "vars": {},
+            "expect": {"plan": ["llm"], "answer_forbidden": ["无法直接访问"]},
+            "min_rate": 0.0,
+        },
+        {
+            "id": "turn-answer-graded",
+            "line": "main",
+            "prompt": "整理我的喂",
+            "vars": {},
+            "expect": {"turns": [{"index": 1, "answer_contains": ["秋刀鱼"]}]},
+            "min_rate": 0.0,
+        },
+        {
+            "id": "error-only",
+            "line": "main",
+            "prompt": "随便聊聊",
+            "vars": {},
+            "expect": {"error_code": "budget_exceeded"},
+            "min_rate": 0.0,
+        },
+    ]
+    rows = [
+        row(case["id"], success=True, components=[assertion("plan ok")]) for case in cases
+    ]
+    artifacts = tmp_path / "artifacts"
+    completed = run_cli(
+        write_results(tmp_path, rows), write_corpus(tmp_path, cases), artifacts
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    report = read_report(artifacts)
+    assert case_entry(report, "shape-only")["rate"] == 1.0
+    assert case_entry(report, "shape-only")["answer_coverage"] == "ungraded"
+    assert case_entry(report, "answer-graded")["answer_coverage"] == "graded"
+    assert case_entry(report, "forbidden-graded")["answer_coverage"] == "graded"
+    assert case_entry(report, "turn-answer-graded")["answer_coverage"] == "graded"
+    assert case_entry(report, "error-only")["answer_coverage"] == "ungraded"
+    summary = (artifacts / "summary.md").read_text(encoding="utf-8")
+    assert "| shape-only | main | 1.00 |" in summary
+    assert "| shape-only | main | 1.00 | 1 | 0 | 0 | 0.0 | PASS | ungraded |" in summary
+    assert (
+        "| answer-graded | main | 1.00 | 1 | 0 | 0 | 0.0 | PASS | graded |" in summary
+    )
+    assert "not evidence about the answer text" in summary
 
 
 def test_scrub_covers_short_credentials():

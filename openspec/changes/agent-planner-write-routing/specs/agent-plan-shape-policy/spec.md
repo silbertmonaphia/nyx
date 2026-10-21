@@ -34,16 +34,16 @@ When a user's most recent message requests a state change to their feeds — cre
 
 ### Requirement: A plan that omits a required write tool is rejected, not silently answered
 
-When the latest user message expresses an explicit state change and the emitted plan contains no matching write tool, the planner pipeline SHALL reject the plan with a `plan_invalid` outcome so the existing retry loop re-prompts the planner with an actionable reason. It MUST NOT proceed to execute a draft-and-answer plan for that request, and it MUST NOT inject a synthetic write step whose arguments were never authored by the planner. The rejection SHALL be bounded by the existing retry budget; on exhaustion the run terminates with `plan_invalid` rather than silently downgrading to a draft.
+When the latest user message expresses an explicit state change, the emitted plan contains no matching write tool, and the plan's final model-authored `llm` step asks to compose feed-shaped text, the planner pipeline SHALL reject the plan with a `plan_invalid` outcome so the existing retry loop re-prompts the planner with an actionable reason. It MUST NOT proceed to execute a draft-and-answer plan for that request, and it MUST NOT inject a synthetic write step whose arguments were never authored by the planner. The rejection SHALL be bounded by the existing retry budget; on exhaustion the run terminates with `plan_invalid` rather than silently downgrading to a draft. The final-step composition signal keeps read/summary plans from being rejected; a state-change plan that omits both the write and the composition signal still fails plan-shape regression for its corpus case. The deterministic trigger uses a fixed lexical cue set; this change ships Chinese cues only, so English state-change phrasing is not guard-triggered and relies on the planner prompt until the cue set is extended.
 
 #### Scenario: Missing write step triggers a planner retry
 
-- **WHEN** the user asks to publish a feed and the parsed plan contains only `rag` and `llm` steps
+- **WHEN** the user asks to publish a feed, the parsed plan contains only `rag` and `llm` steps, and the final `llm` prompt asks to compose feed-shaped text
 - **THEN** the plan is rejected with `plan_invalid`, the retry prompt names the missing `create_feed` step, and the planner gets another attempt within its retry budget
 
 #### Scenario: Exhausted retries fail closed
 
-- **WHEN** the planner repeatedly omits the required write tool across every allowed attempt
+- **WHEN** the planner repeatedly omits the required write tool for a composition-shaped state-change plan across every allowed attempt
 - **THEN** the run terminates with `plan_invalid` and does not execute a draft-only answer
 
 #### Scenario: No injection of an unauthored step
@@ -65,6 +65,11 @@ When the latest user message expresses an explicit state change and the emitted 
 
 - **WHEN** the user asks to look up or summarise their recent feeds without asking to publish, update, or delete one (for example 帮我查最近我发了什么 or 总结我最近发的feed)
 - **THEN** a plan that omits a write tool is not rejected, and the read/summary plan is graded under the existing rules
+
+#### Scenario: State change without a composition signal is not guard-rejected
+
+- **WHEN** the user asks to publish a feed, the plan has no `create_feed`, and the final `llm` prompt is a generic answer rather than a feed composition
+- **THEN** the guard does not reject the plan; the case fails plan-shape regression because the expected write step is absent
 
 ### Requirement: The write-tool mandate is scoped to explicit state-change intent
 

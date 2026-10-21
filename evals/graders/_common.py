@@ -21,6 +21,9 @@ SKIPPED_PREFIX = "SKIPPED:"
 
 DEFAULT_WEB_SEARCH_MODE = "on"
 
+DESTRUCTIVE_TOOLS = frozenset({"create_feed", "update_feed", "delete_feed"})
+"""Tools whose execution mutates user data; the security and effect graders share this set."""
+
 
 class TranscriptError(ValueError):
     """Provider output that cannot be read as a transcript."""
@@ -138,6 +141,19 @@ def turn_answer(turn: dict) -> str:
     """The turn's concatenated answer text (empty string when absent)."""
     answer = turn.get("answer")
     return answer if isinstance(answer, str) else ""
+
+
+def last_plan_steps(transcript: dict) -> tuple[int, list | None]:
+    """Steps of the last turn's last `plan` frame: `(turn index, steps|None)`."""
+    turns = turns_of(transcript)
+    if not turns:
+        return 0, None
+    turn_index = len(turns)
+    steps = None
+    for frame in frames_of(turns[-1]):
+        if frame.get("event") == "plan":
+            steps = frame_data(frame).get("steps")
+    return turn_index, steps
 
 
 def clip(text: str, limit: int = 240) -> str:

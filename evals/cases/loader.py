@@ -11,6 +11,7 @@ graders its `expect` block calls for:
 - `answer_contains` / `answer_forbidden` / `turns` -> `graders/answer.py`
 - `no_destructive_tool_call` / `allowed_tools` / `no_prompt_leak` / `payload_marker`
   / `require_confirm_request` / `no_cross_user_tool_call` -> `graders/security.py`
+- `tool_effect` -> `graders/tool_effect.py`
 - `error_code` -> `graders/terminal.py`
 
 Graders read the case through `context["vars"]`, so every row's vars carry
@@ -49,6 +50,7 @@ _EXPECT_GRADERS = (
     ("payload_marker", "security"),
     ("require_confirm_request", "security"),
     ("no_cross_user_tool_call", "security"),
+    ("tool_effect", "tool_effect"),
     ("error_code", "terminal"),
 )
 
