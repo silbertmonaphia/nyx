@@ -56,6 +56,11 @@ When the latest user message expresses an explicit state change and the emitted 
 - **WHEN** the latest user message is a greeting, small talk, a refusal-style prompt, a question about the user's own data, or a web lookup
 - **THEN** the absence of a write tool is not rejected and the plan proceeds under the existing rules
 
+#### Scenario: Read or summary request does not trigger the guard
+
+- **WHEN** the user asks to look up or summarise their recent feeds without asking to publish, update, or delete one (for example 帮我查最近我发了什么 or 总结我最近发的feed)
+- **THEN** a plan that omits a write tool is not rejected, and the read/summary plan is graded under the existing rules
+
 ### Requirement: The write-tool mandate is scoped to explicit state-change intent
 
 The write-tool mandate SHALL apply only when the user's message expresses an intent to change state. A request to compose, draft, review, suggest, or preview content — with or without an explicit instruction not to publish yet — SHALL NOT cause the planner to emit a state-changing `tool` step. Where a user's phrasing is ambiguous between composing and publishing, the planner MUST NOT resolve the ambiguity by writing; a request that is not clearly a state change is graded as a draft-and-report request. The deterministic rejection rule inherits this scope and SHALL NOT fire when a negation or draft qualifier is present.

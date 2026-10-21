@@ -42,9 +42,11 @@ The guard fires only when all of the following hold:
 - the latest user message contains an explicit state-change verb (发出去 / 发布 / 创建 / 更新 / 删除 / 形成…发出去), and
 - the message contains no negation or draft qualifier (别发 / 不要发 / 先不发 / 草稿 / 仅供预览), and
 - the plan contains no matching write tool (`create_feed` / `update_feed` / `delete_feed`), and
-- the plan ends with an `llm` step that answers the request, per the existing shape rule.
+- the plan ends with an `llm` step whose prompt asks to compose feed-shaped text, not the auto-appended generic `final_answer` step.
 
-On a match it returns `_PlanError("plan_invalid", ...)` with an actionable reason; the existing retry loop re-prompts. It does **not** inject a synthetic step: an injected `create_feed` has no valid `title` and an injected `update_feed`/`delete_feed` has no valid `id`, so injection would guarantee a schema failure and then a retry that can substitute a different tool.
+On a match it returns `_PlanError("plan_invalid", ...)` with an actionable reason; the existing retry loop re-prompts.
+
+**Why the user-message check and the second signal are both necessary:** a plan-only check cannot tell whether `[rag, llm]` is correct. `总结最近3个月我发的feed` should stay a read/summary plan; `总结…形成一篇新feed发出去` should become a write. Both mention feeds and summarising. The committed baseline shows the difference in the final `llm` prompt: the summary-only case ends with the auto-appended generic `final_answer` prompt, while the create case's model-emitted `llm` prompt asks to 撰写 a new feed. The guard therefore requires an explicit state-change phrase in the latest user message **and** a feed-composition-shaped final `llm` prompt. A read/summary request such as `帮我查最近我发了什么` has neither and is not rejected. `main-rag-summary-recent` is the corpus canary for this branch. It does **not** inject a synthetic step: an injected `create_feed` has no valid `title` and an injected `update_feed`/`delete_feed` has no valid `id`, so injection would guarantee a schema failure and then a retry that can substitute a different tool.
 
 **Why this revises the earlier rejection:** the original design rejected deterministic repair because it would encode a second, silent copy of the intent judgement. That reasoning still applies to a *general* intent classifier; it does not apply to this deliberately narrow trigger, which the earlier revision already kept in reserve as a fallback. Prompt-only is unreliable on a 4B; the guard is the only deterministic way to keep the omission from being silently accepted.
 
