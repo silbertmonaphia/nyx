@@ -1,7 +1,7 @@
 CLAUDE.md
 
 # Repo shape
-Nyx: Go 1.26.9 API (`backend/`, `chi v5` + `huma v2`) + React 19 + Vite 8 SPA (`frontend/`), talking REST. PostgreSQL is source of truth; Redis is opt-in cache-aside for `GET /api/feeds`. SQL is type-safe via `sqlc` over `pgx/v5` + `pgxpool`. Migrations in `backend/migrations/`, applied automatically on backend boot via `golang-migrate`.
+Nyx: Go 1.26.10 API (`backend/`, `chi v5` + `huma v2`) + React 19 + Vite 8 SPA (`frontend/`), talking REST. PostgreSQL is source of truth; Redis is opt-in cache-aside for `GET /api/feeds`. SQL is type-safe via `sqlc` over `pgx/v5` + `pgxpool`. Migrations in `backend/migrations/`, applied automatically on backend boot via `golang-migrate`.
 
 Roadmap lives in `FUTURE.md`, `FUTURE_BACKEND.md`, `FUTURE_FRONTEND.md` — tick an item when the work lands.
 
@@ -11,7 +11,7 @@ Roadmap lives in `FUTURE.md`, `FUTURE_BACKEND.md`, `FUTURE_FRONTEND.md` — tick
 
 Backend (from repo root):
 - Build: `cd backend && go build ./...`
-- Toolchain: `backend/go.mod` requires Go 1.26.9; align a local machine with `gvm install go1.26.9 && gvm use go1.26.9 --default`
+- Toolchain: `backend/go.mod` requires Go 1.26.10; align a local machine with `gvm install go1.26.10 && gvm use go1.26.10 --default`
 - Unit tests (no Docker): `cd backend && SKIP_CONTAINERS=true go test ./...`
 - Full tests (needs Docker/testcontainers): `cd backend && go test ./...`
 - Lint: `cd backend && golangci-lint run --timeout=5m`

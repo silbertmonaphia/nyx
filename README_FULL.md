@@ -2,7 +2,7 @@
 
 > Full technical README. In a hurry? See the short version: [`README.md`](README.md).
 
-A minimalist feed application — Go 1.26.9 API, React 19 SPA, PostgreSQL, optional Redis cache.
+A minimalist feed application — Go 1.26.10 API, React 19 SPA, PostgreSQL, optional Redis cache.
 
 ## Highlights
 
