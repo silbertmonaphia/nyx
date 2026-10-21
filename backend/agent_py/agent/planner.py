@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 
 from langchain_core.callbacks import UsageMetadataCallbackHandler
 from langchain_core.exceptions import OutputParserException
@@ -728,13 +729,38 @@ def _parse_and_validate(raw: str, max_steps: int) -> Plan | _PlanError:
 # --- post-parse enrichment (shared) -------------------------------------
 
 
+_NON_REQUEST_INTENT_RES = (
+    re.compile(
+        r"(?:别|不要|先别|暂不|无需|不必|不用|不需要|不想)\s*"
+        r"(?:删除|删掉|删了|移除|更新|修改|改为|改成|编辑|创建|新建|发布|发表|发出去|形成一篇|形成一条|发一篇|发一条)"
+    ),
+    re.compile(
+        r"(?:已经|已|刚才|之前|刚刚)\s*"
+        r"(?:删除|删掉|移除|更新|修改|改为|改成|编辑|创建|新建|发布|发表)了?"
+    ),
+    re.compile(
+        r"(?:怎么|如何|怎样|为什么)\s*[^，。！？?]{0,20}"
+        r"(?:删除|删掉|删了|移除|更新|修改|改为|改成|编辑|创建|新建|发布|发表)"
+    ),
+)
+
+
+def _strip_non_request_mentions(message: str) -> str:
+    """Drop negated, past-tense, and informational verb mentions before intent matching."""
+    text = message
+    for pattern in _NON_REQUEST_INTENT_RES:
+        text = pattern.sub("", text)
+    return text
+
+
 def _state_change_intents(message: str) -> list[str]:
+    text = _strip_non_request_mentions(message)
     intents: list[str] = []
-    if any(marker in message for marker in _CREATE_INTENT_MARKERS):
+    if any(marker in text for marker in _CREATE_INTENT_MARKERS):
         intents.append("create")
-    if any(marker in message for marker in _UPDATE_INTENT_MARKERS):
+    if any(marker in text for marker in _UPDATE_INTENT_MARKERS):
         intents.append("update")
-    if any(marker in message for marker in _DELETE_INTENT_MARKERS):
+    if any(marker in text for marker in _DELETE_INTENT_MARKERS):
         intents.append("delete")
     return intents
 
@@ -810,14 +836,14 @@ def _enforce_write_routing(
         if not any(tool in tools for tool in _WRITE_TOOLS_BY_INTENT[intent])
     ]
     if missing and _is_feed_composition_prompt(steps[-1].prompt):
-        intent = missing[0]
-        required = _WRITE_TOOLS_BY_INTENT[intent][0]
+        intents_text = ", ".join(missing)
+        required = ", ".join(_WRITE_TOOLS_BY_INTENT[intent][0] for intent in missing)
         return _PlanError(
             "plan_invalid",
             "Plan is invalid",
             (
-                f"the user asked to {intent} a feed, but the plan has no "
-                f"{required} tool step; add a tool step calling {required} "
+                f"the user asked to {intents_text} a feed, but the plan has no "
+                f"{required} tool step; add the missing write tool step(s) "
                 "before the final llm step"
             ),
         )

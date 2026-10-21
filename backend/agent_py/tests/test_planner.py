@@ -32,6 +32,7 @@ from agent.planner import (
     _latest_user_message,
     _parse_and_validate,
     _PlanError,
+    _state_change_intents,
     plan_node,
 )
 from agent.state import new_state
@@ -1047,6 +1048,8 @@ def test_guard_prompt_reconciles_unsure_rule_with_write_mandate():
         ("帮我创建一篇新的feed，写写今天吃的拉面", "create_feed"),
         ("把最近那条关于拉面的feed更新一下", "update_feed"),
         ("删除我最近发的那条feed", "delete_feed"),
+        ("别删掉旧的feed，帮我创建一篇新的feed", "create_feed"),
+        ("我已经删除了旧的feed，现在帮我创建一篇新的feed", "create_feed"),
     ],
 )
 def test_guard_rejects_explicit_state_change_without_write_tool(
@@ -1118,12 +1121,92 @@ def test_guard_rejects_explicit_state_change_without_write_tool(
                 _llm_step(),
             ],
         ),
+        (
+            "不要移除我关于旅行的feed，帮我把它们总结成一篇周报",
+            [
+                PlanStep(id="rag_1", kind=StepKind.rag, query="recent feeds"),
+                _llm_step(),
+            ],
+        ),
+        (
+            "别删掉我的feed，帮我总结成一篇周报",
+            [
+                PlanStep(id="rag_1", kind=StepKind.rag, query="recent feeds"),
+                _llm_step(),
+            ],
+        ),
+        (
+            "我已经删除了那些负面feed，现在帮我总结成一篇周报",
+            [
+                PlanStep(id="rag_1", kind=StepKind.rag, query="recent feeds"),
+                _llm_step(),
+            ],
+        ),
+        (
+            "怎么删除feed？我想先了解再决定",
+            [
+                PlanStep(id="rag_1", kind=StepKind.rag, query="recent feeds"),
+                _llm_step(),
+            ],
+        ),
+        (
+            "别修改我的feed，帮我总结成一篇周报",
+            [
+                PlanStep(id="rag_1", kind=StepKind.rag, query="recent feeds"),
+                _llm_step(),
+            ],
+        ),
+        (
+            "无需更新我的feed，帮我总结成一篇周报",
+            [
+                PlanStep(id="rag_1", kind=StepKind.rag, query="recent feeds"),
+                _llm_step(),
+            ],
+        ),
+        (
+            "不用创建新的feed，帮我总结",
+            [
+                PlanStep(id="rag_1", kind=StepKind.rag, query="recent feeds"),
+                _llm_step(),
+            ],
+        ),
     ],
 )
 def test_guard_does_not_fire_on_non_state_change(message, steps):
     out = _guard(Plan(steps=steps), message)
 
     assert isinstance(out, Plan)
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        "不要移除我关于旅行的feed，帮我把它们总结成一篇周报",
+        "别删掉我的feed，帮我总结成一篇周报",
+        "我已经删除了那些负面feed，现在帮我总结成一篇周报",
+        "怎么删除feed？我想先了解再决定",
+        "别修改我的feed，帮我总结成一篇周报",
+        "无需更新我的feed，帮我总结成一篇周报",
+        "不用创建新的feed，帮我总结",
+    ],
+)
+def test_state_change_intents_ignores_non_request_mentions(message):
+    assert _state_change_intents(message) == []
+
+
+def test_guard_reports_all_missing_write_intents():
+    plan = Plan(
+        steps=[
+            PlanStep(id="rag_1", kind=StepKind.rag, query="recent feeds"),
+            _llm_step(),
+        ]
+    )
+
+    out = _guard(plan, "更新并删除我的feed")
+
+    assert isinstance(out, _PlanError)
+    assert "update_feed" in out.reason
+    assert "delete_feed" in out.reason
 
 
 def test_guard_does_not_fire_without_latest_user_message():

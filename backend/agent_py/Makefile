@@ -28,7 +28,7 @@ lint-ruff:
 lint-mypy:
 	@tmp=$$(mktemp); \
 	trap 'rm -f "$$tmp"' EXIT; \
-	$(MYPY) agent 2>&1 | grep -E ' error: ' | sort -u > "$$tmp"; \
+	{ $(MYPY) agent 2>&1 || true; } | grep -E ' error: ' | sort -u > "$$tmp"; \
 	if diff -u .mypy-known-errors.txt "$$tmp" > /dev/null; then \
 		echo "mypy: no new errors vs baseline"; \
 	else \
@@ -47,7 +47,7 @@ lint: lint-ruff lint-mypy
 # intentionally accepting new mypy noise (e.g. adding a dependency that
 # lacks type stubs). Always review the diff before committing.
 mypy-baseline:
-	$(MYPY) agent 2>&1 | grep -E ' error: ' | sort -u > .mypy-known-errors.txt
+	{ $(MYPY) agent 2>&1 || true; } | grep -E ' error: ' | sort -u > .mypy-known-errors.txt
 	@echo "updated .mypy-known-errors.txt ($$(wc -l < .mypy-known-errors.txt) entries)"
 
 # Apply ruff's safe autofixes locally. CI never auto-fixes; this is

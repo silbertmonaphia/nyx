@@ -933,6 +933,71 @@ describe('useChatStore', () => {
       });
     });
 
+    it('replaces a plan-time arg template with the resolved tool_call args', async () => {
+      mockedService.streamMessage.mockImplementationOnce(
+        (_messages: unknown, signal: AbortSignal) =>
+          makeStream(
+            [
+              {
+                kind: 'plan',
+                steps: [
+                  { id: 'llm_1', kind: 'llm' },
+                  {
+                    id: 's1',
+                    kind: 'tool',
+                    tool: 'create_feed',
+                    args: { description: '{{step:llm_1}}' },
+                  },
+                ],
+              },
+              { kind: 'step_start', step_id: 's1', step_kind: 'tool' },
+              {
+                kind: 'tool_call',
+                step_id: 's1',
+                call_id: 'c1',
+                name: 'create_feed',
+                args: { description: '最近三个月的总结' },
+              },
+              {
+                kind: 'tool_result',
+                step_id: 's1',
+                call_id: 'c1',
+                ok: true,
+                result: { id: 1 },
+              },
+              { kind: 'step_end', step_id: 's1', status: 'ok', reason: '' },
+              {
+                kind: 'done',
+                usage: {
+                  prompt_tokens: 1,
+                  completion_tokens: 1,
+                  total_tokens: 2,
+                },
+              },
+            ],
+            signal,
+          ),
+      );
+
+      await act(async () => {
+        useChatStore.getState().send('hi');
+      });
+
+      await act(async () => {
+        releaseStream();
+      });
+
+      const assistant = useChatStore
+        .getState()
+        .messages.find((m) => m.role === 'assistant');
+      expect(assistant?.steps?.[1]?.toolArgs).toEqual({
+        description: '最近三个月的总结',
+      });
+      expect(JSON.stringify(assistant?.steps?.[1]?.toolArgs)).not.toContain(
+        '{{step:',
+      );
+    });
+
     it('appends a step row when step_start arrives without a preceding plan', async () => {
       // Defensive fallback: a server that forgets to emit `plan`
       // first still gets a row per step so the UI has something to
