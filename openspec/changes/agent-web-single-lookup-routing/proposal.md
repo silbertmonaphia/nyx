@@ -14,7 +14,7 @@ The case grades plan shape only, so the discarded answer shipped silently.
 - **React step outputs reach the next step.** `_render_prior_data` forwards a completed `react` step's text into later steps' context alongside `rag` and `tool` outputs, within the existing per-section and total character caps. Without this the flat-shape fix alone would still let an answer be written from a context that never received the search.
 - **An answer assertion on the force-search case** that fires on the denial phrasing actually present in the recorded failure (「无法获取」 / 「无法直接访问」), verified against the recorded sample — not a paraphrase, which would be a vacuous assertion that never fires.
 
-**Note on capability placement:** the plan-shape requirement for single-lookup routing is carried in `agent-planner-write-routing`'s `agent-plan-shape-policy` delta, because that capability does not exist until that change is archived. This change carries the executor-side data-flow requirement and the implementation of both.
+**Note on capability placement:** the `agent-plan-shape-policy` capability is created by `agent-planner-write-routing` with the write-tool mandate, the deterministic guard, and the draft carve-out. This change adds the single-lookup requirement to that capability in its own delta, and carries the executor-side data-flow requirement and the implementation of both. It must land after `agent-planner-write-routing` archives, when the capability exists in the main specs.
 
 ## Capabilities
 
@@ -24,6 +24,7 @@ The case grades plan shape only, so the discarded answer shipped silently.
 
 ### Modified Capabilities
 
+- `agent-plan-shape-policy`: a single lookup plans one `web_search` `tool` step; `react` is reserved for requests that need multi-round interaction, and a disabled web-search configuration removes the step rather than substituting a loop.
 - `agent-loop`: a completed `react` step's output is carried into later steps' context the way `rag` and `tool` outputs already are, bounded by the existing caps.
 
 ## Impact
@@ -31,5 +32,5 @@ The case grades plan shape only, so the discarded answer shipped silently.
 - **Code**: `backend/agent_py/agent/web_tools.py` (`_PLANNER_RULE`), `backend/agent_py/agent/executor.py` (`_render_prior_data` react branch), `evals/cases/main.yaml` (answer assertion), `evals/graders/` (assertion wiring), `evals/tests/` (tests against the recorded frame fixture).
 - **Not touched**: no Go. `web_search` / `web_fetch` are agent-native and are not exposed through the MCP server; the only Go mention of `web_search` is a comment in `internal/llm/provider.go` distinguishing it from a vLLM provider-specific kind.
 - **Behaviour**: user-visible. A request that names web search returns search-derived answers instead of an apology, and a single lookup stops being wrapped in a multi-round loop.
-- **Ordering**: no implementation dependency on the other slice-2 change (`agent-feed-bulk-write-tools`); both are sequenced together for rate reasons only. The plan-shape requirement it implements lives in `agent-planner-write-routing`, so that change should archive first.
+- **Ordering**: this change must land after `agent-planner-write-routing` archives, because its `agent-plan-shape-policy` delta adds a requirement to the capability that change creates. It has no implementation dependency on the other slice-2 change (`agent-feed-bulk-write-tools`); both are sequenced together for rate reasons only.
 - **Rollout gates**: none. No production env flip, no deployed-stack smoke, no multi-day green window.

@@ -58,7 +58,7 @@ The obvious failure mode of a "must plan the write tool" rule is over-firing: a 
 
 ### 3. Grade execution for write cases; plan shape is not acceptance
 
-**Chosen:** every case that expects a write tool asserts the transcript's `tool_call`/`tool_result` frames in addition to the plan. The named write tool must be called under the expected step, and its `tool_result.ok` must be true. Where the case is about a specific feed, assert the DB effect through the eval user's API.
+**Chosen:** every case that expects a write tool asserts the transcript's `tool_call`/`tool_result` frames in addition to the plan. The named write tool must be called under the expected step, and its `tool_result.ok` must be true. Where the case is about a specific feed, assert the DB effect through the eval user's API; for the create cases, assert the created feed's content reflects the retrieved fixtures rather than a plan-time placeholder.
 
 **Why:** the baseline's update/delete 3/3 shows the exact failure mode a shape-only assertion misses — the plan names `update_feed`, the executed call fails validation, the retry calls `list_feeds`, and the run scores green. A create-feed plan with a planner-authored title will execute successfully and publish the wrong content; only a content/DB assertion distinguishes that from the requested summary.
 
@@ -72,7 +72,7 @@ The obvious failure mode of a "must plan the write tool" rule is over-firing: a 
 
 The strict `[rag, create_feed, llm]` shape writes before any composition step exists, and the planner cannot see rag results at plan time. The compose-then-write variant `[rag, llm, create_feed, llm]` is the correct shape but is unimplementable while tool args are static (`executor.py:277`).
 
-The executor resolves an earlier step's output into a `tool` step's args at execution time. The corpus moves `main-rag-create-feed` and `main-all-tools-combined` to `[rag, llm, create_feed, llm]` and `[rag, llm, create_feed, llm]` respectively (both need composed content before the write).
+The executor resolves an earlier step's output into a `tool` step's args at execution time. The corpus moves `main-rag-create-feed` to `[rag, llm, create_feed, llm]` and `main-all-tools-combined` to `[rag, web_search, llm, create_feed, llm]` — both need composed content before the write, and the combined chain keeps its `web_search` step.
 
 **This is not create-feed content polish — it is the only path to working mutation at all.** The verified baseline shows `update_feed` called with `id: "feed_id_from_list"` and `delete_feed` called with `{"feed_id": "list_feeds_3months"}`: a placeholder the planner cannot avoid emitting, because a 4B at plan time has no way to know a real numeric feed id. No prompt wording fixes that. Templating is what lets `update_feed`/`delete_feed` receive a real identifier from an earlier `list_feeds` step, so their planned writes become executable rather than permanently schema-rejected.
 
@@ -106,7 +106,7 @@ Feeds are soft-deleted (`feeds.deleted_at`), so a mistaken bulk delete is recove
 
 Ordering is load-bearing: a clean baseline at current HEAD must land before the first prompt edit, because the 0.73 figure is five days old and the most recent artifact is a false green. Optimising against an unconfirmed number repeats the mistake this change exists to fix. The baseline needs two runs: the normal stack (11 cases graded, `main-budget-exceeded` skipped) and the small-budget side stack (the budget case). A single normal-stack run cannot re-derive the budget floor.
 
-**Sequence the fixes before the assertions.** Tightening the gate before the thing the gate checks is fixed produces a guaranteed red in the middle of the change: adding execution-effect assertions before the bulk tools land drops `main-rag-update-feed` and `main-rag-delete-feed` from 3/3 to 0/3 and the overall rate from 0.73 to 0.55, and that red only describes a known-unfixed defect. Land the write fixes first, then tighten.
+**Sequence a case's fix before that case's assertion, but do not delay an honest red just because the fix is in another change.** The create fix lands here, so the create-case assertions land here. The update/delete fix is the bulk-tool sibling, so their assertions land here and deliberately record the known-unfixed defect as red; the sibling flips it green. Tightening update/delete first without recording the red would leave the hollow green in place, which is the failure this change exists to close.
 
 A confirming run that does **not** improve the rate is a valid outcome and gets recorded as one, with the observed plans attached. The failure mode to avoid is iterating prompt wording until the number moves and landing on a change that scores well for reasons nobody can explain. Two runs (before/after), not a search.
 
@@ -124,9 +124,9 @@ A scheduled live run is a different proposition: it needs a GPU runner (GitHub-h
 
 `check_rate.py` already records `args.min_rate` as the report's overall floor and renders it in `summary.md` (`:368,373`, `:523`); the `20261016T143912Z` false green did record floor 0.7. The missing piece is the **baseline rate the floor was derived from** and a guard against treating a partial run as a baseline. Scope the report change to those two, rather than re-implementing the applied-floor recording that already works.
 
-### 9. Prefer a flat web_search step for single lookups, and assert the answer
+### 9. Prefer a flat web_search step for single lookups, and assert the answer (deferred)
 
-Extend `_PLANNER_RULE` to prefer one `web_search` `tool` step and reserve `react` for multi-round work. The answer assertion targets the exact observed denial phrases (`无法获取`, `无法直接访问`), because the grader is a case-sensitive substring check. Separately, either fix `_render_prior_data` to carry react-hosted tool results into the next `llm` step, or state in the spec that the "search performed" guarantee applies to `tool`-hosted searches only. The current requirement's claim that "the executor feeds the tool result into the answering step's context" is false for react-hosted searches.
+**Deferred to `agent-web-single-lookup-routing`; recorded here only as the design context that motivated the split.** Extend `_PLANNER_RULE` to prefer one `web_search` `tool` step and reserve `react` for multi-round work. The answer assertion targets the exact observed denial phrases (`无法获取`, `无法直接访问`), because the grader is a case-sensitive substring check. Separately, either fix `_render_prior_data` to carry react-hosted tool results into the next `llm` step, or state in the spec that the "search performed" guarantee applies to `tool`-hosted searches only. The current requirement's claim that "the executor feeds the tool result into the answering step's context" is false for react-hosted searches.
 
 ## Risks / Trade-offs
 
@@ -135,7 +135,7 @@ Extend `_PLANNER_RULE` to prefer one `web_search` `tool` step and reserve `react
 - **The prompt fix simply does not flip the 4B** → recorded as an outcome, not tuned around; the deterministic guard becomes the live fallback.
 - **Resolved arguments carry untrusted user content into a write path** → a referenced `rag` or `tool` output is retrieved feed text or a fetched page, i.e. attacker-influenceable input reaching `create_feed`/`update_feed`/`delete_feed` arguments. Mitigation is normative in the `agent-loop` delta: untrusted-content markers are stripped from resolved values at the dispatch boundary, matching what `_strip_untrusted_markers` already does on the prompt path. The security review of the resolution pass is a task, not an afterthought.
 - **Reference syntax collides with literal user content** → if a value a user typed into a feed body contains the reference marker, a later tool step could resolve against it. Mitigation: references resolve only against known step identifiers in the current plan, and an unknown or malformed reference fails the step closed rather than passing the text through.
-- **Corpus expectations move** → `main-rag-create-feed` and `main-all-tools-combined` shift from `[rag, create_feed, llm]` to `[rag, llm, create_feed, llm]`, which re-opens a floor the suite previously graded as settled. The change is deliberate and operator-decided; the re-opened floors need the same operator sign-off as any other floor edit.
+- **Corpus expectations move** → `main-rag-create-feed` shifts from `[rag, create_feed, llm]` to `[rag, llm, create_feed, llm]`, and `main-all-tools-combined` to `[rag, web_search, llm, create_feed, llm]`, which re-opens floors the suite previously graded as settled. The change is deliberate and operator-decided; the re-opened floors need the same operator sign-off as any other floor edit.
 - **Templating does not by itself make update/delete green** → it makes the identifier resolvable, but the case still needs its fixtures seeded (see the fixture-seeding risk) and its answer asserted (the hallucinated-success risk).
 - **Execution assertions expose the update/delete siblings** → treat the new red as the defect becoming visible; choose fix-or-record-red with operator sign-off.
 - **Answer assertions over- or under-constrain** → target the observed denial phrases, not broad vocabulary; verify the assertion fails on the recorded sample 16 answer and passes on a search-grounded answer.
