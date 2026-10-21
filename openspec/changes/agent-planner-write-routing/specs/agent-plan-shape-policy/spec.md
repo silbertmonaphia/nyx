@@ -51,6 +51,11 @@ When the latest user message expresses an explicit state change and the emitted 
 - **WHEN** the guard detects a missing write tool
 - **THEN** it does not append a synthetic `create_feed` / `update_feed` / `delete_feed` step, because such a step would carry no valid `title` or `id` and would fail execution
 
+#### Scenario: Write without the composing step is rejected
+
+- **WHEN** a create/publish plan contains `create_feed` but no preceding composing `llm` step, or the write args contain no reference to that step
+- **THEN** the plan is rejected with `plan_invalid` and the retry prompt names the missing composing step or reference, so a placeholder feed cannot be published through the runtime path
+
 #### Scenario: The guard does not fire on non-state-change requests
 
 - **WHEN** the latest user message is a greeting, small talk, a refusal-style prompt, a question about the user's own data, or a web lookup
