@@ -70,7 +70,14 @@ The success-claim phrases for the conditional assertion must be taken from the f
 
 ### main-budget-exceeded
 
-SKIPPED on the normal stack as designed; the budget-stack run is task 1.3.
+SKIPPED on the normal stack as designed. The small-budget side stack ran separately:
+
+- stack: Go `:8280`, agent `:9200`, Vite `:5275`, `AGENT_BUDGET_PER_USER_PER_HOUR=500`
+- stamp: `20261021T175808Z`
+- filtered run (`EVAL_FILTER=main-budget-exceeded`, `EVAL_BUDGET_STACK=1`), 3 samples, 21s
+- result: **3/3 PASS**, all samples ended with `error_code: budget_exceeded`; floor `1.0`
+- this is a filtered/partial run (only the budget case), so its overall `1.00` is not a suite baseline; it exists to measure the budget case
+- the 2026-10-16 2/3-then-3/3 flakiness did not reproduce in this run; the floor stays `1.0` with the flakiness noted
 
 ## Warnings observed
 
