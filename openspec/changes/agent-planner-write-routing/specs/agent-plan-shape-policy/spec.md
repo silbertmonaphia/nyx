@@ -2,7 +2,9 @@
 
 ## Purpose
 
-Governs which step kinds the planner must choose for a given request shape: which requests require a state-changing registry tool in the plan, and when a web lookup is expressed as a single search step rather than a nested loop. No existing capability owns this — `agent-planner-structured` governs how a plan is emitted and validated, not what it contains.
+Governs which step kinds the planner must choose for a given request shape: which requests require a state-changing registry tool in the plan, when a plan that omits one is rejected, and when a web lookup is expressed as a single search step rather than a nested loop. No existing capability owns this — `agent-planner-structured` governs how a plan is emitted and validated, not what it contains.
+
+Plan-shape compliance is necessary but not sufficient: a plan can name the write tool while the executed call fails validation or a retry substitutes a read-only tool. Execution is graded by `agent-golden-eval`'s execution-effect requirement; this capability governs only the plan.
 
 ## ADDED Requirements
 
@@ -25,14 +27,43 @@ When a user's most recent message requests a state change to their feeds — cre
 - **WHEN** the user asks to update or delete feeds rather than create one
 - **THEN** the plan still contains the matching `update_feed` / `delete_feed` `tool` step, and the write-tool mandate adds no step these requests did not already require
 
+### Requirement: A plan that omits a required write tool is rejected, not silently answered
+
+When the latest user message expresses an explicit state change and the emitted plan contains no matching write tool, the planner pipeline SHALL reject the plan with a `plan_invalid` outcome so the existing retry loop re-prompts the planner with an actionable reason. It MUST NOT proceed to execute a draft-and-answer plan for that request, and it MUST NOT inject a synthetic write step whose arguments were never authored by the planner. The rejection SHALL be bounded by the existing retry budget; on exhaustion the run terminates with `plan_invalid` rather than silently downgrading to a draft.
+
+#### Scenario: Missing write step triggers a planner retry
+
+- **WHEN** the user asks to publish a feed and the parsed plan contains only `rag` and `llm` steps
+- **THEN** the plan is rejected with `plan_invalid`, the retry prompt names the missing `create_feed` step, and the planner gets another attempt within its retry budget
+
+#### Scenario: Exhausted retries fail closed
+
+- **WHEN** the planner repeatedly omits the required write tool across every allowed attempt
+- **THEN** the run terminates with `plan_invalid` and does not execute a draft-only answer
+
+#### Scenario: No injection of an unauthored step
+
+- **WHEN** the guard detects a missing write tool
+- **THEN** it does not append a synthetic `create_feed` / `update_feed` / `delete_feed` step, because such a step would carry no valid `title` or `id` and would fail execution
+
+#### Scenario: The guard does not fire on non-state-change requests
+
+- **WHEN** the latest user message is a greeting, small talk, a refusal-style prompt, a question about the user's own data, or a web lookup
+- **THEN** the absence of a write tool is not rejected and the plan proceeds under the existing rules
+
 ### Requirement: The write-tool mandate is scoped to explicit state-change intent
 
-The write-tool mandate SHALL apply only when the user's message expresses an intent to change state. A request to compose, draft, review, suggest, or preview content — with or without an explicit instruction not to publish yet — SHALL NOT cause the planner to emit a state-changing `tool` step. Where a user's phrasing is ambiguous between composing and publishing, the planner MUST NOT resolve the ambiguity by writing; a request that is not clearly a state change is graded as a draft-and-report request.
+The write-tool mandate SHALL apply only when the user's message expresses an intent to change state. A request to compose, draft, review, suggest, or preview content — with or without an explicit instruction not to publish yet — SHALL NOT cause the planner to emit a state-changing `tool` step. Where a user's phrasing is ambiguous between composing and publishing, the planner MUST NOT resolve the ambiguity by writing; a request that is not clearly a state change is graded as a draft-and-report request. The deterministic rejection rule inherits this scope and SHALL NOT fire when a negation or draft qualifier is present.
 
 #### Scenario: Explicit draft request does not plan a write
 
 - **WHEN** the user asks the agent to draft a feed for review without publishing it
 - **THEN** the emitted plan contains no `create_feed` `tool` step, and no feed is written
+
+#### Scenario: Negated publish phrasing does not plan a write
+
+- **WHEN** the user's message contains a publish verb together with a negation or deferral such as 先别发, 不要发布, or 仅供预览
+- **THEN** the plan contains no state-changing `tool` step and the deterministic rejection rule does not fire
 
 #### Scenario: Ambiguous compose phrasing is not resolved by writing
 
@@ -46,7 +77,7 @@ The write-tool mandate SHALL apply only when the user's message expresses an int
 
 ### Requirement: Single-lookup web requests plan one search step
 
-When a user's message requests a single information lookup from the web, the emitted plan SHALL contain one `tool` step invoking `web_search`, followed by the answering step. A `react` step SHALL be reserved for requests that genuinely need multi-round interaction with the model (iterative refinement, branching follow-ups) and MUST NOT be used to wrap a single lookup. Where the web-search tool is unavailable in the active configuration, the expectation for the affected case is keyed to that mode and the search step is not planned.
+When a user's message requests a single information lookup from the web, the emitted plan SHALL contain one `tool` step invoking `web_search`, followed by the answering step. A `react` step SHALL be reserved for requests that genuinely need multi-round interaction with the model (iterative refinement, branching follow-ups) and MUST NOT be used to wrap a single lookup. Where web search is unavailable in the active configuration, the plan SHALL contain no `web_search` step and no `react` step standing in for one.
 
 #### Scenario: Explicit search request plans one search step
 
@@ -61,13 +92,4 @@ When a user's message requests a single information lookup from the web, the emi
 #### Scenario: Search disabled removes the step rather than substituting a loop
 
 - **WHEN** web search is disabled in the active agent configuration
-- **THEN** the plan contains no `web_search` `tool` step and no `react` step standing in for one, and the case's expectation resolves to the mode that has no search step
-
-### Requirement: A performed search is reported as performed
-
-When a run's transcript contains a `web_search` `tool_call` whose `tool_result` returned results, the answer text assembled from the run's `delta` frames SHALL NOT deny that the search happened or claim the agent lacks internet access. The executor feeds the tool result into the answering step's context; the planner's step rules alone do not guarantee the answering step consumes it, so this is a graded property of the run, not an assumed consequence of planning.
-
-#### Scenario: Answer reflects the search that ran
-
-- **WHEN** a run's transcript shows a `web_search` `tool_call` returning results and the answer text states it cannot access the web or cannot retrieve the requested information
-- **THEN** the run fails answer-content grading, and the report records both the successful `tool_result` and the contradicting answer text
+- **THEN** the plan contains no `web_search` `tool` step and no `react` step standing in for one

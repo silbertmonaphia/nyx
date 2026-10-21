@@ -1,49 +1,91 @@
 # Tasks
 
+## Scope of this slice
+
+This slice takes the main line from 0.727 → 0.545 → ~0.75. The number barely moves, and that is not the point: the change makes two hollow greens honest and fixes the create-feed defect, so the score finally describes reality.
+
+- **In scope here**: arg templating, the planner write-tool rule and its deterministic guard, the execution-effect and answer assertions that turn `main-rag-update-feed` / `main-rag-delete-feed` red, corpus and report honesty fixes, and the CI unit gate.
+- **Deferred to `agent-feed-bulk-write-tools`** (Go-only sibling): the bulk write tools and the update/delete fix that turns those two cases green. That work is independent of everything here; this slice's execution assertions are what make its need visible, and this slice deliberately ends with those two cases red.
+
+Slice 1 therefore ends with **three** red cases — the same count as it starts with, but a different and honest set. `main-rag-create-feed` and `main-all-tools-combined` turn green; `main-rag-update-feed` and `main-rag-delete-feed` go from hollow green to real red, recorded red with operator sign-off per the `agent-golden-eval` sanity rule; `main-web-force-search` is untouched and deferred. Deferring a known fix is acceptable; leaving a hollow green is not.
+
 ## 1. Baseline measurement (before any code change)
 
-- [ ] 1.1 Bring up the eval stack through the repo's established side-stack convention (`scripts/e2e-side-stack.sh` with a stack suffix, on spare ports) and verify the Go API `/api/feeds` and the agent `/healthz` both respond. Do not reuse, restart, or occupy the operator's own dev processes or ports — `make eval-run` preflights and refuses to start services itself.
-- [ ] 1.2 Run `make eval-golden` on unmodified HEAD and verify the report under `evals/artifacts/<stamp>/` shows all 12 main cases graded with a non-trivial sample count — explicitly not a 3-sample partial of the kind that produced the false green at `20261016T143912Z`.
-- [ ] 1.3 Record the confirmed per-case and overall rates in `baseline.md` in this change directory next to the 2026-10-16 figures, and verify the recorded 0.73 either reproduces or is corrected with the new number stated.
+- [ ] 1.1 Bring up the normal eval stack through the repo's established side-stack convention (`scripts/e2e-side-stack.sh` with a stack suffix, on spare ports) and verify the Go API `/api/feeds` and the agent `/healthz` both respond. Do not reuse, restart, or occupy the operator's own dev processes or ports — `make eval-run` preflights and refuses to start services itself.
+- [ ] 1.2 Run `make eval-golden` on unmodified HEAD and verify the report under `evals/artifacts/<stamp>/` shows the 11 normal-stack cases graded with a non-trivial sample count. `main-budget-exceeded` is expected to be SKIPPED on this stack; do not treat its absence as a failure and do not claim all 12 cases ran.
+- [ ] 1.3 Bring up the small-budget side stack (`EVAL_BUDGET_STACK=1` and a tiny `AGENT_BUDGET_PER_USER_PER_HOUR`) and run the budget case against it. Record its rate separately; `main-budget-exceeded` cannot be graded on the normal stack.
+- [ ] 1.4 Record the confirmed per-case and overall rates in `baseline.md` in this change directory next to the 2026-10-16 figures, and verify the recorded 0.73 (24/33 graded) either reproduces or is corrected with the new number stated. Record the budget rate from 1.3 in the same file, labelled as a separate stack.
+- [ ] 1.5 Inspect the `main-rag-update-feed` and `main-rag-delete-feed` samples in the fresh baseline and record the execution evidence in `baseline.md`: the write tool's args, the `tool_result.ok` value, and any retry tool substitution. If the 2026-10-16 hollow-green pattern reproduces, state it explicitly — it is the reason the change adds execution-effect grading.
+- [ ] 1.6 Diagnose the fixture-matching anomaly visible in the committed baseline: the executor's `list_feeds` retry for the mood cases returned `total: 0` despite three declared fixtures (`eval-main-mood-stressed` / `-anxious` / `-happy`). Leading hypothesis, already narrowed by reading the query: `list_feeds`'s `query` is a literal `ILIKE '%' || query || '%'` over title and description (`backend/queries/feeds.sql:20-22`), so a query of 「负面情绪」 only matches if that substring is literally present in a fixture's title or description. Verify in the fresh run whether the fixtures are present in the eval user's feed list *and* whether their text contains the case's query string. Fix whichever is wrong — the fixture text or the case's query — since a case whose target set can never match is vacuous by construction. This also constrains the bulk tools' semantics (`design.md` Decision 4b): query-based selection is substring matching, not semantic.
 
-## 2. Planner prompt: write-tool mandate
+## 2. Arg templating for tool-step arguments (Decision 4, option A)
 
-- [ ] 2.1 Add the write-tool mandate and its draft carve-out to `PLANNER_SYSTEM_PROMPT` (`backend/agent_py/agent/planner.py:76-84`), reconciling the new rule with the existing `when unsure, prefer a single llm step` rule in the same edit rather than appending a rule that contradicts it. Verify the composed prompt renders through the existing planner tests without error.
-- [ ] 2.2 Confirm the existing planner test suite still passes, and record in the change directory that compliance is graded **only** by the live eval — no deterministic unit test can assert that a 4B model emits a write-tool step, and a prompt-contains assertion would pass without proving compliance.
-- [ ] 2.3 Document the write-tool policy and its draft carve-out in `backend/agent_py/README.md` (and `README.zh.md`), and verify the documented behaviour matches the shipped prompt text.
+- [x] 2.1 Decide between (A) executor arg templating + `[rag, llm, create_feed, llm]`, (B) a react-hosted write + `[rag, react, llm]`, and (C) plan-shape-only scope. **Decided: A** (operator, 2026-10-22), rationale in `design.md` Decision 4. A is the only option under which `update_feed`/`delete_feed` ever receive a real identifier, and it resolves values deterministically instead of relying on the 4B to carry a tool result into a later tool call — the exact step already observed failing on the force-search case.
+- [ ] 2.2 Define the reference syntax and implement the resolution pass in `executor.py`, resolving only against known step identifiers earlier in the current plan. Verify with unit tests covering: normal resolution, unknown step id, forward reference, reference cycle, and a plan with no references dispatching byte-identical args.
+- [ ] 2.3 Fail closed on unresolvable references — an unknown, forward, or cyclic reference MUST fail the step with a typed error and MUST NOT dispatch a partially-resolved argument. Verify no partial dispatch occurs in any of those three cases.
+- [ ] 2.4 Apply untrusted-content handling to resolved argument values at the dispatch boundary, mirroring the `_strip_untrusted_markers` treatment retrieved context already receives on the prompt path. Verify with a fixture whose feed body carries framing markers that those markers do not appear in the dispatched `tool_call` args.
+- [ ] 2.5 Security review of the resolution pass before merge — the resolved value is attacker-influenceable (retrieved feed text, fetched web page) and lands in mutating tool arguments. Verify the review covers a reference marker embedded in user-authored content and a resolved value reaching `create_feed`/`update_feed`/`delete_feed`.
+- [ ] 2.6 Update the two create cases' expectations in `evals/cases/main.yaml` to `[rag, llm, create_feed, llm]`, and record operator sign-off for the re-opened floor — this changes an expectation the suite previously graded as settled, so it needs the same sign-off as any other floor edit.
+- [ ] 2.7 Teach `PLANNER_SYSTEM_PROMPT` the reference syntax for tool-step arguments only, and that references resolve against earlier steps' outputs. Verify the composed planner prompt renders and existing planner tests pass.
+- [ ] 2.8 Verify no client-visible SSE frame change: a `tool_call` frame carries the resolved arguments and the frame kinds and fields are otherwise identical, so the frontend needs no change.
 
-## 3. Web tools prompt: single-lookup preference
+## 3. Planner prompt and deterministic guard
 
-- [ ] 3.1 Extend `_PLANNER_RULE` (`backend/agent_py/agent/web_tools.py:520-524`) to prefer one `web_search` `tool` step for a single lookup and reserve `react` for genuinely multi-round requests. Verify `pytest` under the agent venv still passes for the web-tools module.
-- [ ] 3.2 Verify the rule text is consistent with `agent-web-tools`' existing requirement that web tools are dispatchable from **both** `tool` and `react` steps — the change narrows when `react` is chosen, it does not remove the capability.
+- [ ] 3.1 Add the write-tool mandate and its draft/negation carve-out to `PLANNER_SYSTEM_PROMPT` (`backend/agent_py/agent/planner.py:76-84`), reconciling the new rule with the existing `when unsure, prefer a single llm step` rule in the same edit rather than appending a rule that contradicts it. Verify the composed prompt renders through the existing planner tests without error.
+- [ ] 3.2 Add the narrow deterministic guard to the shared post-parse validation (`_enforce_plan_shape` or a shared helper): explicit state-change verb + no negation/draft qualifier + no matching write tool + (for create) a final feed-shaped `llm` step → return `_PlanError("plan_invalid", ...)` with an actionable reason. Use the existing retry loop, do not inject a synthetic step, and pass the latest user message into the post-parse path. Document that the legacy free-text path does not call the shared guard and has no retry (`planner.py:555-557`); either unify the paths or record structured-only coverage.
+- [ ] 3.3 Add unit tests for the trigger matrix: publish, create, update, delete, draft, negation (`先别发` / `不要发布`), greeting, refusal, ambiguous compose, and web lookup. Verify each non-state-change case does **not** trigger and each explicit state-change case does.
+- [ ] 3.4 Confirm the existing planner test suite still passes, and record in the change directory that prompt compliance is graded **only** by the live eval plus the deterministic guard's unit tests — no unit test can assert that a 4B model follows the prompt.
+- [ ] 3.5 Document the write-tool policy, the draft carve-out, and the guard's structured-path limitation in `backend/agent_py/README.md` (and `README.zh.md`), and verify the documented behaviour matches the shipped prompt and guard text.
+- [ ] 3.6 Decide and record the guard's language scope. The trigger verb list is currently Chinese-only (发出去 / 发布 / 创建 / 更新 / 删除) while the product ships `frontend-i18n`; an English "post this" or "delete my feeds" would plan no write tool and the guard would not fire. Either add the English verbs with matching unit tests, or state the Chinese-only limitation explicitly in the spec delta and the README rather than leaving it implicit.
 
-## 4. Eval corpus: answer assertions and red tracking
+## 4. Web tools prompt, answer assertion, and react data flow — DEFERRED to slice 2
 
-- [ ] 4.1 Add answer-content assertions to the three affected cases in `evals/cases/main.yaml`, including a forbidden-keyword assertion on the force-search case targeting the denial phrasing specifically (无法访问互联网 / cannot access the web) rather than broad vocabulary. Verify the corpus still passes `evals/validate.py`.
-- [ ] 4.2 Correct the `main-rag-create-feed` note that claims the update/delete siblings pass "on the same fixtures" — they use a different fixture set (mood-\* vs food-\*) — and restore the diagnostic text for all three open reds into the corpus case notes. Do not reinstate `bugs.md`; the corpus is the durable home (design.md Decision 5).
-- [ ] 4.3 Re-derive the `main-budget-exceeded` floor from the fresh baseline in task 1.2 and record the operator sign-off in the case note. The evidence is two runs five minutes apart at 2/3 and 3/3 (the budget guard's trip point depends on real token spend); if the fresh run is 3/3 the floor stays at 1.0 with the flakiness noted, if it is lower the floor follows the spec's sanity rule and is not written from the red rate alone.
-- [ ] 4.4 Add grader unit tests under `evals/tests` for the new answer assertions, parsed against a recorded frame fixture from a real run, and verify `pytest evals/tests` passes locally under the agent venv.
+None of this touches Go and none of it depends on the bulk write tools; it sits in slice 2 because the operator chose to sequence the two rate-moving steps together (operator decision 2026-10-22), not because of any technical coupling. If force-search later needs react data-flow work that drags, it is the piece to split into its own change — the bulk tools do not wait on it.
 
-## 5. Report: floor provenance and answer-coverage marking
+- [ ] 4.1 Extend `_PLANNER_RULE` (`backend/agent_py/agent/web_tools.py:520-524`) to prefer one `web_search` `tool` step for a single lookup and reserve `react` for genuinely multi-round requests. Verify `pytest` under the agent venv still passes for the web-tools module.
+- [ ] 4.2 Add a forbidden-keyword assertion to `main-web-force-search` using phrasing that actually occurs in the failure text (`无法获取`, `无法直接访问`), not the paraphrase `无法访问互联网`. Verify the assertion fails on the recorded sample 16 answer and passes on a search-grounded answer.
+- [ ] 4.3 Resolve the react data-flow gap: either make `_render_prior_data` carry a react step's tool results into the next `llm` step's context (with a test), or state in the spec that the "performed search is reported" guarantee applies to `tool`-hosted searches only. Do not leave the requirement claiming a mechanism the executor does not implement.
+- [ ] 4.4 Verify the rule text is consistent with `agent-web-tools`' existing requirement that web tools are dispatchable from **both** `tool` and `react` steps — the change narrows when `react` is chosen, it does not remove the capability.
 
-- [ ] 5.1 Record the overall floor actually applied by the run and the baseline rate it was derived from in both `report.json` and `summary.md` (`evals/bin/check_rate.py`), and verify a run graded at a non-default floor reports that floor rather than the `DEFAULT_MIN_RATE` constant.
-- [ ] 5.2 Mark a case's answer coverage as ungraded in the report when it carries only a plan-shape expectation, and verify a plan-shape-only case's green rate cannot be read as evidence about answer text.
-- [ ] 5.3 Add `evals/tests` coverage for both report changes and verify the unit gate passes.
+## 5. Eval execution-effect grading
 
-## 6. CI: wire the deterministic eval unit gate
+This group is the one that takes the rate down before anything takes it back up. That is intended: it is the change making hollow greens honest. Do not soften an assertion to avoid the red.
 
-- [ ] 6.1 Add `pytest evals/tests` to the `agent-lint` job in `.github/workflows/ci.yml` and extend that job's path filters to cover `evals/**` — the job currently filters on `backend/agent_py/**` only, so a grader change would not trigger it. Resolve the `working-directory` so the path reaches the repo-root `evals/tests`.
-- [ ] 6.2 Verify the gate actually fires: introduce a deliberately failing grader test on a scratch branch and confirm the job goes red, then revert. A wired-but-untriggered gate is the exact failure this task exists to prevent.
-- [ ] 6.3 Document the gate's presence and what it does not cover (it never calls the model) in `backend/agent_py/README.md`, and verify the documented scope matches the workflow.
+- [ ] 5.1 Add execution-effect assertions to every write-expecting case: the named write tool is called under the expected step and its `tool_result.ok` is true. A failed call followed by a retry to a different tool fails the sample even when the plan tokens match.
+- [ ] 5.2 Where the case asserts a specific feed, verify the DB effect through the eval user's API (feed exists / changed / removed). Keep the assertion deterministic; no LLM judge.
+- [ ] 5.3 Add grader unit tests under `evals/tests` for the new execution-effect assertions, parsed against recorded frame fixtures from a real run. Add corpus validation that rejects a write case declaring no execution assertion.
+- [ ] 5.4 Record `main-rag-update-feed` and `main-rag-delete-feed` as honestly red with operator sign-off, per the `agent-golden-eval` sanity rule for a case below the floor. Do **not** lower their floors to make the run green and do **not** relax the new assertions to hide the red. Record in the case notes that the fix is the bulk write tools landing in `agent-feed-bulk-write-tools`, and that the plural mutation these cases request is unreachable while the tools are single-target.
+- [ ] 5.5 Add an answer assertion that catches a success report with no executed write. In the committed baseline both mutation cases told the user the operation succeeded while zero writes landed — 「你近3个月的负面情绪feed已全部转化为积极情绪feed」 and 「已根据你的要求，删除了近3个月所有关于负面情绪的feed」 — inventing before/after titles. Execution-effect grading catches the failed call; only an answer assertion catches the lie. Verify the assertion fails on the recorded baseline answer and passes on a genuinely-executed write.
 
-## 7. Scheduled live-run feasibility spike
+## 6. Eval corpus: draft case, notes, and floor
 
-- [ ] 7.1 Investigate whether an unattended live eval run is viable on this project's CI (GPU runner availability, vLLM warm-up cost, how an infra failure would surface) and write the finding as a recommendation in this change directory. Deliver a written recommendation, not a workflow file.
-- [ ] 7.2 Write the manual-run fallback runbook into `backend/agent_py/README.md` covering side-stack bring-up, the serial `--workers=1` requirement, and artifact location, so the suite has a documented operating procedure regardless of the spike's outcome.
-- [ ] 7.3 If the spike concludes an unattended run is viable, do not build it here — record that it needs its own change with its own spec delta to `agent-golden-eval`'s live-gated posture, and link that recommendation from this change.
+- [ ] 6.1 Add a draft/negation case to `evals/cases/main.yaml` (for example 「帮我写一篇关于最近三个月 feed 的总结草稿，先别发」) asserting `[rag, llm]` or `[llm]` with no `create_feed` `tool` step. This is the canary for the carve-out and the deterministic guard; without it the scoping requirement is ungraded.
+- [ ] 6.2 Correct the `main-rag-create-feed` note that claims the update/delete siblings pass "on the same fixtures" — they use a different fixture set (mood-\* vs food-\*) — and restore the diagnostic text for all three open reds into the corpus case notes. Do not reinstate `bugs.md`; cross-reference `agent-tool-policy-gate` for the security finding that the deleted log also carried.
+- [ ] 6.3 Re-derive the `main-budget-exceeded` floor from the fresh budget-stack baseline in task 1.3 and record the operator sign-off in the case note. If the fresh run is 3/3 the floor stays at 1.0 with the flakiness noted; if it is lower the floor follows the spec's sanity rule and is not written from the red rate alone.
+- [ ] 6.4 Add answer-content assertions to the three affected cases where the answer itself is part of the contract, and verify the corpus still passes `evals/validate.py`.
 
-## 8. Post-change verification and evidence
+## 7. Report: floor provenance, partial-run guard, and answer-coverage marking
 
-- [ ] 8.1 Re-run `make eval-golden` against the edited prompts and verify the after-report: the three target cases moved, **and** `main-rag-update-feed`, `main-rag-delete-feed`, `main-smalltalk-greeting`, and `main-refusal-direct-answer` did not regress. Check the mutation siblings before celebrating the gains.
-- [ ] 8.2 Record the after-run in `baseline.md` with the observed plans for any case that did not move. A re-run that does not improve the rate is a valid recorded outcome, not a prompt to keep tuning until the number moves — design.md Decision 3.
-- [ ] 8.3 Commit the new baseline report as evidence under `evals/artifacts/<stamp>/`, force-added past the bulk artifact gitignore, mirroring how the 2026-10-16 baselines were landed.
+- [ ] 7.1 Record the baseline rate the overall floor was derived from in both `report.json` and `summary.md` (`evals/bin/check_rate.py`). The applied floor itself is already recorded (`:368,373`) — verify that behaviour rather than re-implementing it.
+- [ ] 7.2 Mark a run that leaves cases NOT RUN as not a baseline, and make the overall rate not citable as a suite baseline in that case. This is the guard against the `20261016T143912Z` false green.
+- [ ] 7.3 Mark a case's answer coverage as ungraded in the report when it carries only a plan-shape expectation, and verify a plan-shape-only case's green rate cannot be read as evidence about answer text.
+- [ ] 7.4 Add `evals/tests` coverage for the report changes and verify the unit gate passes.
+
+## 8. CI: wire the deterministic eval unit gate
+
+- [ ] 8.1 Add `pytest evals/tests` to the `agent-lint` job in `.github/workflows/ci.yml` and extend that job's path filters to cover `evals/**` — the job currently filters on `backend/agent_py/**` only, so a grader change would not trigger it. Resolve the `working-directory` so the path reaches the repo-root `evals/tests`.
+- [ ] 8.2 Verify the gate actually fires: introduce a deliberately failing grader test on a scratch branch and confirm the job goes red, then revert. A wired-but-untriggered gate is the exact failure this task exists to prevent.
+- [ ] 8.3 Document the gate's presence and what it does not cover (it never calls the model) in `backend/agent_py/README.md`, and verify the documented scope matches the workflow.
+
+## 9. Scheduled live-run feasibility spike
+
+- [ ] 9.1 Investigate whether an unattended live eval run is viable on this project's CI (GPU runner availability, vLLM warm-up cost, how an infra failure would surface) and write the finding as a recommendation in this change directory. Deliver a written recommendation, not a workflow file.
+- [ ] 9.2 Write the manual-run fallback runbook into `backend/agent_py/README.md` covering side-stack bring-up, the serial `--workers=1` requirement, the separate budget-stack run, and artifact location, so the suite has a documented operating procedure regardless of the spike's outcome.
+- [ ] 9.3 If the spike concludes an unattended run is viable, do not build it here — record that it needs its own change with its own spec delta to `agent-golden-eval`'s live-gated posture, and link that recommendation from this change.
+
+## 10. Post-change verification and evidence
+
+- [ ] 10.1 Re-run `make eval-golden` against the edited prompts/guard and verify the after-report: the three target cases moved, **and** `main-rag-update-feed`, `main-rag-delete-feed`, `main-smalltalk-greeting`, `main-refusal-direct-answer`, and the new draft case did not regress. Check the mutation siblings and the draft canary before celebrating the gains. Verify execution-effect assertions, not just plan tokens.
+- [ ] 10.2 Re-run the budget case on the budget side stack and record its rate separately.
+- [ ] 10.3 Record the after-run in `baseline.md` with the observed plans and executed tool calls for any case that did not move. A re-run that does not improve the rate is a valid recorded outcome, not a prompt to keep tuning until the number moves — design.md Decision 5.
+- [ ] 10.4 Commit the new baseline report as evidence under `evals/artifacts/<stamp>/`, force-adding `report.json` and `summary.md` only (the samples remain behind the bulk artifact gitignore, mirroring the 2026-10-16 baselines).
