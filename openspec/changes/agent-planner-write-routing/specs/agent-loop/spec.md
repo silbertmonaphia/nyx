@@ -4,17 +4,22 @@
 
 ### Requirement: Tool step arguments resolve from earlier step outputs at execution time
 
-A `tool` step's `args` MAY reference the output of an earlier step in the same plan by that step's identifier, using an explicit reference syntax. The executor SHALL resolve the reference at execution time — after the referenced step has completed — and SHALL dispatch the tool with the resolved arguments; the planner never has to know a value it can only obtain by running a prior step (a concrete feed identifier, a composed body). A reference to a step that does not exist in the plan, has not completed, or that would form a cycle SHALL fail the step with a typed error and MUST NOT dispatch a partially-resolved argument. Arguments containing no reference MUST continue to dispatch exactly as authored, so plans without references are unaffected.
+A `tool` step's `args` MAY reference the output of an earlier step in the same plan by that step's identifier, using an explicit reference syntax. A reference is a whole argument value, not embedded interpolation; the executor substitutes the referenced output value unchanged, and the tool's own schema decides whether that value is acceptable. The executor SHALL resolve the reference at execution time — after the referenced step has completed — and SHALL dispatch the tool with the resolved arguments; the planner never has to know a value it can only obtain by running a prior step (a composed body). A reference to a step that does not exist in the plan, has not completed, or that would form a cycle SHALL fail the step with a typed error and MUST NOT dispatch a partially-resolved argument. Arguments containing no reference MUST continue to dispatch exactly as authored, so plans without references are unaffected. A model-corrected call produced by the tool-retry path is dispatched literally and is not re-resolved as a template.
 
 #### Scenario: Composed body reaches the write tool
 
 - **WHEN** a plan contains a `tool` step whose argument references an earlier `llm` step's output, and that step has completed
 - **THEN** the executor dispatches the tool with the earlier step's text substituted into the argument, and the tool receives the composed content rather than a plan-time placeholder
 
-#### Scenario: Real identifier resolves instead of a placeholder
+#### Scenario: Whole output value is substituted unchanged
 
-- **WHEN** a plan's `update_feed` step takes its `id` argument from an earlier step that listed the user's feeds, and that step returned concrete identifiers
-- **THEN** the dispatched call carries a real identifier from that step's output rather than a plan-time placeholder, and the write can succeed
+- **WHEN** a tool step's argument is a reference to an earlier step whose output is a dict or list
+- **THEN** the executor substitutes the whole output value, and the tool's schema decides whether it is acceptable; no path selector or partial extraction is performed
+
+#### Scenario: Retry-corrected call is dispatched literally
+
+- **WHEN** a tool call fails validation and the model produces a corrected call through the retry path
+- **THEN** the corrected call's arguments are dispatched as authored, not re-resolved as templates
 
 #### Scenario: Unknown reference fails the step closed
 

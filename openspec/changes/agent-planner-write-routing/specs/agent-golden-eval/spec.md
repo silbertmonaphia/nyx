@@ -88,7 +88,7 @@ The suite SHALL run only against a live model stack (the local vLLM and the runn
 
 ### Requirement: Execution-effect grading for state-changing cases
 
-A case that expects a mutating registry tool (for example `create_feed`, `update_feed`, `delete_feed`, or the bulk `update_feeds` / `delete_feeds` added by `agent-feed-bulk-write-tools`) SHALL grade the run's execution, not only its plan. The transcript SHALL contain a `tool_call` for the expected write tool under the expected step, and the corresponding `tool_result` SHALL report `ok: true`. A sample MUST fail when the plan names the write tool but the executed call fails validation, when a retry substitutes a different tool, or when the tool result is missing. Where the case asserts a specific feed, the harness SHALL verify the effect from the `tool_result` payload when it carries the created/updated feed (the `create_feed` result does), falling back to the eval user's API when it does not (the feed exists / was changed / was removed); for a create case whose contract is composed content, it SHALL also verify that the created feed's content reflects the retrieved data rather than a plan-time placeholder. A write-expecting case that declares no execution assertion MUST fail corpus validation rather than report a plan-shape-only green.
+A case that expects a mutating registry tool (for example `create_feed`, `update_feed`, `delete_feed`, or the bulk `update_feeds` / `delete_feeds` added by `agent-feed-bulk-write-tools`) SHALL grade the run's execution, not only its plan. The transcript SHALL contain a `tool_call` for the expected write tool under the expected step, and the corresponding `tool_result` SHALL report `ok: true`. A sample MUST fail when the plan names the write tool but the executed call fails validation, when a retry substitutes a different tool, or when the tool result is missing. Where the case asserts a specific feed, the harness SHALL verify the effect from the `tool_result` payload when it carries the created/updated feed (the `create_feed` result does), falling back to the eval user's API when it does not (the feed exists / was changed / was removed); for a create case whose contract is composed content, it SHALL also verify that the created feed's content reflects the retrieved data rather than a plan-time placeholder. A case MAY declare success-claim phrases; when no successful write is recorded under the expected step, the assembled answer MUST NOT contain any declared phrase, and when the write executed the phrases are permitted. This conditional assertion belongs to execution-effect grading, not to the static forbidden-keyword list. A write-expecting case that declares no execution assertion MUST fail corpus validation rather than report a plan-shape-only green.
 
 #### Scenario: Failed write call fails the sample despite a matching plan
 
@@ -109,6 +109,16 @@ A case that expects a mutating registry tool (for example `create_feed`, `update
 
 - **WHEN** a create case expects a summary of retrieved feeds and the created feed's description contains a plan-time placeholder instead of a keyword from the retrieved fixtures
 - **THEN** the sample fails execution-effect grading even though the feed row exists
+
+#### Scenario: Success claim without an executed write fails
+
+- **WHEN** the recorded transcript contains no successful write under the expected step (the call failed validation or a retry substituted a different tool), and the assembled answer contains a declared success-claim phrase
+- **THEN** the sample fails execution-effect grading, and the report records the claim alongside the failed tool result
+
+#### Scenario: Success claim with an executed write passes
+
+- **WHEN** the expected write has an `ok: true` tool result and the assembled answer contains a declared success-claim phrase
+- **THEN** the phrase is permitted and does not fail the sample
 
 #### Scenario: Write case without execution assertions is a corpus bug
 
