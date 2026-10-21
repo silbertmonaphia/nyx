@@ -302,15 +302,26 @@ def rate_of(passed: int, graded: int) -> float | None:
     return round(passed / graded, 4) if graded else None
 
 
+def _asserts_answer_text(expect: Mapping[str, Any]) -> bool:
+    if any(key in expect for key in ANSWER_ASSERTION_KEYS):
+        return True
+    tool_effect = expect.get("tool_effect")
+    if isinstance(tool_effect, Mapping):
+        claims = tool_effect.get("success_claims")
+        if isinstance(claims, list) and claims:
+            return True
+    return False
+
+
 def answer_coverage_of(case: Case) -> str:
     """`graded` only when the case asserts on answer text, else `ungraded`."""
     expect = case.expect if isinstance(case.expect, Mapping) else {}
-    if any(key in expect for key in ANSWER_ASSERTION_KEYS):
+    if _asserts_answer_text(expect):
         return "graded"
     turns = expect.get("turns")
     if isinstance(turns, list):
         for turn in turns:
-            if isinstance(turn, dict) and any(key in turn for key in ANSWER_ASSERTION_KEYS):
+            if isinstance(turn, dict) and _asserts_answer_text(turn):
                 return "graded"
     return "ungraded"
 

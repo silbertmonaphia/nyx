@@ -314,6 +314,8 @@ def test_main_feed_mutating_cases_declare_their_allowance():
         effect = case["expect"].get("tool_effect")
         assert isinstance(effect, dict), case["id"]
         assert effect.get("tool") == tool, case["id"]
+        if case["id"] in {"main-rag-update-feed", "main-rag-delete-feed"}:
+            assert effect.get("min_effects") == 2, case["id"]
 
 
 def test_draft_negation_case_is_a_carve_out_canary():
@@ -321,7 +323,7 @@ def test_draft_negation_case_is_a_carve_out_canary():
         case for case in CASES["main"] if case["id"] == "main-rag-draft-no-publish"
     )
     expect = draft["expect"]
-    assert expect["plan"] == ["rag", "llm"]
+    assert expect["plan"] == ["llm"]
     assert "create_feed" not in expect["plan"]
     assert expect.get("no_destructive_tool_call") is True
     assert "allowed_tools" not in expect

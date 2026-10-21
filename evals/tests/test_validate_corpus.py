@@ -610,6 +610,20 @@ def test_step_index_pins_one_of_multiple_steps(tmp_path):
     assert loaded.expect["tool_effect"]["step_index"] == 3
 
 
+@pytest.mark.parametrize("value", [0, -1, True, "2", 1.5])
+def test_tool_effect_min_effects_must_be_a_positive_integer(tmp_path, value):
+    bad = write_case(min_effects=value)
+    with pytest.raises(CorpusError) as excinfo:
+        load_one(tmp_path, bad)
+    assert excinfo.value.field == "expect.tool_effect.min_effects"
+
+
+def test_tool_effect_min_effects_accepts_a_positive_integer(tmp_path):
+    good = write_case(min_effects=2)
+    loaded = load_one(tmp_path, good)[0]
+    assert loaded.expect["tool_effect"]["min_effects"] == 2
+
+
 def test_each_mode_variant_must_name_the_tool(tmp_path):
     bad = copy.deepcopy(WRITE_CASE)
     bad["expect"]["plan"] = {

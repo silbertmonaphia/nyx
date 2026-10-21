@@ -397,6 +397,83 @@ def test_deleted_without_marker_or_snapshot_fails() -> None:
     assert verdict["pass"] is False
 
 
+def test_delete_min_effects_two_fails_on_one_delete() -> None:
+    frames = [
+        plan_frame(DELETE_PLAN),
+        call_frame("step_2", "delete_feed", call_id="c1"),
+        result_frame(
+            "step_2",
+            call_id="c1",
+            result=mcp_result(structured={"deleted": True, "id": 9}),
+        ),
+    ]
+
+    verdict = get_assert(
+        transcript(turn(frames, "已删除")), context({**DELETE, "min_effects": 2})
+    )
+
+    assert verdict["pass"] is False
+    assert "observed 1" in verdict["reason"]
+
+
+def test_delete_min_effects_two_passes_on_two_deletes() -> None:
+    frames = [
+        plan_frame(DELETE_PLAN),
+        call_frame("step_2", "delete_feed", call_id="c1"),
+        result_frame(
+            "step_2",
+            call_id="c1",
+            result=mcp_result(structured={"deleted": True, "id": 9}),
+        ),
+        call_frame("step_2", "delete_feed", call_id="c2"),
+        result_frame(
+            "step_2",
+            call_id="c2",
+            result=mcp_result(structured={"deleted": True, "id": 10}),
+        ),
+    ]
+
+    verdict = get_assert(
+        transcript(turn(frames, "已删除")), context({**DELETE, "min_effects": 2})
+    )
+
+    assert verdict["pass"] is True
+
+
+def test_delete_min_effects_empty_target_list_counts_zero() -> None:
+    frames = [
+        plan_frame(DELETE_PLAN),
+        call_frame("step_2", "delete_feed"),
+        result_frame(
+            "step_2",
+            result=mcp_result(structured={"deleted": True, "deleted_ids": []}),
+        ),
+    ]
+
+    verdict = get_assert(
+        transcript(turn(frames, "已删除")), context({**DELETE, "min_effects": 1})
+    )
+
+    assert verdict["pass"] is False
+    assert "observed 0" in verdict["reason"]
+
+
+def test_create_min_effects_two_fails_on_one_create() -> None:
+    feed = {"id": 284, "title": "总结", "description": "拉面与咖喱的季度回顾"}
+    frames = [
+        plan_frame(CREATE_PLAN),
+        call_frame("step_2", "create_feed"),
+        result_frame("step_2", result=mcp_result(structured=feed)),
+    ]
+
+    verdict = get_assert(
+        transcript(turn(frames, "已创建")), context({**CREATE, "min_effects": 2})
+    )
+
+    assert verdict["pass"] is False
+    assert "observed 1" in verdict["reason"]
+
+
 def test_failed_write_then_retry_substituting_another_tool_fails() -> None:
     frames = [
         plan_frame(UPDATE_PLAN),

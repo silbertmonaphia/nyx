@@ -10,8 +10,10 @@ The contract:
 
 - `tool` is a destructive tool (`create_feed`, `update_feed`, `delete_feed`),
   `effect` is `created` / `updated` / `deleted`, `step_index` optionally pins
-  the plan step, `description_any_of` is required for `created`, and
-  `success_claims` lists phrases the answer may only utter after a write.
+  the plan step, `description_any_of` is required for `created`,
+  `success_claims` lists phrases the answer may only utter after a write, and
+  `min_effects` optionally requires that many distinct successful targets so a
+  single-target write cannot satisfy a plural request.
 - The expected step is the last turn's last `plan` frame's step naming the
   tool. Without `step_index`, exactly one such step must exist.
 - Every `tool_call` under that step must be for the expected tool, carry a
@@ -56,7 +58,14 @@ EXPECTED_EFFECTS = {
 }
 
 SPEC_KEYS = frozenset(
-    {"tool", "effect", "step_index", "description_any_of", "success_claims"}
+    {
+        "tool",
+        "effect",
+        "step_index",
+        "description_any_of",
+        "success_claims",
+        "min_effects",
+    }
 )
 
 
@@ -83,6 +92,13 @@ def _validate_spec(spec) -> str | None:
         or step_index < 0
     ):
         return f"tool_effect.step_index {step_index!r} is not a non-negative integer"
+    min_effects = spec.get("min_effects")
+    if min_effects is not None and (
+        isinstance(min_effects, bool)
+        or not isinstance(min_effects, int)
+        or min_effects < 1
+    ):
+        return "tool_effect.min_effects must be a positive integer"
     keywords = spec.get("description_any_of")
     if keywords is not None and (
         not isinstance(keywords, list)
@@ -257,6 +273,32 @@ def _content_payload(result: dict) -> tuple[dict | None, str | None]:
     if isinstance(structured, list) and structured:
         return {"data": structured}, "structuredContent"
     return None, None
+
+
+def _effect_target_count(results: list[dict]) -> int:
+    targets: set[str] = set()
+    metadata_seen = False
+    for result in results:
+        payload, _ = _content_payload(result)
+        if not isinstance(payload, dict):
+            continue
+        value = payload.get("id")
+        if value is not None:
+            metadata_seen = True
+            if isinstance(value, (int, str)) and not isinstance(value, bool):
+                targets.add(str(value))
+        for key in ("deleted_ids", "updated_ids", "ids", "data"):
+            items = payload.get(key)
+            if not isinstance(items, list):
+                continue
+            metadata_seen = True
+            for item in items:
+                item_id = item.get("id") if isinstance(item, dict) else item
+                if isinstance(item_id, (int, str)) and not isinstance(item_id, bool):
+                    targets.add(str(item_id))
+    if targets:
+        return len(targets)
+    return 0 if metadata_seen else len(results)
 
 
 def _feed_row(payload) -> dict | None:
@@ -546,6 +588,14 @@ def get_assert(transcript: dict, context: dict) -> dict:
         failures.append(f"no tool_call for {tool!r} under step {step_id!r}")
     failures.extend(result_failures)
 
+    min_effects = spec.get("min_effects")
+    observed_effects = _effect_target_count(successful)
+    if min_effects is not None and observed_effects < min_effects:
+        failures.append(
+            f"expected at least {min_effects} {effect} effect(s), "
+            f"observed {observed_effects} distinct target(s)"
+        )
+
     answer = turn_answer(turn)
     claims = spec.get("success_claims") or []
     hits = [claim for claim in claims if claim in answer]
@@ -555,6 +605,8 @@ def get_assert(transcript: dict, context: dict) -> dict:
             "executed_tools": _executed_tools(frames),
             "call_ids": call_ids,
             "write_executed": bool(successful),
+            "min_effects": min_effects,
+            "observed_effects": observed_effects,
             "success_claims": claims,
             "answer_claim_hits": hits,
         }

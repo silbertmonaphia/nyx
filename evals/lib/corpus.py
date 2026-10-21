@@ -112,7 +112,14 @@ WRITE_EFFECTS = {
 """Write tools a plan may name, and the execution effect each must produce."""
 
 TOOL_EFFECT_KEYS = frozenset(
-    {"tool", "effect", "step_index", "description_any_of", "success_claims"}
+    {
+        "tool",
+        "effect",
+        "step_index",
+        "description_any_of",
+        "success_claims",
+        "min_effects",
+    }
 )
 
 DIALOGUE_TURN_KEYS = frozenset({"prompt", "new_session", "poll_prefs"})
@@ -612,6 +619,19 @@ def _validate_tool_effect(
             f"must be a non-negative integer, got {step_index!r}",
             case_id,
             "expect.tool_effect.step_index",
+            source,
+        )
+
+    min_effects = spec.get("min_effects")
+    if min_effects is not None and (
+        isinstance(min_effects, bool)
+        or not isinstance(min_effects, int)
+        or min_effects < 1
+    ):
+        raise _error(
+            f"must be a positive integer, got {min_effects!r}",
+            case_id,
+            "expect.tool_effect.min_effects",
             source,
         )
 

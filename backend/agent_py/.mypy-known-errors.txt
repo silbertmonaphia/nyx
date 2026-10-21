@@ -32,7 +32,7 @@ agent/observability.py:385: error: Argument 2 to "start_as_current_span" of "Tra
 agent/observability.py:385: error: Argument 2 to "start_as_current_span" of "Tracer" has incompatible type "**dict[str, Context]"; expected "SpanKind"  [arg-type]
 agent/observability.py:385: error: Argument 2 to "start_as_current_span" of "Tracer" has incompatible type "**dict[str, Context]"; expected "bool"  [arg-type]
 agent/observability.py:385: error: Argument 2 to "start_as_current_span" of "Tracer" has incompatible type "**dict[str, Context]"; expected "int | None"  [arg-type]
-agent/planner.py:223: error: "ChatMessage" has no attribute "get"  [attr-defined]
+agent/planner.py:225: error: "ChatMessage" has no attribute "get"  [attr-defined]
 agent/prefs.py:42: error: Skipping analyzing "asyncpg": module is installed, but missing library stubs or py.typed marker  [import-untyped]
 agent/prefs.py:537: error: Unexpected keyword argument "max_tokens" for "ChatOpenAI"  [call-arg]
 agent/retention.py:268: error: Item "None" of "ChatStore | None" has no attribute "soft_delete_expired"  [union-attr]

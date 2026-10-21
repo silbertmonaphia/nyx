@@ -88,9 +88,11 @@ Rules:
 - the plan MUST contain at least one step; for greetings, small talk, or anything needing no retrieval or tools, emit exactly one `llm` step that answers the user
 - prefer the minimum number of steps; don't insert filler
 - use `rag` only when the request is clearly about the user's own data
+- for weather, current events, or any external information, use the available web tools when they are enabled; never use `rag` for those requests — `rag` is only for the user's own feed data
 - when the user explicitly asks to change their feeds — create or publish (发布 / 发出去 / 创建), update (更新 / 修改), or delete (删除 / 删掉) — the plan MUST contain a `tool` step calling the matching write tool (`create_feed` / `update_feed` / `delete_feed`) before the answering `llm` step; an `llm` step composes text and never performs the write
 - do NOT plan a write tool when the user asks to compose, draft, review, suggest, or preview content, when the message says not to publish yet (草稿 / 先别发 / 不要发布 / 仅供预览), or when an ambiguous request could be either composing or publishing — such requests are draft-and-report
 - when the write's content must be composed from earlier results, plan the composing `llm` step BEFORE the write step and make the write's content argument reference that step's output; never pass a plan-time placeholder as the created or updated content
+- when a plan composes a feed body for `create_feed` / `update_feed`, the composing `llm` prompt MUST tell the model to keep the body under 300 Chinese characters (about 900 bytes); both write tools reject a description over 1000 bytes
 - `tool` step `args` may reference an earlier step's output by setting the ENTIRE argument value to the literal `{{step:<step_id>}}` with no surrounding text, for example `"description": "{{step:llm_1}}"`; the executor replaces it with that step's output, and only a step earlier in the same plan can be referenced
 - when unsure whether the user wants a state change, prefer a single `llm` step (a draft-and-report answer) and do not emit a write tool; an explicit state-change request is not ambiguous and requires the matching write tool
 """
@@ -310,7 +312,7 @@ def _build_structured_client(settings: Settings):
         # Transport field stays `max_tokens` (vLLM-compatible wire);
         # langchain-openai 1.7 types only the renamed field, so mypy
         # sees a mismatch that does not exist at runtime.
-        max_tokens=512,  # type: ignore[call-arg]
+        max_tokens=1024,  # type: ignore[call-arg]
     )
     response_format = {
         "type": "json_schema",
@@ -624,7 +626,7 @@ async def _emit_legacy_plan(
         # Transport field stays `max_tokens` (vLLM-compatible wire);
         # langchain-openai 1.7 types only the renamed field, so mypy
         # sees a mismatch that does not exist at runtime.
-        max_tokens=512,  # type: ignore[call-arg]
+        max_tokens=1024,  # type: ignore[call-arg]
     )
     with jaeger_span(tracer, "agent.planner.legacy") as span:
         span.set_attribute("structured", False)
@@ -735,8 +737,8 @@ _NON_REQUEST_INTENT_RES = (
         r"(?:删除|删掉|删了|移除|更新|修改|改为|改成|编辑|创建|新建|发布|发表|发出去|形成一篇|形成一条|发一篇|发一条)"
     ),
     re.compile(
-        r"(?:已经|已|刚才|之前|刚刚)\s*"
-        r"(?:删除|删掉|移除|更新|修改|改为|改成|编辑|创建|新建|发布|发表)了?"
+        r"(?:已经|已|刚才|刚刚|刚|之前)\s*"
+        r"(?:删除|删掉|删了|移除|更新|修改|改为|改成|编辑|创建|新建|发布|发表)了?"
     ),
     re.compile(
         r"(?:怎么|如何|怎样|为什么)\s*[^，。！？?]{0,20}"

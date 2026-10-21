@@ -1041,6 +1041,13 @@ def test_guard_prompt_reconciles_unsure_rule_with_write_mandate():
     assert "{{step:<step_id>}}" in PLANNER_SYSTEM_PROMPT
 
 
+def test_prompt_preserves_web_routing_and_caps_feed_length():
+    assert "never use `rag` for those requests" in PLANNER_SYSTEM_PROMPT
+    assert "under 300 Chinese characters" in PLANNER_SYSTEM_PROMPT
+    assert "`create_feed` / `update_feed`" in PLANNER_SYSTEM_PROMPT
+    assert "1000 bytes" in PLANNER_SYSTEM_PROMPT
+
+
 @pytest.mark.parametrize(
     ("message", "required_tool"),
     [
@@ -1143,6 +1150,27 @@ def test_guard_rejects_explicit_state_change_without_write_tool(
             ],
         ),
         (
+            "我刚刚删了那条负面feed，现在帮我总结成一篇周报",
+            [
+                PlanStep(id="rag_1", kind=StepKind.rag, query="recent feeds"),
+                _llm_step(),
+            ],
+        ),
+        (
+            "我刚才删了那条feed，现在帮我把它总结成周报",
+            [
+                PlanStep(id="rag_1", kind=StepKind.rag, query="recent feeds"),
+                _llm_step(),
+            ],
+        ),
+        (
+            "我刚删掉了那条feed，帮我总结成一篇周报",
+            [
+                PlanStep(id="rag_1", kind=StepKind.rag, query="recent feeds"),
+                _llm_step(),
+            ],
+        ),
+        (
             "怎么删除feed？我想先了解再决定",
             [
                 PlanStep(id="rag_1", kind=StepKind.rag, query="recent feeds"),
@@ -1184,6 +1212,9 @@ def test_guard_does_not_fire_on_non_state_change(message, steps):
         "不要移除我关于旅行的feed，帮我把它们总结成一篇周报",
         "别删掉我的feed，帮我总结成一篇周报",
         "我已经删除了那些负面feed，现在帮我总结成一篇周报",
+        "我刚刚删了那条负面feed，现在帮我总结成一篇周报",
+        "我刚才删了那条feed，现在帮我把它总结成周报",
+        "我刚删掉了那条feed，帮我总结成一篇周报",
         "怎么删除feed？我想先了解再决定",
         "别修改我的feed，帮我总结成一篇周报",
         "无需更新我的feed，帮我总结成一篇周报",

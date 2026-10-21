@@ -612,6 +612,32 @@ def test_answer_coverage_marks_plan_shape_only_cases_ungraded(tmp_path):
             "min_rate": 0.0,
         },
         {
+            "id": "tool-effect-claims-graded",
+            "line": "main",
+            "prompt": "删掉那些feed",
+            "vars": {},
+            "expect": {
+                "plan": ["rag", "delete_feed"],
+                "tool_effect": {
+                    "tool": "delete_feed",
+                    "effect": "deleted",
+                    "success_claims": ["已删除"],
+                },
+            },
+            "min_rate": 0.0,
+        },
+        {
+            "id": "tool-effect-no-claims",
+            "line": "main",
+            "prompt": "删掉那些feed",
+            "vars": {},
+            "expect": {
+                "plan": ["rag", "delete_feed"],
+                "tool_effect": {"tool": "delete_feed", "effect": "deleted"},
+            },
+            "min_rate": 0.0,
+        },
+        {
             "id": "error-only",
             "line": "main",
             "prompt": "随便聊聊",
@@ -635,6 +661,8 @@ def test_answer_coverage_marks_plan_shape_only_cases_ungraded(tmp_path):
     assert case_entry(report, "answer-graded")["answer_coverage"] == "graded"
     assert case_entry(report, "forbidden-graded")["answer_coverage"] == "graded"
     assert case_entry(report, "turn-answer-graded")["answer_coverage"] == "graded"
+    assert case_entry(report, "tool-effect-claims-graded")["answer_coverage"] == "graded"
+    assert case_entry(report, "tool-effect-no-claims")["answer_coverage"] == "ungraded"
     assert case_entry(report, "error-only")["answer_coverage"] == "ungraded"
     summary = (artifacts / "summary.md").read_text(encoding="utf-8")
     assert "| shape-only | main | 1.00 |" in summary
