@@ -1,6 +1,6 @@
 {
-  "version": 2,
-  "note": "Hand-authored relevance labels for the RAG retrieval baseline. Feed keys are stable identities; DB ids are assigned per test run. Descriptions stay under ~130 Chinese chars so the 256-token embedding window never truncates. Query categories are deliberate: semantic, exact-keyword, buried-in-long-description, same-topic-distractor, and out-of-domain negative (empty relevant list).",
+  "version": 3,
+  "note": "Hand-authored relevance labels for the RAG retrieval baseline. v3 adds realistic-library difficulty: 6 near-duplicate clusters (ramen shops, meeting minutes, annual checkups, gym logs, error notes, DCA records), 12 long multi-topic descriptions, life-log filler, and adjacent-but-not-answering neighbours for the negative queries. New query categories: symptom (problem-vocabulary queries whose referent uses solution-vocabulary), vague_referential (recall-style queries with a topical anchor), cluster_confusable (must pick the right member of a near-duplicate group). Feed keys are stable identities; DB ids are assigned per test run. Descriptions stay under ~220 Chinese chars so the 256-token embedding window never truncates.",
   "top_k": 5,
   "feeds": [
     { "key": "ramen-yamada", "category": "food", "title": "山田家拉面", "description": "公司后门左转第三家，招牌是浓厚豚骨拉面。营业到凌晨两点，适合加班后吃。汤底加半份叉烧多花十块。" },
@@ -35,7 +35,60 @@
     { "key": "sleep-routine", "category": "life", "title": "睡眠调整", "description": "早上晒十分钟太阳，晚上十一点前放下手机。连续两周固定起床时间比固定睡觉时间更有效。" },
     { "key": "salary-negotiation", "category": "life", "title": "薪资沟通记录", "description": "谈薪先给出期望区间和理由，不要问自己能拿多少。问对方薪资带宽但不给具体数字。" },
 
-    { "key": "plant-monstera", "category": "life", "title": "龟背竹养护", "description": "散射光不能直晒。土干到两三厘米再浇水，不然烂根。冬天一个月浇一次就够了。" }
+    { "key": "plant-monstera", "category": "life", "title": "龟背竹养护", "description": "散射光不能直晒。土干到两三厘米再浇水，不然烂根。冬天一个月浇一次就够了。" },
+
+    { "key": "ichiran-branch", "category": "food", "title": "一兰拉面分店", "description": "商场负一层新开的分店，只卖豚骨一味，辣度可以选。独立隔间单人位的设计，半夜十二点还在排队。" },
+    { "key": "sanuki-udon", "category": "food", "title": "赞岐乌冬小店", "description": "手打乌冬，冷热两吃，天妇罗碎是灵魂。中午十二点半要等位十五分钟，傍晚去直接吃。老板只收现金。" },
+
+    { "key": "meeting-product", "category": "work", "title": "产品周会纪要", "description": "本周定了搜索改版的验收标准：首屏命中率不低于七成。运营提的会员日活动暂缓到下月。设计稿周四前给到。" },
+    { "key": "meeting-backend", "category": "work", "title": "后端周会纪要", "description": "消息队列选型还在拉扯，Kafka 和 RabbitMQ 各写了调研，下周三前出结论。慢查询治理这期先不做，人手不够。连接池告警阈值调到八成。" },
+    { "key": "meeting-allhands", "category": "work", "title": "全员大会纪要", "description": "现金流能撑十八个月，招聘全面放缓，只补关键岗位。Q4 目标改为保留存冲增长。年会改到一月办，预算砍半。" },
+
+    { "key": "checkup-2023", "category": "life", "title": "2023 体检记录", "description": "尿酸 512 超了不少，医生说先控制嘌呤饮食三个月复查。体重比前年重了四公斤。其他指标大致正常，轻度脂肪肝。" },
+    { "key": "checkup-2024", "category": "life", "title": "2024 体检记录", "description": "尿酸降到 448，仍偏高但进步明显。脂肪肝从轻度转回临界。新查出幽门螺杆菌阳性，开了四联药，吃完要复查。" },
+    { "key": "checkup-2025", "category": "life", "title": "2025 体检记录", "description": "尿酸 421 继续往下走，幽门螺杆菌转阴了。血脂四项里低密度脂蛋白第一次踩线，医生建议先饮食运动干预，暂不用药。" },
+
+    { "key": "gym-deadlift", "category": "life", "title": "硬拉训练日志", "description": "硬拉今天冲到 140 公斤做了一个，有点弓背，下个周期回到 125 做 3×5。握力是瓶颈，考虑上助力带。" },
+    { "key": "gym-bench", "category": "life", "title": "卧推训练日志", "description": "卧推卡在 82.5 公斤三周了，按 5×5 重新来。肩胛收紧之后稳定多了，腿部驱动还是没找感觉，看了三遍教学视频。" },
+    { "key": "gym-running", "category": "life", "title": "跑步训练日志", "description": "五公里最好成绩跑进 25 分钟了，心率控制在三区的体感刚好。跑鞋累计六百公里，缓震明显衰减，该换了。" },
+
+    { "key": "err-refused", "category": "tech", "title": "connection refused 排查", "description": "服务起不来报 connection refused，第一反应是端口根本没监听，先 ss -tlnp 再说。上次绕了半小时发现是配置文件写错端口。" },
+    { "key": "err-timeout", "category": "tech", "title": "请求超时排查", "description": "上游接口偶发 timeout，抓包看是 TLS 握手阶段卡住，SNI 配错指向了旧网关。重试要带幂等键，不然超时重发会造成重复下单。" },
+    { "key": "err-dns", "category": "tech", "title": "DNS 解析失败笔记", "description": "容器里 DNS 解析间歇性失败，resolv.conf 被 DHCP 覆盖了。ndots:5 会先把服务名当域名走一遍搜索域，短域名白白多几次查询。" },
+
+    { "key": "dca-sep", "category": "life", "title": "九月定投记录", "description": "九月定投扣款成功，沪深300 六百，中证500 四百。本月忽略波动，纪律优先。账户整体浮亏收窄到三个点。" },
+    { "key": "dca-oct", "category": "life", "title": "十月定投记录", "description": "十月继续，加了五百的标普500，占比第一次超过两成。汇率对收益的影响开始显现。" },
+    { "key": "dca-nov", "category": "life", "title": "十一月定投记录", "description": "十一月照常扣款。定投满两年了，总投入六位数，年化勉强跑赢余额宝。不折腾，继续。" },
+
+    { "key": "trip-fujian-long", "category": "travel", "title": "霞浦两日", "description": "动车到霞浦站再拼车去镇上，车费一人四十。住宿订的海边民宿，房间正对滩涂，老板娘早上五点敲门喊人看日出，管一碗热粥。海鲜大排档两顿吃了一百八，剑蛏和红膏蟹最惊艳。返程才发现存储卡快满，滩涂日落只拍到一半。" },
+    { "key": "reno-diary", "category": "life", "title": "装修日记", "description": "装修进入第四十天。瓦工老陈贴砖很正，阳角全部做了 45 度碰角，多收两千但值。美缝自己动手省了三千。板材升级成 ENF 级多层实木，甲醛检测两次合格。电工把客厅双控接错了，返工等了一周。尾款留了百分之五，等灯具装完再结。" },
+    { "key": "retro-year", "category": "work", "title": "年度复盘", "description": "这一年交付节奏稳了，线上事故三次都比去年低。技术上把发布流水线从三十分钟压到十一分钟。管理是短板：一对一做得太随意，两个同事的离职面谈都提到缺乏成长感。明年把自动化测试覆盖率拉到七成，每两周至少一次正式一对一。" },
+    { "key": "shopping-1111", "category": "life", "title": "双11 清单", "description": "今年克制很多。数码只换了降噪耳机，旧平板出了二手。日用囤了十二瓶洗衣液和一年份的抽纸，占了个货架。最冲动的是空气炸锅，用了三次在吃灰。退款两笔都在价保期内操作成功。" },
+    { "key": "baby-log", "category": "life", "title": "育儿记录", "description": "娃十一个月，辅食从强化铁米粉过渡到碎菜末，先加的南瓜后加的胡萝卜，一次只加一样观察三天。疫苗打完麻腮风第一针，低烧一晚。睡眠倒退期熬人，夜里醒三次。老人总想喂盐，立场要守住。" },
+    { "key": "move-log", "category": "life", "title": "搬家记录", "description": "房子定在地铁口六百米的老小区，租金便宜八百，代价是六楼没电梯。中介小吴说好不收费，签约时冒出半个月佣金，掰扯半天砍到三天。搬家师傅四人干了三小时，纸箱十九个。退租时房东扣押金三百说是窗帘清洗费，认栽。" },
+    { "key": "trip-yunnan-long", "category": "travel", "title": "云南环线", "description": "昆明租车走昆大丽。大理住才村码头边，洱海骑电动车环了半圈，晒脱一层皮。丽江古城商业化严重，束河好得多。玉龙雪山高反比预想轻，租的氧气瓶没用上。蓝月谷的水是奶粉蓝，照片没有骗人。全程油费过路费一千一。" },
+    { "key": "reading-two-books", "category": "reading", "title": "双读笔记", "description": "同月读完两本小说。《平原上的摩西》冷峻克制，双视角叙事到最后一章才合拢。《长安的荔枝》完全相反，两口气读完，小吏接下不可能的任务，过程比结局好看。共同点：都在写小人物被时代裹挟，都不煽情。" },
+    { "key": "kitchen-note", "category": "food", "title": "厨房改造", "description": "台面换成石英石，浅灰显干净但水渍明显，要勤擦。入手磨豆机之后手冲稳定性上了一个台阶，刻度固定比手感靠谱。烤箱是二手收的，发热管一根不太匀，烤欧包要中途转盘。收纳做了挂杆系统，台面终于能空出来。" },
+    { "key": "health-plan", "category": "life", "title": "减脂计划", "description": "三个月目标减六公斤，目前完成一半。饮食把精米换了一半成糙米，晚餐八点后不进食。力量保持三次，有氧加了两回爬楼机。平台期卡了两周，靠一顿欺骗餐突破。教训是别天天称重，周均更有参考性。" },
+    { "key": "trip-xiamen", "category": "travel", "title": "厦门笔记", "description": "鼓浪屿船票要提前三天在公众号买，现场基本售罄。民宿选了内厝澳这边，安静，离沙滩两分钟。沙茶面吃了两家，龙头路网红店不如巷子里老太那家。回程顺路去集美学村，嘉庚建筑的屋顶值得抬头看。" },
+    { "key": "car-maintenance", "category": "life", "title": "养车台账", "description": "六万公里大保养花了两千四，火花塞和刹车油是大头。4S 店推的发动机清洗是智商税，拒绝了。雨刮换了博世的，安静。保险今年涨四百，出过一次交强险的缘故。明年续保打算货比三家。" },
+
+    { "key": "parcel-locker", "category": "life", "title": "快递柜使用记录", "description": "代收点超三次会退件，设置送货上门要提前一天。丰巢柜超时二十四小时开始收费，大件还是约京东送上门。" },
+    { "key": "washer-filter", "category": "life", "title": "洗衣机滤网清理", "description": "波轮的滤网两个月清一次，全是毛絮。滚筒的排污口在右下角，打开有惊喜，建议垫毛巾。清洗剂一季度跑一次筒自洁。" },
+    { "key": "door-lock", "category": "life", "title": "门锁换电池", "description": "智能锁半年换一次电池，低电提醒会响三天，别拖。应急充电口在底部面板下面，Type-C 的。机械钥匙藏在车里。" },
+    { "key": "subscriptions", "category": "life", "title": "订阅续费清单", "description": "网盘年费一月，视频会员自动续费关了，音乐订阅学生价还有两年。域名三月到期，记得提前转移，别掉进续费价格陷阱。" },
+    { "key": "powerbank", "category": "life", "title": "充电宝功率", "description": "标称两万毫安实际能充手机四次左右，转换损耗正常。上飞机必须随身不能托运。给笔记本充电要 65W 以上协议才行。" },
+    { "key": "coffee-descale", "category": "food", "title": "咖啡机除垢", "description": "除垢周期两个月，用柠檬酸比专用片便宜。水垢多了抽水有异响，温度上不去。水箱每天换水，隔夜水别用。" },
+    { "key": "showerhead", "category": "life", "title": "花洒除水垢", "description": "花洒水变小多半是水垢堵了，白醋袋扎头上泡一小时，喷孔用针通。增压款对老房子的水压衰减提升明显。" },
+    { "key": "fridge-smell", "category": "food", "title": "冰箱除味", "description": "咖啡渣和茶叶渣都比除味盒好用。活性炭包三个月换。串味的根源是剩菜不封膜，治本比除味重要。" },
+    { "key": "powerstrip", "category": "life", "title": "插线板功率", "description": "厨房大功率电器别全插一个插线板，2500W 是上限。选带分控开关的，待机功耗能省一点。孔位间距要留意，大插头不打架。" },
+    { "key": "ac-filter", "category": "life", "title": "空调滤网", "description": "滤网一个月洗一次，制冷能快不少。深度清洗两年一次，一百块上下。挂机的滤网拆法：先开面板再抬卡扣。" },
+
+    { "key": "shebao-base", "category": "life", "title": "社保基数调整", "description": "七月起社保缴费基数上调，个人部分每月多扣一百八。公积金比例没变。到手工资影响比想象小，全年算下来是一顿大餐。" },
+    { "key": "k8s-rollout", "category": "tech", "title": "K8s 滚动发布", "description": "滚动发布策略 maxSurge 设一、maxUnavailable 设零，发布期间容量不掉。就绪探针要配初始延迟，不然流量打进未热身的实例。回滚就是一条命令的事。" },
+    { "key": "insurance-claim", "category": "life", "title": "商业保险理赔记录", "description": "意外险理赔交了三次材料：病历原件、发票原件、事故说明，第三次才过。医疗险免赔额一万，门诊基本用不上。健康告知没做好是理赔纠纷的重灾区。" },
+    { "key": "yibao-flow", "category": "life", "title": "医保报销流程", "description": "门诊刷医保卡直接结算，住院要出院结算单。异地就医备案在 app 上就能办，直接结算省得跑腿。起付线以下自付，封顶线以上自费。" },
+    { "key": "index-fund-primer", "category": "life", "title": "指数基金入门", "description": "指数基金买的是一篮子，费率比主动型低一个量级。沪深300 覆盖大盘，中证500 是中盘。增强型长期跑输指数是常态，别为多收的费率买单。" }
   ],
   "queries": [
     { "key": "q-latenight-hot", "category": "semantic", "text": "现在半夜了，想吃点热乎的东西", "relevant": ["ramen-yamada", "hotpot-night"] },
@@ -65,6 +118,54 @@
     { "key": "q-bike-noise", "category": "semantic", "text": "自行车链条骑起来有声音，怎么处理", "relevant": ["bike-repair"] },
 
     { "key": "q-neg-tax-deduction", "category": "negative", "text": "个人所得税专项附加扣除怎么申报", "relevant": [] },
-    { "key": "q-neg-k8s-autoscale", "category": "negative", "text": "Kubernetes 集群扩容策略怎么配", "relevant": [] }
+    { "key": "q-neg-k8s-autoscale", "category": "negative", "text": "Kubernetes 集群扩容策略怎么配", "relevant": [] },
+
+    { "key": "q-sym-yellow-leaves", "category": "symptom", "text": "阳台那盆绿植叶子发黄耷拉着,是不是水浇多了", "relevant": ["plant-monstera"] },
+    { "key": "q-sym-cant-fall-asleep", "category": "symptom", "text": "躺下一两个小时都睡不着,白天困得不行", "relevant": ["sleep-routine"] },
+    { "key": "q-sym-cpu-high", "category": "symptom", "text": "服务器 CPU 长期九成以上,从哪里查起", "relevant": ["golang-pprof"] },
+    { "key": "q-sym-stream-stalls", "category": "symptom", "text": "看直播老是自己断,每次都得手动刷新", "relevant": ["sse-reconnect"] },
+    { "key": "q-sym-coffee-sour", "category": "symptom", "text": "最近冲出来的咖啡发酸,是不是豆子坏了", "relevant": ["coffee-brew"] },
+    { "key": "q-sym-cat-scratch", "category": "symptom", "text": "猫老是用后腿挠耳朵,看着挺难受", "relevant": ["cat-vet"] },
+    { "key": "q-sym-brake-soft", "category": "symptom", "text": "骑车下长坡感觉车停不太住,有点慌", "relevant": ["bike-repair"] },
+    { "key": "q-sym-parcel-stuck", "category": "symptom", "text": "快递三天了一直显示派送中,物流不动", "relevant": ["parcel-locker"] },
+    { "key": "q-sym-oven-uneven", "category": "symptom", "text": "烤箱烤东西一边糊一边还是生的", "relevant": ["kitchen-note"] },
+    { "key": "q-sym-stairs-wheeze", "category": "symptom", "text": "爬三层楼就喘,是不是该练练了", "relevant": ["health-plan"] },
+    { "key": "q-sym-powerbank-laptop", "category": "symptom", "text": "充电宝给笔记本充不进电,什么原因", "relevant": ["powerbank"] },
+    { "key": "q-sym-laundry-lint", "category": "symptom", "text": "洗完的衣服上全是毛絮,粘都粘不干净", "relevant": ["washer-filter"] },
+
+    { "key": "q-vague-ramen-late", "category": "vague_referential", "text": "之前存的那几家面馆,哪家开到最晚", "relevant": ["ramen-yamada"] },
+    { "key": "q-vague-checkup-uric", "category": "vague_referential", "text": "最近一次体检,尿酸降到多少了", "relevant": ["checkup-2025"] },
+    { "key": "q-vague-retro-auto", "category": "vague_referential", "text": "那篇复盘里说要把什么测试补齐来着", "relevant": ["retro-year"] },
+    { "key": "q-vague-coffee-bean", "category": "vague_referential", "text": "存过一条讲豆子放几天最好喝的", "relevant": ["coffee-brew"] },
+    { "key": "q-vague-hotpot-room", "category": "vague_referential", "text": "记得有家店有包间不用等位的,是哪家", "relevant": ["hotpot-night"] },
+    { "key": "q-vague-stuck-items", "category": "vague_referential", "text": "那条讲卡住的事要写出来的模板叫什么", "relevant": ["weekly-review"] },
+    { "key": "q-vague-train-fare", "category": "vague_referential", "text": "那条讲车票买晚了反而更贵的", "relevant": ["train-berlin"] },
+    { "key": "q-vague-ac-clean", "category": "vague_referential", "text": "讲空调滤网多久洗一次的那条", "relevant": ["ac-filter"] },
+
+    { "key": "q-clus-udon", "category": "cluster_confusable", "text": "面馆笔记里哪篇讲的是乌冬", "relevant": ["sanuki-udon"] },
+    { "key": "q-clus-mq", "category": "cluster_confusable", "text": "哪次周会讨论了消息队列选型", "relevant": ["meeting-backend"] },
+    { "key": "q-clus-hpylori", "category": "cluster_confusable", "text": "幽门螺杆菌阳性是哪次体检查出来的,后来转阴没有", "relevant": ["checkup-2024", "checkup-2025"] },
+    { "key": "q-clus-deadlift", "category": "cluster_confusable", "text": "硬拉最高冲到多少公斤来着", "relevant": ["gym-deadlift"] },
+    { "key": "q-clus-dns", "category": "cluster_confusable", "text": "容器里域名解析失败的那篇笔记", "relevant": ["err-dns"] },
+    { "key": "q-clus-sep-dca", "category": "cluster_confusable", "text": "九月的定投都投了哪些", "relevant": ["dca-sep"] },
+    { "key": "q-clus-clear-broth", "category": "cluster_confusable", "text": "那几家面馆哪家是清汤汤底", "relevant": ["noodle-xiaolong"] },
+    { "key": "q-clus-bench-stall", "category": "cluster_confusable", "text": "卧推卡住的那篇写了怎么破", "relevant": ["gym-bench"] },
+
+    { "key": "q-buried-bnb-breakfast", "category": "buried", "text": "霞浦那趟住的民宿管早饭吗", "relevant": ["trip-fujian-long"] },
+    { "key": "q-buried-tiler-fee", "category": "buried", "text": "装修日记里瓦工多收的两千是什么项目", "relevant": ["reno-diary"] },
+    { "key": "q-buried-one-on-one", "category": "buried", "text": "复盘里说明年管理上要做什么", "relevant": ["retro-year"] },
+    { "key": "q-buried-first-puree", "category": "buried", "text": "辅食最早加的是南瓜还是胡萝卜", "relevant": ["baby-log"] },
+    { "key": "q-buried-agent-fee", "category": "buried", "text": "搬家那次中介最后收了多少佣金", "relevant": ["move-log"] },
+    { "key": "q-buried-yunnan-toll", "category": "buried", "text": "云南那趟油费过路费一共花了多少", "relevant": ["trip-yunnan-long"] },
+
+    { "key": "q-multi-japanese-ramen", "category": "multi_relevant", "text": "关于日式拉面的笔记有哪几篇", "relevant": ["ramen-yamada", "ichiran-branch"] },
+    { "key": "q-multi-checkups", "category": "multi_relevant", "text": "体检记录一共有几次", "relevant": ["checkup-2023", "checkup-2024", "checkup-2025"] },
+    { "key": "q-multi-queue-mentions", "category": "multi_relevant", "text": "哪几篇里提到排队或者等位", "relevant": ["curry-bomb", "hotpot-night", "ichiran-branch"] },
+    { "key": "q-multi-conn-errors", "category": "multi_relevant", "text": "连接类报错的笔记都有哪些", "relevant": ["err-refused", "err-timeout"] },
+
+    { "key": "q-neg-invoice-title", "category": "negative", "text": "报销发票抬头开错了怎么作废重开", "relevant": [] },
+    { "key": "q-neg-autoscale", "category": "negative", "text": "生产集群要不要开自动扩容", "relevant": [] },
+    { "key": "q-neg-insurance-order", "category": "negative", "text": "重疾险和百万医疗险应该先买哪个", "relevant": [] },
+    { "key": "q-neg-yearbonus-tax", "category": "negative", "text": "年终奖单独计税和并入综合所得哪个划算", "relevant": [] }
   ]
 }
