@@ -1,5 +1,5 @@
 {
- "version": 1,
+ "version": 2,
  "model": "Qwen/Qwen3-Embedding-0.6B",
  "dimensions": 1024,
  "feeds": {

@@ -1,5 +1,5 @@
 {
-  "version": 1,
+  "version": 2,
   "note": "Hand-authored relevance labels for the RAG retrieval baseline. Feed keys are stable identities; DB ids are assigned per test run. Descriptions stay under ~130 Chinese chars so the 256-token embedding window never truncates. Query categories are deliberate: semantic, exact-keyword, buried-in-long-description, same-topic-distractor, and out-of-domain negative (empty relevant list).",
   "top_k": 5,
   "feeds": [
@@ -58,7 +58,7 @@
     { "key": "q-buried-tail-wild-pines", "category": "buried", "text": "十月底沿途的彩林什么时候最好看", "relevant": ["xizang-road"] },
     { "key": "q-buried-morning-crowd", "category": "buried", "text": "清水寺几点去人少", "relevant": ["kyoto-3day"] },
 
-    { "key": "q-distractor-coffee-vs-noodle", "category": "same_topic_distractor", "text": "想找家店能坐下慢慢吃东西的", "relevant": ["coffee-brew"] },
+    { "key": "q-distractor-coffee-vs-noodle", "category": "same_topic_distractor", "text": "想找家店能坐下慢慢吃东西的", "relevant": ["ramen-yamada", "hotpot-night", "noodle-xiaolong"] },
     { "key": "q-distractor-latenight-vs-lunch", "category": "same_topic_distractor", "text": "晚上找个不用等位的地方", "relevant": ["hotpot-night"] },
 
     { "key": "q-cat-move-city", "category": "semantic", "text": "猫换了城市之后疫苗要不要重打", "relevant": ["cat-vet"] },
