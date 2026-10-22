@@ -1,0 +1,70 @@
+{
+  "version": 1,
+  "note": "Hand-authored relevance labels for the RAG retrieval baseline. Feed keys are stable identities; DB ids are assigned per test run. Descriptions stay under ~130 Chinese chars so the 256-token embedding window never truncates. Query categories are deliberate: semantic, exact-keyword, buried-in-long-description, same-topic-distractor, and out-of-domain negative (empty relevant list).",
+  "top_k": 5,
+  "feeds": [
+    { "key": "ramen-yamada", "category": "food", "title": "山田家拉面", "description": "公司后门左转第三家，招牌是浓厚豚骨拉面。营业到凌晨两点，适合加班后吃。汤底加半份叉烧多花十块。" },
+    { "key": "hotpot-night", "category": "food", "title": "深夜火锅", "description": "晚上十一点才开的火锅店，二楼包间不用等位。毛肚和鸭肠必点，锅底偏辣。" },
+    { "key": "noodle-xiaolong", "category": "food", "title": "楼下兰州拉面", "description": "开了十二年的老店，牛肉面十二块加肉八块。汤是清的，跟豚骨完全不是一个路子。" },
+    { "key": "curry-bomb", "category": "food", "title": "炸弹咖喱饭", "description": "周末限定的炸弹咖喱饭，咖喱里埋一整颗溏心蛋，蛋黄流出来拌饭很香。排队四十分钟。" },
+    { "key": "coffee-brew", "category": "food", "title": "手冲咖啡记录", "description": "浅烘耶加雪菲，水温八十八度，三段注水。豆子养一周，风味最平衡是第八到第十四天。" },
+
+    { "key": "pgvector-hnsw", "category": "tech", "title": "pgvector 索引笔记", "description": "HNSW 建索引 m 十六、ef_construction 六十四，查询默认 ef_search 四十。数据量小的时候 seq scan 反而更快。" },
+    { "key": "golang-pprof", "category": "tech", "title": "Go 性能剖析", "description": "pprof 的 cpu profile 采样率默认一百赫兹。要看内存分配用 allocs profile，逃逸分析看 gcflags 输出。" },
+    { "key": "react-render", "category": "tech", "title": "React 重渲染排查", "description": "useMemo 用错地方比不用更糟。先用 DevTools Profiler 确认哪个组件在重渲染，再决定优化点。" },
+    { "key": "docker-net", "category": "tech", "title": "容器网络排查", "description": "容器里 ping 不通宿主机，多半是网桥模式的问题。host 模式能通但没有隔离，开发环境可以接受。" },
+    { "key": "sse-reconnect", "category": "tech", "title": "SSE 断线重连", "description": "EventSource 自带重连，Last-Event-ID 会带在重连请求里。服务端记住这个 id 决定从哪儿续，代理层要关缓冲。" },
+
+    { "key": "model-serving", "category": "tech", "title": "本地部署嵌入模型", "description": "Qwen3-Embedding-0.6B 跑 vLLM 需要约 3.2 GiB 显存，gpu-memory-utilization 配 0.15 就能和主模型共存。" },
+    { "key": "nyx-env", "category": "tech", "title": "环境变量备忘", "description": "RAG_TOP_K 默认 5，RAG_MAX_CONTEXT_CHARS 默认 4000。EMBEDDING_DIMENSIONS 必须和数据库向量维度一致，不一致启动时告警。" },
+    { "key": "rag-topk-tuning", "category": "tech", "title": "召回条数调参", "description": "top_k 从五调到十能多召回一些，但也会把噪声喂给模型。先量一下召回率再决定，不要凭感觉。" },
+
+    { "key": "sapiens", "category": "reading", "title": "人类简史读书笔记", "description": "认知革命、农业革命、科学革命三段论。最有意思的是虚构故事让大规模协作成为可能，国家货币公司都是故事。" },
+    { "key": "prince", "category": "reading", "title": "小王子摘抄", "description": "真正重要的东西用眼睛是看不见的。驯养意味着建立联系，一旦建立就要负责。" },
+    { "key": "thinking-fast-slow", "category": "reading", "title": "思考快与慢摘抄", "description": "系统一快但容易偏，系统二慢但懒。多数时候你相信的是系统一给出的直觉。" },
+    { "key": "clean-code", "category": "reading", "title": "重构笔记", "description": "长函数是信号不是罪。真正难读的是嵌套三层以上的条件，先用卫语句把早返回写出来。" },
+    { "key": "weekly-review", "category": "reading", "title": "周报模板", "description": "本周完成、下周计划、卡住的地方。第三栏最重要，卡住的事不写出来就永远不会被解决。" },
+
+    { "key": "kyoto-3day", "category": "travel", "title": "京都三日", "description": "清水寺早上八点人少。东山适合步行，从三年坂走到二年坂一路都是店。中午在锦市场吃玉子烧。" },
+    { "key": "iceland-ring", "category": "travel", "title": "冰岛环岛自驾", "description": "环岛一圈大概十天。九月到十月看极光，但要盯天气。油价高，租车一定买全险。" },
+    { "key": "xizang-road", "category": "travel", "title": "川西自驾路线", "description": "从成都到康定走三一八，四百多公里。十月沿途彩林最好。高反风险高，别一上来冲到四千米。" },
+    { "key": "train-berlin", "category": "travel", "title": "欧洲火车票", "description": "Interrail 通票按天算，四个国家以上才划算。单程票买晚了会比通票贵，提前三个月订便宜。" },
+
+    { "key": "cat-vet", "category": "life", "title": "猫看病记录", "description": "疫苗每三个月一次，驱虫每月一次。换城市之后要重新做体检，之前的记录不通用。" },
+    { "key": "bike-repair", "category": "life", "title": "自行车保养", "description": "链条每两周上一次油，磨损到百分之一点五就该换。刹车皮磨到看不见纹路立刻换。" },
+    { "key": "sleep-routine", "category": "life", "title": "睡眠调整", "description": "早上晒十分钟太阳，晚上十一点前放下手机。连续两周固定起床时间比固定睡觉时间更有效。" },
+    { "key": "salary-negotiation", "category": "life", "title": "薪资沟通记录", "description": "谈薪先给出期望区间和理由，不要问自己能拿多少。问对方薪资带宽但不给具体数字。" },
+
+    { "key": "plant-monstera", "category": "life", "title": "龟背竹养护", "description": "散射光不能直晒。土干到两三厘米再浇水，不然烂根。冬天一个月浇一次就够了。" }
+  ],
+  "queries": [
+    { "key": "q-latenight-hot", "category": "semantic", "text": "现在半夜了，想吃点热乎的东西", "relevant": ["ramen-yamada", "hotpot-night"] },
+    { "key": "q-lunch-cheap", "category": "semantic", "text": "中午想找个便宜管饱的快餐", "relevant": ["noodle-xiaolong"] },
+    { "key": "q-weekend-curry", "category": "semantic", "text": "周末想试试咖喱饭，哪家好", "relevant": ["curry-bomb"] },
+    { "key": "q-coffee-brew", "category": "semantic", "text": "在家手冲咖啡，水温和时间怎么控制", "relevant": ["coffee-brew"] },
+
+    { "key": "q-vector-index-when", "category": "semantic", "text": "向量数据库什么时候该建索引，小数据量呢", "relevant": ["pgvector-hnsw"] },
+    { "key": "q-profiling-slow-endpoint", "category": "semantic", "text": "线上接口慢，怎么定位到底是哪里耗时", "relevant": ["golang-pprof"] },
+    { "key": "q-react-too-many-renders", "category": "semantic", "text": "React 组件老是重渲染，怎么排查", "relevant": ["react-render"] },
+    { "key": "q-container-cannot-reach-host", "category": "semantic", "text": "容器访问不到宿主机，网络怎么配", "relevant": ["docker-net"] },
+    { "key": "q-stream-reconnect", "category": "semantic", "text": "SSE 断了以后怎么从上次的位置继续", "relevant": ["sse-reconnect"] },
+
+    { "key": "q-exact-model-vram", "category": "exact_keyword", "text": "Qwen3-Embedding-0.6B 部署要占多少显存", "relevant": ["model-serving"] },
+    { "key": "q-exact-env-topk", "category": "exact_keyword", "text": "RAG_TOP_K 这个环境变量默认值是多少", "relevant": ["nyx-env"] },
+    { "key": "q-exact-lasteventid", "category": "exact_keyword", "text": "Last-Event-ID 是怎么带上的", "relevant": ["sse-reconnect"] },
+    { "key": "q-exact-ticket-pass", "category": "exact_keyword", "text": "Interrail 通票按天算划算吗", "relevant": ["train-berlin"] },
+
+    { "key": "q-buried-fiction-claim", "category": "buried", "text": "虚构的故事为什么能让人大规模协作", "relevant": ["sapiens"] },
+    { "key": "q-buried-tail-wild-pines", "category": "buried", "text": "十月底沿途的彩林什么时候最好看", "relevant": ["xizang-road"] },
+    { "key": "q-buried-morning-crowd", "category": "buried", "text": "清水寺几点去人少", "relevant": ["kyoto-3day"] },
+
+    { "key": "q-distractor-coffee-vs-noodle", "category": "same_topic_distractor", "text": "想找家店能坐下慢慢吃东西的", "relevant": ["coffee-brew"] },
+    { "key": "q-distractor-latenight-vs-lunch", "category": "same_topic_distractor", "text": "晚上找个不用等位的地方", "relevant": ["hotpot-night"] },
+
+    { "key": "q-cat-move-city", "category": "semantic", "text": "猫换了城市之后疫苗要不要重打", "relevant": ["cat-vet"] },
+    { "key": "q-bike-noise", "category": "semantic", "text": "自行车链条骑起来有声音，怎么处理", "relevant": ["bike-repair"] },
+
+    { "key": "q-neg-tax-deduction", "category": "negative", "text": "个人所得税专项附加扣除怎么申报", "relevant": [] },
+    { "key": "q-neg-k8s-autoscale", "category": "negative", "text": "Kubernetes 集群扩容策略怎么配", "relevant": [] }
+  ]
+}
