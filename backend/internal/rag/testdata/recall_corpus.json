@@ -1,5 +1,5 @@
 {
-  "version": 3,
+  "version": 4,
   "note": "Hand-authored relevance labels for the RAG retrieval baseline. v3 adds realistic-library difficulty: 6 near-duplicate clusters (ramen shops, meeting minutes, annual checkups, gym logs, error notes, DCA records), 12 long multi-topic descriptions, life-log filler, and adjacent-but-not-answering neighbours for the negative queries. New query categories: symptom (problem-vocabulary queries whose referent uses solution-vocabulary), vague_referential (recall-style queries with a topical anchor), cluster_confusable (must pick the right member of a near-duplicate group). Feed keys are stable identities; DB ids are assigned per test run. Descriptions stay under ~220 Chinese chars so the 256-token embedding window never truncates.",
   "top_k": 5,
   "feeds": [
@@ -88,7 +88,12 @@
     { "key": "k8s-rollout", "category": "tech", "title": "K8s 滚动发布", "description": "滚动发布策略 maxSurge 设一、maxUnavailable 设零，发布期间容量不掉。就绪探针要配初始延迟，不然流量打进未热身的实例。回滚就是一条命令的事。" },
     { "key": "insurance-claim", "category": "life", "title": "商业保险理赔记录", "description": "意外险理赔交了三次材料：病历原件、发票原件、事故说明，第三次才过。医疗险免赔额一万，门诊基本用不上。健康告知没做好是理赔纠纷的重灾区。" },
     { "key": "yibao-flow", "category": "life", "title": "医保报销流程", "description": "门诊刷医保卡直接结算，住院要出院结算单。异地就医备案在 app 上就能办，直接结算省得跑腿。起付线以下自付，封顶线以上自费。" },
-    { "key": "index-fund-primer", "category": "life", "title": "指数基金入门", "description": "指数基金买的是一篮子，费率比主动型低一个量级。沪深300 覆盖大盘，中证500 是中盘。增强型长期跑输指数是常态，别为多收的费率买单。" }
+    { "key": "index-fund-primer", "category": "life", "title": "指数基金入门", "description": "指数基金买的是一篮子，费率比主动型低一个量级。沪深300 覆盖大盘，中证500 是中盘。增强型长期跑输指数是常态，别为多收的费率买单。" },
+
+    { "key": "err-p3001", "category": "tech", "title": "网关证书重装记录", "description": "上周五起偶发 ERR_P3001，重装网关侧证书后消失，原因未明。现象多出现在整点后的第一波请求，TTL 续期窗口附近，先记录在此。" },
+    { "key": "order-sku", "category": "life", "title": "催件记录", "description": "单号 SK-20261103-8871 在分拨中心滞留两天，App 里催单后次日到达。投诉入口藏在订单详情页最底部，别点客服机器人，转人工快。" },
+    { "key": "slug-note", "category": "tech", "title": "内网工具备忘", "description": "内网工具 zhangw/vec-cache-bypass，仅公司网络可达。用途是验证数据一致性，用完记得关闭，影响面是全站只读接口。" },
+    { "key": "plate-code", "category": "life", "title": "班车时刻", "description": "公司通勤班车 苏EX3001，工作日早上七点二十从东门发车，过时不候。回程晚六点半，同一站牌。雨雪天微信群另行通知。" }
   ],
   "queries": [
     { "key": "q-latenight-hot", "category": "semantic", "text": "现在半夜了，想吃点热乎的东西", "relevant": ["ramen-yamada", "hotpot-night"] },
@@ -166,6 +171,11 @@
     { "key": "q-neg-invoice-title", "category": "negative", "text": "报销发票抬头开错了怎么作废重开", "relevant": [] },
     { "key": "q-neg-autoscale", "category": "negative", "text": "生产集群要不要开自动扩容", "relevant": [] },
     { "key": "q-neg-insurance-order", "category": "negative", "text": "重疾险和百万医疗险应该先买哪个", "relevant": [] },
-    { "key": "q-neg-yearbonus-tax", "category": "negative", "text": "年终奖单独计税和并入综合所得哪个划算", "relevant": [] }
+    { "key": "q-neg-yearbonus-tax", "category": "negative", "text": "年终奖单独计税和并入综合所得哪个划算", "relevant": [] },
+
+    { "key": "q-opaque-p3001", "category": "opaque_id", "text": "ERR_P3001 怎么处理", "relevant": ["err-p3001"] },
+    { "key": "q-opaque-sku", "category": "opaque_id", "text": "SK-20261103-8871 到哪了", "relevant": ["order-sku"] },
+    { "key": "q-opaque-slug", "category": "opaque_id", "text": "vec-cache-bypass 那个工具的入口在哪", "relevant": ["slug-note"] },
+    { "key": "q-opaque-plate", "category": "opaque_id", "text": "苏EX3001 几点发车", "relevant": ["plate-code"] }
   ]
 }
