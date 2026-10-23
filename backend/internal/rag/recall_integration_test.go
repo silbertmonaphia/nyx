@@ -42,6 +42,7 @@ const (
 	annExercisedMinRow    = 1000
 	recallKOffsets        = 5
 	recallFloor5          = 0.60
+	skipTrue              = "true"
 )
 
 type recallFeedSpec struct {
@@ -251,7 +252,7 @@ func TestRecallCorpusFixtureValid(t *testing.T) {
 
 func recallBaseURL(t *testing.T) string {
 	t.Helper()
-	if os.Getenv("SKIP_CONTAINERS") == "true" {
+	if os.Getenv("SKIP_CONTAINERS") == skipTrue {
 		t.Skip("SKIP_CONTAINERS=true; rag recall baseline requires pgvector Postgres")
 	}
 	url := os.Getenv("DB_URL")
@@ -327,7 +328,7 @@ func startRecallContainer(t *testing.T) *pgxpool.Pool {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 
-	if os.Getenv("SKIP_CONTAINERS") == "true" {
+	if os.Getenv("SKIP_CONTAINERS") == skipTrue {
 		t.Skip("SKIP_CONTAINERS=true; rag recall baseline requires pgvector Postgres")
 	}
 
@@ -441,7 +442,7 @@ func cosine(a, b []float32) float64 {
 }
 
 func buildDecoyVectors(mode decoyMode, seedKeys []string, source map[string][]float32, n int) ([][]float32, float64, float64) {
-	rng := rand.New(rand.NewPCG(decoySeed, decoySeed))
+	rng := rand.New(rand.NewPCG(decoySeed, decoySeed)) //nolint:gosec // G404: deterministic PRNG is the point; decoys must be reproducible.
 	unit := make(map[string][]float32, len(seedKeys))
 	for _, k := range seedKeys {
 		unit[k] = normalizeVector(source[k])
@@ -686,7 +687,7 @@ func runRecallScenario(t *testing.T, pool *pgxpool.Pool, corpus recallCorpus, ve
 		ownerRows, len(ownerFeedIDs))
 
 	randomVec := normalizeVector(func() []float32 {
-		rng := rand.New(rand.NewPCG(decoySeed+1, decoySeed+1))
+		rng := rand.New(rand.NewPCG(decoySeed+1, decoySeed+1)) //nolint:gosec // G404: deterministic PRNG keeps the random-control reproducible.
 		v := make([]float32, recallVectorDims)
 		for i := range v {
 			v[i] = float32(rng.NormFloat64())
@@ -709,108 +710,14 @@ func runRecallScenario(t *testing.T, pool *pgxpool.Pool, corpus recallCorpus, ve
 		PerCategoryRecall: map[string]float64{},
 	}
 
-	var recalls1, recalls3, recalls5, recalls10, exact5, hitsAny, rr, relScores, irrelScores, negTop1, negMaxScore []float64
-	var random5, random10 []float64
-	catHits := map[string]int{}
-	catTotal := map[string]int{}
-	distinctTop1 := map[int]struct{}{}
-
+	collector := newRecallCollector(&report, corpus, vectors, feedIDByKey, ownerFeedIDs, retriever, exactRetriever, owner, randomVec)
 	for _, q := range corpus.Queries {
-		vec, ok := vectors.Queries[q.Key]
-		require.True(t, ok)
-
-		passages, err := retriever.Retrieve(ctx, owner, vec, recallK)
-		require.NoErrorf(t, err, "query %s", q.Key)
-		for _, p := range passages {
-			require.Containsf(t, ownerFeedIDs, p.FeedID,
-				"query %s returned feed %d, which the requesting user does not own; the user_id filter leaked", q.Key, p.FeedID)
-		}
-
-		exactPassages, err := exactRetriever.Retrieve(ctx, owner, vec, recallK)
-		require.NoErrorf(t, err, "exact-scan query %s", q.Key)
-
-		if len(passages) < recallK {
-			report.UnderfillQueries++
-		}
-
-		if len(q.Relevant) == 0 {
-			report.NegativeQueries++
-			negTop1 = append(negTop1, passages[0].Score)
-			res := evaluateQuery(q, nil, passages, passageFeedIDs(exactPassages))
-			negMaxScore = append(negMaxScore, res.MaxIrrelScore)
-			report.Queries = append(report.Queries, res)
-			continue
-		}
-
-		relevantIDs := make([]int, 0, len(q.Relevant))
-		for _, key := range q.Relevant {
-			relevantIDs = append(relevantIDs, feedIDByKey[key])
-		}
-		res := evaluateQuery(q, relevantIDs, passages, passageFeedIDs(exactPassages))
-
-		randomPassages, err := retriever.Retrieve(ctx, owner, randomVec, recallK)
-		require.NoError(t, err)
-		randomRes := evaluateQuery(q, relevantIDs, randomPassages, nil)
-		res.RandomHits = randomRes.Hits
-		report.RandomControlHits += res.RandomHits
-		random5 = append(random5, randomRes.RecallAt5)
-		random10 = append(random10, randomRes.RecallAt10)
-		if len(res.Retrieved) > 0 {
-			distinctTop1[res.Retrieved[0]] = struct{}{}
-		}
-
-		exactRelevant := make(map[int]struct{}, len(relevantIDs))
-		for _, id := range relevantIDs {
-			exactRelevant[id] = struct{}{}
-		}
-		exact5 = append(exact5, float64(hitsWithin(passageFeedIDs(exactPassages), exactRelevant, recallKOffsets))/float64(len(relevantIDs)))
-
-		report.Queries = append(report.Queries, res)
-		report.LabeledQueries++
-		recalls1 = append(recalls1, res.RecallAt1)
-		recalls3 = append(recalls3, res.RecallAt3)
-		recalls5 = append(recalls5, res.RecallAt5)
-		recalls10 = append(recalls10, res.RecallAt10)
-		catHits[q.Category] += hitsWithin(res.Retrieved, exactRelevant, recallKOffsets)
-		catTotal[q.Category] += len(res.Relevant)
-		if res.HitsAt5 > 0 {
-			hitsAny = append(hitsAny, 1)
-		}
-		if res.FirstRank > 0 && res.FirstRank <= recallKOffsets {
-			rr = append(rr, 1/float64(res.FirstRank))
-		}
-		if res.HasRelScore {
-			relScores = append(relScores, res.MinRelScore)
-		}
-		if res.HasIrrelScore {
-			irrelScores = append(irrelScores, res.MaxIrrelScore)
-		}
-		if len(res.Retrieved) != len(res.ExactRetrieved) ||
-			!sameIDSet(res.Retrieved, res.ExactRetrieved) {
-			report.ANNDivergentQueries++
-		}
+		collector.collect(ctx, t, q)
 	}
 
 	require.Positive(t, report.LabeledQueries, "corpus has no labelled queries")
 
-	report.RecallAt1 = meanOf(recalls1)
-	report.RecallAt3 = meanOf(recalls3)
-	report.RecallAt5 = meanOf(recalls5)
-	report.RecallAt10 = meanOf(recalls10)
-	report.ExactRecallAt5 = meanOf(exact5)
-	report.HitRateAt5 = float64(len(hitsAny)) / float64(report.LabeledQueries)
-	report.MRRAt5 = meanOf(rr)
-	report.RandomControlRecall = meanOf(random10)
-	report.RandomControlRecall5 = meanOf(random5)
-	report.TrivialBaseRate5 = float64(recallKOffsets) / float64(ownerRows)
-	report.MeanRelScore = meanOf(relScores)
-	report.MeanIrrelScore = meanOf(irrelScores)
-	report.NegativeTop1Mean = meanOf(negTop1)
-	report.NegativeMaxIrrelScore = meanOf(negMaxScore)
-	report.DistinctTop1 = len(distinctTop1)
-	for cat, hits := range catHits {
-		report.PerCategoryRecall[cat] = float64(hits) / float64(catTotal[cat])
-	}
+	collector.finalize(ownerRows)
 
 	report.ANNExercised = indexedRows >= annExercisedMinRow
 	if report.ANNExercised {
@@ -837,6 +744,160 @@ func runRecallScenario(t *testing.T, pool *pgxpool.Pool, corpus recallCorpus, ve
 		report.DistinctTop1, report.LabeledQueries)
 	require.Greaterf(t, report.RecallAt5, recallFloor5,
 		"recall@%d fell to %.3f against the pinned baseline of %.2f", recallKOffsets, report.RecallAt5, recallFloor5)
+}
+
+type recallCollector struct {
+	report         *recallScenarioReport
+	vectors        recallVectorSet
+	feedIDByKey    map[string]int
+	ownerFeedIDs   map[int]struct{}
+	retriever      *Retriever
+	exactRetriever *Retriever
+	owner          int
+	randomVec      []float32
+
+	recalls1, recalls3, recalls5, recalls10 []float64
+	exact5, hitsAny, rr                     []float64
+	relScores, irrelScores                  []float64
+	negTop1, negMaxScore                    []float64
+	random5, random10                       []float64
+	catHits, catTotal                       map[string]int
+	distinctTop1                            map[int]struct{}
+}
+
+func newRecallCollector(report *recallScenarioReport, corpus recallCorpus, vectors recallVectorSet, feedIDByKey map[string]int, ownerFeedIDs map[int]struct{}, retriever, exactRetriever *Retriever, owner int, randomVec []float32) *recallCollector {
+	n := len(corpus.Queries)
+	return &recallCollector{
+		report:         report,
+		vectors:        vectors,
+		feedIDByKey:    feedIDByKey,
+		ownerFeedIDs:   ownerFeedIDs,
+		retriever:      retriever,
+		exactRetriever: exactRetriever,
+		owner:          owner,
+		randomVec:      randomVec,
+		recalls1:       make([]float64, 0, n),
+		recalls3:       make([]float64, 0, n),
+		recalls5:       make([]float64, 0, n),
+		recalls10:      make([]float64, 0, n),
+		exact5:         make([]float64, 0, n),
+		hitsAny:        make([]float64, 0, n),
+		rr:             make([]float64, 0, n),
+		relScores:      make([]float64, 0, n),
+		irrelScores:    make([]float64, 0, n),
+		negTop1:        make([]float64, 0, n),
+		negMaxScore:    make([]float64, 0, n),
+		random5:        make([]float64, 0, n),
+		random10:       make([]float64, 0, n),
+		catHits:        map[string]int{},
+		catTotal:       map[string]int{},
+		distinctTop1:   map[int]struct{}{},
+	}
+}
+
+func (c *recallCollector) collect(ctx context.Context, t *testing.T, q recallQuerySpec) {
+	vec, ok := c.vectors.Queries[q.Key]
+	require.True(t, ok)
+
+	passages, err := c.retriever.Retrieve(ctx, c.owner, vec, recallK)
+	require.NoErrorf(t, err, "query %s", q.Key)
+	for _, p := range passages {
+		require.Containsf(t, c.ownerFeedIDs, p.FeedID,
+			"query %s returned feed %d, which the requesting user does not own; the user_id filter leaked", q.Key, p.FeedID)
+	}
+
+	exactPassages, err := c.exactRetriever.Retrieve(ctx, c.owner, vec, recallK)
+	require.NoErrorf(t, err, "exact-scan query %s", q.Key)
+
+	if len(passages) < recallK {
+		c.report.UnderfillQueries++
+	}
+
+	if len(q.Relevant) == 0 {
+		c.collectNegative(q, passages, exactPassages)
+		return
+	}
+	c.collectLabeled(ctx, t, q, passages, exactPassages)
+}
+
+func (c *recallCollector) collectNegative(q recallQuerySpec, passages, exactPassages []Passage) {
+	c.report.NegativeQueries++
+	c.negTop1 = append(c.negTop1, passages[0].Score)
+	res := evaluateQuery(q, nil, passages, passageFeedIDs(exactPassages))
+	c.negMaxScore = append(c.negMaxScore, res.MaxIrrelScore)
+	c.report.Queries = append(c.report.Queries, res)
+}
+
+func (c *recallCollector) collectLabeled(ctx context.Context, t *testing.T, q recallQuerySpec, passages, exactPassages []Passage) {
+	relevantIDs := make([]int, 0, len(q.Relevant))
+	for _, key := range q.Relevant {
+		relevantIDs = append(relevantIDs, c.feedIDByKey[key])
+	}
+	res := evaluateQuery(q, relevantIDs, passages, passageFeedIDs(exactPassages))
+
+	randomPassages, err := c.retriever.Retrieve(ctx, c.owner, c.randomVec, recallK)
+	require.NoError(t, err)
+	randomRes := evaluateQuery(q, relevantIDs, randomPassages, nil)
+	res.RandomHits = randomRes.Hits
+	c.report.RandomControlHits += res.RandomHits
+	c.random5 = append(c.random5, randomRes.RecallAt5)
+	c.random10 = append(c.random10, randomRes.RecallAt10)
+	if len(res.Retrieved) > 0 {
+		c.distinctTop1[res.Retrieved[0]] = struct{}{}
+	}
+
+	exactRelevant := make(map[int]struct{}, len(relevantIDs))
+	for _, id := range relevantIDs {
+		exactRelevant[id] = struct{}{}
+	}
+	c.exact5 = append(c.exact5, float64(hitsWithin(passageFeedIDs(exactPassages), exactRelevant, recallKOffsets))/float64(len(relevantIDs)))
+
+	c.report.Queries = append(c.report.Queries, res)
+	c.report.LabeledQueries++
+	c.recalls1 = append(c.recalls1, res.RecallAt1)
+	c.recalls3 = append(c.recalls3, res.RecallAt3)
+	c.recalls5 = append(c.recalls5, res.RecallAt5)
+	c.recalls10 = append(c.recalls10, res.RecallAt10)
+	c.catHits[q.Category] += hitsWithin(res.Retrieved, exactRelevant, recallKOffsets)
+	c.catTotal[q.Category] += len(res.Relevant)
+	if res.HitsAt5 > 0 {
+		c.hitsAny = append(c.hitsAny, 1)
+	}
+	if res.FirstRank > 0 && res.FirstRank <= recallKOffsets {
+		c.rr = append(c.rr, 1/float64(res.FirstRank))
+	}
+	if res.HasRelScore {
+		c.relScores = append(c.relScores, res.MinRelScore)
+	}
+	if res.HasIrrelScore {
+		c.irrelScores = append(c.irrelScores, res.MaxIrrelScore)
+	}
+	if len(res.Retrieved) != len(res.ExactRetrieved) ||
+		!sameIDSet(res.Retrieved, res.ExactRetrieved) {
+		c.report.ANNDivergentQueries++
+	}
+}
+
+func (c *recallCollector) finalize(ownerRows int) {
+	r := c.report
+	r.RecallAt1 = meanOf(c.recalls1)
+	r.RecallAt3 = meanOf(c.recalls3)
+	r.RecallAt5 = meanOf(c.recalls5)
+	r.RecallAt10 = meanOf(c.recalls10)
+	r.ExactRecallAt5 = meanOf(c.exact5)
+	r.HitRateAt5 = float64(len(c.hitsAny)) / float64(r.LabeledQueries)
+	r.MRRAt5 = meanOf(c.rr)
+	r.RandomControlRecall = meanOf(c.random10)
+	r.RandomControlRecall5 = meanOf(c.random5)
+	r.TrivialBaseRate5 = float64(recallKOffsets) / float64(ownerRows)
+	r.MeanRelScore = meanOf(c.relScores)
+	r.MeanIrrelScore = meanOf(c.irrelScores)
+	r.NegativeTop1Mean = meanOf(c.negTop1)
+	r.NegativeMaxIrrelScore = meanOf(c.negMaxScore)
+	r.DistinctTop1 = len(c.distinctTop1)
+	for cat, hits := range c.catHits {
+		r.PerCategoryRecall[cat] = float64(hits) / float64(c.catTotal[cat])
+	}
 }
 
 func sameIDSet(a, b []int) bool {

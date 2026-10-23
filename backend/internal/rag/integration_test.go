@@ -66,7 +66,7 @@ func (stubEmbedder) Chat(_ context.Context, _ llm.ChatRequest, _ func(string, *l
 // integration tests use.
 func requirePgvector(t *testing.T) *pgxpool.Pool {
 	t.Helper()
-	if os.Getenv("SKIP_CONTAINERS") == "true" {
+	if os.Getenv("SKIP_CONTAINERS") == skipTrue {
 		t.Skip("SKIP_CONTAINERS=true; rag integration test requires pgvector Postgres")
 	}
 	url := os.Getenv("DB_URL")
