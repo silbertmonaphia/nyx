@@ -7,16 +7,18 @@
 然后的想法: LangGraph[编排] + Pgvector/Milvus[RAG] + MCP&Tool + Langfuse[OTel&Eval] + Tavily[搜索] + Mem0[记忆]  
 最新的想法202610 agent(p0):[Security, Data, Performance]
 0、LLM: vllm
-1、RAG: vector db(Pgvector, Milvus)
+?1、RAG: embedding_model + reranker_model(optional) + vector db(Pgvector, Milvus) 【关键:召回调优】「检索出来的内容相关性很差，你会怎么排查？」「召回不准可能是什么原因？」「检索内容和模型自身知识冲突怎么处理？」「用哪些指标衡量 RAG 的效果？」
 2、MCP
 
-3、Ochestration: LangGraph(Planner-and-Executer[reAct] loop)
-?4、Eval: Goden Set: promptfoo(mvp) => Inspect AI
+3、Ochestration: LangGraph(Planner-and-Executer[reAct] DAG=>loop)
+?4、Eval: Goden Set: promptfoo(mvp) => Inspect AI 【关键:prompt调优】
 ?5、Security: Prompt Injection
 6、Otel: Langfuse(langfuse+langfus-worker+ClickHouse+MinIO+PostgreSQL+Redis) 开发默认关闭,可以make dev-up-langfuse起。线上agent不用docker compose这个langfuse，直接配置langfuse集群的url，docker compose的langfuse只对开发本地有用
-7、Memory: Mem0
 
-8、Tool: web_serach(Tavily),web_fetch,feed tools...
+7、Memory: Mem0
+8、Tool:
+   - Agent内部: web_serach(Tavily),web_fetch
+   - Agent外部: MCP tool
 9、GuardRail: HITL(Human-in-the-loop)
 
 
