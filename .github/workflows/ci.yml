@@ -306,6 +306,12 @@ jobs:
       CORS_ALLOWED_ORIGINS: "http://localhost:5173"
       PORT: "8080"
       REDIS_ENABLED: "false"
+      LLM_ENABLED: "true"
+      LLM_PROVIDER: "vllm"
+      LLM_BASE_URL: "http://localhost:8000/v1"
+      LLM_MODEL: "ci-e2e-model"
+      LLM_ALLOW_PRIVATE_URL: "true"
+      USER_LLM_ENCRYPTION_KEY: "ci-user-llm-encryption-key-0123456789"
     steps:
     - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
     - name: Set up Go
@@ -425,6 +431,12 @@ jobs:
       PORT: "8080"
       REDIS_ENABLED: "true"
       REDIS_URL: "redis://localhost:6379"
+      LLM_ENABLED: "true"
+      LLM_PROVIDER: "vllm"
+      LLM_BASE_URL: "http://localhost:8000/v1"
+      LLM_MODEL: "ci-e2e-model"
+      LLM_ALLOW_PRIVATE_URL: "true"
+      USER_LLM_ENCRYPTION_KEY: "ci-user-llm-encryption-key-0123456789"
     steps:
     - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
     - name: Set up Go
