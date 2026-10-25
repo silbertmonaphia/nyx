@@ -19,3 +19,17 @@ When the authenticated user has no stored LLM configuration, the RAG bridge SHAL
 
 - **WHEN** a configured user queries the bridge
 - **THEN** retrieval embeds the query with the user's own embedding configuration and searches only that user's feeds, as today
+
+### Requirement: An embedding of unexpected width degrades to the empty envelope
+
+When the user's embedding endpoint returns a vector whose width differs from the deployment's embedding width, the bridge SHALL return the same 200-empty envelope as the no-matches case and MUST NOT fail the request with a server error. The width check SHALL happen before the vector search, so no search is issued against a mismatched vector.
+
+#### Scenario: Mismatched embedding width returns the empty envelope
+
+- **WHEN** a configured user's embedding endpoint returns a vector whose width differs from the deployment's embedding width
+- **THEN** the bridge returns the standard empty envelope with a warning naming the mismatch, and no vector search is issued
+
+#### Scenario: Matching embedding width searches normally
+
+- **WHEN** a configured user's embedding endpoint returns a vector of the deployment's embedding width
+- **THEN** the bridge searches the user's feeds and returns the matching passages

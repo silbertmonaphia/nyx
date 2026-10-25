@@ -8,7 +8,7 @@
 
 ### Requirement: `web_search` queries the Tavily Search API
 
-`web_search` SHALL accept a `query` string (required, 1–400 characters) and return a compact ranked result list — for each result a title, URL, and description snippet — bounded by a configurable maximum (default 5, hard cap 10). The search provider base URL and API key SHALL come from the run's Tavily override when one is present, and otherwise from configuration; the API key SHALL be optional: with no key from either source the tool MUST operate against the provider's keyless tier (no account required), and with a configured key it MUST authenticate against the account. Provider throttling (HTTP 429), server errors (5xx), and timeouts SHALL be classified as transient (retryable); malformed or invalid queries SHALL be classified as correctable argument errors; account/plan-limit rejections SHALL NOT be retried.
+`web_search` SHALL accept a `query` string (required, 1–400 characters) and return a compact ranked result list — for each result a title, URL, and description snippet — bounded by a configurable maximum (default 5, hard cap 10). The search provider base URL and API key SHALL come from the run's Tavily override when one is present, and otherwise from configuration; the API key SHALL be optional: with no key from either source the tool MUST operate against the provider's keyless tier (no account required), and with a configured key it MUST authenticate against the account. Provider throttling (HTTP 429), server errors (5xx), and timeouts SHALL be classified as transient (retryable); malformed or invalid queries SHALL be classified as correctable argument errors; account/plan-limit rejections SHALL NOT be retried. The override's base URL is user-supplied and is not filtered against private or restricted addresses; that surface is accepted for self-hosted deployments and is intentionally asymmetric with `web_fetch`, which continues to refuse private and unsafe targets.
 
 #### Scenario: Search returns bounded compact results
 
@@ -20,7 +20,7 @@
 - **WHEN** a run carries a Tavily override and the model calls `web_search`
 - **THEN** the search request goes to the override's base URL with the override's credential, and the deployment-configured values are not consulted
 
-#### Scenario: Keyless operation without any key
+#### Scenario: Keyless operation without an API key
 
 - **WHEN** `web_search` runs with no API key from either the override or configuration
 - **THEN** the search succeeds against the provider's keyless tier and no Authorization credential is sent

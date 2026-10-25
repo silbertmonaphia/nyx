@@ -4,6 +4,22 @@
 
 The structured-output binding becomes a per-run decision: when a run carries a user LLM override whose base-URL host is a known-legacy provider (DeepSeek), the planner uses the legacy free-text path for that run regardless of the global flag. The planner also honors the user's configured model.
 
+## MODIFIED Requirements
+
+### Requirement: Plan obtained via provider structured output
+
+The planner SHALL obtain the `Plan` object via a provider structured-output binding (Pydantic-typed response, JSON-schema response format, or provider tool-call wire) and SHALL NOT run `json.loads` on raw free-text model output as part of the primary path. When the binding is disabled by configuration, the planner MAY fall back to the legacy free-text path; the primary path MUST go through the structured binding. The binding's enablement is decided per run: it is disabled when the deployment-wide flag is off, and also when the run's provider selection designates a legacy-only provider for that run, in which case the legacy free-text path is that run's primary path.
+
+#### Scenario: Structured binding returns parsed Plan on first try
+
+- **WHEN** the planner invokes the model with `Plan` as the response schema and the model returns a schema-conformant response
+- **THEN** the planner receives a Pydantic `Plan` instance derived from schema-constrained provider output — no fence-stripping and no `json.loads` on unconstrained free-text
+
+#### Scenario: Fence-stripping code is unreachable on the primary path
+
+- **WHEN** the structured binding is enabled for the run — the deployment-wide flag is on and the run's provider selection designates a structured-output-capable provider
+- **THEN** no code path on the primary planner flow executes the legacy fence-stripping or `json.loads` logic — that code is either deleted or guarded behind a configuration flag whose default places it on a non-primary branch
+
 ## ADDED Requirements
 
 ### Requirement: Per-run planner path selection from the user provider

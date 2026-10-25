@@ -25,10 +25,10 @@ The system SHALL persist one configuration row per user holding: main LLM base U
 - **WHEN** the backend starts with `LLM_ENABLED=true` and `USER_LLM_ENCRYPTION_KEY` is missing or shorter than 32 bytes
 - **THEN** startup is refused with an error naming the variable
 
-#### Scenario: User deletion cascades
+#### Scenario: Row is removed with its user row
 
-- **WHEN** a user account is deleted
-- **THEN** their configuration row is removed with it
+- **WHEN** the `users` row for a configured user is deleted at the database level
+- **THEN** the `user_llm_settings` row is removed with it, by foreign-key cascade
 
 ### Requirement: Config CRUD scoped to the authenticated identity
 
@@ -53,6 +53,11 @@ The API SHALL expose `GET /api/me/llm-config`, `PUT /api/me/llm-config`, and `DE
 
 - **WHEN** any of the three endpoints is called without a valid Bearer token
 - **THEN** the response is 401
+
+#### Scenario: Endpoints exist only with the LLM feature enabled
+
+- **WHEN** the deployment runs with the LLM feature disabled
+- **THEN** the three config endpoints are not routed, and the chat route is absent on the same gate
 
 ### Requirement: PUT validates and upserts
 
@@ -88,6 +93,20 @@ PUT SHALL accept all eleven fields (fallback optional as a group), validate URLs
 - **WHEN** a PUT supplies `http://localhost:8000/v1` as a base URL
 - **THEN** the configuration is accepted
 
+### Requirement: Each slot reaches its own endpoint
+
+A user's main-LLM base URL and embedding base URL SHALL be honoured independently: chat traffic reaches the main-LLM endpoint and embedding traffic reaches the embedding endpoint. Resolving a user's configuration SHALL produce a client per slot — the embedding client is built from the embedding base URL, API key, and model, not reused from the chat client.
+
+#### Scenario: Embedding traffic uses the embedding endpoint
+
+- **WHEN** a configured user's feed is indexed or their RAG query is embedded
+- **THEN** the embedding request is sent to the user's embedding base URL with the user's embedding model
+
+#### Scenario: Chat traffic uses the main endpoint
+
+- **WHEN** a configured user sends a chat message
+- **THEN** the chat request is sent to the user's main-LLM base URL with the user's main model
+
 ### Requirement: Strict BYOK — no server-env fallback on user paths
 
 When a user has no configuration row, every user-facing LLM path SHALL be unavailable for that user: chat returns 409 before streaming; RAG retrieval and feed embedding-indexing resolve no embedder. Server-level `LLM_*` environment configuration SHALL NOT serve as a fallback for any user's request. Clearing the configuration SHALL re-gate these paths immediately.
@@ -99,12 +118,12 @@ When a user has no configuration row, every user-facing LLM path SHALL be unavai
 
 ### Requirement: In-modal guidance names the provider, where to obtain credentials, and the affected features
 
-The config modal SHALL show, per section (main LLM, embedding, Tavily, optional retry model), in both UI languages: one example placeholder per empty input (URL and model name), a short description of what the group drives, where to obtain the credentials (provider sign-up/console URLs, plus the local-vLLM option for the LLM and embedding groups), and the note that all eight required fields must be present before AI Agent becomes usable. The embedding section SHALL additionally state the deployment's embedding-dimension requirement (1024) with an example compatible model. The optional retry-model section SHALL state that leaving it empty only affects the single-turn chat fallback path, not agent runs.
+The config modal SHALL show, per section (main LLM, embedding, Tavily, optional retry model), in both UI languages: one example placeholder per empty input (URL and model name), a short description of what the group drives, where to obtain the credentials (provider sign-up/console URLs, plus the local-vLLM option for the LLM and embedding groups), and the note that all eight required fields must be present before AI Agent becomes usable. Both base-URL fields SHALL state that the value is an OpenAI-compatible endpoint whose path carries the provider's version prefix (e.g. a trailing `/v1`), and the placeholders SHALL show that prefix. The embedding section SHALL additionally state the deployment's embedding-dimension requirement (1024) with an example compatible model, and note that a model emitting a different width is rejected at query time rather than at save time. The main-LLM section SHALL note that the configured model must exist on the configured endpoint (the deployment does not probe at save time), that an endpoint that needs no credential still requires a non-placeholder value, and that the retry-model section, when left empty, only affects the single-turn chat fallback path and not agent runs. The search section SHALL note that the slot is shaped for the deployment's search provider.
 
 #### Scenario: First-time user sees actionable guidance
 
 - **WHEN** a user with no configuration opens the modal from the blocking gate
-- **THEN** each section displays its example placeholders, credential-source description (e.g. Tavily console URL and its free tier), and the feature-impact note, localized to the UI language
+- **THEN** each section displays its example placeholders, credential-source description (e.g. Tavily console URL and its free tier), the base-URL path convention, and the feature-impact note, localized to the UI language
 
 #### Scenario: Embedding constraint is visible before saving
 
@@ -113,14 +132,19 @@ The config modal SHALL show, per section (main LLM, embedding, Tavily, optional 
 
 ### Requirement: Config forwarded to the agent per run, never client-supplied
 
-When an authenticated, configured user's chat request is proxied to the Python agent, the Go handler SHALL include the user's decrypted LLM configuration and Tavily configuration in the `/agent/run` payload. These fields MUST NOT be accepted from the client request body, MUST NOT be logged, and the fallback fields MUST NOT be forwarded.
+When an authenticated, configured user's chat request is proxied to the Python agent, the Go handler SHALL include the user's decrypted LLM configuration and Tavily configuration in the `/agent/run` payload. These fields MUST NOT be accepted from the client request body, MUST NOT be logged, and the fallback fields MUST NOT be forwarded. The plaintext API key MUST NOT be written to durable storage by the agent runtime — in particular it MUST NOT travel inside the checkpointed graph state — and MUST NOT be attached to a trace span or log line.
 
 #### Scenario: Payload carries the owner's config only
 
 - **WHEN** a chat request is proxied
-- **THEN** the payload's `llm_config`/`tavily_config` are the JWT-identified user's stored values, and a client-supplied config field in the chat request body is rejected by the existing strict body decoding
+- **THEN** the payload's `llm_config`/`tavily_config` are the JWT-identified user's stored values, and a client-supplied config field in the chat request body is rejected by the chat endpoint's strict body decoding
 
 #### Scenario: Config never logged
 
 - **WHEN** any log line, trace span attribute, or error detail is emitted while handling the run
 - **THEN** no API key plaintext appears in it
+
+#### Scenario: Key is not persisted by the agent runtime
+
+- **WHEN** an agent run completes and the agent's checkpoint tables and trace export are inspected
+- **THEN** no API key plaintext appears in either

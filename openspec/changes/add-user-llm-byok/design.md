@@ -4,18 +4,24 @@
 
 LLM config is process-global today: viper `.env` → clients constructed once in `cmd/api/main.go` → injected as `llm.Provider` into `chat.Service` / `rag.Embedder`. Both runtimes own disjoint Postgres schemas (Go: `public`; Python: `langgraph`+`agent`, structurally barred from `public`), and the agent receives identity as the verified `X-Nyx-User-Id` header. The feed indexer and `rag.BackfillOnce` are already user-scoped. See proposal.md for motivation; behavior contract in specs/.
 
+Two structural facts shape the wiring:
+
+- `mountChatRoute` returns before the chat route is registered when `LLM_ENABLED=false` — so a deployment with the LLM feature off serves no `/api/chat` at all, and `AGENT_ENABLED=true` without `LLM_ENABLED=true` does not produce an agent-backed chat route either. The RAG facade and the bridge are built in the same function, so they share the gate.
+- The openai client binds the chat base URL, the API key and the chat model at construction, and `Client.Embed` posts to that *same* base URL. The server-level wiring therefore builds a second client when a separate embedding endpoint is configured (`mountRAGFacade`). The vllm client instead appends `/v1/...` to a bare host, which is why the `.env` base-URL convention differs per provider.
+
 ## Goals / Non-Goals
 
 **Goals:**
 
 - One per-user config row, CRUD via the SPA gear modal, keys encrypted at rest and masked on read.
 - Strict BYOK gating at every LLM consumption point, with feed CRUD untouched.
-- Python stays schema-isolated: config reaches it per run in the request payload; it never reads `public`.
+- The user's *embedding* endpoint is honoured — it gets its own client, not the chat endpoint.
+- Python stays schema-isolated: config reaches it per run in the request payload; it never reads `public`, and the plaintext key never reaches its checkpoint tables or traces.
 - Zero change to the `llm.Provider` interface, the SSE frame set, and the RAG bridge wire contract.
 
 **Non-Goals:**
 
-- Save-time connectivity/dimension probes (1024-dim embedding constraint is documented, not enforced).
+- Save-time connectivity/dimension probes (the 1024-dim embedding constraint is documented, not enforced at save time).
 - Encryption-key rotation machinery (`v1:` prefix reserves the seam).
 - Per-user fallback semantics in the agent (fallback stays Go legacy-router only).
 - Server `.env` cleanup on user paths (validation/construction stay; follow-up).
@@ -30,7 +36,7 @@ Go owns identity and CRUD; forwarding the resolved values in `/agent/run` preser
 `ChatRequest` is the SPA-facing decode target; adding config fields there invites a future caller path to forward client-supplied config (user A injecting user B's provider). The payload is assembled only from the DB row for the JWT-verified user. Plaintext keys ride the same private-network hop as the forwarded `Authorization` header (existing trust model) and are never logged. Fallback is NOT forwarded (Python has no fallback semantics; it serves the Go legacy router only).
 
 **D3 — Per-user clients use the openai implementation for every user, and user URLs are not private-IP-blocked.**
-The `llm/vllm` client's per-dial guard refuses private addresses, which would outlaw the primary use case (localhost vLLM, `host.docker.internal`, LAN Ollama/LM Studio). The openai SDK transport has no per-dial check, so user configs accept http/https anywhere; validation is parse + scheme + no-userinfo only. Self-hosted deployment accepted the SSRF surface explicitly. Server-level `LLM_*` behavior (incl. `LLM_ALLOW_PRIVATE_URL`) is unchanged.
+The `llm/vllm` client's per-dial guard refuses private addresses, which would outlaw the primary use case (localhost vLLM, `host.docker.internal`, LAN Ollama/LM Studio). The openai SDK transport has no per-dial check, so user configs accept http/https anywhere; validation is parse + scheme + no-userinfo only. Self-hosted deployment accepted the SSRF surface explicitly. Server-level `LLM_*` behavior (incl. `LLM_ALLOW_PRIVATE_URL`) is unchanged. Consequence: every user base URL follows the openai convention and must end in `/v1` (the SDK appends `/chat/completions` and `/embeddings`), which the modal states and its placeholders show.
 
 **D4 — AES-256-GCM with a versioned token format; key = `sha256(USER_LLM_ENCRYPTION_KEY)`; `v1:<base64(nonce||ct)>`.**
 Random 12-byte nonce per encryption (`crypto/rand`); decrypt fails closed on unknown prefix or auth failure (wrong key after rotation invalidates rows loudly, not silently). `MinKeyBytes = 32` enforced in both `config.Load()` (when `LLM_ENABLED=true` — the key is load-bearing exactly when the LLM feature exists; demanding it on `LLM_ENABLED=false` deployments would break every no-LLM boot/test) and `NewCipher` (mirrors the JWT_SECRET double-check).
@@ -39,10 +45,12 @@ Random 12-byte nonce per encryption (`crypto/rand`); decrypt fails closed on unk
 On PUT, an empty key field means "keep the stored ciphertext" (create requires it present); plaintext exists only in-memory in the service/resolver. This is the standard BYOK-settings shape (OpenRouter-style) and keeps key material out of browser memory, logs, and any client store.
 
 **D6 — Strict BYOK with a 409 before the first SSE byte.**
-`stream()` resolves the user's config after request validation and before dispatch: `ErrNotFound` → `api.WriteError(409, "LLM configuration required", "llm_not_configured")` — a plain JSON envelope in the window already reserved for pre-stream errors (chat has no other 409, so the SPA can key on status alone; a wire-contract test pins this). RAG bridge keeps its 200-empty envelope for unconfigured users (frozen Python-side contract). Feed indexing skips with a warning (existing best-effort semantics absorb the sentinel). `.env` fallback is rejected per operator decision.
+`stream()` resolves the user's config after request validation and before dispatch: `ErrNotFound` → `api.WriteError(w, r, http.StatusConflict, "LLM configuration required", "llm_not_configured")`. The response is the repo's standard error envelope — `{"error": <message>, "code": <int HTTP status>, "request_id": ..., "details": ...}` — so the machine-readable marker rides in `details`, **not** in `code` (`ErrorResponse.Code` is an int; the change cannot introduce a string `code` without touching every error surface). A plain JSON envelope in the window already reserved for pre-stream errors (chat has no other 409, so the SPA can key on status alone; a wire-contract test pins this). RAG bridge keeps its 200-empty envelope for unconfigured users (frozen Python-side contract). Feed indexing skips with a warning (existing best-effort semantics absorb the sentinel). `.env` fallback is rejected per operator decision.
 
 **D7 — Resolver = bounded client cache keyed by config hash, not per-request construction.**
-`sha256(base_url|key|model)` per slot; hash compare on each resolve (a PUT invalidates within one request); map+mutex, cap 64 with arbitrary eviction — user counts are small, and clients hold `*http.Client` state so unbounded construction leaks. Clients build via the clone-not-mutate pattern over the base config; fallback present → `llm.NewRouter` with two slots, mirroring `mountChatRoute`.
+`sha256(base_url|key|model)` per slot; hash compare on each resolve (a PUT invalidates within one request); map+mutex, cap 64 with arbitrary eviction — user counts are small, and clients hold `*http.Client` state so unbounded construction leaks. Clients build via the clone-not-mutate pattern over the base config; fallback present → `llm.NewRouter` with two slots, mirroring `mountChatRoute` in `cmd/api/main.go`.
+
+**Two clients per user, not one.** `openai.Client.Embed` posts to the chat client's base URL, so the embedding slot needs its own client — the same shape `mountRAGFacade` already builds for `LLM_EMBEDDING_BASE_URL`. `UserStack` therefore carries the chat provider (a router when a fallback is configured), the embedding provider, and the embedding model. A resolver that reuses one client for both slots would silently point the user's embedding traffic at their chat endpoint — the user's embedding base URL would be accepted, stored, and ignored.
 
 **D8 — Resolve BEFORE `BackfillOnce`'s `LoadOrStore`.**
 The `sync.Once` guard is stored before the work runs today; a user who configures LLM later would be poisoned (marked done on a run that did nothing) until process restart. Ordering fix: resolver miss (`ErrNotFound`) returns without marking. Pinned by a named test.
@@ -53,22 +61,36 @@ The `sync.Once` guard is stored before the work runs today; a user who configure
 **D10 — Tavily override threads through the existing per-request tool seam.**
 `ToolDispatcher` is already constructed per request; only the local-tool registry is shared at startup. When a run carries `tavily_config`, `build_local_tools` builds a per-run registry; otherwise the shared one is untouched.
 
+**D11 — The plaintext key never enters the checkpointed graph state.**
+The production agent checkpoints every node transition through `AsyncPostgresSaver`, which writes the state into the `langgraph` schema verbatim. Anything carried in `AgentState` therefore lands in Postgres in plaintext — including an API key. The override travels *outside* the state: a request-scoped holder consulted at client-construction time, with the state carrying only non-secret fields (base URL, model) plus an opaque handle. The same rule covers traces: the Langfuse/OTel scrubber only matches Bearer tokens, JWTs and `sk-`/`*-lf-` shapes, so a Tavily key or a self-hosted key would survive masking — the guarantee is "never put it in the state or a span", not "the scrubber will catch it".
+
+**D12 — The router's liveness probe path is normalized for `/v1`-suffixed base URLs.**
+`llm.Router.probe` builds `{base}/v1/models`, which is correct for the vllm impl's base convention (a bare host) and wrong for the openai impl's (the base must end in `/v1`). With the openai impl chosen for every user config, an unfixed probe would 404 on every request and the router would silently fail over to the user's fallback — the user pays for the fallback provider and never reaches their configured model. The probe normalizes: a base ending in `/v1` is probed at `{base}/models`, otherwise at `{base}/v1/models`. Pre-existing bug, user-visible once per-user routers exist; pinned by a unit test.
+
+**D13 — The config endpoints exist exactly when the LLM feature exists.**
+`/api/me/llm-config` is registered with the same `LLM_ENABLED=true` gate as the chat route, and the SPA hides the gear button in the same condition. `USER_LLM_ENCRYPTION_KEY` is required exactly when the endpoints are mounted, which is why the boot check keys off `LLM_ENABLED=true`. Registering the endpoints unconditionally would leave them without a cipher on a no-LLM deployment (an unexplained 500 behind a visible button).
+
+**D14 — A dimension mismatch degrades to the empty envelope, not to an error.**
+`feed_embeddings.embedding` is `vector(1024)`; a user whose embedding model emits a different width makes the retriever's `embedding <=> $1` comparison raise a pgvector dimension error, which the bridge's safe-error funnel would surface as a 500 — not the "degrades safely" behaviour the risk register claims. The embedder therefore checks the returned vector width against `EMBEDDING_DIMENSIONS` and reports the same internal "no embedder" sentinel as the unconfigured case → the 200-empty envelope. The indexer's upsert keeps its warn-and-skip behaviour.
+
 ## Risks / Trade-offs
 
 - **Deploy-time user break (accepted)**: every existing user 409s on chat until configured. Discoverability: the SPA auto-opens the modal on panel-open and on the 409; native clients get the standard error envelope (documented).
-- **Embedding dimension drift (documented, not enforced)**: `feed_embeddings.embedding` is `vector(1024)`; a user configuring a 1536-dim model degrades safely (index upserts warn-and-skip, retrieval returns empty) but silently. Modal helper text + README note; a save-time probe is a follow-up.
-- **Key transit Go→Python in plaintext** rides the internal hop with the forwarded bearer token (same trust domain); never logged; Langfuse masking already scrubs credential-shaped strings.
-- **Encryption key loss = stored keys unrecoverable** (same blast radius as dropping the table); versioned format enables future dual-key rotation.
-- **`openai`-impl choice drops per-dial SSRF guarding for user URLs** — explicit operator decision (self-hosted private endpoints are the point); residual risk documented.
+- **Embedding dimension drift (documented, not enforced)**: `feed_embeddings.embedding` is `vector(1024)`; a user configuring a 1536-dim model degrades safely (index upserts warn-and-skip, retrieval returns the empty envelope via D14) but silently. Modal helper text + README note; a save-time probe is a follow-up.
+- **Key transit Go→Python in plaintext** rides the internal hop with the forwarded bearer token (same trust domain); never logged, never checkpointed (D11), never attached to a span. The Langfuse scrubber does **not** cover arbitrary user key shapes — only Bearer tokens, JWTs and `sk-`/`*-lf-` patterns are matched — so the never-log guarantee is enforced by construction (the key is not passed to any logging or tracing call), not delegated to the scrubber.
+- **Encryption key loss = stored keys unrecoverable** (same blast radius as dropping the table); versioned format enables future dual-key rotation. The key must be identical across replicas and stable across restarts — a per-deploy random key makes every stored row undecryptable (decrypt fails closed) and every user 500s until they re-enter their keys.
+- **`openai`-impl choice drops per-dial SSRF guarding for user URLs** — explicit operator decision (self-hosted private endpoints are the point); residual risk documented. The same surface extends to the search tool: a user's Tavily base URL is dialled by the agent, while `web_fetch` still refuses private targets. The asymmetry is intentional and recorded here.
 - **Planner-model behavior change** is observable (planner quality now depends on the user's model); called out in FUTURE_AGENT.md and the commit body.
 - **No comments on new lines** (repo rule) — rationale lives here, in tests, and in commit messages.
 
 ## Migration Plan
 
 1. Migration 000017 (CREATE TABLE / DROP TABLE, reversible, empty at start) applies on backend boot — deploy order: backend first (new route + 409 gate), frontend second (modal + gate), Python agent any time (tolerates absent `llm_config` forever; only new payload fields are new).
-2. `USER_LLM_ENCRYPTION_KEY` must be set before the first `LLM_ENABLED=true` boot; missing/short key refuses startup (loud, same as JWT_SECRET).
+2. `USER_LLM_ENCRYPTION_KEY` must be set before the first `LLM_ENABLED=true` boot; missing/short key refuses startup (loud, same as JWT_SECRET). It must be the same value on every replica and across restarts — the deploy note records this.
 3. Rollback: revert binaries, keep the table (harmless, preserves user configs). `migrate down 1` destroys saved configs — operator-visible in the down migration.
 
 ## Open Questions
 
 None — the four product decisions (masked keys, private URLs allowed, strict BYOK, AES-GCM at rest) were confirmed by the operator during planning.
+
+Follow-ups (not in this change): a save-time probe that a configured model exists on its endpoint and reports its embedding width; rotation support for the encryption key; search providers beyond Tavily (the `web_search` tool is Tavily-shaped, so another provider needs its own request shape, not just a different base URL).
