@@ -214,6 +214,23 @@ describe('LlmConfigModal', () => {
     expect(input('tavily-base-url').placeholder).toBe('https://api.tavily.com/search');
   });
 
+  it('locks the embedding model once configured and explains why', () => {
+    mockHook({ status: configuredStatus });
+    renderModal();
+
+    expect(input('embedding-model').disabled).toBe(true);
+    expect(
+      screen.getByText(/model is locked after the first save/),
+    ).toBeInTheDocument();
+  });
+
+  it('keeps the embedding model editable before the first save', async () => {
+    mockHook({ status: unconfigured });
+    renderModal();
+    await expandOptionalSections();
+    expect(input('embedding-model').disabled).toBe(false);
+  });
+
   it('renders masked saved-key placeholders with blank key inputs when configured', () => {
     mockHook({ status: configuredStatus });
     renderModal();
@@ -326,8 +343,8 @@ describe('LlmConfigModal', () => {
     ).toBeInTheDocument();
     expect(screen.getByText(/1024-dimension vectors/)).toBeInTheDocument();
     expect(
-      screen.getByText(/rejected at query time, not when saving/),
-    ).toBeInTheDocument();
+      screen.getAllByText(/probed on save/).length,
+    ).toBeGreaterThan(0);
     expect(
       screen.getByRole('link', {
         name: 'SiliconFlow API documentation',

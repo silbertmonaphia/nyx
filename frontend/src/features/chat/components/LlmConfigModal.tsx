@@ -212,6 +212,8 @@ interface ConfigFieldProps {
   type?: "text" | "password";
   error: string | undefined;
   registration: UseFormRegisterReturn;
+  disabled?: boolean;
+  hint?: string;
 }
 
 function ConfigField({
@@ -221,6 +223,8 @@ function ConfigField({
   type = "text",
   error,
   registration,
+  disabled = false,
+  hint,
 }: ConfigFieldProps) {
   return (
     <div className="space-y-1">
@@ -230,12 +234,14 @@ function ConfigField({
         type={type}
         placeholder={placeholder}
         aria-invalid={error ? true : undefined}
-        className={error ? "border-destructive" : ""}
+        disabled={disabled}
+        className={error ? "border-destructive" : disabled ? "opacity-60" : ""}
         {...registration}
       />
       {error ? (
         <p className="text-xs font-medium text-destructive">{error}</p>
       ) : null}
+      {hint ? <p className="text-xs font-medium text-destructive">{hint}</p> : null}
     </div>
   );
 }
@@ -451,7 +457,6 @@ export const LlmConfigModal = ({
                     t("llmConfig.sections.embedding.separateProvider"),
                     t("llmConfig.sections.embedding.credentials"),
                     t("llmConfig.sections.embedding.urlConvention"),
-                    t("llmConfig.sections.embedding.dimensionNote"),
                   ]}
                   docs={{
                     href: DOCS_URLS.embedding,
@@ -480,6 +485,12 @@ export const LlmConfigModal = ({
                     placeholder={EXAMPLE_MODELS.embedding}
                     error={errors.embedding?.model?.message}
                     registration={register("embedding.model")}
+                    disabled={status?.embedding != null}
+                    hint={
+                      status?.embedding != null
+                        ? `${t("llmConfig.sections.embedding.modelRequirement")} ${t("llmConfig.sections.embedding.modelLocked")}`
+                        : t("llmConfig.sections.embedding.modelRequirement")
+                    }
                   />
                 </div>
               </div>

@@ -98,7 +98,7 @@ test.describe('LLM configuration gate (browser-level)', () => {
       },
       embedding: {
         base_url: 'https://embed.example.test/v1',
-        model: 'e2e-embed-model',
+        model: 'Qwen/Qwen3-Embedding-0.6B',
         api_key: 'sk-e2e-embed-ef12',
       },
       tavily: {
@@ -120,8 +120,9 @@ test.describe('LLM configuration gate (browser-level)', () => {
       'https://embed.example.test/v1',
     );
     await expect(page.locator('#embedding-model')).toHaveValue(
-      'e2e-embed-model',
+      'Qwen/Qwen3-Embedding-0.6B',
     );
+    await expect(page.locator('#embedding-model')).toBeDisabled();
     await expect(page.locator('#tavily-base-url')).toHaveValue(
       'https://tavily.example.test/search',
     );
