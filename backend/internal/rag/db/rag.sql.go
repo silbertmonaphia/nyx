@@ -21,6 +21,18 @@ func (q *Queries) DeleteFeedEmbedding(ctx context.Context, feedID int32) error {
 	return err
 }
 
+const deleteFeedEmbeddingsByUser = `-- name: DeleteFeedEmbeddingsByUser :execrows
+DELETE FROM feed_embeddings WHERE user_id = $1
+`
+
+func (q *Queries) DeleteFeedEmbeddingsByUser(ctx context.Context, userID int64) (int64, error) {
+	result, err := q.db.Exec(ctx, deleteFeedEmbeddingsByUser, userID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const getFeedEmbeddingHash = `-- name: GetFeedEmbeddingHash :one
 
 SELECT content_hash FROM feed_embeddings WHERE feed_id = $1

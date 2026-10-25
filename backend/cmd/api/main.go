@@ -67,17 +67,66 @@ func loadConfigOrFatal() *config.Config {
 	return cfg
 }
 
-func mountLLMSettingsOps(humaAPI huma.API, cfg *config.Config, db *pgxpool.Pool, tracerProvider trace.TracerProvider, tokens auth.TokenService) *llmsettings.Resolver {
+func mountLLMSettingsOps(humaAPI huma.API, cfg *config.Config, db *pgxpool.Pool, tracerProvider trace.TracerProvider, tokens auth.TokenService) (*llmsettings.Resolver, *llmsettings.Handler) {
 	if !cfg.LLMEnabled {
-		return nil
+		return nil, nil
 	}
 	settingsCipher, err := crypto.NewCipher(cfg.UserLLMEncryptionKey)
 	if err != nil {
 		log.Fatal().Err(err).Msg("invalid USER_LLM_ENCRYPTION_KEY")
 	}
 	service := llmsettings.NewService(llmsettings.NewRepository(db), settingsCipher)
-	llmsettings.RegisterLLMConfigOps(humaAPI, llmsettings.NewHandler(service), tokens)
-	return llmsettings.NewResolver(service, cfg, tracerProvider)
+	service.SetEmbeddingProbe(newEmbeddingProbe(cfg, tracerProvider))
+	handler := llmsettings.NewHandler(service)
+	llmsettings.RegisterLLMConfigOps(humaAPI, handler, tokens)
+	return llmsettings.NewResolver(service, cfg, tracerProvider), handler
+}
+
+func newEmbeddingProbe(cfg *config.Config, tracerProvider trace.TracerProvider) func(ctx context.Context, baseURL, apiKey, model string) error {
+	return func(ctx context.Context, baseURL, apiKey, model string) error {
+		probeCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+		defer cancel()
+		probeCfg := *cfg
+		probeCfg.LLMEnabled = true
+		probeCfg.LLMBaseURL = baseURL
+		probeCfg.LLMAPIKey = apiKey
+		if probeCfg.LLMAPIKey == "" {
+			probeCfg.LLMAPIKey = "nyx-user-keyless-endpoint"
+		}
+		probeCfg.LLMModel = model
+		client, err := openai.NewClient(&probeCfg, tracerProvider.Tracer("nyx.llm.embed_probe"))
+		if err != nil {
+			return err
+		}
+		vecs, err := client.Embed(probeCtx, llm.EmbedRequest{Model: model, Inputs: []string{"dimension probe"}})
+		if err != nil {
+			log.Warn().Err(err).Str("base_url", baseURL).Str("model", model).Msg("embedding dimension probe skipped: endpoint unreachable")
+			return err
+		}
+		if len(vecs) != 1 || len(vecs[0]) != cfg.EmbeddingDimensions {
+			return llmsettings.ErrEmbeddingWidthMismatch
+		}
+		return nil
+	}
+}
+
+func wireEmbeddingInvalidation(handler *llmsettings.Handler, ragSvc *rag.Service, ragIndexer feed.EmbeddingIndexer) {
+	if handler == nil || ragIndexer == nil {
+		return
+	}
+	invalidator, _ := ragIndexer.(interface {
+		InvalidateUserEmbeddings(context.Context, int) (int64, error)
+	})
+	handler.SetEmbeddingInvalidatedHook(func(ctx context.Context, userID int) {
+		if invalidator != nil {
+			if _, err := invalidator.InvalidateUserEmbeddings(ctx, userID); err != nil {
+				log.Warn().Err(err).Int("user_id", userID).Msg("failed to invalidate user embeddings")
+			}
+		}
+		if ragSvc != nil {
+			ragSvc.ResetBackfill(userID)
+		}
+	})
 }
 
 // buildAndServe assembles every domain (config, token, tracing,
@@ -247,7 +296,7 @@ func buildAndServe(cfg *config.Config) {
 	feed.RegisterFeedOps(humaAPI, feedHandler, tokens)
 	user.RegisterUserOps(humaAPI, userHandler, tokens)
 
-	userLLMResolver := mountLLMSettingsOps(humaAPI, cfg, db, tracing.Provider, tokens)
+	userLLMResolver, userLLMSettingsHandler := mountLLMSettingsOps(humaAPI, cfg, db, tracing.Provider, tokens)
 
 	// Build the LLM provider (single-provider or router with
 	// failover) + the RAG facade (nil when LLM is disabled). The
@@ -256,6 +305,7 @@ func buildAndServe(cfg *config.Config) {
 	// embed.
 	stopChatGC, ragSvc, ragIndexer := mountChatRoute(router, cfg, db, feedRepo, tracing.Provider, tokens, userLLMResolver)
 	defer stopChatGC()
+	wireEmbeddingInvalidation(userLLMSettingsHandler, ragSvc, ragIndexer)
 	if ragIndexer != nil {
 		feedService.SetIndexer(ragIndexer)
 	}

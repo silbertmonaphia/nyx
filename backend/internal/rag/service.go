@@ -224,6 +224,10 @@ func renderContextBlock(passages []Passage, maxChars int) string {
 // backfill — the chat service detaches the context (Background +
 // a derived timeout) before the go-statement so a long backfill
 // survives the originating request.
+func (s *Service) ResetBackfill(userID int) {
+	s.backfillInFlight.Delete(userID)
+}
+
 func (s *Service) BackfillOnce(ctx context.Context, userID int) {
 	if s.feedRepo == nil {
 		return

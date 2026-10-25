@@ -14,11 +14,16 @@ import (
 )
 
 type Handler struct {
-	service *Service
+	service                *Service
+	onEmbeddingInvalidated func(ctx context.Context, userID int)
 }
 
 func NewHandler(service *Service) *Handler {
 	return &Handler{service: service}
+}
+
+func (h *Handler) SetEmbeddingInvalidatedHook(fn func(ctx context.Context, userID int)) {
+	h.onEmbeddingInvalidated = fn
 }
 
 type llmEndpointResponse struct {
@@ -196,12 +201,16 @@ func (h *Handler) GetConfig(ctx context.Context, _ *getConfigInput) (*getConfigO
 //nolint:revive // unexported-return is huma's idiomatic op pattern
 func (h *Handler) UpdateConfig(ctx context.Context, in *putConfigInput) (*putConfigOutput, error) {
 	userID := reqctx.UserIDFromContext(ctx)
-	if err := h.service.Save(ctx, userID, updateInputFrom(in.Body)); err != nil {
+	embeddingChanged, err := h.service.SaveTrackingEmbedding(ctx, userID, updateInputFrom(in.Body))
+	if err != nil {
 		var fieldErr *InvalidFieldError
 		if errors.As(err, &fieldErr) {
 			return nil, api.NewErrorResponseFromContext(ctx, http.StatusBadRequest, "Invalid LLM configuration", fieldErr.Field)
 		}
 		return nil, api.MapError(ctx, err, "Failed to save LLM configuration")
+	}
+	if embeddingChanged && h.onEmbeddingInvalidated != nil {
+		h.onEmbeddingInvalidated(ctx, userID)
 	}
 	s, err := h.service.Get(ctx, userID)
 	if err != nil {
@@ -213,8 +222,12 @@ func (h *Handler) UpdateConfig(ctx context.Context, in *putConfigInput) (*putCon
 //nolint:revive // unexported-return is huma's idiomatic op pattern
 func (h *Handler) DeleteConfig(ctx context.Context, _ *deleteConfigInput) (*deleteConfigOutput, error) {
 	userID := reqctx.UserIDFromContext(ctx)
-	if _, err := h.service.Delete(ctx, userID); err != nil {
+	deleted, err := h.service.Delete(ctx, userID)
+	if err != nil {
 		return nil, api.MapError(ctx, err, "Failed to delete LLM configuration")
+	}
+	if deleted > 0 && h.onEmbeddingInvalidated != nil {
+		h.onEmbeddingInvalidated(ctx, userID)
 	}
 	return &deleteConfigOutput{Status: http.StatusNoContent}, nil
 }

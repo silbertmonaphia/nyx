@@ -10,6 +10,7 @@ import (
 
 type Querier interface {
 	DeleteFeedEmbedding(ctx context.Context, feedID int32) error
+	DeleteFeedEmbeddingsByUser(ctx context.Context, userID int64) (int64, error)
 	// SQL queries for the RAG-over-feeds feature. Each block becomes a
 	// method on the generated internal/rag/db.Querier interface.
 	//

@@ -6,6 +6,8 @@ var (
 	ErrNotFound = errors.New("llm settings not found")
 
 	ErrInvalidConfig = errors.New("invalid llm configuration")
+
+	ErrEmbeddingWidthMismatch = errors.New("embedding width mismatch")
 )
 
 type Settings struct {

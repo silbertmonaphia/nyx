@@ -415,3 +415,69 @@ func TestHandler_KeysAreWriteOnlyInSpec(t *testing.T) {
 	require.NoError(t, err)
 	assert.True(t, strings.Contains(string(spec), `"writeOnly":true`), "API keys must be marked write-only in the spec")
 }
+
+func setupConfigRouterWithHook(t *testing.T, hook func(ctx context.Context, userID int)) (*chi.Mux, *Service, auth.TokenService) {
+	t.Helper()
+	platapi.OverrideHumaErrors()
+	svc, _, _ := newTestService(t)
+	tokens, err := auth.NewTokenService([]byte(auth.TestSecret), 15*time.Minute)
+	require.NoError(t, err)
+	router := chi.NewMux()
+	router.Use(middleware.StoreRequest)
+	hapi := humachi.New(router, platapi.HumaConfig())
+	handler := NewHandler(svc)
+	handler.SetEmbeddingInvalidatedHook(hook)
+	RegisterLLMConfigOpsTest(hapi, handler, tokens, true)
+	return router, svc, tokens
+}
+
+func TestHandler_PutInvalidatesEmbeddingsOnlyWhenIdentityChanges(t *testing.T) {
+	var calls []int
+	router, svc, tokens := setupConfigRouterWithHook(t, func(_ context.Context, userID int) {
+		calls = append(calls, userID)
+	})
+	tok := mustToken(t, tokens, 4)
+
+	base := validPutBody()
+	rr := configRequest(t, router, http.MethodPut, tok, base)
+	require.Equal(t, http.StatusOK, rr.Code)
+	assert.Empty(t, calls, "first save has nothing to invalidate")
+
+	keyOnly := validPutBody()
+	rr = configRequest(t, router, http.MethodPut, tok, keyOnly)
+	require.Equal(t, http.StatusOK, rr.Code)
+	assert.Empty(t, calls, "same endpoint/model keeps the vectors")
+
+	lockedModel := validPutBody()
+	lockedModel["embedding"].(map[string]any)["model"] = "bge-m3"
+	rr = configRequest(t, router, http.MethodPut, tok, lockedModel)
+	require.Equal(t, http.StatusBadRequest, rr.Code)
+	assert.Empty(t, calls, "a rejected model change must not invalidate")
+
+	movedEndpoint := validPutBody()
+	movedEndpoint["embedding"].(map[string]any)["base_url"] = testEmbedBaseURL
+	rr = configRequest(t, router, http.MethodPut, tok, movedEndpoint)
+	require.Equal(t, http.StatusOK, rr.Code)
+	assert.Equal(t, []int{4}, calls)
+
+	_, err := svc.Delete(context.Background(), 4)
+	require.NoError(t, err)
+	rr = configRequest(t, router, http.MethodDelete, tok, nil)
+	require.Equal(t, http.StatusNoContent, rr.Code)
+	assert.Empty(t, calls[1:], "deleting a missing row does not invalidate")
+}
+
+func TestHandler_DeleteInvalidatesEmbeddings(t *testing.T) {
+	var calls []int
+	router, _, tokens := setupConfigRouterWithHook(t, func(_ context.Context, userID int) {
+		calls = append(calls, userID)
+	})
+	tok := mustToken(t, tokens, 5)
+
+	rr := configRequest(t, router, http.MethodPut, tok, validPutBody())
+	require.Equal(t, http.StatusOK, rr.Code)
+
+	rr = configRequest(t, router, http.MethodDelete, tok, nil)
+	require.Equal(t, http.StatusNoContent, rr.Code)
+	assert.Equal(t, []int{5}, calls)
+}

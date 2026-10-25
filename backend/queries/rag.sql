@@ -46,3 +46,5 @@ WHERE f.user_id = $1
   )
 ORDER BY f.created_at ASC
 LIMIT $2;
+-- name: DeleteFeedEmbeddingsByUser :execrows
+DELETE FROM feed_embeddings WHERE user_id = $1;

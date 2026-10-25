@@ -15,12 +15,17 @@ import (
 const maskTailChars = 4
 
 type Service struct {
-	repo   Repository
-	cipher *crypto.Cipher
+	repo           Repository
+	cipher         *crypto.Cipher
+	embeddingProbe func(ctx context.Context, baseURL, apiKey, model string) error
 }
 
 func NewService(repo Repository, cipher *crypto.Cipher) *Service {
 	return &Service{repo: repo, cipher: cipher}
+}
+
+func (s *Service) SetEmbeddingProbe(fn func(ctx context.Context, baseURL, apiKey, model string) error) {
+	s.embeddingProbe = fn
 }
 
 type UpdateInput struct {
@@ -46,12 +51,21 @@ func (s *Service) Get(ctx context.Context, userID int) (*Settings, error) {
 }
 
 func (s *Service) Save(ctx context.Context, userID int, in UpdateInput) error {
+	_, err := s.SaveTrackingEmbedding(ctx, userID, in)
+	return err
+}
+
+func (s *Service) SaveTrackingEmbedding(ctx context.Context, userID int, in UpdateInput) (bool, error) {
 	existing, err := s.repo.Get(ctx, userID)
 	if err != nil && !errors.Is(err, ErrNotFound) {
-		return err
+		return false, err
 	}
+	embeddingChanged := embeddingIdentityChanged(existing, &in)
 	if err = ValidateUpdate(&in, existing); err != nil {
-		return err
+		return false, err
+	}
+	if err = s.probeEmbedding(ctx, existing, &in); err != nil {
+		return false, err
 	}
 
 	out := &EncryptedSettings{
@@ -62,27 +76,53 @@ func (s *Service) Save(ctx context.Context, userID int, in UpdateInput) error {
 	}
 
 	if out.LLMAPIKeyEnc, err = s.resolveKey(in.LLMAPIKey, "llm_api_key", in.LLMBaseURL, existing); err != nil {
-		return err
+		return false, err
 	}
 	if err = s.applyEmbedding(out, &in, existing); err != nil {
-		return err
+		return false, err
 	}
 	if err = s.applyTavily(out, &in, existing); err != nil {
-		return err
+		return false, err
 	}
 
 	if in.FallbackBaseURL == "" && in.FallbackAPIKey == "" && in.FallbackModel == "" {
 		out.FallbackBaseURL, out.FallbackAPIKeyEnc, out.FallbackModel = "", "", ""
 	} else {
 		if out.FallbackAPIKeyEnc, err = s.resolveKey(in.FallbackAPIKey, "fallback_api_key", in.FallbackBaseURL, existing); err != nil {
-			return err
+			return false, err
 		}
 		out.FallbackBaseURL = in.FallbackBaseURL
 		out.FallbackModel = in.FallbackModel
 	}
 
-	_, err = s.repo.Upsert(ctx, out)
-	return err
+	if _, err = s.repo.Upsert(ctx, out); err != nil {
+		return false, err
+	}
+	return embeddingChanged, nil
+}
+
+func embeddingIdentityChanged(existing *EncryptedSettings, in *UpdateInput) bool {
+	if existing == nil {
+		return false
+	}
+	return existing.EmbeddingBaseURL != in.EmbeddingBaseURL || existing.EmbeddingModel != in.EmbeddingModel
+}
+
+func (s *Service) probeEmbedding(ctx context.Context, existing *EncryptedSettings, in *UpdateInput) error {
+	if s.embeddingProbe == nil || in.EmbeddingBaseURL == "" {
+		return nil
+	}
+	apiKey := in.EmbeddingAPIKey
+	if apiKey == "" && existing != nil {
+		if decrypted, err := s.cipher.Decrypt(existing.EmbeddingAPIKeyEnc); err == nil {
+			apiKey = decrypted
+		}
+	}
+	err := s.embeddingProbe(ctx, in.EmbeddingBaseURL, apiKey, in.EmbeddingModel)
+	if errors.Is(err, ErrEmbeddingWidthMismatch) {
+		return invalidField("embedding_model")
+	}
+	return nil
 }
 
 func (s *Service) Delete(ctx context.Context, userID int) (int64, error) {
@@ -209,7 +249,7 @@ func MaskKey(key string) string {
 }
 
 func ValidateUpdate(in *UpdateInput, existing *EncryptedSettings) error {
-	if err := validateRequiredConfig(in); err != nil {
+	if err := validateRequiredConfig(in, existing); err != nil {
 		return err
 	}
 	if existing == nil {
@@ -223,7 +263,7 @@ func ValidateUpdate(in *UpdateInput, existing *EncryptedSettings) error {
 	return validateFallbackGroup(in, existing)
 }
 
-func validateRequiredConfig(in *UpdateInput) error {
+func validateRequiredConfig(in *UpdateInput, existing *EncryptedSettings) error {
 	if err := validateUserURL(in.LLMBaseURL, "llm_base_url"); err != nil {
 		return err
 	}
@@ -232,6 +272,9 @@ func validateRequiredConfig(in *UpdateInput) error {
 			return err
 		}
 		if in.EmbeddingModel == "" {
+			return invalidField("embedding_model")
+		}
+		if existing != nil && existing.EmbeddingModel != "" && in.EmbeddingModel != existing.EmbeddingModel {
 			return invalidField("embedding_model")
 		}
 	} else if in.EmbeddingModel != "" || in.EmbeddingAPIKey != "" {

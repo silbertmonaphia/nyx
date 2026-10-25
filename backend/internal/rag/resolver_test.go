@@ -236,3 +236,27 @@ func TestIndexer_Index_UsesPerUserEmbedder(t *testing.T) {
 	assert.Zero(t, deploymentProvider.embedCalls)
 	require.NoError(t, mock.ExpectationsWereMet())
 }
+
+func TestIndexer_InvalidateUserEmbeddings(t *testing.T) {
+	mock, err := pgxmock.NewPool()
+	require.NoError(t, err)
+	defer mock.Close()
+
+	mock.ExpectExec("DELETE FROM feed_embeddings").
+		WithArgs(int64(9)).
+		WillReturnResult(pgxmock.NewResult("DELETE", 3))
+
+	idx := NewIndexer(mock, nil, noop.NewTracerProvider().Tracer("test"))
+	rows, err := idx.InvalidateUserEmbeddings(context.Background(), 9)
+	require.NoError(t, err)
+	assert.Equal(t, int64(3), rows)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestService_ResetBackfillAllowsAnotherRun(t *testing.T) {
+	svc := &Service{}
+	svc.backfillInFlight.Store(7, &sync.Once{})
+	svc.ResetBackfill(7)
+	_, ok := svc.backfillInFlight.Load(7)
+	assert.False(t, ok)
+}

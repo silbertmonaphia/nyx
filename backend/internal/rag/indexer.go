@@ -38,6 +38,10 @@ func NewIndexer(pool Pool, e *Embedder, tracer trace.Tracer) *Indexer {
 	return &Indexer{q: ragdb.New(pool), embedder: e, tracer: tracer}
 }
 
+func (i *Indexer) InvalidateUserEmbeddings(ctx context.Context, userID int) (int64, error) {
+	return i.q.DeleteFeedEmbeddingsByUser(ctx, int64(userID))
+}
+
 func (i *Indexer) SetEmbedderResolver(fn EmbedderResolver) {
 	i.embedderResolver = fn
 }

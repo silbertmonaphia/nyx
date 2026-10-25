@@ -201,6 +201,7 @@ const (
 	testFallbackModel     = "fallback-model"
 	testStoredFallbackEnc = "v1:stored-fallback"
 	testRemoteLLMBaseURL  = "https://api.example.com/v1"
+	testEmbedBaseURL      = "https://embed.example.com/v1"
 )
 
 func TestValidateUpdate(t *testing.T) {
@@ -211,7 +212,7 @@ func TestValidateUpdate(t *testing.T) {
 		LLMModel:           "old-model",
 		EmbeddingBaseURL:   "http://old:8001/v1",
 		EmbeddingAPIKeyEnc: "v1:stored-embed",
-		EmbeddingModel:     "old-embed",
+		EmbeddingModel:     "Qwen/Qwen3-Embedding-0.6B",
 		TavilyBaseURL:      "https://old-tavily",
 		TavilyAPIKeyEnc:    "v1:stored-tavily",
 	}
@@ -227,7 +228,7 @@ func TestValidateUpdate(t *testing.T) {
 			want   string
 		}{
 			{func(in *UpdateInput) { in.LLMBaseURL = testRemoteLLMBaseURL; in.LLMAPIKey = "" }, "llm_api_key"},
-			{func(in *UpdateInput) { in.EmbeddingBaseURL = "https://embed.example.com/v1"; in.EmbeddingAPIKey = "" }, "embedding_api_key"},
+			{func(in *UpdateInput) { in.EmbeddingBaseURL = testEmbedBaseURL; in.EmbeddingAPIKey = "" }, "embedding_api_key"},
 		} {
 			in := validCreateInput()
 			field.mutate(&in)
@@ -241,9 +242,27 @@ func TestValidateUpdate(t *testing.T) {
 
 	t.Run("update with blank keys passes keep-through", func(t *testing.T) {
 		in := validCreateInput()
+		in.EmbeddingModel = existing.EmbeddingModel
 		in.LLMAPIKey = ""
 		in.EmbeddingAPIKey = ""
 		in.TavilyAPIKey = ""
+		assert.NoError(t, ValidateUpdate(&in, existing))
+	})
+
+	t.Run("changing the embedding model after it is set is rejected", func(t *testing.T) {
+		in := validCreateInput()
+		in.EmbeddingModel = "bge-m3"
+		err := ValidateUpdate(&in, existing)
+		require.Error(t, err)
+		var fe *InvalidFieldError
+		require.ErrorAs(t, err, &fe)
+		assert.Equal(t, "embedding_model", fe.Field)
+	})
+
+	t.Run("updating the embedding URL with the same model is allowed", func(t *testing.T) {
+		in := validCreateInput()
+		in.EmbeddingModel = existing.EmbeddingModel
+		in.EmbeddingBaseURL = testEmbedBaseURL
 		assert.NoError(t, ValidateUpdate(&in, existing))
 	})
 
@@ -414,7 +433,7 @@ func TestValidateUpdate(t *testing.T) {
 
 	t.Run("remote embedding without a key is rejected", func(t *testing.T) {
 		in := validCreateInput()
-		in.EmbeddingBaseURL = "https://embed.example.com/v1"
+		in.EmbeddingBaseURL = testEmbedBaseURL
 		in.EmbeddingAPIKey = ""
 		err := ValidateUpdate(&in, nil)
 		require.Error(t, err)
@@ -522,3 +541,72 @@ func (r *failingRepo) Upsert(context.Context, *EncryptedSettings) (*EncryptedSet
 	return nil, r.err
 }
 func (r *failingRepo) Delete(context.Context, int) (int64, error) { return 0, r.err }
+
+func TestSaveTrackingEmbedding_ReportsIdentityChange(t *testing.T) {
+	svc, _, _ := newTestService(t)
+	ctx := context.Background()
+
+	changed, err := svc.SaveTrackingEmbedding(ctx, 1, validCreateInput())
+	require.NoError(t, err)
+	assert.False(t, changed, "first save has no prior identity")
+
+	in := validCreateInput()
+	in.LLMAPIKey = ""
+	in.EmbeddingAPIKey = "sk-rotated-key-9999"
+	changed, err = svc.SaveTrackingEmbedding(ctx, 1, in)
+	require.NoError(t, err)
+	assert.False(t, changed, "rotating a key does not change the vector space")
+
+	in = validCreateInput()
+	in.EmbeddingAPIKey = ""
+	_, err = svc.SaveTrackingEmbedding(ctx, 1, in)
+	require.NoError(t, err)
+	in.EmbeddingBaseURL = testEmbedBaseURL
+	changed, err = svc.SaveTrackingEmbedding(ctx, 1, in)
+	require.NoError(t, err)
+	assert.True(t, changed, "changing the embedding endpoint must invalidate stored vectors")
+
+	in = validCreateInput()
+	in.EmbeddingBaseURL = ""
+	in.EmbeddingAPIKey = ""
+	in.EmbeddingModel = ""
+	changed, err = svc.SaveTrackingEmbedding(ctx, 1, in)
+	require.NoError(t, err)
+	assert.True(t, changed, "removing the embedding group must invalidate stored vectors")
+}
+
+func TestSaveTrackingEmbedding_ProbesTheEmbeddingWidth(t *testing.T) {
+	svc, _, _ := newTestService(t)
+	ctx := context.Background()
+
+	var probedModel string
+	svc.SetEmbeddingProbe(func(_ context.Context, _, _, model string) error {
+		probedModel = model
+		return ErrEmbeddingWidthMismatch
+	})
+	_, err := svc.SaveTrackingEmbedding(ctx, 1, validCreateInput())
+	require.Error(t, err)
+	var fe *InvalidFieldError
+	require.ErrorAs(t, err, &fe)
+	assert.Equal(t, "embedding_model", fe.Field)
+	assert.Equal(t, "Qwen/Qwen3-Embedding-0.6B", probedModel)
+
+	in := validCreateInput()
+	in.EmbeddingModel = "wrong-width-model"
+	svc.SetEmbeddingProbe(func(_ context.Context, _, _, _ string) error {
+		return errors.New("connection refused")
+	})
+	_, err = svc.SaveTrackingEmbedding(ctx, 1, in)
+	assert.NoError(t, err, "an unreachable endpoint must not block the save")
+
+	svc.SetEmbeddingProbe(func(_ context.Context, _, _, _ string) error {
+		t.Fatal("the probe must not run without an embedding group")
+		return nil
+	})
+	in = validCreateInput()
+	in.EmbeddingBaseURL = ""
+	in.EmbeddingAPIKey = ""
+	in.EmbeddingModel = ""
+	_, err = svc.SaveTrackingEmbedding(ctx, 1, in)
+	assert.NoError(t, err)
+}
