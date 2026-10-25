@@ -180,7 +180,7 @@ export const en: Translation = {
       gate: {
         title: 'LLM configuration required',
         description:
-          'The AI Agent needs your own model endpoints and API keys before it can run. Fill in the eight required fields to continue.',
+          'The AI Agent needs your own model endpoint and API key to run. Fill in the three main-LLM fields to continue — Embedding and Tavily are optional.',
       },
       sections: {
         llm: {
@@ -197,13 +197,17 @@ export const en: Translation = {
             'The model must exist on the endpoint (it is not probed when saving). An endpoint that needs no credential still requires a non-placeholder value.',
         },
         embedding: {
-          title: 'Embedding',
+          title: 'Embedding (optional)',
           drives: 'Drives feed semantic search and RAG retrieval.',
+          impact:
+            'Optional — leave this empty and the AI Agent cannot retrieve your feeds (RAG / semantic search). Chat, planning and tools keep working.',
+          expand: 'Show embedding fields',
+          collapse: 'Hide embedding fields',
           separateProvider:
             'Must expose OpenAI-compatible embeddings — not every chat provider offers them, so this slot may point at a different service than the main LLM.',
           credentials:
-            'Run a local vLLM embedding server (e.g. Qwen/Qwen3-Embedding-0.6B via make dev-vllm-embed), or use a provider console such as SiliconFlow (cloud.siliconflow.cn).',
-          docsLabel: 'vLLM OpenAI-compatible server documentation',
+            'Get a key from the SiliconFlow console (cloud.siliconflow.cn), or run a local vLLM embedding server (e.g. Qwen/Qwen3-Embedding-0.6B via make dev-vllm-embed).',
+          docsLabel: 'SiliconFlow API documentation',
           urlConvention:
             'Must be an OpenAI-compatible endpoint: the path carries the version prefix (a trailing /v1), e.g. http://localhost:8000/v1.',
           dimensionNote:
@@ -214,6 +218,8 @@ export const en: Translation = {
           drives: "Drives the agent's web_search tool.",
           impact:
             'Optional — leave this empty and the AI Agent will not plan web searches. Chat, planning and retrieval keep working.',
+          expand: 'Show Tavily fields',
+          collapse: 'Hide Tavily fields',
           credentials:
             'Create a key in the Tavily console (app.tavily.com) — the free tier covers light use.',
           docsLabel: 'Tavily search API documentation',
@@ -229,7 +235,7 @@ export const en: Translation = {
           collapse: 'Hide retry model fields',
         },
         agentNote:
-          'The six required fields (main LLM, Embedding) must be filled before the AI Agent becomes usable — API keys may be left empty for localhost / 127.0.0.1 endpoints. Tavily is optional: leave it empty and the agent will not plan web searches.',
+          'Only the three main-LLM fields are required. API keys may be left empty for localhost / 127.0.0.1 endpoints. Embedding is optional: leave it empty and the agent cannot retrieve your feeds. Tavily is optional: leave it empty and the agent will not plan web searches.',
       },
       fields: {
         baseUrl: 'Base URL',

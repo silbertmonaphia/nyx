@@ -121,6 +121,8 @@ async function fillRequiredFields() {
   await userEvent.type(input('llm-base-url'), 'https://api.deepseek.com/v1');
   await userEvent.type(input('llm-model'), 'deepseek-chat');
   await userEvent.type(input('llm-api-key'), 'sk-llm');
+  await userEvent.click(screen.getByTestId('llm-embedding-toggle'));
+  await userEvent.click(screen.getByTestId('llm-tavily-toggle'));
   await userEvent.type(input('embedding-base-url'), 'http://localhost:8000/v1');
   await userEvent.type(input('embedding-model'), 'Qwen/Qwen3-Embedding-0.6B');
   await userEvent.type(input('embedding-api-key'), 'sk-emb');
@@ -171,7 +173,7 @@ describe('App LLM config gating', () => {
       await screen.findByText('LLM configuration required'),
     ).toBeInTheDocument();
     expect(
-      screen.getByText(/Fill in the eight required fields/),
+      screen.getByText(/Fill in the three main-LLM fields/),
     ).toBeInTheDocument();
     expect(screen.queryByText('Close')).not.toBeInTheDocument();
     expect(screen.queryByTestId('llm-config-clear')).not.toBeInTheDocument();

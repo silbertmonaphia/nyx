@@ -190,7 +190,7 @@ export interface paths {
         get: operations["get-llm-config"];
         /**
          * Save LLM configuration
-         * @description Validates and upserts the authenticated caller's LLM, embedding, optional Tavily, and optional retry-model configuration. API keys are write-only: a blank key on update keeps the stored key; on create a key is required unless the endpoint is loopback. Omitting Tavily disables web search for the agent. Responds with the masked configuration.
+         * @description Validates and upserts the authenticated caller's LLM, optional embedding, optional Tavily, and optional retry-model configuration. API keys are write-only: a blank key on update keeps the stored key; on create a key is required unless the endpoint is loopback. Omitting Tavily disables web search for the agent. Responds with the masked configuration.
          */
         put: operations["update-llm-config"];
         post?: never;
@@ -265,7 +265,8 @@ export interface components {
             tavily: components["schemas"]["TavilyResponse"];
         };
         ConfigUpdateInput: {
-            embedding: components["schemas"]["LlmEndpointInput"];
+            /** @description Optional embedding group. When omitted the agent runs without feed retrieval (RAG) and feed indexing is skipped. */
+            embedding?: components["schemas"]["LlmEndpointInput"];
             /** @description Optional retry-model group. Supply all three fields or omit the section entirely. */
             fallback?: components["schemas"]["LlmEndpointInput"];
             llm: components["schemas"]["LlmEndpointInput"];

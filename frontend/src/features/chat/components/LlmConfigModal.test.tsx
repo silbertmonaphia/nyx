@@ -72,7 +72,17 @@ function mockHook(overrides: HookOverrides = {}) {
 const input = (id: string) =>
   document.getElementById(id) as HTMLInputElement;
 
+async function expandOptionalSections() {
+  if (document.getElementById('embedding-base-url') === null) {
+    await userEvent.click(screen.getByTestId('llm-embedding-toggle'));
+  }
+  if (document.getElementById('tavily-base-url') === null) {
+    await userEvent.click(screen.getByTestId('llm-tavily-toggle'));
+  }
+}
+
 async function fillRequiredFields(fillKeys = true) {
+  await expandOptionalSections();
   await userEvent.type(input('llm-base-url'), 'https://api.deepseek.com/v1');
   await userEvent.type(input('llm-model'), 'deepseek-chat');
   if (fillKeys) await userEvent.type(input('llm-api-key'), 'sk-llm');
@@ -102,7 +112,7 @@ describe('LlmConfigModal', () => {
     await vi.waitFor(() => {
       expect(save.mutateAsync).not.toHaveBeenCalled();
     });
-    expect(screen.getAllByText('Required').length).toBeGreaterThanOrEqual(6);
+    expect(screen.getAllByText('Required').length).toBeGreaterThanOrEqual(3);
     expect(useUiStore.getState().toasts).toHaveLength(0);
   });
 
@@ -112,6 +122,7 @@ describe('LlmConfigModal', () => {
 
     await userEvent.type(input('llm-base-url'), 'http://localhost:8000/v1');
     await userEvent.type(input('llm-model'), 'local-chat');
+    await expandOptionalSections();
     await userEvent.type(input('embedding-base-url'), 'http://127.0.0.1:8001/v1');
     await userEvent.type(input('embedding-model'), 'local-embed');
     await userEvent.type(input('tavily-base-url'), 'http://localhost:8899/search');
@@ -128,6 +139,28 @@ describe('LlmConfigModal', () => {
     });
   });
 
+  it('saves without an embedding section and shows the red impact note', async () => {
+    const { save } = mockHook({ status: unconfigured });
+    renderModal();
+
+    await userEvent.type(input('llm-base-url'), 'https://api.deepseek.com/v1');
+    await userEvent.type(input('llm-model'), 'deepseek-chat');
+    await userEvent.type(input('llm-api-key'), 'sk-llm');
+
+    expect(
+      screen.getAllByText(/cannot retrieve your feeds/).length,
+    ).toBeGreaterThan(0);
+
+    await userEvent.click(screen.getByTestId('llm-config-save'));
+
+    await vi.waitFor(() => {
+      expect(save.mutateAsync).toHaveBeenCalledTimes(1);
+    });
+    expect(save.mutateAsync.mock.calls[0][0]).toMatchObject({
+      embedding: { base_url: '', api_key: '', model: '' },
+    });
+  });
+
   it('saves without a Tavily section and shows the red impact note', async () => {
     const { save } = mockHook({ status: unconfigured });
     renderModal();
@@ -135,6 +168,7 @@ describe('LlmConfigModal', () => {
     await userEvent.type(input('llm-base-url'), 'https://api.deepseek.com/v1');
     await userEvent.type(input('llm-model'), 'deepseek-chat');
     await userEvent.type(input('llm-api-key'), 'sk-llm');
+    await expandOptionalSections();
     await userEvent.type(input('embedding-base-url'), 'https://api.deepseek.com/v1');
     await userEvent.type(input('embedding-model'), 'embed-model');
     await userEvent.type(input('embedding-api-key'), 'sk-emb');
@@ -168,13 +202,14 @@ describe('LlmConfigModal', () => {
     });
   });
 
-  it('shows an example placeholder in every empty input when unconfigured', () => {
+  it('shows an example placeholder in every empty input when unconfigured', async () => {
     mockHook({ status: unconfigured });
     renderModal();
+    await expandOptionalSections();
 
     expect(input('llm-base-url').placeholder).toBe('https://api.deepseek.com/v1');
     expect(input('llm-model').placeholder).toBe('deepseek-chat');
-    expect(input('embedding-base-url').placeholder).toBe('http://localhost:8000/v1');
+    expect(input('embedding-base-url').placeholder).toBe('https://api.siliconflow.cn/v1');
     expect(input('embedding-model').placeholder).toBe('Qwen/Qwen3-Embedding-0.6B');
     expect(input('tavily-base-url').placeholder).toBe('https://api.tavily.com/search');
   });
@@ -260,9 +295,10 @@ describe('LlmConfigModal', () => {
     });
   });
 
-  it('shows guidance copy for every section', () => {
+  it('shows guidance copy for every section', async () => {
     mockHook({ status: unconfigured });
     renderModal();
+    await expandOptionalSections();
 
     expect(screen.getByText('Main LLM')).toBeInTheDocument();
     expect(
@@ -282,7 +318,10 @@ describe('LlmConfigModal', () => {
     expect(
       screen.getByRole('link', { name: 'DeepSeek API documentation' }),
     ).toHaveAttribute('href', 'https://api-docs.deepseek.com/');
-    expect(screen.getByText('Embedding')).toBeInTheDocument();
+    expect(screen.getByText('Embedding (optional)')).toBeInTheDocument();
+    expect(
+      screen.getAllByText(/cannot retrieve your feeds/).length,
+    ).toBeGreaterThan(0);
     expect(
       screen.getByText(/may point at a different service than the main LLM/),
     ).toBeInTheDocument();
@@ -292,7 +331,7 @@ describe('LlmConfigModal', () => {
     ).toBeInTheDocument();
     expect(
       screen.getByRole('link', {
-        name: 'vLLM OpenAI-compatible server documentation',
+        name: 'SiliconFlow API documentation',
       }),
     ).toBeInTheDocument();
     expect(screen.getByText('Tavily search (optional)')).toBeInTheDocument();
@@ -306,7 +345,7 @@ describe('LlmConfigModal', () => {
     ).toBeInTheDocument();
     expect(screen.getByText(/shaped for the deployment's search provider/)).toBeInTheDocument();
     expect(
-      screen.getByText(/six required fields/),
+      screen.getByText(/Only the three main-LLM fields are required/),
     ).toBeInTheDocument();
     expect(screen.getByText(/single-turn chat fallback path/)).toBeInTheDocument();
   });

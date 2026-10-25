@@ -36,6 +36,8 @@ test.describe('LLM configuration gate (browser-level)', () => {
     await page.locator('#llm-base-url').fill('https://llm.example.test/v1');
     await page.locator('#llm-model').fill('e2e-main-model');
     await page.locator('#llm-api-key').fill('sk-e2e-main-abcd');
+    await page.getByTestId('llm-embedding-toggle').click();
+    await page.getByTestId('llm-tavily-toggle').click();
     await page
       .locator('#embedding-base-url')
       .fill('https://embed.example.test/v1');
@@ -71,6 +73,8 @@ test.describe('LLM configuration gate (browser-level)', () => {
     await page.locator('#llm-base-url').fill('https://llm.example.test/v1');
     await page.locator('#llm-model').fill('e2e-main-model');
     await page.locator('#llm-api-key').fill('sk-e2e-main-abcd');
+    await page.getByTestId('llm-embedding-toggle').click();
+    await page.getByTestId('llm-tavily-toggle').click();
     await page
       .locator('#embedding-base-url')
       .fill('https://embed.example.test/v1');
@@ -170,6 +174,7 @@ test.describe('LLM configuration gate (browser-level)', () => {
     ).toBeVisible();
     await expect(page.locator('#llm-base-url')).toHaveValue('');
     await expect(page.locator('#llm-api-key')).toHaveValue('');
+    await page.getByTestId('llm-tavily-toggle').click();
     await expect(page.locator('#tavily-api-key')).toHaveValue('');
     await expect(page.getByTestId('chat-form')).not.toBeVisible();
   });

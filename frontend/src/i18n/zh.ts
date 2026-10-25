@@ -164,7 +164,7 @@ export const zh = {
       gate: {
         title: '需要先配置 LLM',
         description:
-          'AI Agent 需要你自己的模型端点与 API 密钥才能运行。请填写 8 个必填字段后继续。',
+          'AI Agent 需要你自己的模型端点与 API 密钥才能运行。请先填写主 LLM 的 3 个必填字段；Embedding 与 Tavily 为选填，需要时展开填写。',
       },
       sections: {
         llm: {
@@ -181,13 +181,17 @@ export const zh = {
             '模型必须真实存在于该端点上（保存时不做探测）。无需密钥的端点也需填写一个非占位的值。',
         },
         embedding: {
-          title: 'Embedding',
+          title: 'Embedding（可选）',
           drives: '驱动私人动态语义搜索与 RAG 检索。',
+          impact:
+            '选填 —— 留空则 AI Agent 无法检索你的私人动态（RAG / 语义搜索）；聊天、规划与工具仍可正常使用。',
+          expand: '展开 Embedding 字段',
+          collapse: '收起 Embedding 字段',
           separateProvider:
             '必须是暴露 OpenAI 兼容 embeddings 的服务 —— 并非每个聊天服务商都提供 embedding，因此这里可以填和主 LLM 不同的服务。',
           credentials:
-            '可运行本地 vLLM 嵌入服务（如 make dev-vllm-embed 启动的 Qwen/Qwen3-Embedding-0.6B），或使用 SiliconFlow（cloud.siliconflow.cn）等控制台。',
-          docsLabel: 'vLLM OpenAI 兼容服务文档',
+            '可在 SiliconFlow 控制台（cloud.siliconflow.cn）申请密钥，也可以运行本地 vLLM 嵌入服务（如 make dev-vllm-embed 启动的 Qwen/Qwen3-Embedding-0.6B）。',
+          docsLabel: 'SiliconFlow API 文档',
           urlConvention:
             '需为 OpenAI 兼容端点：路径需携带服务商的版本前缀（以 /v1 结尾），如 http://localhost:8000/v1。',
           dimensionNote:
@@ -198,6 +202,8 @@ export const zh = {
           drives: '驱动 Agent 的 web_search 工具。',
           impact:
             '选填 —— 留空则 AI Agent 不会规划网络搜索；聊天、规划与检索仍可正常使用。',
+          expand: '展开 Tavily 字段',
+          collapse: '收起 Tavily 字段',
           credentials:
             '在 Tavily 控制台（app.tavily.com）创建密钥 — 免费额度足够轻度使用。',
           docsLabel: 'Tavily 搜索 API 文档',
@@ -211,7 +217,7 @@ export const zh = {
           collapse: '收起重试模型字段',
         },
         agentNote:
-          '必须填满 6 个必填字段（主 LLM、Embedding）后 AI Agent 才可用 —— localhost / 127.0.0.1 端点可以不填 API 密钥。Tavily 为选填：留空则 agent 不会规划网络搜索。',
+          '只有主 LLM 的三个字段为必填；localhost / 127.0.0.1 端点可以不填 API 密钥。Embedding 为选填：留空则 agent 无法检索你的私人动态。Tavily 为选填：留空则 agent 不会规划网络搜索。',
       },
       fields: {
         baseUrl: '基础 URL',

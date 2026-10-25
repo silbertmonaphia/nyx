@@ -17,7 +17,7 @@ import type {
 
 const EXAMPLE_BASE_URLS = {
   llm: "https://api.deepseek.com/v1",
-  embedding: "http://localhost:8000/v1",
+  embedding: "https://api.siliconflow.cn/v1",
   tavily: "https://api.tavily.com/search",
   fallback: "https://api.deepseek.com/v1",
 };
@@ -30,8 +30,7 @@ const EXAMPLE_MODELS = {
 
 const DOCS_URLS = {
   llm: "https://api-docs.deepseek.com/",
-  embedding:
-    "https://docs.vllm.ai/en/latest/serving/openai_compatible_server.html",
+  embedding: "https://docs.siliconflow.cn/",
   tavily: "https://docs.tavily.com/documentation/api-reference/endpoint/search",
   fallback: "https://api-docs.deepseek.com/",
 };
@@ -118,11 +117,37 @@ function buildLlmConfigSchema(requireKeys: boolean) {
       .superRefine(keyRequired),
     embedding: z
       .object({
-        base_url: requiredBaseUrl,
+        base_url: optionalBaseUrl,
         api_key: z.string(),
-        model: requiredModel,
+        model: z.string(),
       })
-      .superRefine(keyRequired),
+      .superRefine((value, ctx) => {
+        const url = value.base_url.trim();
+        if (url === "") {
+          if (value.api_key.trim() !== "" || value.model.trim() !== "") {
+            ctx.addIssue({
+              code: "custom",
+              path: ["base_url"],
+              message: required(),
+            });
+          }
+          return;
+        }
+        if (value.model.trim() === "") {
+          ctx.addIssue({
+            code: "custom",
+            path: ["model"],
+            message: required(),
+          });
+        }
+        if (requireKeys && value.api_key.trim() === "" && !isLoopbackUrl(url)) {
+          ctx.addIssue({
+            code: "custom",
+            path: ["api_key"],
+            message: required(),
+          });
+        }
+      }),
     tavily: z
       .object({
         base_url: optionalBaseUrl,
@@ -328,6 +353,20 @@ export const LlmConfigModal = ({
   const [fallbackOverride, setFallbackOverride] = useState<boolean | null>(
     null,
   );
+  const [embeddingOverride, setEmbeddingOverride] = useState<boolean | null>(
+    null,
+  );
+  const [tavilyOverride, setTavilyOverride] = useState<boolean | null>(null);
+  const embeddingError = Boolean(
+    errors.embedding?.base_url ||
+      errors.embedding?.api_key ||
+      errors.embedding?.model,
+  );
+  const showEmbedding =
+    embeddingOverride ?? (status?.embedding != null || embeddingError);
+  const tavilyError = Boolean(errors.tavily?.base_url || errors.tavily?.api_key);
+  const showTavily =
+    tavilyOverride ?? (status?.tavily != null || tavilyError);
   const [confirmClearOpen, setConfirmClearOpen] = useState(false);
   const fallbackError = Boolean(
     errors.fallback?.base_url ||
@@ -448,82 +487,119 @@ export const LlmConfigModal = ({
             </div>
           </fieldset>
 
-          <fieldset className="space-y-3 rounded-md border p-4">
-            <div className="text-sm font-semibold">
-              {t("llmConfig.sections.embedding.title")}
+          <fieldset className="space-y-3 rounded-md border border-dashed p-4">
+            <div className="flex items-center justify-between gap-2">
+              <div className="text-sm font-semibold text-muted-foreground">
+                {t("llmConfig.sections.embedding.title")}
+              </div>
+              <button
+                type="button"
+                aria-expanded={showEmbedding}
+                data-testid="llm-embedding-toggle"
+                onClick={() => setEmbeddingOverride(!showEmbedding)}
+                className="text-xs font-medium text-primary hover:underline"
+              >
+                {showEmbedding
+                  ? t("llmConfig.sections.embedding.collapse")
+                  : t("llmConfig.sections.embedding.expand")}
+              </button>
             </div>
-            <Guidance
-              lines={[
-                t("llmConfig.sections.embedding.drives"),
-                t("llmConfig.sections.embedding.separateProvider"),
-                t("llmConfig.sections.embedding.credentials"),
-                t("llmConfig.sections.embedding.urlConvention"),
-                t("llmConfig.sections.embedding.dimensionNote"),
-              ]}
-              docs={{
-                href: DOCS_URLS.embedding,
-                label: t("llmConfig.sections.embedding.docsLabel"),
-              }}
-            />
-            <ConfigField
-              id="embedding-base-url"
-              label={t("llmConfig.fields.baseUrl")}
-              placeholder={EXAMPLE_BASE_URLS.embedding}
-              error={errors.embedding?.base_url?.message}
-              registration={register("embedding.base_url")}
-            />
-            <div className="grid gap-3 sm:grid-cols-2">
-              <ConfigField
-                id="embedding-api-key"
-                label={t("llmConfig.fields.apiKey")}
-                placeholder={keyPlaceholder(status?.embedding)}
-                type="password"
-                error={errors.embedding?.api_key?.message}
-                registration={register("embedding.api_key")}
-              />
-              <ConfigField
-                id="embedding-model"
-                label={t("llmConfig.fields.model")}
-                placeholder={EXAMPLE_MODELS.embedding}
-                error={errors.embedding?.model?.message}
-                registration={register("embedding.model")}
-              />
-            </div>
+            <p className="text-xs font-medium text-destructive">
+              {t("llmConfig.sections.embedding.impact")}
+            </p>
+            {showEmbedding ? (
+              <div className="space-y-3">
+                <Guidance
+                  lines={[
+                    t("llmConfig.sections.embedding.drives"),
+                    t("llmConfig.sections.embedding.separateProvider"),
+                    t("llmConfig.sections.embedding.credentials"),
+                    t("llmConfig.sections.embedding.urlConvention"),
+                    t("llmConfig.sections.embedding.dimensionNote"),
+                  ]}
+                  docs={{
+                    href: DOCS_URLS.embedding,
+                    label: t("llmConfig.sections.embedding.docsLabel"),
+                  }}
+                />
+                <ConfigField
+                  id="embedding-base-url"
+                  label={t("llmConfig.fields.baseUrl")}
+                  placeholder={EXAMPLE_BASE_URLS.embedding}
+                  error={errors.embedding?.base_url?.message}
+                  registration={register("embedding.base_url")}
+                />
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <ConfigField
+                    id="embedding-api-key"
+                    label={t("llmConfig.fields.apiKey")}
+                    placeholder={keyPlaceholder(status?.embedding)}
+                    type="password"
+                    error={errors.embedding?.api_key?.message}
+                    registration={register("embedding.api_key")}
+                  />
+                  <ConfigField
+                    id="embedding-model"
+                    label={t("llmConfig.fields.model")}
+                    placeholder={EXAMPLE_MODELS.embedding}
+                    error={errors.embedding?.model?.message}
+                    registration={register("embedding.model")}
+                  />
+                </div>
+              </div>
+            ) : null}
           </fieldset>
 
-          <fieldset className="space-y-3 rounded-md border p-4">
-            <div className="text-sm font-semibold">
-              {t("llmConfig.sections.tavily.title")}
+          <fieldset className="space-y-3 rounded-md border border-dashed p-4">
+            <div className="flex items-center justify-between gap-2">
+              <div className="text-sm font-semibold text-muted-foreground">
+                {t("llmConfig.sections.tavily.title")}
+              </div>
+              <button
+                type="button"
+                aria-expanded={showTavily}
+                data-testid="llm-tavily-toggle"
+                onClick={() => setTavilyOverride(!showTavily)}
+                className="text-xs font-medium text-primary hover:underline"
+              >
+                {showTavily
+                  ? t("llmConfig.sections.tavily.collapse")
+                  : t("llmConfig.sections.tavily.expand")}
+              </button>
             </div>
             <p className="text-xs font-medium text-destructive">
               {t("llmConfig.sections.tavily.impact")}
             </p>
-            <Guidance
-              lines={[
-                t("llmConfig.sections.tavily.drives"),
-                t("llmConfig.sections.tavily.credentials"),
-                t("llmConfig.sections.tavily.shapeNote"),
-              ]}
-              docs={{
-                href: DOCS_URLS.tavily,
-                label: t("llmConfig.sections.tavily.docsLabel"),
-              }}
-            />
-            <ConfigField
-              id="tavily-base-url"
-              label={t("llmConfig.fields.baseUrl")}
-              placeholder={EXAMPLE_BASE_URLS.tavily}
-              error={errors.tavily?.base_url?.message}
-              registration={register("tavily.base_url")}
-            />
-            <ConfigField
-              id="tavily-api-key"
-              label={t("llmConfig.fields.apiKey")}
-              placeholder={keyPlaceholder(status?.tavily)}
-              type="password"
-              error={errors.tavily?.api_key?.message}
-              registration={register("tavily.api_key")}
-            />
+            {showTavily ? (
+              <div className="space-y-3">
+                <Guidance
+                  lines={[
+                    t("llmConfig.sections.tavily.drives"),
+                    t("llmConfig.sections.tavily.credentials"),
+                    t("llmConfig.sections.tavily.shapeNote"),
+                  ]}
+                  docs={{
+                    href: DOCS_URLS.tavily,
+                    label: t("llmConfig.sections.tavily.docsLabel"),
+                  }}
+                />
+                <ConfigField
+                  id="tavily-base-url"
+                  label={t("llmConfig.fields.baseUrl")}
+                  placeholder={EXAMPLE_BASE_URLS.tavily}
+                  error={errors.tavily?.base_url?.message}
+                  registration={register("tavily.base_url")}
+                />
+                <ConfigField
+                  id="tavily-api-key"
+                  label={t("llmConfig.fields.apiKey")}
+                  placeholder={keyPlaceholder(status?.tavily)}
+                  type="password"
+                  error={errors.tavily?.api_key?.message}
+                  registration={register("tavily.api_key")}
+                />
+              </div>
+            ) : null}
           </fieldset>
 
           <fieldset className="space-y-3 rounded-md border border-dashed p-4">
