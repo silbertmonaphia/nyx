@@ -1,5 +1,6 @@
 import { expect } from '@playwright/test';
 import { test } from './fixtures/e2e-fixtures';
+import { seedLlmConfig } from './helpers/llm-config';
 
 /**
  * End-to-end coverage of the feed list CRUD flow.
@@ -35,6 +36,9 @@ test.describe('Feed CRUD', () => {
     await page.getByLabel(/Username/i).fill(testUser.username);
     await page.getByLabel(/Password/i).fill(testUser.password);
     await page.getByRole('button', { name: /^Register$/i }).click();
+    await expect(page.getByText(/Successfully registered!/i)).toBeVisible();
+    await seedLlmConfig(page);
+    await page.reload();
     await expect(page.getByTestId('chat-form')).toBeVisible();
     await page.keyboard.press('Escape');
     await expect(page.getByTestId('chat-form')).toHaveCount(0);

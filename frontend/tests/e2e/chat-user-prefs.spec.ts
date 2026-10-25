@@ -1,6 +1,7 @@
 import { execFileSync } from 'node:child_process';
 import { expect, type Page } from '@playwright/test';
 import { test } from './fixtures/e2e-fixtures';
+import { registerAndOpenChat as registerAndOpenChatShared } from './helpers/llm-config';
 
 /**
  * User-preference memory — browser verification for
@@ -34,26 +35,10 @@ import { test } from './fixtures/e2e-fixtures';
  * annotation will show a plain reply).
  */
 
-// Fresh user per test — see chat-rag.spec.ts `makeTestUser` for why a
-// module-level constant re-registered in beforeEach collides (409).
-function makeTestUser() {
-  return {
-    username: `e2e_prefs_${Date.now()}_${Math.floor(Math.random() * 100000)}`,
-    password: 'testpass123',
-  };
-}
-
 const CURRENT_SESSION_KEY = 'nyx.chat.currentSessionId';
 
 async function registerAndOpenChat(page: Page): Promise<void> {
-  const user = makeTestUser();
-  await page.goto('/');
-  await page.getByRole('button', { name: /Register/i }).last().click();
-  await page.getByLabel(/Username/i).fill(user.username);
-  await page.getByLabel(/Password/i).fill(user.password);
-  await page.getByRole('button', { name: /^Register$/i }).click();
-  await expect(page.getByText(/Successfully registered!/i)).toBeVisible();
-  await expect(page.getByTestId('chat-form')).toBeVisible();
+  await registerAndOpenChatShared(page, { prefix: 'e2e_prefs' });
 }
 
 /** A reload drops the dialog's open flag — reopen it (sidebar spec). */

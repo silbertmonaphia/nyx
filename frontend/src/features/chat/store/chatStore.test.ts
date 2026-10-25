@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { act, waitFor } from '@testing-library/react';
 import { chatService } from '../services/chatService';
 import { useChatStore } from './chatStore';
-import { ChatApiError, type ChatEvent, type SessionMessage } from '../types/chat';
+import { ChatApiError, ChatStreamError, type ChatEvent, type SessionMessage } from '../types/chat';
 import { queryClient } from '~/services/queryClient';
 import { useAuthStore } from '~/store/authStore';
 
@@ -36,6 +36,7 @@ function resetStore() {
     messages: [],
     isStreaming: false,
     error: null,
+    llmGateOpen: false,
     currentSessionId: null,
     ownerUserId: undefined,
     sessionList: [],
@@ -2981,6 +2982,79 @@ describe('useChatStore', () => {
       expect(useChatStore.getState().messages).toEqual([
         { role: 'user', content: 'bob message' },
       ]);
+    });
+  });
+
+  describe('llm gate (add-user-llm-byok 6.3)', () => {
+    it('opens the gate when a send fails with a pre-stream 409', async () => {
+      mockedService.streamMessage.mockImplementationOnce(
+        () =>
+          (async function* () {
+            throw new ChatStreamError({
+              kind: 'http',
+              status: 409,
+              message: 'LLM configuration required',
+            });
+          })(),
+      );
+
+      await act(async () => {
+        await useChatStore.getState().send('hello');
+      });
+
+      expect(useChatStore.getState().llmGateOpen).toBe(true);
+      expect(useChatStore.getState().isStreaming).toBe(false);
+    });
+
+    it('does not open the gate for other HTTP failures', async () => {
+      mockedService.streamMessage.mockImplementationOnce(
+        () =>
+          (async function* () {
+            throw new ChatStreamError({
+              kind: 'http',
+              status: 500,
+              message: 'Server error',
+            });
+          })(),
+      );
+
+      await act(async () => {
+        await useChatStore.getState().send('hello');
+      });
+
+      expect(useChatStore.getState().llmGateOpen).toBe(false);
+    });
+
+    it('does not open the gate for a mid-stream error frame', async () => {
+      mockedService.streamMessage.mockImplementationOnce(
+        (_messages: unknown, signal: AbortSignal) =>
+          makeStream([{ kind: 'error', error: 'boom', request_id: 'r1' }], signal),
+      );
+
+      await act(async () => {
+        await useChatStore.getState().send('hello');
+      });
+
+      expect(useChatStore.getState().llmGateOpen).toBe(false);
+    });
+
+    it('setLlmGateOpen clears the flag and resetForUser resets it', async () => {
+      act(() => {
+        useChatStore.getState().setLlmGateOpen(true);
+      });
+      expect(useChatStore.getState().llmGateOpen).toBe(true);
+
+      act(() => {
+        useChatStore.getState().setLlmGateOpen(false);
+      });
+      expect(useChatStore.getState().llmGateOpen).toBe(false);
+
+      useChatStore.getState().resetForUser(1);
+      act(() => {
+        useChatStore.getState().setLlmGateOpen(true);
+      });
+      useChatStore.getState().resetForUser(2);
+      expect(useChatStore.getState().llmGateOpen).toBe(false);
     });
   });
 });

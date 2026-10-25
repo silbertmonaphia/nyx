@@ -49,6 +49,7 @@ export const zh = {
       loginOrRegister: '登录 / 注册',
       addFeed: '添加私人动态',
       cancelAddFeed: '取消添加私人动态',
+      llmConfig: 'LLM 配置',
       sort: {
         newest: '最新优先',
         oldest: '最早优先',
@@ -155,6 +156,87 @@ export const zh = {
         noBody: '聊天响应没有响应体',
         streamError: '聊天流错误',
         sessionNoId: '聊天会话创建未返回 id',
+      },
+    },
+    llmConfig: {
+      title: 'LLM 配置',
+      description: '自带密钥 — 配置聊天、搜索与检索所用的端点、模型与 API 密钥。',
+      gate: {
+        title: '需要先配置 LLM',
+        description:
+          'AI Agent 需要你自己的模型端点与 API 密钥才能运行。请填写 8 个必填字段后继续。',
+      },
+      sections: {
+        llm: {
+          title: '主 LLM',
+          drives: '驱动聊天回复与 Agent 的规划步骤。',
+          capabilities:
+            'AI Agent 需要服务商具备三项能力：流式 chat completions、OpenAI 形状的 tool calls、结构化（json_schema）输出。缺少 tool calls 时 AI Agent 不可用、只剩单轮聊天路径；缺少结构化输出时 planner 回退到旧版自由文本路径。',
+          credentials:
+            '可在 DeepSeek 控制台（platform.deepseek.com）或 OpenRouter（openrouter.ai）获取密钥，也可以运行本地 vLLM 服务并把基础 URL 指向它。',
+          docsLabel: 'DeepSeek API 文档',
+          urlConvention:
+            '需为 OpenAI 兼容端点：路径需携带服务商的版本前缀（以 /v1 结尾），如 https://api.deepseek.com/v1。',
+          modelNote:
+            '模型必须真实存在于该端点上（保存时不做探测）。无需密钥的端点也需填写一个非占位的值。',
+        },
+        embedding: {
+          title: 'Embedding',
+          drives: '驱动私人动态语义搜索与 RAG 检索。',
+          separateProvider:
+            '必须是暴露 OpenAI 兼容 embeddings 的服务 —— 并非每个聊天服务商都提供 embedding，因此这里可以填和主 LLM 不同的服务。',
+          credentials:
+            '可运行本地 vLLM 嵌入服务（如 make dev-vllm-embed 启动的 Qwen/Qwen3-Embedding-0.6B），或使用 SiliconFlow（cloud.siliconflow.cn）等控制台。',
+          docsLabel: 'vLLM OpenAI 兼容服务文档',
+          urlConvention:
+            '需为 OpenAI 兼容端点：路径需携带服务商的版本前缀（以 /v1 结尾），如 http://localhost:8000/v1。',
+          dimensionNote:
+            '部署要求 1024 维向量，例如 Qwen/Qwen3-Embedding-0.6B。维度不符的模型会在查询时被拒绝，而不是保存时。',
+        },
+        tavily: {
+          title: 'Tavily 搜索',
+          drives: '驱动 Agent 的 web_search 工具。',
+          credentials:
+            '在 Tavily 控制台（app.tavily.com）创建密钥 — 免费额度足够轻度使用。',
+          docsLabel: 'Tavily 搜索 API 文档',
+          shapeNote: '该槽位按部署的搜索服务商（Tavily）的请求形态设计。',
+        },
+        fallback: {
+          title: '重试模型（可选）',
+          drives: '留空时仅影响单轮聊天的回退路径，不影响 Agent 运行；填写后主 LLM 出错时由它接管。',
+          docsLabel: '服务商 API 文档',
+          expand: '展开重试模型字段',
+          collapse: '收起重试模型字段',
+        },
+        agentNote:
+          '必须填满全部 8 个必填字段（主 LLM、Embedding、Tavily）后，AI Agent 才可用。',
+      },
+      fields: {
+        baseUrl: '基础 URL',
+        model: '模型',
+        apiKey: 'API 密钥',
+        keyPlaceholder: '你的 API 密钥',
+        keySaved: '已保存 {{masked}}，留空保持不变',
+      },
+      errors: {
+        required: '必填项',
+        url: '请输入合法的 http(s) URL',
+      },
+      actions: {
+        save: '保存',
+        saving: '保存中…',
+        clear: '清除配置',
+        clearing: '清除中…',
+      },
+      confirm: {
+        title: '清除 LLM 配置？',
+        description: '将删除已保存的端点与密钥。在重新配置之前，AI Agent 将不可用。',
+        confirm: '清除',
+      },
+      toasts: {
+        saved: 'LLM 配置已保存',
+        cleared: 'LLM 配置已清除',
+        failed: 'LLM 配置操作失败，请重试',
       },
     },
     time: {

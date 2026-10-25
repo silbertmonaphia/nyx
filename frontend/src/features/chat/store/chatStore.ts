@@ -5,6 +5,7 @@ import { invalidateFeedQueries } from "~/services/queryInvalidation";
 import { chatService } from "../services/chatService";
 import {
   ChatApiError,
+  ChatStreamError,
   type ApprovalDecision,
   type ChatStep,
   type ChatStepConfirm,
@@ -47,6 +48,8 @@ interface ChatState {
   messages: ChatMessage[];
   isStreaming: boolean;
   error: string | null;
+  llmGateOpen: boolean;
+  setLlmGateOpen: (open: boolean) => void;
   /**
    * Send a user message and stream the assistant response. Appends
    * the user message immediately, opens the stream, and patches a
@@ -446,6 +449,10 @@ export const useChatStore = create<ChatState>((set, get) => ({
   messages: [],
   isStreaming: false,
   error: null,
+  llmGateOpen: false,
+  setLlmGateOpen: (open) => {
+    set({ llmGateOpen: open });
+  },
   currentSessionId: readPersistedSessionId(),
   ownerUserId: undefined,
   sessionList: [],
@@ -830,6 +837,13 @@ export const useChatStore = create<ChatState>((set, get) => ({
         }
       }
     } catch (err) {
+      if (
+        err instanceof ChatStreamError &&
+        err.event.kind === "http" &&
+        err.event.status === 409
+      ) {
+        set({ llmGateOpen: true });
+      }
       // Distinguish user-driven aborts (Cancel button) from real
       // failures. AbortError is the WHATWG fetch name; the
       // underlying DOMException shares it. Don't surface it as a
@@ -1152,6 +1166,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
       messages: [],
       isStreaming: false,
       error: null,
+      llmGateOpen: false,
       currentSessionId: null,
       sessionList: [],
       sessionListNextCursor: null,

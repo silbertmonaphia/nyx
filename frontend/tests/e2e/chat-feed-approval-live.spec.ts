@@ -1,5 +1,6 @@
 import { expect, type Page } from '@playwright/test';
 import { test } from './fixtures/e2e-fixtures';
+import { registerAndOpenChat as registerAndOpenChatShared } from './helpers/llm-config';
 
 /**
  * Live feed-creation approval flow — agent-feed-tools task 7.2.
@@ -20,24 +21,8 @@ import { test } from './fixtures/e2e-fixtures';
  * Side effects: creates one feed for a throwaway user (unique per run).
  */
 
-// Fresh user per test — see chat-rag.spec.ts `makeTestUser` for why a
-// module-level constant re-registered in beforeEach collides (409).
-function makeTestUser() {
-  return {
-    username: `e2e_feed_live_${Date.now()}_${Math.floor(Math.random() * 100000)}`,
-    password: 'testpass123',
-  };
-}
-
 async function registerAndOpenChat(page: Page): Promise<void> {
-  const TEST_USER = makeTestUser();
-  await page.goto('/');
-  await page.getByRole('button', { name: /Register/i }).last().click();
-  await page.getByLabel(/Username/i).fill(TEST_USER.username);
-  await page.getByLabel(/Password/i).fill(TEST_USER.password);
-  await page.getByRole('button', { name: /^Register$/i }).click();
-  await expect(page.getByText(/Successfully registered!/i)).toBeVisible();
-  await expect(page.getByTestId('chat-form')).toBeVisible();
+  await registerAndOpenChatShared(page, { prefix: 'e2e_feed_live' });
 }
 
 const FEED_NAME = `Live Smoke ${Date.now()}`;

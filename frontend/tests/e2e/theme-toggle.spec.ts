@@ -35,6 +35,25 @@ const USER = {
   updated_at: '2026-10-17T00:00:00Z',
 };
 
+const stubbedLlmConfig = {
+  configured: true,
+  llm: {
+    base_url: 'https://llm.example.test/v1',
+    model: 'stub-model',
+    api_key_masked: '…mock',
+  },
+  embedding: {
+    base_url: 'https://embed.example.test/v1',
+    model: 'stub-embed',
+    api_key_masked: '…mock',
+  },
+  tavily: {
+    base_url: 'https://tavily.example.test/search',
+    api_key_masked: '…mock',
+  },
+  fallback: null,
+};
+
 async function stubAuthenticated(page: Page): Promise<void> {
   await page.addInitScript((user) => {
     window.localStorage.setItem(
@@ -50,6 +69,9 @@ async function stubAuthenticated(page: Page): Promise<void> {
     (url) => url.pathname.startsWith('/api/'),
     (route) => {
       const pathname = new URL(route.request().url()).pathname;
+      if (pathname.endsWith('/me/llm-config')) {
+        return route.fulfill({ json: stubbedLlmConfig });
+      }
       if (pathname.endsWith('/me')) return route.fulfill({ json: USER });
       if (pathname.endsWith('/feeds')) {
         return route.fulfill({

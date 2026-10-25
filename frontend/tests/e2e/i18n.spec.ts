@@ -40,6 +40,25 @@ const sessionPage = {
   next_cursor: null,
 };
 
+const stubbedLlmConfig = {
+  configured: true,
+  llm: {
+    base_url: 'https://llm.example.test/v1',
+    model: 'stub-model',
+    api_key_masked: '…mock',
+  },
+  embedding: {
+    base_url: 'https://embed.example.test/v1',
+    model: 'stub-embed',
+    api_key_masked: '…mock',
+  },
+  tavily: {
+    base_url: 'https://tavily.example.test/search',
+    api_key_masked: '…mock',
+  },
+  fallback: null,
+};
+
 async function stubApi(page: Page) {
   await page.route(
     (url) => url.pathname.startsWith('/api/'),
@@ -50,6 +69,9 @@ async function stubApi(page: Page) {
       }
       if (path.endsWith('/login')) {
         return route.fulfill({ json: loginPayload });
+      }
+      if (path.endsWith('/me/llm-config')) {
+        return route.fulfill({ json: stubbedLlmConfig });
       }
       if (path.endsWith('/me')) {
         return route.fulfill({ json: loginPayload.user });

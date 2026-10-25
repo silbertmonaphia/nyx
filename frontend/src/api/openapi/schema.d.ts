@@ -176,6 +176,34 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/me/llm-config": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get LLM configuration
+         * @description Returns the authenticated caller's per-user LLM configuration with API keys masked to their last four characters. A user with no saved configuration receives configured=false with null sections.
+         */
+        get: operations["get-llm-config"];
+        /**
+         * Save LLM configuration
+         * @description Validates and upserts the authenticated caller's LLM, embedding, Tavily, and optional retry-model configuration. API keys are write-only: a blank key on update keeps the stored key, while a create requires every required key. Responds with the masked configuration.
+         */
+        put: operations["update-llm-config"];
+        post?: never;
+        /**
+         * Delete LLM configuration
+         * @description Removes the authenticated caller's LLM configuration. Idempotent: deleting an unconfigured user also returns 204.
+         */
+        delete: operations["delete-llm-config"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/refresh": {
         parameters: {
             query?: never;
@@ -228,6 +256,20 @@ export interface components {
             /** @example Bearer */
             token_type: string;
             user: components["schemas"]["User"];
+        };
+        ConfigResponse: {
+            configured: boolean;
+            embedding: components["schemas"]["LlmEndpointResponse"];
+            fallback: components["schemas"]["LlmEndpointResponse"];
+            llm: components["schemas"]["LlmEndpointResponse"];
+            tavily: components["schemas"]["TavilyResponse"];
+        };
+        ConfigUpdateInput: {
+            embedding: components["schemas"]["LlmEndpointInput"];
+            /** @description Optional retry-model group. Supply all three fields or omit the section entirely. */
+            fallback?: components["schemas"]["LlmEndpointInput"];
+            llm: components["schemas"]["LlmEndpointInput"];
+            tavily: components["schemas"]["TavilyInput"];
         };
         ErrorResponse: {
             /** Format: int64 */
@@ -305,6 +347,20 @@ export interface components {
              */
             status: string;
         };
+        LlmEndpointInput: {
+            /** @description Write-only API key. Required on create; leave empty on update to keep the stored key. */
+            api_key?: string;
+            /** @description OpenAI-compatible base URL including the provider's version prefix (for example, a trailing /v1). Private and localhost addresses are allowed. */
+            base_url: string;
+            /** @description Model name as the configured endpoint expects it. */
+            model: string;
+        };
+        LlmEndpointResponse: {
+            /** @description Masked preview of the stored key: the last four characters only. The plaintext key is write-only and never returned. */
+            api_key_masked: string;
+            base_url: string;
+            model: string;
+        };
         LoginRequest: {
             password: string;
             username: string;
@@ -318,6 +374,17 @@ export interface components {
         RegisterRequest: {
             password: string;
             username: string;
+        };
+        TavilyInput: {
+            /** @description Write-only API key. Required on create; leave empty on update to keep the stored key. */
+            api_key?: string;
+            /** @description Search provider base URL. */
+            base_url: string;
+        };
+        TavilyResponse: {
+            /** @description Masked preview of the stored key: the last four characters only. The plaintext key is write-only and never returned. */
+            api_key_masked: string;
+            base_url: string;
         };
         User: {
             /** Format: date-time */
@@ -672,6 +739,95 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["User"];
                 };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    "get-llm-config": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConfigResponse"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    "update-llm-config": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ConfigUpdateInput"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConfigResponse"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    "delete-llm-config": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description No Content */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
             /** @description Error */
             default: {

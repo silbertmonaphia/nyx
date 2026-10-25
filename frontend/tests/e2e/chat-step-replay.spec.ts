@@ -1,24 +1,11 @@
 import { expect, type Locator, type Page } from '@playwright/test';
 import { test } from './fixtures/e2e-fixtures';
+import { registerAndOpenChat as registerAndOpenChatShared } from './helpers/llm-config';
 
 const CURRENT_SESSION_KEY = 'nyx.chat.currentSessionId';
 
-function makeTestUser() {
-  return {
-    username: `e2e_steps_${Date.now()}_${Math.floor(Math.random() * 100000)}`,
-    password: 'testpass123',
-  };
-}
-
 async function registerAndOpenChat(page: Page): Promise<void> {
-  const testUser = makeTestUser();
-  await page.goto('/');
-  await page.getByRole('button', { name: /Register/i }).last().click();
-  await page.getByLabel(/Username/i).fill(testUser.username);
-  await page.getByLabel(/Password/i).fill(testUser.password);
-  await page.getByRole('button', { name: /^Register$/i }).click();
-  await expect(page.getByText(/Successfully registered!/i)).toBeVisible();
-  await expect(page.getByTestId('chat-form')).toBeVisible();
+  await registerAndOpenChatShared(page, { prefix: 'e2e_steps' });
 }
 
 async function sendAndWaitForReply(page: Page, prompt: string): Promise<void> {

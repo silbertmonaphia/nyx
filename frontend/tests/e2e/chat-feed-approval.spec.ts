@@ -1,5 +1,6 @@
 import { expect, type Page, type Route } from '@playwright/test';
 import { test } from './fixtures/e2e-fixtures';
+import { registerAndOpenChat as registerAndOpenChatShared } from './helpers/llm-config';
 import http from 'node:http';
 import type { AddressInfo } from 'node:net';
 
@@ -245,22 +246,8 @@ async function routeToMock(page: Page, base: string) {
 
 // --- app-driving helpers (pattern: chat-rag.spec.ts) ------------------------
 
-function makeTestUser() {
-  return {
-    username: `e2e_approval_${Date.now()}_${Math.floor(Math.random() * 100000)}`,
-    password: 'testpass123',
-  };
-}
-
 async function registerAndOpenChat(page: Page): Promise<void> {
-  const user = makeTestUser();
-  await page.goto('/');
-  await page.getByRole('button', { name: /Register/i }).last().click();
-  await page.getByLabel(/Username/i).fill(user.username);
-  await page.getByLabel(/Password/i).fill(user.password);
-  await page.getByRole('button', { name: /^Register$/i }).click();
-  await expect(page.getByText(/Successfully registered!/i)).toBeVisible();
-  await expect(page.getByTestId('chat-form')).toBeVisible();
+  await registerAndOpenChatShared(page, { prefix: 'e2e_approval' });
 }
 
 async function sendMessage(page: Page, text: string): Promise<void> {

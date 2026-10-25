@@ -1,5 +1,6 @@
 import { expect, type Page } from '@playwright/test';
 import { test } from './fixtures/e2e-fixtures';
+import { seedLlmConfig } from './helpers/llm-config';
 
 const API_URL = process.env.E2E_API_URL ?? 'http://localhost:8080/api';
 
@@ -40,6 +41,8 @@ test.describe('Authentication', () => {
     expect(
       Math.abs(toastBox!.x + toastBox!.width / 2 - viewport!.width / 2),
     ).toBeLessThan(2);
+    await seedLlmConfig(page);
+    await page.reload();
     await closeChatIfOpen(page);
     // The header shows the username as plain text and a Logout button —
     // both gate on `isAuthenticated`, so seeing them is proof the
@@ -60,6 +63,9 @@ test.describe('Authentication', () => {
     await page.getByLabel(/Password/i).fill('password123');
     await expect(page.getByLabel(/Remember me/i)).toBeChecked();
     await page.getByRole('button', { name: /^Register$/i }).click();
+    await expect(page.getByText(/Successfully registered!/i)).toBeVisible();
+    await seedLlmConfig(page);
+    await page.reload();
     await expect(page.getByTestId('chat-form')).toBeVisible();
     await closeChatIfOpen(page);
     await expect(page.getByRole('button', { name: /^Logout$/i })).toBeVisible();
@@ -85,6 +91,9 @@ test.describe('Authentication', () => {
     await page.getByLabel(/Username/i).fill(username);
     await page.getByLabel(/Password/i).fill('password123');
     await page.getByRole('button', { name: /^Register$/i }).click();
+    await expect(page.getByText(/Successfully registered!/i)).toBeVisible();
+    await seedLlmConfig(page);
+    await page.reload();
     await expect(page.getByTestId('chat-form')).toBeVisible();
 
     const refreshToken = await page.evaluate(() => {
@@ -122,6 +131,9 @@ test.describe('Authentication', () => {
     await page.getByLabel(/Username/i).fill(username);
     await page.getByLabel(/Password/i).fill('password123');
     await page.getByRole('button', { name: /^Register$/i }).click();
+    await expect(page.getByText(/Successfully registered!/i)).toBeVisible();
+    await seedLlmConfig(page);
+    await page.reload();
     await expect(page.getByTestId('chat-form')).toBeVisible();
 
     const refreshToken = await page.evaluate(() => {
@@ -159,6 +171,9 @@ test.describe('Authentication', () => {
     await page.getByLabel(/Password/i).fill('password123');
     await page.getByLabel(/Remember me/i).uncheck();
     await page.getByRole('button', { name: /^Register$/i }).click();
+    await expect(page.getByText(/Successfully registered!/i)).toBeVisible();
+    await seedLlmConfig(page);
+    await page.reload();
     await expect(page.getByTestId('chat-form')).toBeVisible();
     expect(
       await page.evaluate(() => window.localStorage.getItem('nyx-token-store')),
@@ -192,6 +207,9 @@ test.describe('Authentication', () => {
     await page.getByLabel(/Username/i).fill(user.username);
     await page.getByLabel(/Password/i).fill(user.password);
     await page.getByRole('button', { name: /^Register$/i }).click();
+    await expect(page.getByText(/Successfully registered!/i)).toBeVisible();
+    await seedLlmConfig(page);
+    await page.reload();
     await expect(page.getByTestId('chat-form')).toBeVisible();
 
     await closeChatIfOpen(page);

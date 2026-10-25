@@ -1,5 +1,6 @@
 import { expect, type Page, type Locator } from '@playwright/test';
 import { test } from './fixtures/e2e-fixtures';
+import { registerAndOpenChat as registerAndOpenChatShared } from './helpers/llm-config';
 
 /**
  * Browser-level verification of the chat / RAG flow.
@@ -22,29 +23,8 @@ import { test } from './fixtures/e2e-fixtures';
  * dev server; the others are preconditions.
  */
 
-// Fresh user per test. `registerAndOpenChat` runs in `beforeEach` and
-// registers through the UI every time, so the name must be unique within
-// this file too: a module-level constant collides with itself in any
-// worker that executes a second test from the same file → 409 "User
-// already exists" → the success toast never appears and the test fails
-// in its beforeEach (observed 2026-10-13, the root of the suite's
-// registration flake).
-function makeTestUser() {
-  return {
-    username: `e2e_chat_${Date.now()}_${Math.floor(Math.random() * 100000)}`,
-    password: 'testpass123',
-  };
-}
-
 async function registerAndOpenChat(page: Page): Promise<void> {
-  const TEST_USER = makeTestUser();
-  await page.goto('/');
-  await page.getByRole('button', { name: /Register/i }).last().click();
-  await page.getByLabel(/Username/i).fill(TEST_USER.username);
-  await page.getByLabel(/Password/i).fill(TEST_USER.password);
-  await page.getByRole('button', { name: /^Register$/i }).click();
-  await expect(page.getByText(/Successfully registered!/i)).toBeVisible();
-  await expect(page.getByTestId('chat-form')).toBeVisible();
+  await registerAndOpenChatShared(page, { prefix: 'e2e_chat' });
 }
 
 async function closeChat(page: Page): Promise<void> {

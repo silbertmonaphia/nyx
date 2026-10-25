@@ -1,22 +1,9 @@
 import { expect, type Page } from '@playwright/test';
 import { test } from './fixtures/e2e-fixtures';
-
-function makeTestUser() {
-  return {
-    username: `e2e_tokens_${Date.now()}_${Math.floor(Math.random() * 100000)}`,
-    password: 'testpass123',
-  };
-}
+import { registerAndOpenChat as registerAndOpenChatShared } from './helpers/llm-config';
 
 async function registerAndOpenChat(page: Page): Promise<void> {
-  const TEST_USER = makeTestUser();
-  await page.goto('/');
-  await page.getByRole('button', { name: /Register/i }).last().click();
-  await page.getByLabel(/Username/i).fill(TEST_USER.username);
-  await page.getByLabel(/Password/i).fill(TEST_USER.password);
-  await page.getByRole('button', { name: /^Register$/i }).click();
-  await expect(page.getByText(/Successfully registered!/i)).toBeVisible();
-  await expect(page.getByTestId('chat-form')).toBeVisible();
+  await registerAndOpenChatShared(page, { prefix: 'e2e_tokens' });
 }
 
 async function sendAndWaitForReply(page: Page): Promise<void> {

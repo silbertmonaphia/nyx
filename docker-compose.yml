@@ -583,6 +583,11 @@ services:
         # directive via the __SENTRY_CSP_ORIGIN__ placeholder; default
         # is the SaaS ingest host list — self-hosted operators override.
         - VITE_SENTRY_DSN=${VITE_SENTRY_DSN:-}
+        # Per-user BYOK LLM config gate. Default on; set to false for a
+        # deployment whose backend runs with LLM_ENABLED=false. The SPA
+        # also hides the gear when GET /api/me/llm-config returns 404, so
+        # the defaults self-align even if this is left unset.
+        - VITE_LLM_FEATURE_ENABLED=${VITE_LLM_FEATURE_ENABLED:-true}
         - SENTRY_AUTH_TOKEN=${SENTRY_AUTH_TOKEN:-}
         - SENTRY_ORG=${SENTRY_ORG:-}
         - SENTRY_PROJECT=${SENTRY_PROJECT:-nyx-frontend}

@@ -22,7 +22,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from './components/ui/Dialog';
-import { Plus, X, Search, LogOut, User as UserIcon, MessageSquare, ArrowDownNarrowWide, ArrowUpNarrowWide, Users } from 'lucide-react';
+import { Plus, X, Search, LogOut, User as UserIcon, MessageSquare, ArrowDownNarrowWide, ArrowUpNarrowWide, Users, Settings } from 'lucide-react';
 import { PageMeta } from './components/app/PageMeta';
 import { ThemeToggle } from './components/app/ThemeToggle';
 import { LocaleToggle } from './components/app/LocaleToggle';
@@ -30,6 +30,9 @@ import { logger } from './services/logger';
 import { ChatPanel } from './features/chat/components/ChatPanel';
 import { resetFeedStateForNewUser } from './features/feeds/services/resetFeedState';
 import { useChatStateReset } from './features/chat/hooks/useChatStateReset';
+import { LlmConfigModal } from './features/chat/components/LlmConfigModal';
+import { useLlmConfig } from './features/chat/hooks/useLlmConfig';
+import { useChatStore } from './features/chat/store/chatStore';
 
 function App() {
   const { t } = useTranslation();
@@ -51,6 +54,35 @@ function App() {
   const chatOpen = isAuthenticated && !chatDismissed;
   const [showLogoutAll, setShowLogoutAll] = useState(false);
   const [loggingOutAll, setLoggingOutAll] = useState(false);
+  const llmFeatureEnabled = import.meta.env.VITE_LLM_FEATURE_ENABLED !== 'false';
+  const [llmSettingsOpen, setLlmSettingsOpen] = useState(false);
+  const llmGateOpen = useChatStore((state) => state.llmGateOpen);
+  const setLlmGateOpen = useChatStore((state) => state.setLlmGateOpen);
+  const {
+    configured: llmConfigured,
+    isLoading: llmStatusLoading,
+    isUnavailable: llmUnavailable,
+  } = useLlmConfig({
+    enabled: llmFeatureEnabled && isAuthenticated && chatOpen,
+  });
+  const llmFeatureActive = llmFeatureEnabled && !llmUnavailable;
+  const llmGate =
+    llmFeatureActive &&
+    isAuthenticated &&
+    chatOpen &&
+    !llmStatusLoading &&
+    llmConfigured === false;
+  const llmModalBlocking = llmGate || llmGateOpen;
+
+  const handleLlmModalChange = (open: boolean) => {
+    setLlmSettingsOpen(open);
+    if (!open) setLlmGateOpen(false);
+  };
+
+  const handleLlmSaved = () => {
+    setLlmGateOpen(false);
+    setChatDismissed(false);
+  };
 
   // Boot-time round-trip: if localStorage has a persisted user,
   // reconcile it against the server. SECURITY.md L7.
@@ -192,6 +224,19 @@ function App() {
           <div className="flex items-center gap-4 justify-self-end">
             {isAuthenticated ? (
               <>
+                {llmFeatureActive && (
+                  <Button
+                    variant="outline"
+                    size="icon"
+                    onClick={() => setLlmSettingsOpen(true)}
+                    aria-label={t('nav.llmConfig')}
+                    title={t('nav.llmConfig')}
+                    className="shrink-0"
+                    data-testid="llm-config-button"
+                  >
+                    <Settings className="h-4 w-4" />
+                  </Button>
+                )}
                 <Button
                   variant="outline"
                   size="sm"
@@ -375,7 +420,19 @@ function App() {
         </DialogContent>
       </Dialog>
 
-      <ChatPanel open={chatOpen} onOpenChange={(open) => setChatDismissed(!open)} />
+      <ChatPanel
+        open={chatOpen && !llmModalBlocking}
+        onOpenChange={(open) => setChatDismissed(!open)}
+      />
+
+      {llmFeatureActive && (
+        <LlmConfigModal
+          open={llmSettingsOpen || llmGate || llmGateOpen}
+          blocking={llmModalBlocking}
+          onOpenChange={handleLlmModalChange}
+          onSaved={handleLlmSaved}
+        />
+      )}
 
       <section id="spacer"></section>
     </div>

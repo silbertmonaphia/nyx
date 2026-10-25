@@ -1,5 +1,6 @@
 import { expect, type Page, type APIRequestContext } from '@playwright/test';
 import { test } from './fixtures/e2e-fixtures';
+import { llmConfigSeedBody } from './helpers/llm-config';
 
 /**
  * Long-run survival + the summarize→create journey (live stack).
@@ -72,6 +73,15 @@ async function registerSeedAndLogin(
     `register failed: ${reg.status()} ${await reg.text()}`,
   ).toBe(201);
   const { access_token } = (await reg.json()) as { access_token: string };
+
+  const seededConfig = await request.put(`${API}/me/llm-config`, {
+    headers: { Authorization: `Bearer ${access_token}` },
+    data: llmConfigSeedBody(),
+  });
+  expect(
+    seededConfig.ok(),
+    `llm config seed failed: ${seededConfig.status()} ${await seededConfig.text()}`,
+  ).toBeTruthy();
 
   // Mirror the operator's data shape: three recent feeds, no query match
   // for the planner's args — the plan must still summarize + create.

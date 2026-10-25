@@ -14,7 +14,7 @@
     "test:e2e": "playwright test --grep-invert @live",
     "openapi:gen": "openapi-typescript ../api/openapi.json -o src/api/openapi/schema.d.ts",
     "openapi:check": "openapi-typescript ../api/openapi.json -o /tmp/openapi-check.d.ts && diff -u src/api/openapi/schema.d.ts /tmp/openapi-check.d.ts",
-    "test:e2e:live": "playwright test --grep @live --workers=1"
+    "test:e2e:live": "E2E_EMBEDDING_BASE_URL=${E2E_EMBEDDING_BASE_URL:-http://localhost:8001/v1} playwright test --grep @live --workers=1"
   },
   "dependencies": {
     "@hookform/resolvers": "^5.2.2",

@@ -1,5 +1,6 @@
 import { expect, type Page } from '@playwright/test';
 import { test } from './fixtures/e2e-fixtures';
+import { registerAndOpenChat as registerAndOpenChatShared } from './helpers/llm-config';
 
 /**
  * Browser-level verification for `agent-langfuse-tracing`.
@@ -49,24 +50,8 @@ const LANGFUSE_SECRET_KEY =
 const INGESTION_TIMEOUT_MS = 60_000;
 const POLL_INTERVAL_MS = 2_000;
 
-// Fresh user per test — see chat-rag.spec.ts `makeTestUser` for why a
-// module-level constant re-registered in beforeEach collides (409).
-function makeTestUser() {
-  return {
-    username: `e2e_langfuse_${Date.now()}_${Math.floor(Math.random() * 100000)}`,
-    password: 'testpass123',
-  };
-}
-
 async function registerAndOpenChat(page: Page): Promise<void> {
-  const TEST_USER = makeTestUser();
-  await page.goto('/');
-  await page.getByRole('button', { name: /Register/i }).last().click();
-  await page.getByLabel(/Username/i).fill(TEST_USER.username);
-  await page.getByLabel(/Password/i).fill(TEST_USER.password);
-  await page.getByRole('button', { name: /^Register$/i }).click();
-  await expect(page.getByText(/Successfully registered!/i)).toBeVisible();
-  await expect(page.getByTestId('chat-form')).toBeVisible();
+  await registerAndOpenChatShared(page, { prefix: 'e2e_langfuse' });
 }
 
 /** The verified numeric user id the agent receives via X-Nyx-User-Id: the

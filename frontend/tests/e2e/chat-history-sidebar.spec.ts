@@ -1,5 +1,10 @@
 import { expect, type Page } from '@playwright/test';
 import { test } from './fixtures/e2e-fixtures';
+import {
+  makeTestUser,
+  registerAndOpenChat as registerAndOpenChatShared,
+  seedLlmConfig,
+} from './helpers/llm-config';
 
 /**
  * Chat history sidebar — browser verification for `agent-chat-history-ui`.
@@ -41,26 +46,10 @@ import { test } from './fixtures/e2e-fixtures';
  * E2E_API_URL to the side backend (default http://localhost:8080/api).
  */
 
-// Fresh user per test — see chat-rag.spec.ts `makeTestUser` for why a
-// module-level constant re-registered in beforeEach collides (409).
-function makeTestUser() {
-  return {
-    username: `e2e_history_${Date.now()}_${Math.floor(Math.random() * 100000)}`,
-    password: 'testpass123',
-  };
-}
-
 const CURRENT_SESSION_KEY = 'nyx.chat.currentSessionId';
 
 async function registerAndOpenChat(page: Page): Promise<void> {
-  const user = makeTestUser();
-  await page.goto('/');
-  await page.getByRole('button', { name: /Register/i }).last().click();
-  await page.getByLabel(/Username/i).fill(user.username);
-  await page.getByLabel(/Password/i).fill(user.password);
-  await page.getByRole('button', { name: /^Register$/i }).click();
-  await expect(page.getByText(/Successfully registered!/i)).toBeVisible();
-  await expect(page.getByTestId('chat-form')).toBeVisible();
+  await registerAndOpenChatShared(page, { prefix: 'e2e_history' });
 }
 
 /**
@@ -193,6 +182,8 @@ test.describe('Chat history sidebar (browser-level, live backend)', { tag: '@liv
 
     await expect.poll(() => persistedSessionId(page)).toBeNull();
 
+    await seedLlmConfig(page);
+    await page.reload();
     await expect(page.getByTestId('chat-form')).toBeVisible();
     await expect(page.getByTestId('chat-session-empty')).toHaveText(
       'No conversations yet',

@@ -60,6 +60,7 @@ export const en: Translation = {
       loginOrRegister: 'Login / Register',
       addFeed: 'Add feed',
       cancelAddFeed: 'Cancel adding feed',
+      llmConfig: 'LLM settings',
       sort: {
         newest: 'Newest first',
         oldest: 'Oldest first',
@@ -170,6 +171,91 @@ export const en: Translation = {
         noBody: 'Chat response had no body',
         streamError: 'Chat stream error',
         sessionNoId: 'Chat session creation returned no id',
+      },
+    },
+    llmConfig: {
+      title: 'LLM configuration',
+      description:
+        'Bring your own keys — endpoints, models and API keys for chat, search and retrieval.',
+      gate: {
+        title: 'LLM configuration required',
+        description:
+          'The AI Agent needs your own model endpoints and API keys before it can run. Fill in the eight required fields to continue.',
+      },
+      sections: {
+        llm: {
+          title: 'Main LLM',
+          drives: "Drives chat replies and the agent's planning steps.",
+          capabilities:
+            'AI Agent needs three provider capabilities: streaming chat completions, OpenAI-shaped tool calls, and structured (json_schema) output. Without tool calls the AI Agent is unavailable and only the single-turn chat path works; without structured output the planner falls back to its legacy free-text path.',
+          credentials:
+            'Get a key from the DeepSeek console (platform.deepseek.com) or OpenRouter (openrouter.ai), or run a local vLLM server and point the base URL at it.',
+          docsLabel: 'DeepSeek API documentation',
+          urlConvention:
+            'Must be an OpenAI-compatible endpoint: the path carries the version prefix (a trailing /v1), e.g. https://api.deepseek.com/v1.',
+          modelNote:
+            'The model must exist on the endpoint (it is not probed when saving). An endpoint that needs no credential still requires a non-placeholder value.',
+        },
+        embedding: {
+          title: 'Embedding',
+          drives: 'Drives feed semantic search and RAG retrieval.',
+          separateProvider:
+            'Must expose OpenAI-compatible embeddings — not every chat provider offers them, so this slot may point at a different service than the main LLM.',
+          credentials:
+            'Run a local vLLM embedding server (e.g. Qwen/Qwen3-Embedding-0.6B via make dev-vllm-embed), or use a provider console such as SiliconFlow (cloud.siliconflow.cn).',
+          docsLabel: 'vLLM OpenAI-compatible server documentation',
+          urlConvention:
+            'Must be an OpenAI-compatible endpoint: the path carries the version prefix (a trailing /v1), e.g. http://localhost:8000/v1.',
+          dimensionNote:
+            'The deployment requires 1024-dimension vectors, e.g. Qwen/Qwen3-Embedding-0.6B. A model emitting a different width is rejected at query time, not when saving.',
+        },
+        tavily: {
+          title: 'Tavily search',
+          drives: "Drives the agent's web_search tool.",
+          credentials:
+            'Create a key in the Tavily console (app.tavily.com) — the free tier covers light use.',
+          docsLabel: 'Tavily search API documentation',
+          shapeNote:
+            "This slot is shaped for the deployment's search provider (Tavily).",
+        },
+        fallback: {
+          title: 'Retry model (optional)',
+          drives:
+            'When left empty this only affects the single-turn chat fallback path, never agent runs; when set, it takes over if the main LLM errors.',
+          docsLabel: 'Provider API documentation',
+          expand: 'Show retry model fields',
+          collapse: 'Hide retry model fields',
+        },
+        agentNote:
+          'All eight required fields (main LLM, Embedding, Tavily) must be filled before the AI Agent becomes usable.',
+      },
+      fields: {
+        baseUrl: 'Base URL',
+        model: 'Model',
+        apiKey: 'API key',
+        keyPlaceholder: 'Your API key',
+        keySaved: 'Saved {{masked}} — leave blank to keep',
+      },
+      errors: {
+        required: 'Required',
+        url: 'Enter a valid http(s) URL',
+      },
+      actions: {
+        save: 'Save',
+        saving: 'Saving…',
+        clear: 'Clear configuration',
+        clearing: 'Clearing…',
+      },
+      confirm: {
+        title: 'Clear LLM configuration?',
+        description:
+          'Your stored endpoints and keys will be deleted. The AI Agent stays unavailable until you configure it again.',
+        confirm: 'Clear',
+      },
+      toasts: {
+        saved: 'LLM configuration saved',
+        cleared: 'LLM configuration cleared',
+        failed: 'Could not update your LLM configuration. Please try again.',
       },
     },
     time: {

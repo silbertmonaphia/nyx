@@ -1,5 +1,6 @@
 import { expect, type Page, type Route } from '@playwright/test';
 import { test } from './fixtures/e2e-fixtures';
+import { registerAndOpenChat as registerAndOpenChatShared } from './helpers/llm-config';
 
 /**
  * Browser-level verification that the chat store drops a stranded
@@ -18,26 +19,8 @@ import { test } from './fixtures/e2e-fixtures';
  * others are preconditions.
  */
 
-// Fresh user per test — see chat-rag.spec.ts `makeTestUser` for why a
-// module-level constant re-registered in beforeEach collides (409).
-function makeTestUser() {
-  return {
-    username: `e2e_empty_${Date.now()}_${Math.floor(Math.random() * 100000)}`,
-    password: 'testpass123',
-  };
-}
-
 async function registerAndOpenChat(page: Page): Promise<void> {
-  const TEST_USER = makeTestUser();
-  await page.goto('/');
-  await page.getByRole('button', { name: /Register/i }).last().click();
-  // AuthForm uses <Label htmlFor="username"> / htmlFor="password">,
-  // no placeholder attribute. Use label-association.
-  await page.getByLabel(/Username/i).fill(TEST_USER.username);
-  await page.getByLabel(/Password/i).fill(TEST_USER.password);
-  await page.getByRole('button', { name: /^Register$/i }).click();
-  await expect(page.getByText(/Successfully registered!/i)).toBeVisible();
-  await expect(page.getByTestId('chat-form')).toBeVisible();
+  await registerAndOpenChatShared(page, { prefix: 'e2e_empty' });
 }
 
 /**

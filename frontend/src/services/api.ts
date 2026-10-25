@@ -13,6 +13,7 @@ declare module "axios" {
   interface AxiosRequestConfig {
     skipAuthRefresh?: boolean;
     skipErrorToast?: boolean;
+    skipSentry?: boolean;
     _retried?: boolean;
   }
 }
@@ -542,10 +543,12 @@ api.interceptors.response.use(
         // structured log lines without leaking PII into either
         // pipeline. captureSentryException noops when initSentry()
         // returned false (DSN absent).
-        captureSentryException(error, {
-          tags: { http_status: status },
-          extra: { requestId, payload: sanitiseForLog(payload) },
-        });
+        if (!config?.skipSentry) {
+          captureSentryException(error, {
+            tags: { http_status: status },
+            extra: { requestId, payload: sanitiseForLog(payload) },
+          });
+        }
         message = buildServerErrorToast(
           status,
           requestId,

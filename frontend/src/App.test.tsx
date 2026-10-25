@@ -5,10 +5,12 @@ import { vi, describe, it, expect, beforeEach } from 'vitest';
 import { useFeeds } from './features/feeds/hooks/useFeeds';
 import { useAuthStore } from './store/authStore';
 import { useFeedUiStore } from './features/feeds/store/feedUiStore';
+import { useLlmConfig } from './features/chat/hooks/useLlmConfig';
 import { i18n } from '~/i18n';
 
 vi.mock('./features/feeds/hooks/useFeeds');
 vi.mock('./store/authStore');
+vi.mock('./features/chat/hooks/useLlmConfig');
 vi.mock('./features/chat/components/ChatPanel', () => ({
   ChatPanel: ({
     open,
@@ -28,6 +30,7 @@ vi.mock('./features/chat/components/ChatPanel', () => ({
 
 const mockUseFeeds = useFeeds as any;
 const mockUseAuthStore = useAuthStore as any;
+const mockUseLlmConfig = useLlmConfig as any;
 
 const baseFeeds = {
   feeds: [],
@@ -45,6 +48,15 @@ const baseFeeds = {
 describe('App', () => {
   beforeEach(() => {
     mockUseFeeds.mockReturnValue({ ...baseFeeds });
+    mockUseLlmConfig.mockReturnValue({
+      status: { configured: true, llm: null, embedding: null, tavily: null, fallback: null },
+      configured: true,
+      isLoading: false,
+      isError: false,
+      refetch: vi.fn(),
+      save: { mutateAsync: vi.fn(), isPending: false },
+      remove: { mutateAsync: vi.fn(), isPending: false },
+    });
     // SECURITY.md L7: useAuthReconciliation reads
     // `useAuthStore.getState().user` on mount, so the mock must
     // expose getState alongside the hook return value. Without
