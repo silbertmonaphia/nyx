@@ -72,16 +72,14 @@
             "description": "Optional retry-model group. Supply all three fields or omit the section entirely."
           },
           "llm": {
-            "$ref": "#/components/schemas/LlmEndpointInput"
+            "$ref": "#/components/schemas/LlmEndpointInput",
+            "description": "Optional main-LLM group. Required for the AI Agent; without it feeds and other features keep working."
           },
           "tavily": {
             "$ref": "#/components/schemas/TavilyInput",
             "description": "Optional search provider group. When omitted the agent does not plan web searches."
           }
         },
-        "required": [
-          "llm"
-        ],
         "type": "object"
       },
       "ErrorResponse": {
@@ -1036,7 +1034,7 @@
         ]
       },
       "put": {
-        "description": "Validates and upserts the authenticated caller's LLM, optional embedding, optional Tavily, and optional retry-model configuration. API keys are write-only: a blank key on update keeps the stored key; on create a key is required unless the endpoint is loopback. Omitting Tavily disables web search for the agent. Responds with the masked configuration.",
+        "description": "Validates and upserts the authenticated caller's optional main LLM, optional embedding, optional Tavily, and optional retry-model configuration. API keys are write-only: a blank key on update keeps the stored key; on create a key is required unless the endpoint is loopback. Omitting Tavily disables web search for the agent. Responds with the masked configuration.",
         "operationId": "update-llm-config",
         "requestBody": {
           "content": {

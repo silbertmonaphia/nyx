@@ -279,3 +279,21 @@ func TestHandler_AgentPayloadOmitsTavilyWhenUnconfigured(t *testing.T) {
 	assert.Contains(t, payload, "llm_config")
 	assert.NotContains(t, payload, "tavily_config")
 }
+
+func TestHandler_MissingMainLLMReturns409(t *testing.T) {
+	stack := testUserStack()
+	stack.Chat = nil
+	stack.LLMBaseURL = ""
+	stack.LLMAPIKey = ""
+	stack.LLMModel = ""
+
+	proxy, err := NewAgentProxy("http://127.0.0.1:1", nil)
+	require.NoError(t, err)
+	router, tokens := newProxyHarnessWithResolver(t, proxy, &stubLLMResolver{stack: stack})
+	server := httptest.NewServer(router)
+	defer server.Close()
+
+	resp := postChat(t, server, bearerToken(t, tokens))
+	defer func() { _ = resp.Body.Close() }()
+	assertConflictEnvelope(t, resp)
+}

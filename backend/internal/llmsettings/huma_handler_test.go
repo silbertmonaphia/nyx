@@ -487,3 +487,22 @@ func TestHandler_DeleteInvalidatesEmbeddings(t *testing.T) {
 	require.Equal(t, http.StatusNoContent, rr.Code)
 	assert.Equal(t, []int{5}, calls)
 }
+
+func TestHandler_PutWithoutLLMIsAccepted(t *testing.T) {
+	router, _, _, tokens := setupConfigRouter(t)
+	tok := mustToken(t, tokens, 1)
+
+	body := validPutBody()
+	delete(body, "llm")
+
+	rr := configRequest(t, router, http.MethodPut, tok, body)
+	require.Equal(t, http.StatusOK, rr.Code, rr.Body.String())
+	got := decodeConfig(t, rr)
+	assert.True(t, got.Configured)
+	assert.Nil(t, got.LLM)
+	assert.NotNil(t, got.Embedding)
+
+	rr = configRequest(t, router, http.MethodGet, tok, nil)
+	require.Equal(t, http.StatusOK, rr.Code)
+	assert.Nil(t, decodeConfig(t, rr).LLM)
+}

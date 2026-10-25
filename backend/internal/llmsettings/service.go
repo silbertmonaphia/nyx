@@ -69,13 +69,13 @@ func (s *Service) SaveTrackingEmbedding(ctx context.Context, userID int, in Upda
 	}
 
 	out := &EncryptedSettings{
-		UserID:           userID,
-		LLMBaseURL:       in.LLMBaseURL,
-		LLMModel:         in.LLMModel,
-		TavilyBaseURL:    in.TavilyBaseURL,
+		UserID:        userID,
+		LLMBaseURL:    in.LLMBaseURL,
+		LLMModel:      in.LLMModel,
+		TavilyBaseURL: in.TavilyBaseURL,
 	}
 
-	if out.LLMAPIKeyEnc, err = s.resolveKey(in.LLMAPIKey, "llm_api_key", in.LLMBaseURL, existing); err != nil {
+	if err = s.applyLLM(out, &in, existing); err != nil {
 		return false, err
 	}
 	if err = s.applyEmbedding(out, &in, existing); err != nil {
@@ -140,6 +140,25 @@ func (s *Service) resolveKey(raw, field, baseURL string, existing *EncryptedSett
 		return "", nil
 	}
 	return "", invalidField(field)
+}
+
+func (s *Service) applyLLM(out *EncryptedSettings, in *UpdateInput, existing *EncryptedSettings) error {
+	if in.LLMBaseURL == "" {
+		out.LLMBaseURL, out.LLMModel, out.LLMAPIKeyEnc = "", "", ""
+		return nil
+	}
+	out.LLMBaseURL = in.LLMBaseURL
+	out.LLMModel = in.LLMModel
+	if in.LLMAPIKey != "" {
+		enc, err := s.cipher.Encrypt(in.LLMAPIKey)
+		if err != nil {
+			return err
+		}
+		out.LLMAPIKeyEnc = enc
+	} else if existing != nil {
+		out.LLMAPIKeyEnc = existing.LLMAPIKeyEnc
+	}
+	return nil
 }
 
 func (s *Service) applyEmbedding(out *EncryptedSettings, in *UpdateInput, existing *EncryptedSettings) error {
@@ -264,40 +283,69 @@ func ValidateUpdate(in *UpdateInput, existing *EncryptedSettings) error {
 }
 
 func validateRequiredConfig(in *UpdateInput, existing *EncryptedSettings) error {
-	if err := validateUserURL(in.LLMBaseURL, "llm_base_url"); err != nil {
+	if err := validateLLMGroup(in); err != nil {
 		return err
 	}
-	if in.EmbeddingBaseURL != "" {
-		if err := validateUserURL(in.EmbeddingBaseURL, "embedding_base_url"); err != nil {
-			return err
-		}
-		if in.EmbeddingModel == "" {
-			return invalidField("embedding_model")
-		}
-		if existing != nil && existing.EmbeddingModel != "" && in.EmbeddingModel != existing.EmbeddingModel {
-			return invalidField("embedding_model")
-		}
-	} else if in.EmbeddingModel != "" || in.EmbeddingAPIKey != "" {
-		return invalidField("embedding_base_url")
+	if err := validateEmbeddingGroup(in, existing); err != nil {
+		return err
 	}
-	if in.TavilyBaseURL != "" {
-		if err := validateUserURL(in.TavilyBaseURL, "tavily_base_url"); err != nil {
-			return err
-		}
+	if err := validateTavilyGroup(in); err != nil {
+		return err
 	}
-	for _, r := range []struct{ raw, field string }{
-		{in.LLMBaseURL, "llm_base_url"},
-		{in.LLMModel, "llm_model"},
-	} {
-		if r.raw == "" {
-			return invalidField(r.field)
-		}
+	if !anyGroupSet(in) && in.FallbackBaseURL == "" && in.FallbackModel == "" {
+		return invalidField("llm_base_url")
 	}
 	return nil
 }
 
+func anyGroupSet(in *UpdateInput) bool {
+	return in.LLMBaseURL != "" || in.EmbeddingBaseURL != "" || in.TavilyBaseURL != ""
+}
+
+func validateLLMGroup(in *UpdateInput) error {
+	if in.LLMBaseURL == "" {
+		if in.LLMModel != "" || in.LLMAPIKey != "" {
+			return invalidField("llm_base_url")
+		}
+		return nil
+	}
+	if err := validateUserURL(in.LLMBaseURL, "llm_base_url"); err != nil {
+		return err
+	}
+	if in.LLMModel == "" {
+		return invalidField("llm_model")
+	}
+	return nil
+}
+
+func validateEmbeddingGroup(in *UpdateInput, existing *EncryptedSettings) error {
+	if in.EmbeddingBaseURL == "" {
+		if in.EmbeddingModel != "" || in.EmbeddingAPIKey != "" {
+			return invalidField("embedding_base_url")
+		}
+		return nil
+	}
+	if err := validateUserURL(in.EmbeddingBaseURL, "embedding_base_url"); err != nil {
+		return err
+	}
+	if in.EmbeddingModel == "" {
+		return invalidField("embedding_model")
+	}
+	if existing != nil && existing.EmbeddingModel != "" && in.EmbeddingModel != existing.EmbeddingModel {
+		return invalidField("embedding_model")
+	}
+	return nil
+}
+
+func validateTavilyGroup(in *UpdateInput) error {
+	if in.TavilyBaseURL == "" {
+		return nil
+	}
+	return validateUserURL(in.TavilyBaseURL, "tavily_base_url")
+}
+
 func validateCreateKeys(in *UpdateInput) error {
-	if in.LLMAPIKey == "" && !isLoopbackBaseURL(in.LLMBaseURL) {
+	if in.LLMBaseURL != "" && in.LLMAPIKey == "" && !isLoopbackBaseURL(in.LLMBaseURL) {
 		return invalidField("llm_api_key")
 	}
 	if in.EmbeddingBaseURL != "" && in.EmbeddingAPIKey == "" && !isLoopbackBaseURL(in.EmbeddingBaseURL) {

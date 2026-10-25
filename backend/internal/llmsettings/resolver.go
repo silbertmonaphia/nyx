@@ -95,6 +95,9 @@ func (r *Resolver) Resolve(ctx context.Context, userID int) (*UserStack, error) 
 }
 
 func (r *Resolver) chatSlot(s *Settings) (llm.Provider, error) {
+	if s.LLMBaseURL == "" {
+		return nil, nil
+	}
 	fallbackModel := s.FallbackModel
 	if fallbackModel == "" {
 		fallbackModel = s.LLMModel

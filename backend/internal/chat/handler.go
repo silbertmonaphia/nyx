@@ -176,6 +176,10 @@ func (h *Handler) stream(w http.ResponseWriter, r *http.Request) {
 			api.ClassifyAndLog(r.Context(), err, "Failed to resolve LLM configuration"))
 		return
 	}
+	if stack != nil && stack.Chat == nil {
+		api.WriteError(w, r, http.StatusConflict, "LLM configuration required", "llm_not_configured")
+		return
+	}
 
 	// Step 2.5: dispatch to the agent proxy when configured. The
 	// dispatch is mutually exclusive with the legacy path — the
@@ -372,7 +376,7 @@ func (h *Handler) streamProxy(w http.ResponseWriter, r *http.Request, req ChatRe
 	defer cancel()
 
 	payload := AgentRunPayload{ChatRequest: req}
-	if stack != nil {
+	if stack != nil && stack.LLMBaseURL != "" {
 		payload.LLMConfig = &AgentLLMConfig{
 			BaseURL: stack.LLMBaseURL,
 			APIKey:  stack.LLMAPIKey,

@@ -608,3 +608,43 @@ func TestSaveTrackingEmbedding_ProbesTheEmbeddingWidth(t *testing.T) {
 	_, err = svc.SaveTrackingEmbedding(ctx, 1, in)
 	assert.NoError(t, err)
 }
+
+func TestValidateUpdate_MainLLMIsOptional(t *testing.T) {
+	t.Run("embedding-only config is accepted", func(t *testing.T) {
+		in := validCreateInput()
+		in.LLMBaseURL = ""
+		in.LLMAPIKey = ""
+		in.LLMModel = ""
+		assert.NoError(t, ValidateUpdate(&in, nil))
+	})
+
+	t.Run("main model without a base URL is rejected", func(t *testing.T) {
+		in := validCreateInput()
+		in.LLMBaseURL = ""
+		err := ValidateUpdate(&in, nil)
+		require.Error(t, err)
+		var fe *InvalidFieldError
+		require.ErrorAs(t, err, &fe)
+		assert.Equal(t, "llm_base_url", fe.Field)
+	})
+
+	t.Run("main key without a base URL is rejected", func(t *testing.T) {
+		in := validCreateInput()
+		in.LLMBaseURL = ""
+		in.LLMModel = ""
+		err := ValidateUpdate(&in, nil)
+		require.Error(t, err)
+		var fe *InvalidFieldError
+		require.ErrorAs(t, err, &fe)
+		assert.Equal(t, "llm_base_url", fe.Field)
+	})
+
+	t.Run("a completely empty update is rejected", func(t *testing.T) {
+		in := UpdateInput{}
+		err := ValidateUpdate(&in, nil)
+		require.Error(t, err)
+		var fe *InvalidFieldError
+		require.ErrorAs(t, err, &fe)
+		assert.Equal(t, "llm_base_url", fe.Field)
+	})
+}
