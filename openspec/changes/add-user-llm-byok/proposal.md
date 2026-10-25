@@ -1,0 +1,44 @@
+# Proposal
+
+## Why
+
+LLM credentials (chat model, embedding model, Tavily search) are server-wide `.env` values today — one key set shared by every user, managed by the operator. 需求.md asks for per-user BYOK: each user configures their own model endpoints and keys from the SPA, stored per user in Postgres, with the Go backend and Python agent consuming the user's values at request time. Without it, users cannot point the agent at their own providers (DeepSeek, a local vLLM, any OpenAI-compatible endpoint), and the operator's keys are a shared, unattributed resource.
+
+## What Changes
+
+- New `user_llm_settings` table (migration 000017, public schema, Go-owned): 11 fields per user — main LLM (base URL, API key, model), embedding (base URL, API key, model), Tavily (base URL, API key) required; retry-model LLM (base URL, API key, model) optional.
+- New huma endpoints `GET/PUT/DELETE /api/me/llm-config` (Bearer-auth, user id from the JWT claim only): GET returns masked keys (tail-4 only), PUT upserts, DELETE clears. API keys are **write-only on the wire** and **AES-GCM encrypted at rest** (`v1:`-prefixed ciphertext, `USER_LLM_ENCRYPTION_KEY`, validated at boot when `LLM_ENABLED=true`).
+- **Strict BYOK** (operator decision — no `.env` fallback): a user with no config gets HTTP 409 (`code: llm_not_configured`) on `POST /api/chat`, empty retrieval from the RAG bridge, and no feed embedding indexing — feed CRUD itself is unaffected (index skip stays best-effort). Clearing config re-gates immediately.
+- Go consumes per-user values everywhere LLM work happens: chat (agent payload + legacy single-turn router incl. optional fallback), RAG query embedding, feed indexing — via a bounded per-user client cache over the unchanged `llm.Provider` seam (openai implementation for all user configs, so private/localhost endpoints work).
+- Go forwards `llm_config` + `tavily_config` to the Python agent inside the `/agent/run` payload (server-constructed, never client-supplied, never logged). The agent threads the override through every LLM client construction site and the web-search tool; absent override keeps `Settings` fallback (backward compatible for direct/test use).
+- Planner structured-output binding becomes a per-run decision: a user base-URL host containing `deepseek` runs the legacy free-text planner path; otherwise the global flag applies. The planner now honors the user's configured model (behavior change: was `PYTHON_AGENT_LLM_PLANNER_MODEL`).
+- SPA: gear button next to the AI Agent button opens an LLM-config modal (4 sections, examples as placeholders, masked saved keys, clear-config with confirm). Opening AI Agent with no saved config force-opens the modal blocking until configured; a chat 409 also opens it.
+- Server-level `LLM_*` env vars stay constructed and validated (smallest diff) but stop serving user-facing paths; documented as such.
+
+Not changing: the `llm.Provider` interface, SSE frame set, RAG bridge wire contract (unconfigured retrieval stays a 200-empty envelope), feed CRUD semantics, MCP, confirmation/approval flows, embeddings schema (`feed_embeddings` stays `vector(1024)` — user embedding models must emit 1024 dims; documented).
+
+## Capabilities
+
+### New Capabilities
+
+- `user-llm-config`: per-user BYOK LLM configuration — settings table + AES-GCM at rest, masked-key CRUD endpoints scoped to the JWT identity, update validation (required fields, URL scheme, placeholder-key blocklist, empty-key-keeps-existing, fallback all-or-nothing), strict-BYOK gating of chat/RAG/indexing, and server-side forwarding of config to the Python agent per run.
+
+### Modified Capabilities
+
+- `chat-agent-proxy`: `/agent/run` payload carries server-constructed `llm_config`/`tavily_config`; chat requests from unconfigured users fail with 409 before any SSE byte; single-turn parity now scoped to configured users.
+- `feed-embed-indexing`: indexing resolves the feed owner's per-user embedder; an unconfigured owner skips indexing (still best-effort, still healable — and a later configuration MUST be picked up by the next backfill, which pins the backfill-guard ordering).
+- `agent-rag-bridge`: retrieval for a user without config returns the same 200-empty envelope as no matches (never an error, never a cross-user leak).
+- `agent-planner-structured`: the structured binding is selected per run from the user provider's capability heuristic (deepseek host → legacy path).
+- `agent-web-tools`: `web_search` reads provider base URL and key from the per-run override when present, else configuration.
+
+## Impact
+
+- `backend/migrations/000017_create_user_llm_settings.{up,down}.sql` (new, reversible, no data backfill); `backend/sqlc.yaml` + `backend/queries/llm_settings.sql` + generated `internal/llmsettings/db`.
+- `backend/internal/llmsettings/` (new domain: model/repository/service/resolver/huma_handler); `backend/internal/platform/crypto/` (new AES-GCM helper); `backend/internal/platform/config/config.go` (`USER_LLM_ENCRYPTION_KEY`, exported placeholder-key check); `backend/cmd/api/main.go` wiring.
+- `backend/internal/chat/` (409 gate, `AgentRunPayload`, per-user provider in legacy path); `backend/internal/rag/` (embedder resolver, backfill-guard ordering); `backend/internal/feed/` (unchanged code — sentinel already warn-only).
+- `backend/agent_py/agent/`: `types.py`/`state.py` (override models), new `llm_effective.py`, 7 `ChatOpenAI` sites, `web_tools.py`, `main.py` run handler.
+- `frontend/src/features/chat/` (types/service/modal/hook, chatStore 409 gate), `frontend/src/App.tsx` (gear button + blocking gate), `frontend/src/i18n/{en,zh}.ts`.
+- `frontend/tests/e2e/`: shared register flow seeds a config (existing specs keep passing); new agent-free `chat-llm-config.spec.ts`.
+- New env: `USER_LLM_ENCRYPTION_KEY` (backend `.env.example`, root `.env.example`, `docker-compose.yml`). OpenAPI regenerated (`make openapi` + frontend `openapi:gen`).
+- Rollout gates: none — dev/CI-completable end to end (the strict-BYOK user break is deployment-local and takes effect when the operator deploys, not via a staged prod flip), so per the rollout-split classification test there is **no sibling rollout change**.
+- Known accepted break: on deploy, every existing user's chat 409s until they configure (explicit operator decision); the SPA surfaces it by auto-opening the config modal.
