@@ -222,6 +222,9 @@ describe('LlmConfigModal', () => {
     expect(
       screen.getByText(/model is locked after the first save/),
     ).toBeInTheDocument();
+    expect(
+      screen.getByText(/deletes your stored feed vectors/),
+    ).toBeInTheDocument();
   });
 
   it('keeps the embedding model editable before the first save', async () => {

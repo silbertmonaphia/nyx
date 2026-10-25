@@ -214,6 +214,8 @@ export const en: Translation = {
             'The deployment requires 1024-dimension vectors, e.g. Qwen/Qwen3-Embedding-0.6B. A model emitting a different width is rejected at query time, not when saving. Changing the endpoint or API key with the same model keeps your stored vectors.',
           modelRequirement:
             'Must emit 1024-dimension vectors — the deployment\'s vector column width. The model is probed on save: a different width is rejected.',
+          removeHint:
+            'Saving with this group removed deletes your stored feed vectors. Retrieval stays unavailable until you configure it again; re-adding re-indexes your feeds on the next retrieval.',
           modelLocked:
             'The model is locked after the first save — switching it would invalidate every stored feed vector. To use a different model, clear the embedding configuration first.',
         },
@@ -261,7 +263,7 @@ export const en: Translation = {
       confirm: {
         title: 'Clear LLM configuration?',
         description:
-          'Your stored endpoints and keys will be deleted. The AI Agent stays unavailable until you configure it again.',
+          'Your stored endpoints and keys will be deleted, along with your stored feed vectors. The AI Agent stays unavailable until you configure it again.',
         confirm: 'Clear',
       },
       toasts: {

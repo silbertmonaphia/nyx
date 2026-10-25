@@ -198,6 +198,8 @@ export const zh = {
             '部署要求 1024 维向量，例如 Qwen/Qwen3-Embedding-0.6B。维度不符的模型会在查询时被拒绝，而不是保存时。保持同一模型时，更换端点或 API 密钥不会影响已存向量。',
           modelRequirement:
             '必须输出 1024 维向量 —— 即部署的向量列宽度。保存时会探测模型：宽度不符将被拒绝。',
+          removeHint:
+            '保存时移除本组会删除已存的 feed 向量。在重新配置前检索不可用；重新添加后会在下次检索时重建索引。',
           modelLocked:
             '模型一经保存即锁定 —— 更换模型会让所有已存 feed 向量失效。确需更换请先清除 Embedding 配置，再重新填写。',
         },
@@ -242,7 +244,7 @@ export const zh = {
       },
       confirm: {
         title: '清除 LLM 配置？',
-        description: '将删除已保存的端点与密钥。在重新配置之前，AI Agent 将不可用。',
+        description: '将删除已保存的端点与密钥，已存的 feed 向量也会一并删除。在重新配置之前，AI Agent 将不可用。',
         confirm: '清除',
       },
       toasts: {

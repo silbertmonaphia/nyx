@@ -449,6 +449,11 @@ export const LlmConfigModal = ({
             <p className="text-xs font-medium text-destructive">
               {t("llmConfig.sections.embedding.impact")}
             </p>
+            {status?.embedding != null ? (
+              <p className="text-xs font-medium text-destructive">
+                {t("llmConfig.sections.embedding.removeHint")}
+              </p>
+            ) : null}
             {showEmbedding ? (
               <div className="space-y-3">
                 <Guidance
