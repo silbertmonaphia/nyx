@@ -458,7 +458,13 @@ func TestHandler_PutInvalidatesEmbeddingsOnlyWhenIdentityChanges(t *testing.T) {
 	movedEndpoint["embedding"].(map[string]any)["base_url"] = testEmbedBaseURL
 	rr = configRequest(t, router, http.MethodPut, tok, movedEndpoint)
 	require.Equal(t, http.StatusOK, rr.Code)
-	assert.Equal(t, []int{4}, calls)
+	assert.Empty(t, calls, "a same-model endpoint change keeps the vectors")
+
+	removed := validPutBody()
+	delete(removed, "embedding")
+	rr = configRequest(t, router, http.MethodPut, tok, removed)
+	require.Equal(t, http.StatusOK, rr.Code)
+	assert.Equal(t, []int{4}, calls, "removing the embedding group invalidates")
 
 	_, err := svc.Delete(context.Background(), 4)
 	require.NoError(t, err)

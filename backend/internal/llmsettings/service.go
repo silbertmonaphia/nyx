@@ -105,7 +105,7 @@ func embeddingIdentityChanged(existing *EncryptedSettings, in *UpdateInput) bool
 	if existing == nil {
 		return false
 	}
-	return existing.EmbeddingBaseURL != in.EmbeddingBaseURL || existing.EmbeddingModel != in.EmbeddingModel
+	return existing.EmbeddingModel != in.EmbeddingModel
 }
 
 func (s *Service) probeEmbedding(ctx context.Context, existing *EncryptedSettings, in *UpdateInput) error {

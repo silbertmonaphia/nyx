@@ -559,12 +559,10 @@ func TestSaveTrackingEmbedding_ReportsIdentityChange(t *testing.T) {
 
 	in = validCreateInput()
 	in.EmbeddingAPIKey = ""
-	_, err = svc.SaveTrackingEmbedding(ctx, 1, in)
-	require.NoError(t, err)
 	in.EmbeddingBaseURL = testEmbedBaseURL
 	changed, err = svc.SaveTrackingEmbedding(ctx, 1, in)
 	require.NoError(t, err)
-	assert.True(t, changed, "changing the embedding endpoint must invalidate stored vectors")
+	assert.False(t, changed, "the same model on a new endpoint keeps the vector space")
 
 	in = validCreateInput()
 	in.EmbeddingBaseURL = ""
