@@ -51,6 +51,38 @@ type tavilyInput struct {
 	APIKey  string `json:"api_key" required:"false" writeOnly:"true" doc:"Write-only API key. Optional: an empty key uses the provider's keyless tier; on update, empty keeps the stored key."`
 }
 
+func derefEndpointBaseURL(in *llmEndpointInput) string {
+	if in == nil {
+		return ""
+	}
+	return in.BaseURL
+}
+
+func derefEndpointAPIKey(in *llmEndpointInput) string {
+	if in == nil {
+		return ""
+	}
+	return in.APIKey
+}
+
+func derefEndpointModel(in *llmEndpointInput) string {
+	if in == nil {
+		return ""
+	}
+	return in.Model
+}
+
+func embeddingResponseFor(s *Settings) *llmEndpointResponse {
+	if s.EmbeddingBaseURL == "" {
+		return nil
+	}
+	return &llmEndpointResponse{
+		BaseURL:      s.EmbeddingBaseURL,
+		Model:        s.EmbeddingModel,
+		APIKeyMasked: MaskKey(s.EmbeddingAPIKey),
+	}
+}
+
 func derefTavilyBaseURL(in *tavilyInput) string {
 	if in == nil {
 		return ""
@@ -77,7 +109,7 @@ func tavilyResponseFor(s *Settings) *tavilyResponse {
 
 type configUpdateInput struct {
 	LLM       llmEndpointInput  `json:"llm" required:"true"`
-	Embedding llmEndpointInput  `json:"embedding" required:"true"`
+	Embedding *llmEndpointInput `json:"embedding" required:"false" doc:"Optional embedding group. When omitted the agent runs without feed retrieval (RAG) and feed indexing is skipped."`
 	Tavily    *tavilyInput      `json:"tavily" required:"false" doc:"Optional search provider group. When omitted the agent does not plan web searches."`
 	Fallback  *llmEndpointInput `json:"fallback,omitempty" required:"false" doc:"Optional retry-model group. Supply all three fields or omit the section entirely."`
 }
@@ -123,7 +155,7 @@ func RegisterLLMConfigOpsTest(api huma.API, h *Handler, tokens auth.TokenService
 		Method:      http.MethodPut,
 		Path:        "/api/me/llm-config",
 		Summary:     "Save LLM configuration",
-		Description: "Validates and upserts the authenticated caller's LLM, embedding, optional Tavily, and optional retry-model configuration. API keys are write-only: a blank key on update keeps the stored key; on create a key is required unless the endpoint is loopback. Omitting Tavily disables web search for the agent. Responds with the masked configuration.",
+		Description: "Validates and upserts the authenticated caller's LLM, optional embedding, optional Tavily, and optional retry-model configuration. API keys are write-only: a blank key on update keeps the stored key; on create a key is required unless the endpoint is loopback. Omitting Tavily disables web search for the agent. Responds with the masked configuration.",
 		Tags:        []string{"llm-config"},
 		Security:    []map[string][]string{{"BearerAuth": {}}},
 		Middlewares: llmConfigMiddlewares(tokens, withAuth),
@@ -195,12 +227,8 @@ func responseFrom(s *Settings) configResponse {
 			Model:        s.LLMModel,
 			APIKeyMasked: MaskKey(s.LLMAPIKey),
 		},
-		Embedding: &llmEndpointResponse{
-			BaseURL:      s.EmbeddingBaseURL,
-			Model:        s.EmbeddingModel,
-			APIKeyMasked: MaskKey(s.EmbeddingAPIKey),
-		},
-		Tavily: tavilyResponseFor(s),
+		Embedding: embeddingResponseFor(s),
+		Tavily:    tavilyResponseFor(s),
 	}
 	if s.FallbackBaseURL != "" {
 		out.Fallback = &llmEndpointResponse{
@@ -217,9 +245,9 @@ func updateInputFrom(in configUpdateInput) UpdateInput {
 		LLMBaseURL:       in.LLM.BaseURL,
 		LLMAPIKey:        in.LLM.APIKey,
 		LLMModel:         in.LLM.Model,
-		EmbeddingBaseURL: in.Embedding.BaseURL,
-		EmbeddingAPIKey:  in.Embedding.APIKey,
-		EmbeddingModel:   in.Embedding.Model,
+		EmbeddingBaseURL: derefEndpointBaseURL(in.Embedding),
+		EmbeddingAPIKey:  derefEndpointAPIKey(in.Embedding),
+		EmbeddingModel:   derefEndpointModel(in.Embedding),
 		TavilyBaseURL:    derefTavilyBaseURL(in.Tavily),
 		TavilyAPIKey:     derefTavilyAPIKey(in.Tavily),
 	}

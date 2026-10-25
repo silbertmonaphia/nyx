@@ -263,3 +263,19 @@ func TestResolver_BuildsRouterWhenFallbackConfigured(t *testing.T) {
 	require.NoError(t, err)
 	assert.True(t, stack.Chat == again.Chat, "the router itself is cached")
 }
+
+func TestResolver_NoEmbeddingConfigReturnsNilEmbed(t *testing.T) {
+	r, svc := newResolverFixture(t)
+	ctx := context.Background()
+	require.NoError(t, svc.Save(ctx, 7, UpdateInput{
+		LLMBaseURL: "http://localhost:8000/v1",
+		LLMAPIKey:  "sk-chat-only-1111",
+		LLMModel:   "chat-model",
+	}))
+
+	stack, err := r.Resolve(ctx, 7)
+	require.NoError(t, err)
+	assert.NotNil(t, stack.Chat)
+	assert.Nil(t, stack.Embed)
+	assert.Empty(t, stack.EmbedModel)
+}

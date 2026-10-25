@@ -64,7 +64,8 @@
         "additionalProperties": false,
         "properties": {
           "embedding": {
-            "$ref": "#/components/schemas/LlmEndpointInput"
+            "$ref": "#/components/schemas/LlmEndpointInput",
+            "description": "Optional embedding group. When omitted the agent runs without feed retrieval (RAG) and feed indexing is skipped."
           },
           "fallback": {
             "$ref": "#/components/schemas/LlmEndpointInput",
@@ -79,8 +80,7 @@
           }
         },
         "required": [
-          "llm",
-          "embedding"
+          "llm"
         ],
         "type": "object"
       },
@@ -1036,7 +1036,7 @@
         ]
       },
       "put": {
-        "description": "Validates and upserts the authenticated caller's LLM, embedding, optional Tavily, and optional retry-model configuration. API keys are write-only: a blank key on update keeps the stored key; on create a key is required unless the endpoint is loopback. Omitting Tavily disables web search for the agent. Responds with the masked configuration.",
+        "description": "Validates and upserts the authenticated caller's LLM, optional embedding, optional Tavily, and optional retry-model configuration. API keys are write-only: a blank key on update keeps the stored key; on create a key is required unless the endpoint is loopback. Omitting Tavily disables web search for the agent. Responds with the masked configuration.",
         "operationId": "update-llm-config",
         "requestBody": {
           "content": {

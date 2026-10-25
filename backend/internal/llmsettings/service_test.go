@@ -386,6 +386,50 @@ func TestValidateUpdate(t *testing.T) {
 		require.Error(t, err, "blank fallback key with no stored ciphertext is a partial group")
 	})
 
+	t.Run("create without embedding is accepted", func(t *testing.T) {
+		in := validCreateInput()
+		in.EmbeddingBaseURL = ""
+		in.EmbeddingAPIKey = ""
+		in.EmbeddingModel = ""
+		assert.NoError(t, ValidateUpdate(&in, nil))
+	})
+
+	t.Run("partial embedding group is rejected", func(t *testing.T) {
+		for _, field := range []struct {
+			mutate func(*UpdateInput)
+			want   string
+		}{
+			{func(in *UpdateInput) { in.EmbeddingModel = "" }, "embedding_model"},
+			{func(in *UpdateInput) { in.EmbeddingBaseURL = "" }, "embedding_base_url"},
+		} {
+			in := validCreateInput()
+			field.mutate(&in)
+			err := ValidateUpdate(&in, nil)
+			require.Error(t, err)
+			var fe *InvalidFieldError
+			require.ErrorAs(t, err, &fe)
+			assert.Equal(t, field.want, fe.Field)
+		}
+	})
+
+	t.Run("remote embedding without a key is rejected", func(t *testing.T) {
+		in := validCreateInput()
+		in.EmbeddingBaseURL = "https://embed.example.com/v1"
+		in.EmbeddingAPIKey = ""
+		err := ValidateUpdate(&in, nil)
+		require.Error(t, err)
+		var fe *InvalidFieldError
+		require.ErrorAs(t, err, &fe)
+		assert.Equal(t, "embedding_api_key", fe.Field)
+	})
+
+	t.Run("loopback embedding without a key is accepted", func(t *testing.T) {
+		in := validCreateInput()
+		in.EmbeddingBaseURL = "http://127.0.0.1:8001/v1"
+		in.EmbeddingAPIKey = ""
+		assert.NoError(t, ValidateUpdate(&in, nil))
+	})
+
 	t.Run("create without Tavily is accepted", func(t *testing.T) {
 		in := validCreateInput()
 		in.TavilyBaseURL = ""

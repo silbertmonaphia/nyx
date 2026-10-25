@@ -133,6 +133,9 @@ func (r *Resolver) chatSlot(s *Settings) (llm.Provider, error) {
 }
 
 func (r *Resolver) embedSlot(s *Settings) (llm.Provider, error) {
+	if s.EmbeddingBaseURL == "" {
+		return nil, nil
+	}
 	key := slotKey("embed", s.EmbeddingBaseURL, s.EmbeddingAPIKey, s.EmbeddingModel)
 	return r.cached(key, func() (llm.Provider, error) {
 		return r.buildClient(s.EmbeddingBaseURL, s.EmbeddingAPIKey, s.EmbeddingModel)

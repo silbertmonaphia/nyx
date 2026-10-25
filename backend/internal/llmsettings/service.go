@@ -58,25 +58,17 @@ func (s *Service) Save(ctx context.Context, userID int, in UpdateInput) error {
 		UserID:           userID,
 		LLMBaseURL:       in.LLMBaseURL,
 		LLMModel:         in.LLMModel,
-		EmbeddingBaseURL: in.EmbeddingBaseURL,
-		EmbeddingModel:   in.EmbeddingModel,
 		TavilyBaseURL:    in.TavilyBaseURL,
 	}
 
 	if out.LLMAPIKeyEnc, err = s.resolveKey(in.LLMAPIKey, "llm_api_key", in.LLMBaseURL, existing); err != nil {
 		return err
 	}
-	if out.EmbeddingAPIKeyEnc, err = s.resolveKey(in.EmbeddingAPIKey, "embedding_api_key", in.EmbeddingBaseURL, existing); err != nil {
+	if err = s.applyEmbedding(out, &in, existing); err != nil {
 		return err
 	}
-	if in.TavilyBaseURL == "" {
-		out.TavilyBaseURL, out.TavilyAPIKeyEnc = "", ""
-	} else if in.TavilyAPIKey != "" {
-		if out.TavilyAPIKeyEnc, err = s.cipher.Encrypt(in.TavilyAPIKey); err != nil {
-			return err
-		}
-	} else if existing != nil {
-		out.TavilyAPIKeyEnc = existing.TavilyAPIKeyEnc
+	if err = s.applyTavily(out, &in, existing); err != nil {
+		return err
 	}
 
 	if in.FallbackBaseURL == "" && in.FallbackAPIKey == "" && in.FallbackModel == "" {
@@ -108,6 +100,43 @@ func (s *Service) resolveKey(raw, field, baseURL string, existing *EncryptedSett
 		return "", nil
 	}
 	return "", invalidField(field)
+}
+
+func (s *Service) applyEmbedding(out *EncryptedSettings, in *UpdateInput, existing *EncryptedSettings) error {
+	if in.EmbeddingBaseURL == "" {
+		out.EmbeddingBaseURL, out.EmbeddingModel, out.EmbeddingAPIKeyEnc = "", "", ""
+		return nil
+	}
+	out.EmbeddingBaseURL = in.EmbeddingBaseURL
+	out.EmbeddingModel = in.EmbeddingModel
+	if in.EmbeddingAPIKey != "" {
+		enc, err := s.cipher.Encrypt(in.EmbeddingAPIKey)
+		if err != nil {
+			return err
+		}
+		out.EmbeddingAPIKeyEnc = enc
+	} else if existing != nil {
+		out.EmbeddingAPIKeyEnc = existing.EmbeddingAPIKeyEnc
+	}
+	return nil
+}
+
+func (s *Service) applyTavily(out *EncryptedSettings, in *UpdateInput, existing *EncryptedSettings) error {
+	if in.TavilyBaseURL == "" {
+		out.TavilyBaseURL, out.TavilyAPIKeyEnc = "", ""
+		return nil
+	}
+	out.TavilyBaseURL = in.TavilyBaseURL
+	if in.TavilyAPIKey != "" {
+		enc, err := s.cipher.Encrypt(in.TavilyAPIKey)
+		if err != nil {
+			return err
+		}
+		out.TavilyAPIKeyEnc = enc
+	} else if existing != nil {
+		out.TavilyAPIKeyEnc = existing.TavilyAPIKeyEnc
+	}
+	return nil
 }
 
 func existingEncFor(field string, e *EncryptedSettings) string {
@@ -195,13 +224,18 @@ func ValidateUpdate(in *UpdateInput, existing *EncryptedSettings) error {
 }
 
 func validateRequiredConfig(in *UpdateInput) error {
-	for _, u := range []struct{ raw, field string }{
-		{in.LLMBaseURL, "llm_base_url"},
-		{in.EmbeddingBaseURL, "embedding_base_url"},
-	} {
-		if err := validateUserURL(u.raw, u.field); err != nil {
+	if err := validateUserURL(in.LLMBaseURL, "llm_base_url"); err != nil {
+		return err
+	}
+	if in.EmbeddingBaseURL != "" {
+		if err := validateUserURL(in.EmbeddingBaseURL, "embedding_base_url"); err != nil {
 			return err
 		}
+		if in.EmbeddingModel == "" {
+			return invalidField("embedding_model")
+		}
+	} else if in.EmbeddingModel != "" || in.EmbeddingAPIKey != "" {
+		return invalidField("embedding_base_url")
 	}
 	if in.TavilyBaseURL != "" {
 		if err := validateUserURL(in.TavilyBaseURL, "tavily_base_url"); err != nil {
@@ -211,8 +245,6 @@ func validateRequiredConfig(in *UpdateInput) error {
 	for _, r := range []struct{ raw, field string }{
 		{in.LLMBaseURL, "llm_base_url"},
 		{in.LLMModel, "llm_model"},
-		{in.EmbeddingBaseURL, "embedding_base_url"},
-		{in.EmbeddingModel, "embedding_model"},
 	} {
 		if r.raw == "" {
 			return invalidField(r.field)
@@ -222,13 +254,11 @@ func validateRequiredConfig(in *UpdateInput) error {
 }
 
 func validateCreateKeys(in *UpdateInput) error {
-	for _, k := range []struct{ raw, field, baseURL string }{
-		{in.LLMAPIKey, "llm_api_key", in.LLMBaseURL},
-		{in.EmbeddingAPIKey, "embedding_api_key", in.EmbeddingBaseURL},
-	} {
-		if k.raw == "" && !isLoopbackBaseURL(k.baseURL) {
-			return invalidField(k.field)
-		}
+	if in.LLMAPIKey == "" && !isLoopbackBaseURL(in.LLMBaseURL) {
+		return invalidField("llm_api_key")
+	}
+	if in.EmbeddingBaseURL != "" && in.EmbeddingAPIKey == "" && !isLoopbackBaseURL(in.EmbeddingBaseURL) {
+		return invalidField("embedding_api_key")
 	}
 	if in.TavilyAPIKey != "" && in.TavilyBaseURL == "" {
 		return invalidField("tavily_base_url")

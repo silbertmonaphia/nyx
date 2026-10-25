@@ -278,6 +278,24 @@ func TestHandler_PutLoopbackWithoutKeys(t *testing.T) {
 	assert.True(t, decodeConfig(t, rr).Configured)
 }
 
+func TestHandler_PutWithoutEmbeddingIsAccepted(t *testing.T) {
+	router, _, _, tokens := setupConfigRouter(t)
+	tok := mustToken(t, tokens, 1)
+
+	body := validPutBody()
+	delete(body, "embedding")
+
+	rr := configRequest(t, router, http.MethodPut, tok, body)
+	require.Equal(t, http.StatusOK, rr.Code, rr.Body.String())
+	got := decodeConfig(t, rr)
+	assert.True(t, got.Configured)
+	assert.Nil(t, got.Embedding)
+
+	rr = configRequest(t, router, http.MethodGet, tok, nil)
+	require.Equal(t, http.StatusOK, rr.Code)
+	assert.Nil(t, decodeConfig(t, rr).Embedding)
+}
+
 func TestHandler_PutWithoutTavilyIsAccepted(t *testing.T) {
 	router, _, _, tokens := setupConfigRouter(t)
 	tok := mustToken(t, tokens, 1)
