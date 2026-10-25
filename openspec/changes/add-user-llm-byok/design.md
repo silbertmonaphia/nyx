@@ -44,6 +44,9 @@ Random 12-byte nonce per encryption (`crypto/rand`); decrypt fails closed on unk
 **D5 — Keys are write-only on the wire; GET returns `api_key_masked` (tail-4).**
 On PUT, an empty key field means "keep the stored ciphertext" (create requires it present); plaintext exists only in-memory in the service/resolver. This is the standard BYOK-settings shape (OpenRouter-style) and keeps key material out of browser memory, logs, and any client store.
 
+**D17 — Every group is optional; the main LLM gates only the AI Agent.**
+A configuration may contain any subset of the groups (but not all empty). Chat requires the main LLM: a row without it returns the same 409 `llm_not_configured` envelope as no row, and the SPA gates the agent panel on `llm != null` rather than on row existence. Embedding and Tavily stay independent: embedding-only users still index and retrieve feeds; feed CRUD and the rest of the app never depend on any group.
+
 **D6 — Strict BYOK with a 409 before the first SSE byte.**
 `stream()` resolves the user's config after request validation and before dispatch: `ErrNotFound` → `api.WriteError(w, r, http.StatusConflict, "LLM configuration required", "llm_not_configured")`. The response is the repo's standard error envelope — `{"error": <message>, "code": <int HTTP status>, "request_id": ..., "details": ...}` — so the machine-readable marker rides in `details`, **not** in `code` (`ErrorResponse.Code` is an int; the change cannot introduce a string `code` without touching every error surface). A plain JSON envelope in the window already reserved for pre-stream errors (chat has no other 409, so the SPA can key on status alone; a wire-contract test pins this). RAG bridge keeps its 200-empty envelope for unconfigured users (frozen Python-side contract). Feed indexing skips with a warning (existing best-effort semantics absorb the sentinel). `.env` fallback is rejected per operator decision.
 
