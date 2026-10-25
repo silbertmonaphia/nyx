@@ -59,7 +59,7 @@ function App() {
   const llmGateOpen = useChatStore((state) => state.llmGateOpen);
   const setLlmGateOpen = useChatStore((state) => state.setLlmGateOpen);
   const {
-    configured: llmConfigured,
+    agentReady: llmAgentReady,
     isLoading: llmStatusLoading,
     isUnavailable: llmUnavailable,
   } = useLlmConfig({
@@ -71,7 +71,7 @@ function App() {
     isAuthenticated &&
     chatOpen &&
     !llmStatusLoading &&
-    llmConfigured === false;
+    llmAgentReady === false;
   const llmModalBlocking = llmGate || llmGateOpen;
 
   const handleLlmModalChange = (open: boolean) => {

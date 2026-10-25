@@ -112,7 +112,9 @@ describe('LlmConfigModal', () => {
     await vi.waitFor(() => {
       expect(save.mutateAsync).not.toHaveBeenCalled();
     });
-    expect(screen.getAllByText('Required').length).toBeGreaterThanOrEqual(3);
+    expect(
+      screen.getByText(/Fill in at least one section/),
+    ).toBeInTheDocument();
     expect(useUiStore.getState().toasts).toHaveLength(0);
   });
 
@@ -364,7 +366,7 @@ describe('LlmConfigModal', () => {
     ).toBeInTheDocument();
     expect(screen.getByText(/shaped for the deployment's search provider/)).toBeInTheDocument();
     expect(
-      screen.getByText(/Only the three main-LLM fields are required/),
+      screen.getByText(/The main LLM is optional too/),
     ).toBeInTheDocument();
   });
 

@@ -86,6 +86,33 @@ test.describe('LLM configuration gate (browser-level)', () => {
     await expect(page.getByTestId('chat-form')).toBeVisible();
   });
 
+  test('an embedding-only config saves but keeps the agent gated', async ({
+    page,
+  }) => {
+    const user = makeTestUser('e2e_llmcfg_embedonly');
+    await registerViaUi(page, user);
+    await expect(
+      page.getByRole('dialog', { name: GATE_TITLE }),
+    ).toBeVisible();
+
+    await page.getByTestId('llm-embedding-toggle').click();
+    await page
+      .locator('#embedding-base-url')
+      .fill('https://embed.example.test/v1');
+    await page.locator('#embedding-model').fill('e2e-embed-model');
+    await page.locator('#embedding-api-key').fill('sk-e2e-embed-ef12');
+
+    await page.getByTestId('llm-config-save').click();
+
+    await expect(
+      page.getByTestId('toast').filter({ hasText: 'LLM configuration saved' }),
+    ).toBeVisible();
+    await expect(
+      page.getByRole('dialog', { name: GATE_TITLE }),
+    ).toBeVisible();
+    await expect(page.getByTestId('chat-form')).not.toBeVisible();
+  });
+
   test('the gear reopens with non-key fields prefilled and keys masked', async ({
     page,
   }) => {

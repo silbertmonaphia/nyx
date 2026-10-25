@@ -80,24 +80,6 @@ function isHttpUrl(value: string): boolean {
 function buildLlmConfigSchema(requireKeys: boolean) {
   const required = () => translate("llmConfig.errors.required");
   const urlError = () => translate("llmConfig.errors.url");
-  const requiredBaseUrl = z
-    .string()
-    .refine((value) => value.trim() !== "", { error: required })
-    .refine((value) => value.trim() === "" || isHttpUrl(value.trim()), {
-      error: urlError,
-    });
-  const requiredModel = z
-    .string()
-    .refine((value) => value.trim() !== "", { error: required });
-  const keyRequired = (
-    value: { base_url: string; api_key: string },
-    ctx: z.RefinementCtx,
-  ) => {
-    if (!requireKeys) return;
-    if (value.api_key.trim() !== "") return;
-    if (isLoopbackUrl(value.base_url.trim())) return;
-    ctx.addIssue({ code: "custom", path: ["api_key"], message: required() });
-  };
   const optionalBaseUrl = z
     .string()
     .refine((value) => value.trim() === "" || isHttpUrl(value.trim()), {
@@ -106,11 +88,37 @@ function buildLlmConfigSchema(requireKeys: boolean) {
   return z.object({
     llm: z
       .object({
-        base_url: requiredBaseUrl,
+        base_url: optionalBaseUrl,
         api_key: z.string(),
-        model: requiredModel,
+        model: z.string(),
       })
-      .superRefine(keyRequired),
+      .superRefine((value, ctx) => {
+        const url = value.base_url.trim();
+        if (url === "") {
+          if (value.api_key.trim() !== "" || value.model.trim() !== "") {
+            ctx.addIssue({
+              code: "custom",
+              path: ["base_url"],
+              message: required(),
+            });
+          }
+          return;
+        }
+        if (value.model.trim() === "") {
+          ctx.addIssue({
+            code: "custom",
+            path: ["model"],
+            message: required(),
+          });
+        }
+        if (requireKeys && value.api_key.trim() === "" && !isLoopbackUrl(url)) {
+          ctx.addIssue({
+            code: "custom",
+            path: ["api_key"],
+            message: required(),
+          });
+        }
+      }),
     embedding: z
       .object({
         base_url: optionalBaseUrl,
@@ -158,6 +166,18 @@ function buildLlmConfigSchema(requireKeys: boolean) {
           });
         }
       }),
+  }).superRefine((value, ctx) => {
+    const hasAny =
+      value.llm.base_url.trim() !== "" ||
+      value.embedding.base_url.trim() !== "" ||
+      value.tavily.base_url.trim() !== "";
+    if (!hasAny) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["llm", "base_url"],
+        message: translate("llmConfig.errors.atLeastOne"),
+      });
+    }
   });
 }
 

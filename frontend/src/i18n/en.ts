@@ -180,7 +180,7 @@ export const en: Translation = {
       gate: {
         title: 'LLM configuration required',
         description:
-          'The AI Agent needs your own model endpoint and API key to run. Fill in the three main-LLM fields to continue.',
+          'The AI Agent needs your own model endpoint and API key. Fill in the main-LLM fields to use it — feeds and the rest of the app keep working without them.',
       },
       sections: {
         llm: {
@@ -241,7 +241,7 @@ export const en: Translation = {
           collapse: 'Hide retry model fields',
         },
         agentNote:
-          'Only the three main-LLM fields are required. API keys may be left empty for localhost / 127.0.0.1 endpoints. Embedding is optional: leave it empty and the agent\'s RAG step and semantic search return no context. Tavily is optional: leave it empty and the agent will not plan web searches.',
+          'The main LLM is optional too: without it the AI Agent is unavailable, while feeds and the rest of the app keep working. API keys may be left empty for localhost / 127.0.0.1 endpoints. Embedding is optional: leave it empty and the agent\'s RAG step and semantic search return no context. Tavily is optional: leave it empty and the agent will not plan web searches.',
       },
       fields: {
         baseUrl: 'Base URL',
@@ -252,6 +252,8 @@ export const en: Translation = {
       },
       errors: {
         required: 'Required',
+        atLeastOne:
+          'Fill in at least one section — the main LLM enables the AI Agent, Embedding enables feed retrieval, Tavily enables web search.',
         url: 'Enter a valid http(s) URL',
       },
       actions: {

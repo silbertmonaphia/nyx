@@ -99,6 +99,7 @@ function mockHook(overrides: HookOverrides = {}) {
   mockUseLlmConfig.mockReturnValue({
     status,
     configured: status ? status.configured : null,
+    agentReady: status ? status.llm !== null : null,
     isLoading: overrides.isLoading ?? false,
     isError: false,
     isUnavailable: overrides.isUnavailable ?? false,
@@ -173,7 +174,7 @@ describe('App LLM config gating', () => {
       await screen.findByText('LLM configuration required'),
     ).toBeInTheDocument();
     expect(
-      screen.getByText(/Fill in the three main-LLM fields/),
+      screen.getByText(/Fill in the main-LLM fields/),
     ).toBeInTheDocument();
     expect(screen.queryByText('Close')).not.toBeInTheDocument();
     expect(screen.queryByTestId('llm-config-clear')).not.toBeInTheDocument();

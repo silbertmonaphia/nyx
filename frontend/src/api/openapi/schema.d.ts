@@ -190,7 +190,7 @@ export interface paths {
         get: operations["get-llm-config"];
         /**
          * Save LLM configuration
-         * @description Validates and upserts the authenticated caller's LLM, optional embedding, optional Tavily, and optional retry-model configuration. API keys are write-only: a blank key on update keeps the stored key; on create a key is required unless the endpoint is loopback. Omitting Tavily disables web search for the agent. Responds with the masked configuration.
+         * @description Validates and upserts the authenticated caller's optional main LLM, optional embedding, optional Tavily, and optional retry-model configuration. API keys are write-only: a blank key on update keeps the stored key; on create a key is required unless the endpoint is loopback. Omitting Tavily disables web search for the agent. Responds with the masked configuration.
          */
         put: operations["update-llm-config"];
         post?: never;
@@ -269,7 +269,8 @@ export interface components {
             embedding?: components["schemas"]["LlmEndpointInput"];
             /** @description Optional retry-model group. Supply all three fields or omit the section entirely. */
             fallback?: components["schemas"]["LlmEndpointInput"];
-            llm: components["schemas"]["LlmEndpointInput"];
+            /** @description Optional main-LLM group. Required for the AI Agent; without it feeds and other features keep working. */
+            llm?: components["schemas"]["LlmEndpointInput"];
             /** @description Optional search provider group. When omitted the agent does not plan web searches. */
             tavily?: components["schemas"]["TavilyInput"];
         };

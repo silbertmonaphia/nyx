@@ -56,6 +56,7 @@ export function useLlmConfig(options: UseLlmConfigOptions = {}) {
   return {
     status: statusQuery.data ?? null,
     configured: statusQuery.data ? statusQuery.data.configured : null,
+    agentReady: statusQuery.data ? statusQuery.data.llm !== null : null,
     isLoading: statusQuery.isLoading,
     isError: statusQuery.isError,
     isUnavailable: isUnavailableError(statusQuery.error),

@@ -164,7 +164,7 @@ export const zh = {
       gate: {
         title: '需要先配置 LLM',
         description:
-          'AI Agent 需要你自己的模型端点与 API 密钥才能运行。请先填写主 LLM 的 3 个必填字段。',
+          'AI Agent 需要你自己的模型端点与 API 密钥；填写主 LLM 三项即可使用。不填也不影响 feed 等其他功能。',
       },
       sections: {
         llm: {
@@ -223,7 +223,7 @@ export const zh = {
           collapse: '收起重试模型字段',
         },
         agentNote:
-          '只有主 LLM 的三个字段为必填；localhost / 127.0.0.1 端点可以不填 API 密钥。Embedding 为选填：留空则 agent 的 RAG 步骤与语义搜索拿不到上下文。Tavily 为选填：留空则 agent 不会规划网络搜索。',
+          '主 LLM 同样是选填：不填只是 AI Agent 不可用，feed 等其他功能照常。localhost / 127.0.0.1 端点可以不填 API 密钥。Embedding 为选填：留空则 agent 的 RAG 步骤与语义搜索拿不到上下文。Tavily 为选填：留空则 agent 不会规划网络搜索。',
       },
       fields: {
         baseUrl: '基础 URL',
@@ -234,6 +234,8 @@ export const zh = {
       },
       errors: {
         required: '必填项',
+        atLeastOne:
+          '至少填写一个分区 —— 主 LLM 启用 AI Agent，Embedding 启用 feed 检索，Tavily 启用网络搜索。',
         url: '请输入合法的 http(s) URL',
       },
       actions: {
