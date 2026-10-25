@@ -94,7 +94,7 @@ off by default. Full production topology → [`README_FULL.md` § Architecture](
 | Backend | Go 1.26 · `chi` + `huma` (OpenAPI 3.1) · `sqlc` + `pgx` |
 | Frontend | React 19 · Vite · TypeScript · Tailwind v4 · TanStack Query · Zustand |
 | Data | PostgreSQL (source of truth) · Redis (optional cache) |
-| Ops | Docker Compose (dev) · Kubernetes (prod) · GitHub Actions CI |
+| Ops | Docker Compose (dev) · Kubernetes (prod) · Render + Vercel · GitHub Actions CI |
 
 ## Run it
 
@@ -123,6 +123,20 @@ Then open:
 Chat is gated by `LLM_ENABLED=true`; adding `AGENT_ENABLED=true` routes it through the agent
 instead of the plain single-turn RAG chat. Everything else works the same either way.
 
+## Deploy
+
+SPA on Vercel, API on Render — the repo carries the config (`render.yaml`,
+`frontend/vercel.json`). Two values have to point at each other before the first deploy:
+
+| Where | Var | Value |
+|---|---|---|
+| Vercel | `VITE_API_URL` | `https://<api>.onrender.com/api` |
+| Render | `CORS_ALLOWED_ORIGINS` | `https://<app>.vercel.app` |
+
+`VITE_API_URL` is inlined into the bundle at build time, so changing it needs a new
+deploy. Walkthrough, verification commands and the free-tier caveats:
+[`docs/deployment.md`](docs/deployment.md).
+
 ## Common commands
 
 | Task | Command |
@@ -144,6 +158,7 @@ instead of the plain single-turn RAG chat. Everything else works the same either
 - [`AgentFaultTolerance.md`](docs_agent/AgentFaultTolerance.md) — every failure mode, and what covers it.
 - [`backend/agent_py/README.md`](backend/agent_py/README.md) — the Python service in detail.
 - [`docs/agent-deployment.md`](docs/agent-deployment.md) — production rollout for the agent.
+- [`docs/deployment.md`](docs/deployment.md) — the Render + Vercel deploy path.
 - [`CLAUDE.md`](CLAUDE.md) · [`SECURITY.md`](SECURITY.md) · [`FUTURE.md`](FUTURE.md) · [`openspec/`](openspec/)
 
 ## License

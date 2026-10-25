@@ -75,7 +75,7 @@ flowchart TB
 | 后端 | Go 1.26 · `chi` + `huma`（OpenAPI 3.1）· `sqlc` + `pgx` |
 | 前端 | React 19 · Vite · TypeScript · Tailwind v4 · TanStack Query · Zustand |
 | 数据 | PostgreSQL（唯一事实来源）· Redis（可选缓存） |
-| 运维 | Docker Compose（开发）· Kubernetes（生产）· GitHub Actions CI |
+| 运维 | Docker Compose（开发）· Kubernetes（生产）· Render + Vercel · GitHub Actions CI |
 
 ## 跑起来
 
@@ -103,6 +103,19 @@ make dev-vllm-embed   # 向量模型  (Qwen3-Embedding-0.6B, :8001, 支撑 RAG)
 
 聊天由 `LLM_ENABLED=true` 开启；再加上 `AGENT_ENABLED=true` 则会路由到 agent，而不是普通的单轮 RAG 聊天。其余一切不受影响。
 
+## 部署
+
+前端 Vercel、后端 Render —— 配置已随仓库提交（`render.yaml`、`frontend/vercel.json`）。
+首次部署前，两个变量要互相指向：
+
+| 位置 | 变量 | 值 |
+|---|---|---|
+| Vercel | `VITE_API_URL` | `https://<api>.onrender.com/api` |
+| Render | `CORS_ALLOWED_ORIGINS` | `https://<app>.vercel.app` |
+
+`VITE_API_URL` 在构建时内联进 bundle，改了必须重新部署。完整步骤、验证命令和免费额度的
+坑：[`docs/deployment.md`](docs/deployment.md)。
+
 ## 常用命令
 
 | 任务 | 命令 |
@@ -123,6 +136,7 @@ make dev-vllm-embed   # 向量模型  (Qwen3-Embedding-0.6B, :8001, 支撑 RAG)
 - [`AgentFaultTolerance.md`](docs_agent/AgentFaultTolerance.md) —— 每一个故障面，以及由什么来兜底。
 - [`backend/agent_py/README.zh.md`](backend/agent_py/README.zh.md) —— Python 服务详细文档。
 - [`docs/agent-deployment.md`](docs/agent-deployment.md) —— agent 的生产上线流程。
+- [`docs/deployment.md`](docs/deployment.md) —— Render + Vercel 部署路径。
 - [`CLAUDE.md`](CLAUDE.md) · [`SECURITY.md`](SECURITY.md) · [`FUTURE.md`](FUTURE.md) · [`openspec/`](openspec/)
 
 ## License
