@@ -8,7 +8,7 @@ Feed embedding-indexing becomes per-user BYOK: the indexer resolves the feed own
 
 ### Requirement: Write-path embedding is best-effort within a bounded wait
 
-Feed create, update, and delete SHALL attempt embedding-index maintenance with a deadline no greater than the configured `FEED_INDEX_TIMEOUT` (default 5 seconds). The embedder SHALL be resolved per feed owner from the owner's stored LLM configuration; when the owner has no configuration, the attempt SHALL be skipped entirely (no embedder exists to call) and reported to the write path as a skipped-attempt error, so the write still succeeds and the write path's existing best-effort handling drops any stale embedding row for that feed. On deadline, indexer error, or unconfigured owner, the write SHALL succeed and emit a warning identifying the feed; indexing failure never fails or delays a write beyond the cap. The indexer attempt SHALL still run when the owner's embedder is configured and healthy.
+Feed create, update, and delete SHALL attempt embedding-index maintenance with a deadline no greater than the configured `FEED_INDEX_TIMEOUT` (default 5 seconds). The embedder SHALL be resolved per feed owner from the owner's stored LLM configuration; when the owner has no configuration or no embedding group, the attempt SHALL be skipped entirely (no embedder exists to call) and reported to the write path as a skipped-attempt error, so the write still succeeds and the write path's existing best-effort handling drops any stale embedding row for that feed. On deadline, indexer error, or unconfigured owner, the write SHALL succeed and emit a warning identifying the feed; indexing failure never fails or delays a write beyond the cap. The indexer attempt SHALL still run when the owner's embedder is configured and healthy.
 
 #### Scenario: Unreachable embedder does not hold the write
 
@@ -37,7 +37,7 @@ Feed create, update, and delete SHALL attempt embedding-index maintenance with a
 
 ### Requirement: A skipped index stays healable
 
-A write whose indexing was skipped by the cap — or because the owner had no configuration — SHALL leave the feed eligible for the retrieve-time backfill. Eligibility is a missing embedding row — the backfill selects only feeds without one — so a skipped create/update SHALL best-effort delete the feed's embedding row (same cap) rather than leave stale content indexed. The next `BackfillOnce` for that user SHALL index the feed once an embedder is resolvable, and a `BackfillOnce` run that finds the user unconfigured MUST NOT mark itself as having run, so a later configuration is honored on the next invocation without a process restart.
+A write whose indexing was skipped by the cap — or because the owner had no configuration or no embedding group — SHALL leave the feed eligible for the retrieve-time backfill. Eligibility is a missing embedding row — the backfill selects only feeds without one — so a skipped create/update SHALL best-effort delete the feed's embedding row (same cap) rather than leave stale content indexed. The next `BackfillOnce` for that user SHALL index the feed once an embedder is resolvable, and a `BackfillOnce` run that finds the user unconfigured MUST NOT mark itself as having run, so a later configuration is honored on the next invocation without a process restart.
 
 #### Scenario: Backfill repairs a capped write
 
