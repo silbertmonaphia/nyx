@@ -19,20 +19,17 @@ const EXAMPLE_BASE_URLS = {
   llm: "https://api.deepseek.com/v1",
   embedding: "https://api.siliconflow.cn/v1",
   tavily: "https://api.tavily.com/search",
-  fallback: "https://api.deepseek.com/v1",
 };
 
 const EXAMPLE_MODELS = {
   llm: "deepseek-chat",
   embedding: "Qwen/Qwen3-Embedding-0.6B",
-  fallback: "Qwen/Qwen3-4B-Instruct-2507-FP8",
 };
 
 const DOCS_URLS = {
   llm: "https://api-docs.deepseek.com/",
   embedding: "https://docs.siliconflow.cn/",
   tavily: "https://docs.tavily.com/documentation/api-reference/endpoint/search",
-  fallback: "https://api-docs.deepseek.com/",
 };
 
 interface EndpointFormValues {
@@ -50,7 +47,6 @@ interface LlmConfigFormValues {
   llm: EndpointFormValues;
   embedding: EndpointFormValues;
   tavily: TavilyFormValues;
-  fallback: EndpointFormValues;
 }
 
 function isLoopbackUrl(value: string): boolean {
@@ -162,39 +158,6 @@ function buildLlmConfigSchema(requireKeys: boolean) {
           });
         }
       }),
-    fallback: z
-      .object({
-        base_url: optionalBaseUrl,
-        api_key: z.string(),
-        model: z.string(),
-      })
-      .superRefine((value, ctx) => {
-        const url = value.base_url.trim();
-        const key = value.api_key.trim();
-        const model = value.model.trim();
-        if (url === "" && key === "" && model === "") return;
-        if (url === "") {
-          ctx.addIssue({
-            code: "custom",
-            path: ["base_url"],
-            message: required(),
-          });
-        }
-        if (model === "") {
-          ctx.addIssue({
-            code: "custom",
-            path: ["model"],
-            message: required(),
-          });
-        }
-        if (requireKeys && key === "") {
-          ctx.addIssue({
-            code: "custom",
-            path: ["api_key"],
-            message: required(),
-          });
-        }
-      }),
   });
 }
 
@@ -214,23 +177,13 @@ function toFormValues(status: LlmConfigStatus | null): LlmConfigFormValues {
       llm: emptyEndpoint(),
       embedding: emptyEndpoint(),
       tavily: { base_url: "", api_key: "" },
-      fallback: emptyEndpoint(),
     };
   }
   return {
     llm: endpoint(status.llm),
     embedding: endpoint(status.embedding),
     tavily: tavily(status.tavily),
-    fallback: endpoint(status.fallback),
   };
-}
-
-function isFallbackProvided(values: EndpointFormValues): boolean {
-  return (
-    values.base_url.trim() !== "" ||
-    values.api_key.trim() !== "" ||
-    values.model.trim() !== ""
-  );
 }
 
 function toUpdateInput(values: LlmConfigFormValues): LlmConfigUpdateInput {
@@ -249,13 +202,6 @@ function toUpdateInput(values: LlmConfigFormValues): LlmConfigUpdateInput {
       base_url: values.tavily.base_url.trim(),
       api_key: values.tavily.api_key.trim(),
     },
-    fallback: isFallbackProvided(values.fallback)
-      ? {
-          base_url: values.fallback.base_url.trim(),
-          api_key: values.fallback.api_key.trim(),
-          model: values.fallback.model.trim(),
-        }
-      : null,
   };
 }
 
@@ -350,9 +296,6 @@ export const LlmConfigModal = ({
     defaultValues: toFormValues(null),
     mode: "onSubmit",
   });
-  const [fallbackOverride, setFallbackOverride] = useState<boolean | null>(
-    null,
-  );
   const [embeddingOverride, setEmbeddingOverride] = useState<boolean | null>(
     null,
   );
@@ -368,13 +311,6 @@ export const LlmConfigModal = ({
   const showTavily =
     tavilyOverride ?? (status?.tavily != null || tavilyError);
   const [confirmClearOpen, setConfirmClearOpen] = useState(false);
-  const fallbackError = Boolean(
-    errors.fallback?.base_url ||
-      errors.fallback?.api_key ||
-      errors.fallback?.model,
-  );
-  const showFallback =
-    fallbackOverride ?? (status?.fallback != null || fallbackError);
 
   useEffect(() => {
     if (!open) return;
@@ -598,65 +534,6 @@ export const LlmConfigModal = ({
                   error={errors.tavily?.api_key?.message}
                   registration={register("tavily.api_key")}
                 />
-              </div>
-            ) : null}
-          </fieldset>
-
-          <fieldset className="space-y-3 rounded-md border border-dashed p-4">
-            <div className="flex items-center justify-between gap-2">
-              <div className="text-sm font-semibold text-muted-foreground">
-                {t("llmConfig.sections.fallback.title")}
-              </div>
-              <button
-                type="button"
-                aria-expanded={showFallback}
-                data-testid="llm-fallback-toggle"
-                onClick={() => setFallbackOverride(!showFallback)}
-                className="text-xs font-medium text-primary hover:underline"
-              >
-                {showFallback
-                  ? t("llmConfig.sections.fallback.collapse")
-                  : t("llmConfig.sections.fallback.expand")}
-              </button>
-            </div>
-            <p className="text-xs text-muted-foreground">
-              {t("llmConfig.sections.fallback.drives")}
-              {" "}
-              <a
-                href={DOCS_URLS.fallback}
-                target="_blank"
-                rel="noreferrer"
-                className="underline underline-offset-2"
-              >
-                {t("llmConfig.sections.fallback.docsLabel")}
-              </a>
-            </p>
-            {showFallback ? (
-              <div className="space-y-3">
-                <ConfigField
-                  id="fallback-base-url"
-                  label={t("llmConfig.fields.baseUrl")}
-                  placeholder={EXAMPLE_BASE_URLS.fallback}
-                  error={errors.fallback?.base_url?.message}
-                  registration={register("fallback.base_url")}
-                />
-                <div className="grid gap-3 sm:grid-cols-2">
-                  <ConfigField
-                    id="fallback-api-key"
-                    label={t("llmConfig.fields.apiKey")}
-                    placeholder={keyPlaceholder(status?.fallback)}
-                    type="password"
-                    error={errors.fallback?.api_key?.message}
-                    registration={register("fallback.api_key")}
-                  />
-                  <ConfigField
-                    id="fallback-model"
-                    label={t("llmConfig.fields.model")}
-                    placeholder={EXAMPLE_MODELS.fallback}
-                    error={errors.fallback?.model?.message}
-                    registration={register("fallback.model")}
-                  />
-                </div>
               </div>
             ) : null}
           </fieldset>

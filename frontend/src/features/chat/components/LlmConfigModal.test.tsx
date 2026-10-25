@@ -258,7 +258,6 @@ describe('LlmConfigModal', () => {
         base_url: 'https://api.tavily.com/search',
         api_key: '',
       },
-      fallback: null,
     });
     expect(onSaved).toHaveBeenCalledTimes(1);
     expect(onOpenChange).toHaveBeenCalledWith(false);
@@ -347,40 +346,6 @@ describe('LlmConfigModal', () => {
     expect(
       screen.getByText(/Only the three main-LLM fields are required/),
     ).toBeInTheDocument();
-    expect(screen.getByText(/single-turn chat fallback path/)).toBeInTheDocument();
-  });
-
-  it('rejects a partially filled fallback group and accepts the complete one', async () => {
-    const { save } = mockHook({ status: unconfigured });
-    renderModal();
-
-    await fillRequiredFields();
-    await userEvent.click(screen.getByTestId('llm-fallback-toggle'));
-    await userEvent.type(input('fallback-base-url'), 'https://api.openai.com/v1');
-
-    await userEvent.click(screen.getByTestId('llm-config-save'));
-
-    await vi.waitFor(() => {
-      expect(save.mutateAsync).not.toHaveBeenCalled();
-    });
-    expect(
-      screen.getAllByText('Required').length,
-    ).toBeGreaterThanOrEqual(2);
-
-    await userEvent.type(input('fallback-model'), 'gpt-4o-mini');
-    await userEvent.type(input('fallback-api-key'), 'sk-fb');
-    await userEvent.click(screen.getByTestId('llm-config-save'));
-
-    await vi.waitFor(() => {
-      expect(save.mutateAsync).toHaveBeenCalledTimes(1);
-    });
-    expect(save.mutateAsync.mock.calls[0][0]).toMatchObject({
-      fallback: {
-        base_url: 'https://api.openai.com/v1',
-        api_key: 'sk-fb',
-        model: 'gpt-4o-mini',
-      },
-    });
   });
 
   it('clears only after the confirm dialog is confirmed', async () => {

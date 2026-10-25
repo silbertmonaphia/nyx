@@ -32,5 +32,5 @@ export interface LlmConfigUpdateInput {
   llm: LlmConfigEndpointInput;
   embedding: LlmConfigEndpointInput;
   tavily: LlmConfigTavilyInput;
-  fallback: LlmConfigEndpointInput | null;
+  fallback?: LlmConfigEndpointInput | null;
 }
