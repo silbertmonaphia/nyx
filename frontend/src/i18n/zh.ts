@@ -195,7 +195,7 @@ export const zh = {
           urlConvention:
             '需为 OpenAI 兼容端点：路径需携带服务商的版本前缀（以 /v1 结尾），如 http://localhost:8000/v1。',
           dimensionNote:
-            '部署要求 1024 维向量，例如 Qwen/Qwen3-Embedding-0.6B。维度不符的模型会在查询时被拒绝，而不是保存时。更换端点会清空已存向量，下次检索时自动重建索引。',
+            '部署要求 1024 维向量，例如 Qwen/Qwen3-Embedding-0.6B。维度不符的模型会在查询时被拒绝，而不是保存时。保持同一模型时，更换端点或 API 密钥不会影响已存向量。',
           modelRequirement:
             '必须输出 1024 维向量 —— 即部署的向量列宽度。保存时会探测模型：宽度不符将被拒绝。',
           modelLocked:

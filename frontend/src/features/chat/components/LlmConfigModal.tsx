@@ -22,7 +22,7 @@ const EXAMPLE_BASE_URLS = {
 };
 
 const EXAMPLE_MODELS = {
-  llm: "deepseek-chat",
+  llm: "deepseek-flash",
   embedding: "Qwen/Qwen3-Embedding-0.6B",
 };
 

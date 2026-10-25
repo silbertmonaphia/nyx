@@ -208,7 +208,7 @@ describe('LlmConfigModal', () => {
     await expandOptionalSections();
 
     expect(input('llm-base-url').placeholder).toBe('https://api.deepseek.com/v1');
-    expect(input('llm-model').placeholder).toBe('deepseek-chat');
+    expect(input('llm-model').placeholder).toBe('deepseek-flash');
     expect(input('embedding-base-url').placeholder).toBe('https://api.siliconflow.cn/v1');
     expect(input('embedding-model').placeholder).toBe('Qwen/Qwen3-Embedding-0.6B');
     expect(input('tavily-base-url').placeholder).toBe('https://api.tavily.com/search');

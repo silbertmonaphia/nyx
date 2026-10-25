@@ -211,7 +211,7 @@ export const en: Translation = {
           urlConvention:
             'Must be an OpenAI-compatible endpoint: the path carries the version prefix (a trailing /v1), e.g. http://localhost:8000/v1.',
           dimensionNote:
-            'The deployment requires 1024-dimension vectors, e.g. Qwen/Qwen3-Embedding-0.6B. A model emitting a different width is rejected at query time, not when saving. Changing the endpoint clears your stored vectors; feeds are re-indexed on the next retrieval.',
+            'The deployment requires 1024-dimension vectors, e.g. Qwen/Qwen3-Embedding-0.6B. A model emitting a different width is rejected at query time, not when saving. Changing the endpoint or API key with the same model keeps your stored vectors.',
           modelRequirement:
             'Must emit 1024-dimension vectors — the deployment\'s vector column width. The model is probed on save: a different width is rejected.',
           modelLocked:
