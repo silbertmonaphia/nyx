@@ -91,7 +91,7 @@ def test_prompt_byte_identical_when_catalog_absent():
 async def test_plan_node_uses_dispatcher_catalog(monkeypatch):
     captured = {}
 
-    async def _fake_emit(state, settings, tracer, prefs_text="", registry_block=""):
+    async def _fake_emit(state, settings, tracer, prefs_text="", registry_block="", secrets=None):
         captured["block"] = registry_block
         return planner_module._PlanError("plan_invalid", "stop", "test")
 
@@ -106,7 +106,7 @@ async def test_plan_node_uses_dispatcher_catalog(monkeypatch):
 async def test_plan_node_catalog_fetch_failure_yields_empty_block(monkeypatch):
     captured = {}
 
-    async def _fake_emit(state, settings, tracer, prefs_text="", registry_block=""):
+    async def _fake_emit(state, settings, tracer, prefs_text="", registry_block="", secrets=None):
         captured["block"] = registry_block
         return planner_module._PlanError("plan_invalid", "stop", "test")
 
@@ -120,7 +120,7 @@ async def test_plan_node_catalog_fetch_failure_yields_empty_block(monkeypatch):
 async def test_plan_node_without_dispatcher_is_unchanged(monkeypatch):
     captured = {}
 
-    async def _fake_emit(state, settings, tracer, prefs_text="", registry_block=""):
+    async def _fake_emit(state, settings, tracer, prefs_text="", registry_block="", secrets=None):
         captured["block"] = registry_block
         return planner_module._PlanError("plan_invalid", "stop", "test")
 
@@ -135,7 +135,7 @@ async def test_plan_node_without_dispatcher_is_unchanged(monkeypatch):
 async def test_planner_factory_threads_dispatcher(monkeypatch):
     captured = {}
 
-    async def _fake_plan_node(state, settings, tracer, prefs_text="", tools=None):
+    async def _fake_plan_node(state, settings, tracer, prefs_text="", tools=None, secrets=None):
         captured["tools"] = tools
         return state
 

@@ -230,7 +230,7 @@ def test_structured_returns_parsed_plan_first_try(monkeypatch, scripted_settings
     )
     client = _ScriptedStructuredClient(script=["ok"], successes=[canned])
     monkeypatch.setattr(
-        "agent.planner._build_structured_client", lambda _s: client
+        "agent.planner._build_structured_client", lambda _s, _state, _secrets=None: client
     )
 
     state = new_state(
@@ -275,7 +275,7 @@ def test_retry_injects_validator_error(monkeypatch, scripted_settings):
             return self._successes.pop(0)
 
     client = _RealErrorClient(script=["raise_validation", "ok"], successes=[canned])
-    monkeypatch.setattr("agent.planner._build_structured_client", lambda _s: client)
+    monkeypatch.setattr("agent.planner._build_structured_client", lambda _s, _state, _secrets=None: client)
 
     state = new_state(
         user_id=1,
@@ -321,7 +321,7 @@ def test_retry_succeeds_after_validation_failure(monkeypatch, scripted_settings)
             return self._successes.pop(0)
 
     client = _RecoveringClient(script=["raise_validation", "ok"], successes=[canned])
-    monkeypatch.setattr("agent.planner._build_structured_client", lambda _s: client)
+    monkeypatch.setattr("agent.planner._build_structured_client", lambda _s, _state, _secrets=None: client)
 
     state = new_state(
         user_id=1,
@@ -358,7 +358,7 @@ def test_retry_exhaustion_emits_plan_invalid(monkeypatch, scripted_settings):
             raise real_error
 
     client = _AlwaysFailingClient(script=["raise_validation", "raise_validation"])
-    monkeypatch.setattr("agent.planner._build_structured_client", lambda _s: client)
+    monkeypatch.setattr("agent.planner._build_structured_client", lambda _s, _state, _secrets=None: client)
 
     state = new_state(
         user_id=1,
@@ -400,7 +400,7 @@ def test_retry_cap_zero_is_one_attempt(monkeypatch):
             raise real_error
 
     client = _AlwaysFailingClient(script=["raise_validation"])
-    monkeypatch.setattr("agent.planner._build_structured_client", lambda _s: client)
+    monkeypatch.setattr("agent.planner._build_structured_client", lambda _s, _state, _secrets=None: client)
 
     state = new_state(
         user_id=1,
@@ -418,7 +418,7 @@ def test_retry_recovers_from_output_parser_exception(monkeypatch, scripted_setti
     """The OutputParserException path is retryable and recovers on attempt 2."""
     canned = Plan(steps=[PlanStep(id="s1", kind=StepKind.llm, prompt="p")])
     client = _ScriptedStructuredClient(script=["raise_parser", "ok"], successes=[canned])
-    monkeypatch.setattr("agent.planner._build_structured_client", lambda _s: client)
+    monkeypatch.setattr("agent.planner._build_structured_client", lambda _s, _state, _secrets=None: client)
 
     state = new_state(
         user_id=1,
@@ -451,7 +451,7 @@ def test_retry_max_two_permits_two_retries(monkeypatch):
     client = _ScriptedStructuredClient(
         script=["raise_parser", "raise_parser", "ok"], successes=[canned]
     )
-    monkeypatch.setattr("agent.planner._build_structured_client", lambda _s: client)
+    monkeypatch.setattr("agent.planner._build_structured_client", lambda _s, _state, _secrets=None: client)
 
     state = new_state(
         user_id=1,
@@ -496,7 +496,7 @@ def test_plan_node_emits_error_and_done_on_retry_exhaustion(
             raise real_error
 
     client = _AlwaysFailingClient(script=["x", "x"])
-    monkeypatch.setattr("agent.planner._build_structured_client", lambda _s: client)
+    monkeypatch.setattr("agent.planner._build_structured_client", lambda _s, _state, _secrets=None: client)
 
     state = new_state(
         user_id=1,
@@ -563,7 +563,7 @@ def test_retry_increments_ok_counter(monkeypatch, scripted_settings):
             return self._successes.pop(0)
 
     client = _RecoveringClient(script=["raise_validation", "ok"], successes=[canned])
-    monkeypatch.setattr("agent.planner._build_structured_client", lambda _s: client)
+    monkeypatch.setattr("agent.planner._build_structured_client", lambda _s, _state, _secrets=None: client)
 
     state = new_state(
         user_id=1,
@@ -599,7 +599,7 @@ def test_retry_exhaustion_increments_exhausted_counter(monkeypatch, scripted_set
             raise real_error
 
     client = _AlwaysFailingClient(script=["raise_validation", "raise_validation"])
-    monkeypatch.setattr("agent.planner._build_structured_client", lambda _s: client)
+    monkeypatch.setattr("agent.planner._build_structured_client", lambda _s, _state, _secrets=None: client)
 
     state = new_state(
         user_id=1,
@@ -633,7 +633,7 @@ def test_terminal_plan_too_large_preserves_code_and_no_exhausted_tick(
 
     # scripted_settings pins plan_max_steps=5, retry_max=1 → 2 attempts, both oversized.
     client = _OversizedClient(script=["ok", "ok"], successes=[])
-    monkeypatch.setattr("agent.planner._build_structured_client", lambda _s: client)
+    monkeypatch.setattr("agent.planner._build_structured_client", lambda _s, _state, _secrets=None: client)
 
     state = new_state(
         user_id=1,
@@ -662,7 +662,7 @@ def test_provider_error_returns_planner_failed_no_retry(monkeypatch, scripted_se
             raise RuntimeError("connection reset by peer")
 
     client = _ProviderErrorClient(script=["ok", "ok"])
-    monkeypatch.setattr("agent.planner._build_structured_client", lambda _s: client)
+    monkeypatch.setattr("agent.planner._build_structured_client", lambda _s, _state, _secrets=None: client)
 
     state = new_state(
         user_id=1,
@@ -722,7 +722,7 @@ def test_non_plan_return_is_retryable_and_recovers(monkeypatch, scripted_setting
             return canned
 
     client = _NoneThenPlanClient(script=["ok", "ok"])
-    monkeypatch.setattr("agent.planner._build_structured_client", lambda _s: client)
+    monkeypatch.setattr("agent.planner._build_structured_client", lambda _s, _state, _secrets=None: client)
 
     state = new_state(
         user_id=1,
@@ -750,7 +750,7 @@ def test_non_plan_return_exhaustion_ticks_exhausted(monkeypatch, scripted_settin
             self._call_count += 1
 
     client = _AlwaysNoneClient(script=["ok", "ok"])
-    monkeypatch.setattr("agent.planner._build_structured_client", lambda _s: client)
+    monkeypatch.setattr("agent.planner._build_structured_client", lambda _s, _state, _secrets=None: client)
 
     state = new_state(
         user_id=1,
@@ -1365,7 +1365,7 @@ def test_guard_rejection_reprompts_and_recovers(monkeypatch, scripted_settings):
     )
     good = _composed_create_plan()
     client = _ScriptedStructuredClient(script=["ok", "ok"], successes=[bad, good])
-    monkeypatch.setattr("agent.planner._build_structured_client", lambda _s: client)
+    monkeypatch.setattr("agent.planner._build_structured_client", lambda _s, _state, _secrets=None: client)
 
     state = new_state(
         user_id=1,
@@ -1392,7 +1392,7 @@ def test_guard_rejection_exhaustion_returns_plan_invalid(monkeypatch, scripted_s
         ]
     )
     client = _ScriptedStructuredClient(script=["ok", "ok"], successes=[bad, bad])
-    monkeypatch.setattr("agent.planner._build_structured_client", lambda _s: client)
+    monkeypatch.setattr("agent.planner._build_structured_client", lambda _s, _state, _secrets=None: client)
 
     state = new_state(
         user_id=1,

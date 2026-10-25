@@ -18,6 +18,7 @@ import pytest
 from agent.config import Settings
 from agent.executor import _classify_tool_failure
 from agent.tools_client import ToolError, ToolRejectedError, ToolUnavailableError
+from agent.types import TavilyOverride
 from agent.web_tools import (
     WEB_FETCH_SCHEMA,
     WEB_SEARCH_SCHEMA,
@@ -480,6 +481,127 @@ async def test_search_bad_query_is_correctable(query):
     settings = make_settings(web_search_enabled=True, tavily_api_key="k")
     with pytest.raises(ToolError):
         await search_web(query, settings)
+
+
+async def test_search_uses_the_run_override_endpoint_and_key(monkeypatch):
+    captured = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["url"] = str(request.url)
+        captured["auth"] = request.headers.get("authorization")
+        captured["keyless"] = request.headers.get("x-tavily-access-mode")
+        return httpx.Response(200, json={"results": []})
+
+    patched_async_client(monkeypatch, handler)
+    settings = make_settings(
+        web_search_enabled=True,
+        tavily_api_key="deployment-key",
+        tavily_base_url="https://deployment-tavily.test/search",
+    )
+    override = TavilyOverride(
+        base_url="https://user-tavily.test/search", api_key="user-key"
+    )
+
+    await search_web("q", settings, tavily_override=override)
+
+    assert captured["url"] == "https://user-tavily.test/search"
+    assert captured["auth"] == "Bearer user-key"
+    assert captured["keyless"] is None
+
+
+async def test_search_override_without_key_keeps_the_keyless_tier(monkeypatch):
+    captured = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["auth"] = request.headers.get("authorization")
+        captured["keyless"] = request.headers.get("x-tavily-access-mode")
+        return httpx.Response(200, json={"results": []})
+
+    patched_async_client(monkeypatch, handler)
+    settings = make_settings(
+        web_search_enabled=True,
+        tavily_api_key="deployment-key",
+        tavily_base_url="https://deployment-tavily.test/search",
+    )
+    override = TavilyOverride(
+        base_url="https://user-tavily.test/search", api_key=""
+    )
+
+    await search_web("q", settings, tavily_override=override)
+
+    assert captured["auth"] is None
+    assert captured["keyless"] == "keyless"
+
+
+async def test_build_local_tools_threads_the_override_into_dispatch(monkeypatch):
+    captured = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["url"] = str(request.url)
+        captured["auth"] = request.headers.get("authorization")
+        return httpx.Response(200, json={"results": []})
+
+    patched_async_client(monkeypatch, handler)
+    settings = make_settings(
+        web_search_enabled=True,
+        tavily_api_key="deployment-key",
+        tavily_base_url="https://deployment-tavily.test/search",
+    )
+    override = TavilyOverride(
+        base_url="https://user-tavily.test/search", api_key="user-key"
+    )
+
+    tools = build_local_tools(settings, tavily_override=override)
+    search = next(tool for tool in tools if tool.name == "web_search")
+    await search.dispatch({"query": "q"})
+
+    assert captured["url"] == "https://user-tavily.test/search"
+    assert captured["auth"] == "Bearer user-key"
+
+
+def test_local_registry_for_reuses_the_shared_registry_without_override():
+    from agent.main import _local_registry_for
+    from agent.tool_dispatch import LocalToolRegistry
+
+    shared = LocalToolRegistry(build_local_tools(make_settings(web_fetch_enabled=True)))
+
+    assert _local_registry_for(make_settings(), None, shared) is shared
+
+
+async def test_local_registry_for_leaves_the_shared_registry_on_deployment_settings(
+    monkeypatch,
+):
+    from agent.main import _local_registry_for
+    from agent.tool_dispatch import LocalToolRegistry
+
+    urls: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        urls.append(str(request.url))
+        return httpx.Response(200, json={"results": []})
+
+    patched_async_client(monkeypatch, handler)
+    settings = make_settings(
+        web_fetch_enabled=False,
+        web_search_enabled=True,
+        tavily_api_key="deployment-key",
+        tavily_base_url="https://deployment-tavily.test/search",
+    )
+    shared = LocalToolRegistry(build_local_tools(settings))
+    override = TavilyOverride(
+        base_url="https://user-tavily.test/search", api_key="user-key"
+    )
+
+    per_run = _local_registry_for(settings, override, shared)
+
+    assert per_run is not shared
+    assert len(shared) == 1
+    await shared.get("web_search").dispatch({"query": "shared"})
+    await per_run.get("web_search").dispatch({"query": "override"})
+    assert urls == [
+        "https://deployment-tavily.test/search",
+        "https://user-tavily.test/search",
+    ]
 
 
 # --- registry glue + planner block ------------------------------------------

@@ -26,6 +26,7 @@ from .approvals import ApprovalGate, RunSink
 from .budget import BudgetGuard
 from .config import Settings
 from .executor import executor_node
+from .llm_effective import OverrideSecrets
 from .observability import agent_runs_total
 from .planner import plan_node
 from .rag_client import RagClient
@@ -42,6 +43,7 @@ def _executor_step_factory(
     tracer: Any,
     approvals: ApprovalGate | None = None,
     prefs_text: str = "",
+    secrets: OverrideSecrets | None = None,
 ):
     """Closure that returns the LangGraph-compatible async node for the executor.
 
@@ -55,6 +57,12 @@ def _executor_step_factory(
     node that writes the user-visible answer carries it too. The `""`
     default keeps the executor's prompts byte-identical for callers that
     pass no prefs.
+
+    `secrets` (add-user-llm-byok D11) rides the closure too: the
+    request-scoped override key holder the nodes consult at
+    client-construction time — a deliberate alternative to a
+    request-scoped contextvar, which langGraph's internal task dispatch
+    cannot guarantee to propagate.
     """
     async def _executor_step(state: AgentState) -> AgentState:
         return await executor_node(
@@ -66,6 +74,7 @@ def _executor_step_factory(
             tools=tools,
             approvals=approvals,
             prefs_text=prefs_text,
+            secrets=secrets,
         )
 
     return _executor_step
@@ -76,6 +85,7 @@ def _planner_step_factory(
     tracer: Any,
     prefs_text: str = "",
     tools: ToolDispatcher | None = None,
+    secrets: OverrideSecrets | None = None,
 ):
     """Closure that returns the LangGraph-compatible async node for the planner.
 
@@ -85,10 +95,12 @@ def _planner_step_factory(
     `plan_node` → `_initial_messages`. `tools` (agent-feed-tools D4) rides
     the same way so the planner can advertise the live registry catalog —
     mirroring the executor factory, which already receives the dispatcher.
+    `secrets` (add-user-llm-byok D11) rides the closure as well: the
+    request-scoped override key holder, kept out of the checkpointed state.
     """
     async def _planner_step(state: AgentState) -> AgentState:
         return await plan_node(
-            state, settings, tracer, prefs_text=prefs_text, tools=tools
+            state, settings, tracer, prefs_text=prefs_text, tools=tools, secrets=secrets
         )
 
     return _planner_step
@@ -103,6 +115,7 @@ def build_graph(
     tracer: Any | None = None,
     prefs_text: str = "",
     approvals: ApprovalGate | None = None,
+    secrets: OverrideSecrets | None = None,
 ):
     """Build (and return) the compiled StateGraph ready for `astream(initial_state)`.
 
@@ -125,6 +138,11 @@ def build_graph(
     building the graph; it rides into BOTH the planner and the executor
     (openspec/changes/agent-chat-fixes D1). The default `""` keeps every
     pre-existing caller's planner and executor prompts byte-identical.
+
+    `secrets` (add-user-llm-byok D11) is the run's request-scoped BYOK key
+    holder; it rides the same closure into both nodes so the plaintext
+    keys never touch the checkpointed state. `None` keeps every
+    pre-existing caller's client construction byte-identical.
     """
     if tracer is None:
         from opentelemetry import trace
@@ -132,12 +150,12 @@ def build_graph(
         tracer = trace.get_tracer("nyx.agent")
     builder = StateGraph(AgentState)
     builder.add_node(
-        "planner", _planner_step_factory(settings, tracer, prefs_text, tools)
+        "planner", _planner_step_factory(settings, tracer, prefs_text, tools, secrets)
     )
     builder.add_node(
         "executor",
         _executor_step_factory(
-            settings, budget, rag, tools, tracer, approvals, prefs_text
+            settings, budget, rag, tools, tracer, approvals, prefs_text, secrets
         ),
     )
     builder.add_edge(START, "planner")
@@ -210,6 +228,7 @@ async def run_agent_stream(
     graph_config: dict | None = None,
     resumed: bool = False,
     sink: RunSink | None = None,
+    secrets: OverrideSecrets | None = None,
 ):
     """Async iterator: yields newly-appended events from `state["events_so_far"]`
     as the graph progresses. Yields one `AgentState` snapshot per node completion,
@@ -226,9 +245,13 @@ async def run_agent_stream(
     appear — including the gate's mid-node confirm prompt — and nothing is
     yielded; the caller drains the sink's queue. Without a sink the legacy
     per-node yield behavior is preserved (unit tests, `run_agent`).
+
+    `secrets` (add-user-llm-byok D11) rides into a self-built graph the
+    same way `build_graph` receives it; ignored when `graph` is pre-built
+    (the pre-built graph already captured the holder in its closure).
     """
     if graph is None:
-        graph = build_graph(settings, budget, rag, tools, tracer=tracer)
+        graph = build_graph(settings, budget, rag, tools, tracer=tracer, secrets=secrets)
 
     last_len = len(state.get("events_so_far", []))
 

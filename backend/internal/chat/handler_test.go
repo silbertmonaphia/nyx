@@ -506,6 +506,30 @@ func TestHandler_RunID_RoundTripsToAgent(t *testing.T) {
 		"the supplied run_id reaches the agent body unchanged")
 }
 
+func TestHandler_ClientSuppliedLLMConfigRejected(t *testing.T) {
+	srv, _ := newUpstreamServer(t, http.StatusOK, cannedSSE, "text/event-stream; charset=utf-8")
+	harness, tokens := newProxyHarness(t, mustAgentProxy(t, srv.URL))
+	server := httptest.NewServer(harness)
+	defer server.Close()
+
+	body := []byte(`{"messages":[{"role":"user","content":"hi"}],"llm_config":{"base_url":"http://evil/v1","api_key":"stolen","model":"m"}}`)
+
+	req, err := http.NewRequest(http.MethodPost, server.URL+"/api/chat", bytes.NewReader(body))
+	require.NoError(t, err)
+	req.Header.Set("Authorization", "Bearer "+bearerToken(t, tokens))
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := server.Client().Do(req)
+	require.NoError(t, err)
+	defer func() { _ = resp.Body.Close() }()
+
+	assert.Equal(t, http.StatusBadRequest, resp.StatusCode,
+		"client-supplied llm_config must be rejected by strict body decoding")
+	raw, err := io.ReadAll(resp.Body)
+	require.NoError(t, err)
+	assert.NotContains(t, string(raw), "stolen")
+}
+
 // TestHandler_OmittedRunID_IsAbsentFromProxiedBody pins the second
 // spec scenario: with the `omitempty` tag, a request that never
 // mentioned run_id produces a body with no run_id key at all —

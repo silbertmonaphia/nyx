@@ -425,3 +425,27 @@ func TestDelete_IndexFailureDoesNotFailDelete(t *testing.T) {
 	require.NoError(t, err, "delete-indexer error must not fail the delete")
 	assert.Equal(t, 1, idx.deleteCalls)
 }
+
+func TestCreate_UnconfiguredIndexerDoesNotFailWriteAndDropsStaleRow(t *testing.T) {
+	idx := &stubIndexer{indexErr: errors.New("rag: embedder not configured")}
+	svc := newServiceWithStubIndexer(idx)
+	ctx := ctxWithUser(t, 1)
+
+	err := svc.CreateFeed(ctx, &Feed{ID: 11, Title: "x"})
+	require.NoError(t, err, "an unconfigured embedder must not fail the write")
+	assert.Equal(t, 1, idx.indexCalls)
+	assert.Equal(t, 1, idx.deleteCalls)
+	assert.Equal(t, []int{11}, idx.deleteFeedIDs, "the stale embedding row is dropped")
+}
+
+func TestUpdate_UnconfiguredIndexerDoesNotFailWriteAndDropsStaleRow(t *testing.T) {
+	idx := &stubIndexer{indexErr: errors.New("rag: embedder not configured")}
+	svc := newServiceWithStubIndexer(idx)
+	ctx := ctxWithUser(t, 1)
+
+	err := svc.UpdateFeed(ctx, 13, &Feed{ID: 13, Title: "y"})
+	require.NoError(t, err, "an unconfigured embedder must not fail the write")
+	assert.Equal(t, 1, idx.indexCalls)
+	assert.Equal(t, 1, idx.deleteCalls)
+	assert.Equal(t, []int{13}, idx.deleteFeedIDs, "the stale embedding row is dropped")
+}

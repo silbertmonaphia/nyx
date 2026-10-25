@@ -3,6 +3,7 @@ package rag
 import (
 	"context"
 	"crypto/sha256"
+	"fmt"
 
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
@@ -56,6 +57,7 @@ func HashChunk(f *feed.Feed) []byte {
 type Embedder struct {
 	provider llm.Provider
 	model    string
+	dims     int
 	tracer   trace.Tracer
 }
 
@@ -65,6 +67,17 @@ type Embedder struct {
 // error at the wiring site.
 func NewEmbedder(p llm.Provider, model string, tracer trace.Tracer) *Embedder {
 	return &Embedder{provider: p, model: model, tracer: tracer}
+}
+
+func (e *Embedder) SetDimensions(dims int) {
+	e.dims = dims
+}
+
+func (e *Embedder) checkVectorWidth(vec []float32) error {
+	if e.dims <= 0 || len(vec) == e.dims {
+		return nil
+	}
+	return fmt.Errorf("rag: embedding width %d does not match configured %d: %w", len(vec), e.dims, ErrNoEmbedder)
 }
 
 // Embed embeds one feed and returns the vector + chunk hash. The
@@ -95,6 +108,10 @@ func (e *Embedder) Embed(ctx context.Context, f *feed.Feed) ([]float32, []byte, 
 		// vectors — but defensive: surface as a clear error rather
 		// than panic on out-of-range indexing.
 		err := llm.ErrProviderUnavailable
+		span.RecordError(err)
+		return nil, nil, err
+	}
+	if err := e.checkVectorWidth(vecs[0]); err != nil {
 		span.RecordError(err)
 		return nil, nil, err
 	}
@@ -141,6 +158,12 @@ func (e *Embedder) EmbedBatch(ctx context.Context, feeds []*feed.Feed) ([][]floa
 		span.RecordError(err)
 		return nil, nil, err
 	}
+	for _, vec := range vecs {
+		if err := e.checkVectorWidth(vec); err != nil {
+			span.RecordError(err)
+			return nil, nil, err
+		}
+	}
 	span.SetStatus(codes.Ok, "")
 	return vecs, hashes, nil
 }
@@ -172,6 +195,12 @@ func (e *Embedder) EmbedStrings(ctx context.Context, inputs []string) ([][]float
 	if err != nil {
 		span.RecordError(err)
 		return nil, err
+	}
+	for _, vec := range vecs {
+		if err := e.checkVectorWidth(vec); err != nil {
+			span.RecordError(err)
+			return nil, err
+		}
 	}
 	span.SetStatus(codes.Ok, "")
 	return vecs, nil

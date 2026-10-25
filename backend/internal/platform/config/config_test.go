@@ -309,6 +309,7 @@ func TestLoad_AcceptsValidLLMConfig(t *testing.T) {
 	t.Setenv("DB_URL", "postgres://x")
 	t.Setenv("JWT_SECRET", auth.TestSecret)
 	t.Setenv("LLM_ENABLED", "true")
+	t.Setenv("USER_LLM_ENCRYPTION_KEY", "nyx-user-llm-encryption-key-0123456789abcdef")
 	t.Setenv("LLM_BASE_URL", "https://api.openai.com/v1")
 	t.Setenv("LLM_API_KEY", "sk-prod-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
 	t.Setenv("LLM_MODEL", "gpt-4o-mini")
@@ -366,6 +367,7 @@ func TestLoad_AcceptsVLLMProviderWithEmptyAPIKey(t *testing.T) {
 	t.Setenv("DB_URL", "postgres://x")
 	t.Setenv("JWT_SECRET", auth.TestSecret)
 	t.Setenv("LLM_ENABLED", "true")
+	t.Setenv("USER_LLM_ENCRYPTION_KEY", "nyx-user-llm-encryption-key-0123456789abcdef")
 	t.Setenv("LLM_PROVIDER", "vllm")
 	t.Setenv("LLM_BASE_URL", "http://vllm:8000/v1")
 	t.Setenv("LLM_API_KEY", "")
@@ -493,6 +495,7 @@ func TestLoad_AcceptsPrimaryOnly(t *testing.T) {
 	t.Setenv("DB_URL", "postgres://x")
 	t.Setenv("JWT_SECRET", auth.TestSecret)
 	t.Setenv("LLM_ENABLED", "true")
+	t.Setenv("USER_LLM_ENCRYPTION_KEY", "nyx-user-llm-encryption-key-0123456789abcdef")
 	t.Setenv("LLM_PROVIDER", "openai")
 	t.Setenv("LLM_BASE_URL", "https://api.openai.com/v1")
 	t.Setenv("LLM_API_KEY", "sk-prod-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
@@ -543,6 +546,7 @@ func TestLoad_AcceptsOpenAIFallbackToVLLMWithEmptyKey(t *testing.T) {
 	t.Setenv("DB_URL", "postgres://x")
 	t.Setenv("JWT_SECRET", auth.TestSecret)
 	t.Setenv("LLM_ENABLED", "true")
+	t.Setenv("USER_LLM_ENCRYPTION_KEY", "nyx-user-llm-encryption-key-0123456789abcdef")
 	t.Setenv("LLM_PROVIDER", "openai")
 	t.Setenv("LLM_BASE_URL", "https://api.openai.com/v1")
 	t.Setenv("LLM_API_KEY", "sk-prod-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
@@ -594,6 +598,7 @@ func TestLoad_AcceptsEmbedBaseURLEmpty(t *testing.T) {
 	t.Setenv("DB_URL", "postgres://x")
 	t.Setenv("JWT_SECRET", auth.TestSecret)
 	t.Setenv("LLM_ENABLED", "true")
+	t.Setenv("USER_LLM_ENCRYPTION_KEY", "nyx-user-llm-encryption-key-0123456789abcdef")
 	t.Setenv("LLM_PROVIDER", "vllm")
 	t.Setenv("LLM_BASE_URL", "http://vllm:8000/v1")
 	t.Setenv("LLM_API_KEY", "")
@@ -622,6 +627,7 @@ func TestLoad_AcceptsValidEmbedConfig(t *testing.T) {
 	t.Setenv("DB_URL", "postgres://x")
 	t.Setenv("JWT_SECRET", auth.TestSecret)
 	t.Setenv("LLM_ENABLED", "true")
+	t.Setenv("USER_LLM_ENCRYPTION_KEY", "nyx-user-llm-encryption-key-0123456789abcdef")
 	t.Setenv("LLM_PROVIDER", "vllm")
 	t.Setenv("LLM_BASE_URL", "http://vllm:8000/v1")
 	t.Setenv("LLM_API_KEY", "")
@@ -772,6 +778,7 @@ func TestLoad_EmbedConfigAllowPrivateHonoured(t *testing.T) {
 	t.Setenv("DB_URL", "postgres://x")
 	t.Setenv("JWT_SECRET", auth.TestSecret)
 	t.Setenv("LLM_ENABLED", "true")
+	t.Setenv("USER_LLM_ENCRYPTION_KEY", "nyx-user-llm-encryption-key-0123456789abcdef")
 	t.Setenv("LLM_PROVIDER", "openai")
 	t.Setenv("LLM_BASE_URL", "https://api.openai.com/v1")
 	t.Setenv("LLM_API_KEY", "sk-prod-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
@@ -787,6 +794,88 @@ func TestLoad_EmbedConfigAllowPrivateHonoured(t *testing.T) {
 	}
 	if !cfg.LLMEmbeddingAllowPrivateURL {
 		t.Error("LLMEmbeddingAllowPrivateURL = false, want true")
+	}
+}
+
+func TestLoad_RequiresUserLLMEncryptionKeyWhenLLMEnabled(t *testing.T) {
+	t.Setenv("DB_URL", "postgres://x")
+	t.Setenv("JWT_SECRET", auth.TestSecret)
+	t.Setenv("LLM_ENABLED", "true")
+	t.Setenv("LLM_BASE_URL", "https://api.openai.com/v1")
+	t.Setenv("LLM_API_KEY", "sk-prod-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+	t.Setenv("LLM_MODEL", "gpt-4o-mini")
+	t.Setenv("USER_LLM_ENCRYPTION_KEY", "")
+
+	_, err := Load()
+	if err == nil {
+		t.Fatal("Load() error = nil, want USER_LLM_ENCRYPTION_KEY-required rejection")
+	}
+	if !strings.Contains(err.Error(), "USER_LLM_ENCRYPTION_KEY") {
+		t.Errorf("Load() error = %v, want it to mention USER_LLM_ENCRYPTION_KEY", err)
+	}
+}
+
+func TestLoad_AcceptsUserLLMEncryptionKeyWhenLLMDisabled(t *testing.T) {
+	t.Setenv("DB_URL", "postgres://x")
+	t.Setenv("JWT_SECRET", auth.TestSecret)
+	t.Setenv("LLM_ENABLED", "")
+	t.Setenv("USER_LLM_ENCRYPTION_KEY", "")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v, want nil (LLM off, key optional)", err)
+	}
+	if cfg.UserLLMEncryptionKey != "" {
+		t.Errorf("UserLLMEncryptionKey = %q, want empty", cfg.UserLLMEncryptionKey)
+	}
+}
+
+func TestLoad_RejectsShortUserLLMEncryptionKey(t *testing.T) {
+	t.Setenv("DB_URL", "postgres://x")
+	t.Setenv("JWT_SECRET", auth.TestSecret)
+	t.Setenv("LLM_ENABLED", "true")
+	t.Setenv("LLM_BASE_URL", "https://api.openai.com/v1")
+	t.Setenv("LLM_API_KEY", "sk-prod-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+	t.Setenv("LLM_MODEL", "gpt-4o-mini")
+	t.Setenv("USER_LLM_ENCRYPTION_KEY", "short-key")
+
+	_, err := Load()
+	if err == nil {
+		t.Fatal("Load() error = nil, want short-USER_LLM_ENCRYPTION_KEY rejection")
+	}
+	if !strings.Contains(err.Error(), "USER_LLM_ENCRYPTION_KEY") {
+		t.Errorf("Load() error = %v, want it to mention USER_LLM_ENCRYPTION_KEY", err)
+	}
+}
+
+func TestLoad_AcceptsValidUserLLMEncryptionKey(t *testing.T) {
+	t.Setenv("DB_URL", "postgres://x")
+	t.Setenv("JWT_SECRET", auth.TestSecret)
+	t.Setenv("LLM_ENABLED", "true")
+	t.Setenv("LLM_BASE_URL", "https://api.openai.com/v1")
+	t.Setenv("LLM_API_KEY", "sk-prod-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+	t.Setenv("LLM_MODEL", "gpt-4o-mini")
+	t.Setenv("USER_LLM_ENCRYPTION_KEY", "nyx-user-llm-encryption-key-0123456789abcdef")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v, want nil for a valid 40-byte key", err)
+	}
+	if cfg.UserLLMEncryptionKey != "nyx-user-llm-encryption-key-0123456789abcdef" {
+		t.Errorf("UserLLMEncryptionKey = %q, want the value from env", cfg.UserLLMEncryptionKey)
+	}
+}
+
+func TestCheckNotPlaceholderKey(t *testing.T) {
+	for _, bad := range []string{"changeme", "CHANGEME-now", "your-key-here", "sk-xxx", "a-xxx-b", "test-key-1"} {
+		if err := CheckNotPlaceholderKey(bad, "FIELD"); err == nil {
+			t.Errorf("CheckNotPlaceholderKey(%q) = nil, want rejection", bad)
+		}
+	}
+	for _, good := range []string{"sk-prod-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "nyx-real-key", "e2e-placeholder-key-not-secret", ""} {
+		if err := CheckNotPlaceholderKey(good, "FIELD"); err != nil {
+			t.Errorf("CheckNotPlaceholderKey(%q) = %v, want nil", good, err)
+		}
 	}
 }
 

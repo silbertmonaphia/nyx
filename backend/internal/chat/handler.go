@@ -12,6 +12,7 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"nyx/internal/llm"
+	"nyx/internal/llmsettings"
 	"nyx/internal/middleware"
 	"nyx/internal/platform/api"
 	"nyx/internal/platform/auth"
@@ -164,11 +165,23 @@ func (h *Handler) stream(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	userID := reqctx.UserIDFromContext(r.Context())
+	stack, err := h.service.ResolveUserLLM(r.Context(), userID)
+	if err != nil {
+		if errors.Is(err, llmsettings.ErrNotFound) {
+			api.WriteError(w, r, http.StatusConflict, "LLM configuration required", "llm_not_configured")
+			return
+		}
+		api.WriteError(w, r, http.StatusInternalServerError, "Internal server error",
+			api.ClassifyAndLog(r.Context(), err, "Failed to resolve LLM configuration"))
+		return
+	}
+
 	// Step 2.5: dispatch to the agent proxy when configured. The
 	// dispatch is mutually exclusive with the legacy path — the
 	// proxy takes over the entire SSE lifecycle.
 	if h.service.IsAgentEnabled() {
-		h.streamProxy(w, r, req)
+		h.streamProxy(w, r, req, stack)
 		return
 	}
 
@@ -190,7 +203,7 @@ func (h *Handler) stream(w http.ResponseWriter, r *http.Request) {
 	// returns.
 	fw := &flushingWriter{w: w}
 
-	streamLegacy(fw, r, req, h.service)
+	streamLegacy(fw, r, req, h.service, h.service.ProviderFor(stack))
 }
 
 // streamLegacy drives today's single-turn path. It is byte-for-byte
@@ -202,12 +215,12 @@ func (h *Handler) stream(w http.ResponseWriter, r *http.Request) {
 //
 // Extracted from the pre-chunk-2 stream() body so the additive
 // proxy path lives in streamProxy without disturbing this surface.
-func streamLegacy(fw *flushingWriter, r *http.Request, req ChatRequest, svc *Service) {
+func streamLegacy(fw *flushingWriter, r *http.Request, req ChatRequest, svc *Service, provider llm.Provider) {
 	var (
 		finalUsage *llm.ChatUsage
 		writeErr   error
 	)
-	_, writeErr = svc.Chat(r.Context(), req,
+	_, writeErr = svc.ChatWithProvider(r.Context(), provider, req,
 		func(delta string, finalUsageChunk *llm.ChatUsage) error {
 			// Heartbeat check: if the client has disconnected, bail
 			// before doing any I/O. The provider's recv loop will also
@@ -311,7 +324,7 @@ func streamLegacy(fw *flushingWriter, r *http.Request, req ChatRequest, svc *Ser
 // failure, the handler emits one typed error frame + done +
 // terminator; the SPA's SSE parser sees a consistent failure
 // shape regardless of mode.
-func (h *Handler) streamProxy(w http.ResponseWriter, r *http.Request, req ChatRequest) {
+func (h *Handler) streamProxy(w http.ResponseWriter, r *http.Request, req ChatRequest, stack *llmsettings.UserStack) {
 	// Defensive auth check. The auth middleware already 401s
 	// unauthenticated requests, but main.go could in theory wire
 	// this route without middleware (admin subrouter, internal
@@ -358,7 +371,20 @@ func (h *Handler) streamProxy(w http.ResponseWriter, r *http.Request, req ChatRe
 	ctx, cancel := context.WithTimeout(r.Context(), h.service.MaxStreamDuration())
 	defer cancel()
 
-	resp, err := h.service.Proxy().Run(ctx, req, userID, bearer)
+	payload := AgentRunPayload{ChatRequest: req}
+	if stack != nil {
+		payload.LLMConfig = &AgentLLMConfig{
+			BaseURL: stack.LLMBaseURL,
+			APIKey:  stack.LLMAPIKey,
+			Model:   stack.LLMModel,
+		}
+		payload.TavilyConfig = &AgentTavilyConfig{
+			BaseURL: stack.TavilyBaseURL,
+			APIKey:  stack.TavilyAPIKey,
+		}
+	}
+
+	resp, err := h.service.Proxy().Run(ctx, payload, userID, bearer)
 	if err != nil {
 		if errors.Is(ctx.Err(), context.DeadlineExceeded) && r.Context().Err() == nil {
 			// The cap expired before the upstream produced its

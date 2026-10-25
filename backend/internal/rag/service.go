@@ -36,6 +36,8 @@ type RetrieverIface interface {
 	Retrieve(ctx context.Context, userID int, queryVec []float32, k int) ([]Passage, error)
 }
 
+type EmbedderResolver func(ctx context.Context, userID int) (*Embedder, error)
+
 // Service orchestrates the chat-side RAG path: embed the user's
 // query, retrieve the top-K passages, render a context block
 // sized to RAGMaxContextChars, and run the lazy backfill.
@@ -61,6 +63,8 @@ type Service struct {
 	// typically a few hundred for any realistic deployment, well
 	// under the per-entry overhead.
 	backfillInFlight sync.Map
+
+	embedderResolver EmbedderResolver
 }
 
 // NewService wires the chat-side rag facade. The pool is shared
@@ -85,6 +89,17 @@ func NewService(embedder *Embedder, retriever RetrieverIface, pool Pool,
 	}
 }
 
+func (s *Service) SetEmbedderResolver(fn EmbedderResolver) {
+	s.embedderResolver = fn
+}
+
+func (s *Service) resolveEmbedder(ctx context.Context, userID int) (*Embedder, error) {
+	if s.embedderResolver != nil {
+		return s.embedderResolver(ctx, userID)
+	}
+	return s.embedder, nil
+}
+
 // Retrieve is the chat-side hot path. Returns the passages + a
 // rendered context block (empty when no passages, which the chat
 // service treats as "no augmentation"). Truncates the context
@@ -103,7 +118,12 @@ func (s *Service) Retrieve(ctx context.Context, userID int, query string) ([]Pas
 	)
 	defer span.End()
 
-	if s.embedder == nil {
+	embedder, err := s.resolveEmbedder(ctx, userID)
+	if err != nil {
+		span.RecordError(err)
+		return nil, "", err
+	}
+	if embedder == nil {
 		span.RecordError(ErrNoEmbedder)
 		return nil, "", ErrNoEmbedder
 	}
@@ -111,7 +131,7 @@ func (s *Service) Retrieve(ctx context.Context, userID int, query string) ([]Pas
 		return nil, "", nil
 	}
 
-	vecs, err := s.embedder.EmbedStrings(ctx, []string{query})
+	vecs, err := embedder.EmbedStrings(ctx, []string{query})
 	if err != nil {
 		span.RecordError(err)
 		return nil, "", err
@@ -205,7 +225,11 @@ func renderContextBlock(passages []Passage, maxChars int) string {
 // a derived timeout) before the go-statement so a long backfill
 // survives the originating request.
 func (s *Service) BackfillOnce(ctx context.Context, userID int) {
-	if s.embedder == nil || s.feedRepo == nil {
+	if s.feedRepo == nil {
+		return
+	}
+	embedder, err := s.resolveEmbedder(ctx, userID)
+	if err != nil || embedder == nil {
 		return
 	}
 	ctx, span := s.tracer.Start(ctx, "rag.backfill_once",
@@ -215,7 +239,7 @@ func (s *Service) BackfillOnce(ctx context.Context, userID int) {
 
 	once, _ := s.backfillInFlight.LoadOrStore(userID, &sync.Once{})
 	once.(*sync.Once).Do(func() {
-		s.runBackfill(ctx, userID)
+		s.runBackfill(ctx, userID, embedder)
 	})
 }
 
@@ -224,7 +248,7 @@ func (s *Service) BackfillOnce(ctx context.Context, userID int) {
 // process. Each iteration embeds one batch via EmbedBatch and
 // upserts each row individually (so a single bad row doesn't
 // abort the rest of the batch).
-func (s *Service) runBackfill(ctx context.Context, userID int) {
+func (s *Service) runBackfill(ctx context.Context, userID int, embedder *Embedder) {
 	ctx, span := s.tracer.Start(ctx, "rag.backfill")
 	defer span.End()
 
@@ -257,7 +281,7 @@ func (s *Service) runBackfill(ctx context.Context, userID int) {
 			}
 		}
 
-		vecs, hashes, err := s.embedder.EmbedBatch(ctx, feeds)
+		vecs, hashes, err := embedder.EmbedBatch(ctx, feeds)
 		if err != nil {
 			span.RecordError(err)
 			return

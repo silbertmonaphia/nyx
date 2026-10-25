@@ -44,6 +44,14 @@ from pydantic import SecretStr, ValidationError
 
 from .arg_refs import has_reference_to
 from .config import Settings
+from .llm_effective import (
+    OverrideSecrets,
+    llm_holder_handle,
+    llm_holder_key,
+    resolve_llm,
+    resolve_llm_endpoint,
+    structured_supported,
+)
 from .observability import (
     agent_planner_parse_failures_total,
     agent_tokens_total,
@@ -180,6 +188,7 @@ async def plan_node(
     tracer: trace.Tracer,
     prefs_text: str = "",
     tools: ToolDispatcher | None = None,
+    secrets: OverrideSecrets | None = None,
 ) -> AgentState:
     """Invoke the planner LLM; mutate state.plan and state.events_so_far.
 
@@ -198,6 +207,11 @@ async def plan_node(
     the prefs block, best-effort — a failed or empty registry call leaves
     the prompt byte-identical to its pre-change form (spec: "Registry
     outage leaves planning unchanged").
+
+    `secrets` is the run's request-scoped override key holder
+    (add-user-llm-byok D11); the override's non-secret fields arrive in
+    the state. When present it decides the per-run emission path
+    (`structured_supported`) and the client credentials.
     """
     # Registry catalog (agent-feed-tools D4), fetched once per plan; the
     # dispatcher memoizes the underlying tools/list for the whole run.
@@ -207,6 +221,10 @@ async def plan_node(
             registry_block = registry_planner_block(await tools.registry_tools())
         except Exception as exc:  # noqa: BLE001 — catalog is best-effort
             log.warning("planner: registry catalog fetch failed: %r", exc)
+    override_view = state.get("llm_override")
+    use_structured = structured_supported(
+        override_view.base_url if override_view else None, settings
+    )
     with (
         # Langfuse twin of the plan span (agent-langfuse-tracing 3.4).
         # Entered BEFORE the Jaeger span (parent-before-child); the Jaeger
@@ -229,7 +247,7 @@ async def plan_node(
             },
             metadata={
                 "kind": "plan",
-                "structured": settings.planner_structured_enabled,
+                "structured": use_structured,
             },
         ) as lf_plan,
         jaeger_span(tracer, "agent.step.plan") as span,
@@ -237,15 +255,25 @@ async def plan_node(
         span.set_attribute("step_id", "plan")
         span.set_attribute("kind", "plan")
         span.set_attribute("iteration", 0)
-        span.set_attribute("structured", settings.planner_structured_enabled)
+        span.set_attribute("structured", use_structured)
 
-        if settings.planner_structured_enabled:
+        if use_structured:
             plan_or_error = await _emit_structured_plan(
-                state, settings, tracer, prefs_text, registry_block=registry_block
+                state,
+                settings,
+                tracer,
+                prefs_text,
+                registry_block=registry_block,
+                secrets=secrets,
             )
         else:
             plan_or_error = await _emit_legacy_plan(
-                state, settings, tracer, prefs_text, registry_block=registry_block
+                state,
+                settings,
+                tracer,
+                prefs_text,
+                registry_block=registry_block,
+                secrets=secrets,
             )
 
         if isinstance(plan_or_error, _PlanError):
@@ -280,7 +308,11 @@ async def plan_node(
 # --- structured-output path --------------------------------------------
 
 
-def _build_structured_client(settings: Settings):
+def _build_structured_client(
+    settings: Settings,
+    state: AgentState,
+    secrets: OverrideSecrets | None = None,
+):
     """Bind a `Plan` response schema onto a fresh ChatOpenAI client.
 
     Deliberately NOT `ChatOpenAI.with_structured_output(Plan,
@@ -303,11 +335,23 @@ def _build_structured_client(settings: Settings):
     honours the schema via guided decoding; when its parser cannot, set
     `PYTHON_AGENT_PLANNER_STRUCTURED_ENABLED=false` to drop back to the
     legacy free-text path.
+
+    The client's (base_url, api_key, model) resolve per run
+    (add-user-llm-byok): an override in the state wins, its key arriving
+    exclusively via `secrets` — never from the state, which the
+    checkpointer serializes verbatim (D11).
     """
+    effective = resolve_llm(
+        state,
+        settings,
+        planner=True,
+        api_key_from_holder=llm_holder_key(secrets),
+        holder_handle=llm_holder_handle(secrets),
+    )
     base = ChatOpenAI(
-        base_url=settings.llm_base_url,
-        api_key=SecretStr(settings.llm_api_key or "no-key"),
-        model=settings.planner_model,
+        base_url=effective.base_url,
+        api_key=SecretStr(effective.api_key),
+        model=effective.model,
         temperature=0.0,
         # Transport field stays `max_tokens` (vLLM-compatible wire);
         # langchain-openai 1.7 types only the renamed field, so mypy
@@ -415,6 +459,7 @@ async def _emit_structured_plan(
     tracer: trace.Tracer,
     prefs_text: str = "",
     registry_block: str = "",
+    secrets: OverrideSecrets | None = None,
 ) -> Plan | _PlanError:
     """Bound the structured-output retry loop. Returns `Plan` or `_PlanError`.
 
@@ -430,7 +475,7 @@ async def _emit_structured_plan(
     not tick the parse-failure counter.
     """
     try:
-        client = _build_structured_client(settings)
+        client = _build_structured_client(settings, state, secrets)
     except Exception as exc:  # noqa: BLE001 — construction fault is startup-class
         # e.g. an old `langchain-openai` without `response_format`
         # json_schema support, or an invalid base_url. Historical
@@ -593,14 +638,17 @@ def _accrue_callback_usage(
 
     The handler only records when the response carries `model_name` (real
     providers do; stubs may not), so absent telemetry is a no-op. Failed
-    attempts accrue too — the provider billed them.
+    attempts accrue too — the provider billed them. The metric label is
+    the run's effective planner model (the override's model when a BYOK
+    override is present, add-user-llm-byok D9).
     """
     total = 0
     for meta in cb.usage_metadata.values():
         _prompt, _completion, _total = accumulate_usage_metadata(state, meta)
         total += _total
     if total:
-        agent_tokens_total.labels("planner", settings.planner_model).inc(total)
+        _base_url, planner_model = resolve_llm_endpoint(state, settings, planner=True)
+        agent_tokens_total.labels("planner", planner_model).inc(total)
 
 
 async def _emit_legacy_plan(
@@ -609,6 +657,7 @@ async def _emit_legacy_plan(
     tracer: trace.Tracer,
     prefs_text: str = "",
     registry_block: str = "",
+    secrets: OverrideSecrets | None = None,
 ) -> Plan | _PlanError:
     """Legacy free-text path: fence-strip + `json.loads` + post-parse enrichment.
 
@@ -618,10 +667,17 @@ async def _emit_legacy_plan(
     return a plan the structured path would reject with `plan_invalid`;
     wiring the guard here would terminate the run on its first rejection.
     """
+    effective = resolve_llm(
+        state,
+        settings,
+        planner=True,
+        api_key_from_holder=llm_holder_key(secrets),
+        holder_handle=llm_holder_handle(secrets),
+    )
     client = ChatOpenAI(
-        base_url=settings.llm_base_url,
-        api_key=SecretStr(settings.llm_api_key or "no-key"),
-        model=settings.planner_model,
+        base_url=effective.base_url,
+        api_key=SecretStr(effective.api_key),
+        model=effective.model,
         temperature=0.0,
         # Transport field stays `max_tokens` (vLLM-compatible wire);
         # langchain-openai 1.7 types only the renamed field, so mypy
@@ -642,7 +698,7 @@ async def _emit_legacy_plan(
 
         _prompt, _completion, _total = accumulate_usage(state, resp)
         if _total:
-            agent_tokens_total.labels("planner", settings.planner_model).inc(_total)
+            agent_tokens_total.labels("planner", effective.model).inc(_total)
         raw = _extract_text(resp)
         plan_or_error = _parse_and_validate(raw, max_steps=settings.plan_max_steps)
         if (

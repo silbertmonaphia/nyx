@@ -1,11 +1,15 @@
 package chat
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -77,9 +81,9 @@ func TestAgentProxy_Run_ForwardsRequestBody(t *testing.T) {
 	proxy, err := NewAgentProxy(srv.URL, nil)
 	require.NoError(t, err)
 
-	resp, err := proxy.Run(context.Background(), ChatRequest{
+	resp, err := proxy.Run(context.Background(), AgentRunPayload{ChatRequest: ChatRequest{
 		Messages: []Message{{Role: RoleUser, Content: "hi"}},
-	}, 42, "Bearer eyJhbGc.dummy.token")
+	}}, 42, "Bearer eyJhbGc.dummy.token")
 	require.NoError(t, err)
 	require.NotNil(t, resp)
 	defer func() { _ = resp.Body.Close() }()
@@ -109,9 +113,9 @@ func TestAgentProxy_Run_ReturnsBodyBytesForHandlerToForward(t *testing.T) {
 	proxy, err := NewAgentProxy(srv.URL, nil)
 	require.NoError(t, err)
 
-	resp, err := proxy.Run(context.Background(), ChatRequest{
+	resp, err := proxy.Run(context.Background(), AgentRunPayload{ChatRequest: ChatRequest{
 		Messages: []Message{{Role: RoleUser, Content: "hi"}},
-	}, 42, "Bearer test")
+	}}, 42, "Bearer test")
 	require.NoError(t, err)
 	defer func() { _ = resp.Body.Close() }()
 
@@ -139,7 +143,7 @@ func TestAgentProxy_Run_ConnectionRefused_ReturnsErrAgentUnavailable(t *testing.
 	proxy, err := NewAgentProxy(url, nil)
 	require.NoError(t, err)
 
-	resp, err := proxy.Run(context.Background(), ChatRequest{}, 42, "Bearer t")
+	resp, err := proxy.Run(context.Background(), AgentRunPayload{}, 42, "Bearer t")
 	if resp != nil {
 		_ = resp.Body.Close()
 	}
@@ -160,7 +164,7 @@ func TestAgentProxy_Run_5xx_ReturnsErrAgentUnavailable(t *testing.T) {
 			proxy, err := NewAgentProxy(srv.URL, nil)
 			require.NoError(t, err)
 
-			resp, err := proxy.Run(context.Background(), ChatRequest{}, 42, "Bearer t")
+			resp, err := proxy.Run(context.Background(), AgentRunPayload{}, 42, "Bearer t")
 			if resp != nil {
 				_ = resp.Body.Close()
 			}
@@ -187,7 +191,7 @@ func TestAgentProxy_Run_4xx_ReturnsResponseForByteForByteForward(t *testing.T) {
 			proxy, err := NewAgentProxy(srv.URL, nil)
 			require.NoError(t, err)
 
-			resp, err := proxy.Run(context.Background(), ChatRequest{}, 42, "Bearer t")
+			resp, err := proxy.Run(context.Background(), AgentRunPayload{}, 42, "Bearer t")
 			require.NoError(t, err, "%d must NOT be classified as unavailable", status)
 			require.NotNil(t, resp)
 			defer func() { _ = resp.Body.Close() }()
@@ -209,7 +213,7 @@ func TestAgentProxy_Run_2xx_ReturnsResponse(t *testing.T) {
 	proxy, err := NewAgentProxy(srv.URL, nil)
 	require.NoError(t, err)
 
-	resp, err := proxy.Run(context.Background(), ChatRequest{}, 42, "Bearer t")
+	resp, err := proxy.Run(context.Background(), AgentRunPayload{}, 42, "Bearer t")
 	require.NoError(t, err)
 	require.NotNil(t, resp)
 	defer func() { _ = resp.Body.Close() }()
@@ -238,7 +242,7 @@ func TestAgentProxy_Run_CtxCanceled_NetworkError(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel() // pre-cancel — client dial will fail
 
-	resp, err := proxy.Run(ctx, ChatRequest{}, 42, "Bearer t")
+	resp, err := proxy.Run(ctx, AgentRunPayload{}, 42, "Bearer t")
 	if resp != nil {
 		_ = resp.Body.Close()
 	}
@@ -289,7 +293,7 @@ func TestNewAgentProxy_TrimsTrailingSlash(t *testing.T) {
 	proxy, err := NewAgentProxy(srv.URL+"/", nil) // trailing slash
 	require.NoError(t, err)
 
-	resp, err := proxy.Run(context.Background(), ChatRequest{}, 42, "Bearer t")
+	resp, err := proxy.Run(context.Background(), AgentRunPayload{}, 42, "Bearer t")
 	if resp != nil {
 		_ = resp.Body.Close()
 	}
@@ -327,4 +331,105 @@ func TestTokenFingerprint(t *testing.T) {
 		"fingerprint MUST NOT contain the token's tail")
 	assert.False(t, strings.Contains(fp, "."),
 		"fingerprint MUST NOT contain the token's body — only first 6 chars")
+}
+
+func TestAgentProxy_Run_ForwardsPerUserConfig(t *testing.T) {
+	srv, captured := newUpstreamServer(t, http.StatusOK, cannedSSE, "text/event-stream")
+	proxy, err := NewAgentProxy(srv.URL, nil)
+	require.NoError(t, err)
+
+	model := "client-model"
+	runID := "run-1"
+	payload := AgentRunPayload{
+		ChatRequest: ChatRequest{
+			Messages: []Message{{Role: RoleUser, Content: "hello"}},
+			Model:    &model,
+			RAG:      true,
+			RunID:    &runID,
+		},
+		LLMConfig: &AgentLLMConfig{
+			BaseURL: "http://localhost:8000/v1",
+			APIKey:  "e2e-placeholder-key-not-secret",
+			Model:   "Qwen/Qwen3-4B-Instruct-2507-FP8",
+		},
+		TavilyConfig: &AgentTavilyConfig{
+			BaseURL: "https://api.tavily.com/search",
+			APIKey:  "e2e-placeholder-key-not-secret",
+		},
+	}
+
+	resp, err := proxy.Run(context.Background(), payload, 42, "Bearer t")
+	require.NoError(t, err)
+	defer func() { _ = resp.Body.Close() }()
+
+	var decoded map[string]json.RawMessage
+	require.NoError(t, json.Unmarshal([]byte(captured.body), &decoded))
+	require.Contains(t, decoded, "llm_config")
+	require.Contains(t, decoded, "tavily_config")
+	assert.NotContains(t, decoded, "fallback", "the fallback slot must never be forwarded")
+
+	var llmCfg AgentLLMConfig
+	require.NoError(t, json.Unmarshal(decoded["llm_config"], &llmCfg))
+	assert.Equal(t, payload.LLMConfig.BaseURL, llmCfg.BaseURL)
+	assert.Equal(t, payload.LLMConfig.APIKey, llmCfg.APIKey)
+	assert.Equal(t, payload.LLMConfig.Model, llmCfg.Model)
+
+	var tavilyCfg AgentTavilyConfig
+	require.NoError(t, json.Unmarshal(decoded["tavily_config"], &tavilyCfg))
+	assert.Equal(t, payload.TavilyConfig.BaseURL, tavilyCfg.BaseURL)
+	assert.Equal(t, payload.TavilyConfig.APIKey, tavilyCfg.APIKey)
+
+	last := -1
+	for _, key := range []string{`"messages"`, `"model"`, `"rag"`, `"run_id"`, `"llm_config"`, `"tavily_config"`} {
+		idx := strings.Index(captured.body, key)
+		require.Greater(t, idx, last, "wire order: %s must follow the previous field", key)
+		last = idx
+	}
+}
+
+func TestAgentProxy_Run_MatchesAgentPayloadFixture(t *testing.T) {
+	srv, captured := newUpstreamServer(t, http.StatusOK, cannedSSE, "text/event-stream")
+	proxy, err := NewAgentProxy(srv.URL, nil)
+	require.NoError(t, err)
+
+	payload := AgentRunPayload{
+		ChatRequest: ChatRequest{Messages: []Message{{Role: RoleUser, Content: "hello"}}},
+		LLMConfig: &AgentLLMConfig{
+			BaseURL: "http://localhost:8000/v1",
+			APIKey:  "e2e-placeholder-key-not-secret",
+			Model:   "Qwen/Qwen3-4B-Instruct-2507-FP8",
+		},
+		TavilyConfig: &AgentTavilyConfig{
+			BaseURL: "https://api.tavily.com/search",
+			APIKey:  "e2e-placeholder-key-not-secret",
+		},
+	}
+
+	resp, err := proxy.Run(context.Background(), payload, 42, "Bearer t")
+	require.NoError(t, err)
+	_ = resp.Body.Close()
+
+	var pretty bytes.Buffer
+	require.NoError(t, json.Indent(&pretty, []byte(captured.body), "", "  "))
+	pretty.WriteByte('\n')
+
+	fixture := filepath.Join("..", "..", "..", "frontend", "tests", "e2e", "fixtures", "agent-payload-llm-config.json")
+	if os.Getenv("UPDATE_FIXTURES") == "1" {
+		require.NoError(t, os.WriteFile(fixture, pretty.Bytes(), 0o600))
+	}
+
+	//nolint:gosec // G304: test-controlled fixture path.
+	raw, err := os.ReadFile(fixture)
+	require.NoError(t, err, "fixture missing; regenerate with UPDATE_FIXTURES=1 go test ./internal/chat -run TestAgentProxy_Run_MatchesAgentPayloadFixture")
+
+	var decoded map[string]any
+	require.NoError(t, json.Unmarshal(raw, &decoded))
+	var capturedDecoded map[string]any
+	require.NoError(t, json.Unmarshal([]byte(captured.body), &capturedDecoded))
+	require.Equal(t, capturedDecoded, decoded, "fixture drift; regenerate with UPDATE_FIXTURES=1")
+
+	assert.Contains(t, decoded, "llm_config")
+	assert.Contains(t, decoded, "tavily_config")
+	assert.NotContains(t, decoded, "fallback")
+	assert.Contains(t, string(raw), "e2e-placeholder-key-not-secret")
 }

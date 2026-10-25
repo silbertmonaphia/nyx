@@ -510,7 +510,11 @@ func (r *Router) probe(ctx context.Context, slot ProviderSlot) error {
 	defer span.End()
 
 	base := strings.TrimRight(slot.BaseURL, "/")
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, base+"/v1/models", nil)
+	probeURL := base + "/v1/models"
+	if strings.HasSuffix(base, "/v1") {
+		probeURL = base + "/models"
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, probeURL, nil)
 	if err != nil {
 		span.RecordError(err)
 		return err

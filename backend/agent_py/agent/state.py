@@ -11,7 +11,7 @@ from typing import Any, TypedDict
 
 from langchain_core.messages import BaseMessage
 
-from .types import ChatMessage, Event, Plan
+from .types import ChatMessage, Event, LLMOverrideView, Plan, TavilyOverrideView
 
 
 class AgentState(TypedDict, total=False):
@@ -21,6 +21,8 @@ class AgentState(TypedDict, total=False):
     request_id: str | None  # from the HTTP request; threaded into error events
     messages: list[ChatMessage]
     model: str | None  # model override; None uses settings.llm_model
+    llm_override: LLMOverrideView | None
+    tavily_override: TavilyOverrideView | None
 
     # --- Plan + per-step output (filled by planner + executor) ---
     plan: Plan | None
@@ -64,6 +66,8 @@ def new_state(
     messages: list[ChatMessage],
     model: str | None,
     request_id: str | None = None,
+    llm_override: LLMOverrideView | None = None,
+    tavily_override: TavilyOverrideView | None = None,
 ) -> AgentState:
     return AgentState(
         user_id=user_id,
@@ -71,6 +75,8 @@ def new_state(
         request_id=request_id,
         messages=messages,
         model=model,
+        llm_override=llm_override,
+        tavily_override=tavily_override,
         plan=None,
         step_outputs={},
         cumulative_tokens=0,

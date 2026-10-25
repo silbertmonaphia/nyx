@@ -1,0 +1,17 @@
+{
+  "messages": [
+    {
+      "role": "user",
+      "content": "hello"
+    }
+  ],
+  "llm_config": {
+    "base_url": "http://localhost:8000/v1",
+    "api_key": "e2e-placeholder-key-not-secret",
+    "model": "Qwen/Qwen3-4B-Instruct-2507-FP8"
+  },
+  "tavily_config": {
+    "base_url": "https://api.tavily.com/search",
+    "api_key": "e2e-placeholder-key-not-secret"
+  }
+}

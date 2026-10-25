@@ -10,10 +10,15 @@ import (
 	"go.opentelemetry.io/otel/trace"
 
 	"nyx/internal/llm"
+	"nyx/internal/llmsettings"
 	"nyx/internal/platform/config"
 	"nyx/internal/rag"
 	"nyx/internal/reqctx"
 )
+
+type LLMResolver interface {
+	Resolve(ctx context.Context, userID int) (*llmsettings.UserStack, error)
+}
 
 // ErrAgentNotEnabled is what the handler's streamProxy path returns
 // when callers invoke it on a legacy-mode Service (the proxy is nil).
@@ -66,7 +71,8 @@ type Service struct {
 	rag             *rag.Service
 	tracer          trace.Tracer
 
-	proxy *AgentProxy
+	proxy    *AgentProxy
+	resolver LLMResolver
 }
 
 // NewService builds a Service from config. cfg supplies the per-
@@ -153,6 +159,24 @@ func (s *Service) MaxStreamDuration() time.Duration {
 	return s.maxStreamDur
 }
 
+func (s *Service) SetResolver(r LLMResolver) {
+	s.resolver = r
+}
+
+func (s *Service) ResolveUserLLM(ctx context.Context, userID int) (*llmsettings.UserStack, error) {
+	if s.resolver == nil {
+		return nil, nil
+	}
+	return s.resolver.Resolve(ctx, userID)
+}
+
+func (s *Service) ProviderFor(stack *llmsettings.UserStack) llm.Provider {
+	if stack == nil || stack.Chat == nil {
+		return s.provider
+	}
+	return stack.Chat
+}
+
 // Run is preserved as a thin shim for the legacy agent test
 // surface (and any future internal caller). It returns
 // ErrAgentNotEnabled because the Go-side planner/executor was
@@ -194,6 +218,10 @@ func (s *Service) Run(_ context.Context, _ ChatRequest) (any, error) {
 // be replayed on retry without the second call seeing the system
 // message twice.
 func (s *Service) Chat(ctx context.Context, req ChatRequest, onDelta func(delta string, finalUsage *llm.ChatUsage) error, onNote func(text, provider string) error) (*llm.ChatUsage, error) {
+	return s.ChatWithProvider(ctx, s.provider, req, onDelta, onNote)
+}
+
+func (s *Service) ChatWithProvider(ctx context.Context, provider llm.Provider, req ChatRequest, onDelta func(delta string, finalUsage *llm.ChatUsage) error, onNote func(text, provider string) error) (*llm.ChatUsage, error) {
 	ctx, span := s.tracer.Start(ctx, "chat.service",
 		trace.WithAttributes(attribute.Int("chat.messages", len(req.Messages))),
 	)
@@ -258,7 +286,7 @@ func (s *Service) Chat(ctx context.Context, req ChatRequest, onDelta func(delta 
 		}
 	}
 
-	usage, err := s.provider.Chat(ctx, llm.ChatRequest{
+	usage, err := provider.Chat(ctx, llm.ChatRequest{
 		Model:     "", // model is configured at the provider level (openai.NewClient reads cfg.LLMModel)
 		Messages:  msgs,
 		MaxTokens: s.maxTokens,

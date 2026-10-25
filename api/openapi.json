@@ -32,6 +32,58 @@
         ],
         "type": "object"
       },
+      "ConfigResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "configured": {
+            "type": "boolean"
+          },
+          "embedding": {
+            "$ref": "#/components/schemas/LlmEndpointResponse"
+          },
+          "fallback": {
+            "$ref": "#/components/schemas/LlmEndpointResponse"
+          },
+          "llm": {
+            "$ref": "#/components/schemas/LlmEndpointResponse"
+          },
+          "tavily": {
+            "$ref": "#/components/schemas/TavilyResponse"
+          }
+        },
+        "required": [
+          "configured",
+          "llm",
+          "embedding",
+          "tavily",
+          "fallback"
+        ],
+        "type": "object"
+      },
+      "ConfigUpdateInput": {
+        "additionalProperties": false,
+        "properties": {
+          "embedding": {
+            "$ref": "#/components/schemas/LlmEndpointInput"
+          },
+          "fallback": {
+            "$ref": "#/components/schemas/LlmEndpointInput",
+            "description": "Optional retry-model group. Supply all three fields or omit the section entirely."
+          },
+          "llm": {
+            "$ref": "#/components/schemas/LlmEndpointInput"
+          },
+          "tavily": {
+            "$ref": "#/components/schemas/TavilyInput"
+          }
+        },
+        "required": [
+          "llm",
+          "embedding",
+          "tavily"
+        ],
+        "type": "object"
+      },
       "ErrorResponse": {
         "additionalProperties": false,
         "properties": {
@@ -237,6 +289,50 @@
         ],
         "type": "object"
       },
+      "LlmEndpointInput": {
+        "additionalProperties": false,
+        "properties": {
+          "api_key": {
+            "description": "Write-only API key. Required on create; leave empty on update to keep the stored key.",
+            "type": "string",
+            "writeOnly": true
+          },
+          "base_url": {
+            "description": "OpenAI-compatible base URL including the provider's version prefix (for example, a trailing /v1). Private and localhost addresses are allowed.",
+            "type": "string"
+          },
+          "model": {
+            "description": "Model name as the configured endpoint expects it.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "base_url",
+          "model"
+        ],
+        "type": "object"
+      },
+      "LlmEndpointResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "api_key_masked": {
+            "description": "Masked preview of the stored key: the last four characters only. The plaintext key is write-only and never returned.",
+            "type": "string"
+          },
+          "base_url": {
+            "type": "string"
+          },
+          "model": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "base_url",
+          "model",
+          "api_key_masked"
+        ],
+        "type": "object"
+      },
       "LoginRequest": {
         "additionalProperties": false,
         "properties": {
@@ -295,6 +391,41 @@
         "required": [
           "username",
           "password"
+        ],
+        "type": "object"
+      },
+      "TavilyInput": {
+        "additionalProperties": false,
+        "properties": {
+          "api_key": {
+            "description": "Write-only API key. Required on create; leave empty on update to keep the stored key.",
+            "type": "string",
+            "writeOnly": true
+          },
+          "base_url": {
+            "description": "Search provider base URL.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "base_url"
+        ],
+        "type": "object"
+      },
+      "TavilyResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "api_key_masked": {
+            "description": "Masked preview of the stored key: the last four characters only. The plaintext key is write-only and never returned.",
+            "type": "string"
+          },
+          "base_url": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "base_url",
+          "api_key_masked"
         ],
         "type": "object"
       },
@@ -840,6 +971,116 @@
         "summary": "Get current user",
         "tags": [
           "auth"
+        ]
+      }
+    },
+    "/api/me/llm-config": {
+      "delete": {
+        "description": "Removes the authenticated caller's LLM configuration. Idempotent: deleting an unconfigured user also returns 204.",
+        "operationId": "delete-llm-config",
+        "responses": {
+          "204": {
+            "description": "No Content"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Delete LLM configuration",
+        "tags": [
+          "llm-config"
+        ]
+      },
+      "get": {
+        "description": "Returns the authenticated caller's per-user LLM configuration with API keys masked to their last four characters. A user with no saved configuration receives configured=false with null sections.",
+        "operationId": "get-llm-config",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConfigResponse"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Get LLM configuration",
+        "tags": [
+          "llm-config"
+        ]
+      },
+      "put": {
+        "description": "Validates and upserts the authenticated caller's LLM, embedding, Tavily, and optional retry-model configuration. API keys are write-only: a blank key on update keeps the stored key, while a create requires every required key. Responds with the masked configuration.",
+        "operationId": "update-llm-config",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ConfigUpdateInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConfigResponse"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Save LLM configuration",
+        "tags": [
+          "llm-config"
         ]
       }
     },

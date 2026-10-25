@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
@@ -14,17 +15,20 @@ import (
 	"nyx/internal/llm"
 	"nyx/internal/llm/openai"
 	"nyx/internal/llm/vllm"
+	"nyx/internal/llmsettings"
 	"nyx/internal/mcp"
 	"nyx/internal/middleware"
 	"nyx/internal/platform/api"
 	"nyx/internal/platform/auth"
 	"nyx/internal/platform/cache"
 	"nyx/internal/platform/config"
+	"nyx/internal/platform/crypto"
 	"nyx/internal/platform/database"
 	"nyx/internal/platform/observability"
 	"nyx/internal/rag"
 	"nyx/internal/user"
 
+	"github.com/danielgtaylor/huma/v2"
 	"github.com/danielgtaylor/huma/v2/adapters/humachi"
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -61,6 +65,19 @@ func loadConfigOrFatal() *config.Config {
 		log.Fatal().Msg("DB_URL environment variable is required")
 	}
 	return cfg
+}
+
+func mountLLMSettingsOps(humaAPI huma.API, cfg *config.Config, db *pgxpool.Pool, tracerProvider trace.TracerProvider, tokens auth.TokenService) *llmsettings.Resolver {
+	if !cfg.LLMEnabled {
+		return nil
+	}
+	settingsCipher, err := crypto.NewCipher(cfg.UserLLMEncryptionKey)
+	if err != nil {
+		log.Fatal().Err(err).Msg("invalid USER_LLM_ENCRYPTION_KEY")
+	}
+	service := llmsettings.NewService(llmsettings.NewRepository(db), settingsCipher)
+	llmsettings.RegisterLLMConfigOps(humaAPI, llmsettings.NewHandler(service), tokens)
+	return llmsettings.NewResolver(service, cfg, tracerProvider)
 }
 
 // buildAndServe assembles every domain (config, token, tracing,
@@ -230,12 +247,14 @@ func buildAndServe(cfg *config.Config) {
 	feed.RegisterFeedOps(humaAPI, feedHandler, tokens)
 	user.RegisterUserOps(humaAPI, userHandler, tokens)
 
+	userLLMResolver := mountLLMSettingsOps(humaAPI, cfg, db, tracing.Provider, tokens)
+
 	// Build the LLM provider (single-provider or router with
 	// failover) + the RAG facade (nil when LLM is disabled). The
 	// ragSvc drives the chat service's RAG injection; the indexer
 	// swaps the feed service's noop indexer so subsequent writes
 	// embed.
-	stopChatGC, ragSvc, ragIndexer := mountChatRoute(router, cfg, db, feedRepo, tracing.Provider, tokens)
+	stopChatGC, ragSvc, ragIndexer := mountChatRoute(router, cfg, db, feedRepo, tracing.Provider, tokens, userLLMResolver)
 	defer stopChatGC()
 	if ragIndexer != nil {
 		feedService.SetIndexer(ragIndexer)
@@ -348,7 +367,7 @@ func setupTracing(cfg *config.Config) *observability.Tracing {
 // RAG facade and its indexer (both nil when LLM is disabled) so
 // main() can swap the feed service's noop indexer for the real
 // rag.Indexer.
-func mountChatRoute(router chi.Router, cfg *config.Config, db *pgxpool.Pool, feedRepo feed.Repository, tracerProvider trace.TracerProvider, tokens auth.TokenService) (shutdown func(), ragSvc *rag.Service, ragIndexer feed.EmbeddingIndexer) {
+func mountChatRoute(router chi.Router, cfg *config.Config, db *pgxpool.Pool, feedRepo feed.Repository, tracerProvider trace.TracerProvider, tokens auth.TokenService, userLLMResolver *llmsettings.Resolver) (shutdown func(), ragSvc *rag.Service, ragIndexer feed.EmbeddingIndexer) {
 	if !cfg.LLMEnabled {
 		log.Info().Msg("LLM chat disabled (LLM_ENABLED=false)")
 		return func() {}, nil, nil
@@ -433,7 +452,7 @@ func mountChatRoute(router chi.Router, cfg *config.Config, db *pgxpool.Pool, fee
 	// when LLM_EMBEDDING_MODEL is empty. See mountRAGFacade for the
 	// extraction.
 	if cfg.LLMEnabled {
-		ragSvc, ragIndexer = mountRAGFacade(cfg, db, feedRepo, primary, llmClient, tracerProvider)
+		ragSvc, ragIndexer = mountRAGFacade(cfg, db, feedRepo, primary, llmClient, tracerProvider, userLLMResolver)
 	}
 
 	// Agent path (AGENT_ENABLED=true → Go chat handler is a thin
@@ -468,6 +487,9 @@ func mountChatRoute(router chi.Router, cfg *config.Config, db *pgxpool.Pool, fee
 			Msg("Agent path enabled (Go handler is SSE proxy to Python LangGraph)")
 	} else {
 		chatService = chat.NewService(llmClient, cfg, ragSvc, tracerProvider.Tracer("nyx.chat"))
+	}
+	if userLLMResolver != nil {
+		chatService.SetResolver(userLLMResolver)
 	}
 	chatHandler := chat.NewHandler(chatService)
 	// Per-user limiter: 5 streams/min, burst 3. In-memory only;
@@ -514,7 +536,7 @@ func mountChatRoute(router chi.Router, cfg *config.Config, db *pgxpool.Pool, fee
 // Returns the RAG service (nil when not built) and the indexer
 // (nil when not built) so the caller can swap the feed service's
 // noop indexer for the real rag.Indexer.
-func mountRAGFacade(cfg *config.Config, db *pgxpool.Pool, feedRepo feed.Repository, primary *llm.ProviderSlot, chatClient llm.Provider, tracerProvider trace.TracerProvider) (*rag.Service, feed.EmbeddingIndexer) {
+func mountRAGFacade(cfg *config.Config, db *pgxpool.Pool, feedRepo feed.Repository, primary *llm.ProviderSlot, chatClient llm.Provider, tracerProvider trace.TracerProvider, userLLMResolver *llmsettings.Resolver) (*rag.Service, feed.EmbeddingIndexer) {
 	var ragLLMClient llm.Provider = chatClient
 	var embeddingModel string
 	if cfg.LLMEmbeddingBaseURL != "" {
@@ -554,6 +576,7 @@ func mountRAGFacade(cfg *config.Config, db *pgxpool.Pool, feedRepo feed.Reposito
 			Msg("RAG reusing chat LLM provider for embeddings")
 	}
 	ragEmbedder := rag.NewEmbedder(ragLLMClient, embeddingModel, tracerProvider.Tracer("nyx.rag"))
+	ragEmbedder.SetDimensions(cfg.EmbeddingDimensions)
 	ragIndexer := rag.NewIndexer(db, ragEmbedder, tracerProvider.Tracer("nyx.rag"))
 	ragRetriever := rag.NewRetriever(db, tracerProvider.Tracer("nyx.rag"))
 	ragSvc := rag.NewService(
@@ -561,6 +584,25 @@ func mountRAGFacade(cfg *config.Config, db *pgxpool.Pool, feedRepo feed.Reposito
 		cfg.RAGTopK, cfg.RAGMaxContextChars, cfg.RAGMaxBackfillPerRequest,
 		tracerProvider.Tracer("nyx.rag"),
 	)
+	if userLLMResolver != nil {
+		perUserEmbedder := func(ctx context.Context, userID int) (*rag.Embedder, error) {
+			stack, err := userLLMResolver.Resolve(ctx, userID)
+			if err != nil {
+				if errors.Is(err, llmsettings.ErrNotFound) {
+					return nil, rag.ErrNoEmbedder
+				}
+				return nil, err
+			}
+			if stack.Embed == nil || stack.EmbedModel == "" {
+				return nil, rag.ErrNoEmbedder
+			}
+			embedder := rag.NewEmbedder(stack.Embed, stack.EmbedModel, tracerProvider.Tracer("nyx.rag.user"))
+			embedder.SetDimensions(cfg.EmbeddingDimensions)
+			return embedder, nil
+		}
+		ragSvc.SetEmbedderResolver(perUserEmbedder)
+		ragIndexer.SetEmbedderResolver(perUserEmbedder)
+	}
 	// Schema-drift warning: warn loudly if the live
 	// feed_embeddings.embedding column dim disagrees with
 	// EMBEDDING_DIMENSIONS. Doesn't fail-closed (the operator may

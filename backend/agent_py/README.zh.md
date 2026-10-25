@@ -83,7 +83,7 @@ cd backend/agent_py && pytest tests/ -v
 
 | 环境变量 | 默认值 | 用途 |
 |---|---|---|
-| `PYTHON_AGENT_LLM_BASE_URL` / `_API_KEY` / `_MODEL` | OpenAI / `gpt-4o-mini` | 任意 OpenAI 兼容端点（开发默认走 vLLM） |
+| `PYTHON_AGENT_LLM_BASE_URL` / `_API_KEY` / `_MODEL` | OpenAI / `gpt-4o-mini` | 任意 OpenAI 兼容端点（开发默认走 vLLM）。服务运行在 Go 后端之后时，每个 run 的每用户 `llm_config` 覆盖优先；这里的值仅供直连/开发/测试兜底。 |
 | `PYTHON_AGENT_DATABASE_URL` | — | Postgres：`agent.runs` + langGraph checkpoint（启动跑 alembic） |
 | `PYTHON_AGENT_REDIS_URL` | `redis://localhost:6380` | 每用户预算护栏 |
 | `PYTHON_AGENT_MCP_URL` / `RAG_BRIDGE_URL` | `:8080` host-dev | Go 工具面 + RAG 桥 |

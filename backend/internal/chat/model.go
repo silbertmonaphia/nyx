@@ -84,3 +84,20 @@ type Message struct {
 	Role    string `json:"role"`
 	Content string `json:"content"`
 }
+
+type AgentLLMConfig struct {
+	BaseURL string `json:"base_url"`
+	APIKey  string `json:"api_key"`
+	Model   string `json:"model"`
+}
+
+type AgentTavilyConfig struct {
+	BaseURL string `json:"base_url"`
+	APIKey  string `json:"api_key"`
+}
+
+type AgentRunPayload struct {
+	ChatRequest
+	LLMConfig    *AgentLLMConfig    `json:"llm_config,omitempty"`
+	TavilyConfig *AgentTavilyConfig `json:"tavily_config,omitempty"`
+}

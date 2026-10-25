@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"nyx/internal/feed"
+	"nyx/internal/llmsettings"
 	"nyx/internal/platform/api"
 	"nyx/internal/platform/auth"
 	"nyx/internal/user"
@@ -84,6 +85,7 @@ func generateSpec() ([]byte, error) {
 	// funcs are never called.
 	feed.RegisterFeedOps(humaAPI, feed.NewHandler(nil), tokens)
 	user.RegisterUserOps(humaAPI, user.NewHandler(nil), tokens)
+	llmsettings.RegisterLLMConfigOps(humaAPI, llmsettings.NewHandler(nil), tokens)
 
 	b, err := json.MarshalIndent(humaAPI.OpenAPI(), "", "  ")
 	if err != nil {

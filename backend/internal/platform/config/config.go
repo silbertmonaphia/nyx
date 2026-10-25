@@ -9,6 +9,7 @@ import (
 
 	"github.com/spf13/viper"
 	"nyx/internal/platform/auth"
+	"nyx/internal/platform/crypto"
 )
 
 // LLM provider identifiers. Centralised as constants so the
@@ -125,6 +126,8 @@ type Config struct {
 	LLMMaxMessageChars    int    `mapstructure:"LLM_MAX_MESSAGE_CHARS"`
 	LLMMaxStreamDuration  string `mapstructure:"LLM_MAX_STREAM_DURATION"`
 	LLMAllowPrivateURL    bool   `mapstructure:"LLM_ALLOW_PRIVATE_URL"`
+
+	UserLLMEncryptionKey string `mapstructure:"USER_LLM_ENCRYPTION_KEY"`
 
 	// LLM failover. LLM_FALLBACK_* is the secondary slot consumed by
 	// llm.Router when LLM_FALLBACK_BASE_URL is non-empty. The
@@ -269,6 +272,12 @@ func Load() (*Config, error) {
 	if cfg.LLMEnabled {
 		if err := validateLLMConfig(&cfg); err != nil {
 			return nil, err
+		}
+		if cfg.UserLLMEncryptionKey == "" {
+			return nil, fmt.Errorf("USER_LLM_ENCRYPTION_KEY is required when LLM_ENABLED=true")
+		}
+		if len(cfg.UserLLMEncryptionKey) < crypto.MinKeyBytes {
+			return nil, fmt.Errorf("USER_LLM_ENCRYPTION_KEY must be at least %d bytes when LLM_ENABLED=true", crypto.MinKeyBytes)
 		}
 	}
 
@@ -431,6 +440,7 @@ func bindEnvVars() {
 		"RAG_TOP_K", "RAG_MAX_CONTEXT_CHARS", "RAG_MAX_BACKFILL_PER_REQUEST",
 		"MCP_ENABLED", "MCP_PATH", "MCP_MAX_BODY_BYTES",
 		"AGENT_ENABLED", "PYTHON_AGENT_URL",
+		"USER_LLM_ENCRYPTION_KEY",
 	} {
 		_ = viper.BindEnv(key)
 	}
@@ -551,7 +561,7 @@ func validateLLMConfig(cfg *Config) error {
 		if cfg.LLMAPIKey == "" {
 			return fmt.Errorf("LLM_API_KEY is required when LLM_ENABLED=true and LLM_PROVIDER=openai")
 		}
-		if err := checkNotPlaceholderKey(cfg.LLMAPIKey, "LLM_API_KEY"); err != nil {
+		if err := CheckNotPlaceholderKey(cfg.LLMAPIKey, "LLM_API_KEY"); err != nil {
 			return err
 		}
 	}
@@ -569,7 +579,7 @@ func validateLLMConfig(cfg *Config) error {
 	// Reuses the chat key blocklist — the foot-gun is the same:
 	// operator committed a literal "your-key" into .env.
 	if cfg.LLMEmbeddingModel != "" {
-		if err := checkNotPlaceholderKey(cfg.LLMEmbeddingModel, "LLM_EMBEDDING_MODEL"); err != nil {
+		if err := CheckNotPlaceholderKey(cfg.LLMEmbeddingModel, "LLM_EMBEDDING_MODEL"); err != nil {
 			return err
 		}
 	}
@@ -600,7 +610,7 @@ func validateFallbackConfig(cfg *Config) error {
 		if cfg.LLMFallbackAPIKey == "" {
 			return fmt.Errorf("LLM_FALLBACK_API_KEY is required when LLM_PROVIDER=vllm (fallback is OpenAI)")
 		}
-		if err := checkNotPlaceholderKey(cfg.LLMFallbackAPIKey, "LLM_FALLBACK_API_KEY"); err != nil {
+		if err := CheckNotPlaceholderKey(cfg.LLMFallbackAPIKey, "LLM_FALLBACK_API_KEY"); err != nil {
 			return err
 		}
 	}
@@ -655,7 +665,7 @@ func validateEmbedConfig(cfg *Config) error {
 		if resolvedAPIKey == "" {
 			return fmt.Errorf("LLM_EMBEDDING_API_KEY is required when LLM_EMBEDDING_PROVIDER=openai")
 		}
-		if err := checkNotPlaceholderKey(resolvedAPIKey, "LLM_EMBEDDING_API_KEY"); err != nil {
+		if err := CheckNotPlaceholderKey(resolvedAPIKey, "LLM_EMBEDDING_API_KEY"); err != nil {
 			return err
 		}
 	}
@@ -670,7 +680,7 @@ func validateEmbedConfig(cfg *Config) error {
 // contains-match against a short blocklist — the check is
 // intentionally cheap and catches careless operators, not
 // determined attackers.
-func checkNotPlaceholderKey(key, fieldName string) error {
+func CheckNotPlaceholderKey(key, fieldName string) error {
 	lower := strings.ToLower(key)
 	for _, placeholder := range []string{"changeme", "your-key", "sk-xxx", "xxx", "test-key"} {
 		if strings.Contains(lower, placeholder) {

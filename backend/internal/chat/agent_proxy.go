@@ -136,13 +136,9 @@ func NewAgentProxy(baseURL string, httpClient *http.Client) (*AgentProxy, error)
 // per the spec's "Wire envelope is byte-for-byte identical"
 // requirement. The handler MAY inspect resp.StatusCode to decide
 // whether to forward; the proxy itself does not transform.
-func (p *AgentProxy) Run(ctx context.Context, req ChatRequest, userID int, bearerToken string) (*http.Response, error) {
-	body, err := json.Marshal(req)
+func (p *AgentProxy) Run(ctx context.Context, payload AgentRunPayload, userID int, bearerToken string) (*http.Response, error) {
+	body, err := json.Marshal(payload)
 	if err != nil {
-		// ChatRequest is a small struct with json tags on every
-		// field — a marshal failure here means a programming bug,
-		// not a runtime input issue. Classify as unavailable so
-		// the caller fails closed rather than masking the bug.
 		return nil, ErrAgentUnavailable
 	}
 

@@ -45,6 +45,14 @@ from langchain_openai import ChatOpenAI
 from pydantic import BaseModel, SecretStr
 
 from .config import Settings
+from .llm_effective import (
+    OverrideSecrets,
+    llm_holder_handle,
+    llm_holder_key,
+    override_only_state,
+    resolve_llm,
+)
+from .types import LLMOverrideView
 
 log = logging.getLogger("nyx.agent.prefs")
 
@@ -513,7 +521,11 @@ def _parse_extraction(raw: str) -> list[Pref]:
 
 
 async def extract_preferences(
-    user_message: str, *, settings: Settings
+    user_message: str,
+    *,
+    settings: Settings,
+    llm_override: LLMOverrideView | None = None,
+    secrets: OverrideSecrets | None = None,
 ) -> list[Pref]:
     """One small LLM call → validated preferences. NEVER raises.
 
@@ -532,12 +544,23 @@ async def extract_preferences(
     at construction on an empty key, and local vLLM needs none.
     `max_tokens` + `timeout` mirror the planner's bounds so a runaway
     extraction cannot stream for the chat request's whole lifetime.
+
+    `llm_override` + `secrets` (add-user-llm-byok) thread the run's BYOK
+    config in: an override's endpoint/model/key win over Settings, the
+    key arriving only via the request-scoped holder (D11).
     """
     try:
+        effective = resolve_llm(
+            override_only_state(llm_override),
+            settings,
+            planner=True,
+            api_key_from_holder=llm_holder_key(secrets),
+            holder_handle=llm_holder_handle(secrets),
+        )
         client = ChatOpenAI(
-            model=settings.planner_model,
-            base_url=settings.llm_base_url,
-            api_key=SecretStr(settings.llm_api_key or "no-key"),
+            model=effective.model,
+            base_url=effective.base_url,
+            api_key=SecretStr(effective.api_key),
             temperature=0,
             max_tokens=_EXTRACTION_MAX_TOKENS,
             timeout=_EXTRACTION_TIMEOUT_SECONDS,

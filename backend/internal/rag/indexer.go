@@ -24,9 +24,10 @@ import (
 // the operator sees them in logs; the contract is "never fail
 // the user's write because embedding failed".
 type Indexer struct {
-	q        *ragdb.Queries
-	embedder *Embedder
-	tracer   trace.Tracer
+	q                *ragdb.Queries
+	embedder         *Embedder
+	tracer           trace.Tracer
+	embedderResolver EmbedderResolver
 }
 
 // NewIndexer builds an Indexer that issues SQL through the supplied
@@ -35,6 +36,17 @@ type Indexer struct {
 // connection by the database package's AfterConnect hook.
 func NewIndexer(pool Pool, e *Embedder, tracer trace.Tracer) *Indexer {
 	return &Indexer{q: ragdb.New(pool), embedder: e, tracer: tracer}
+}
+
+func (i *Indexer) SetEmbedderResolver(fn EmbedderResolver) {
+	i.embedderResolver = fn
+}
+
+func (i *Indexer) resolveEmbedder(ctx context.Context, userID int) (*Embedder, error) {
+	if i.embedderResolver != nil {
+		return i.embedderResolver(ctx, userID)
+	}
+	return i.embedder, nil
 }
 
 // Index upserts a feed's embedding. Skips the Embed API call
@@ -52,6 +64,16 @@ func (i *Indexer) Index(ctx context.Context, userID int, f *feed.Feed) error {
 		),
 	)
 	defer span.End()
+
+	embedder, err := i.resolveEmbedder(ctx, userID)
+	if err != nil {
+		span.RecordError(err)
+		return err
+	}
+	if embedder == nil {
+		span.RecordError(ErrNoEmbedder)
+		return ErrNoEmbedder
+	}
 
 	newHash := HashChunk(f)
 
@@ -72,7 +94,7 @@ func (i *Indexer) Index(ctx context.Context, userID int, f *feed.Feed) error {
 		return nil
 	}
 
-	vec, hash, err := i.embedder.Embed(ctx, f)
+	vec, hash, err := embedder.Embed(ctx, f)
 	if err != nil {
 		span.RecordError(err)
 		return err

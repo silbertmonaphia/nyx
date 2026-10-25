@@ -987,3 +987,58 @@ func TestSetFallbackToolsEnabled_Toggle(t *testing.T) {
 	r.SetFallbackToolsEnabled(false)
 	require.False(t, r.failoverToolsEnabled)
 }
+
+func TestRouter_ProbeNormalizesVersionSuffix(t *testing.T) {
+	cases := []struct {
+		name     string
+		suffix   string
+		wantPath string
+	}{
+		{name: "bare host probes the versioned path", suffix: "", wantPath: "/v1/models"},
+		{name: "version-prefixed base is not double-versioned", suffix: "/v1", wantPath: "/v1/models"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			var gotPath string
+			primaryProbe := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				gotPath = r.URL.Path
+				w.WriteHeader(http.StatusOK)
+				_, _ = fmt.Fprintln(w, `{"data":[]}`)
+			}))
+			defer primaryProbe.Close()
+			secondaryProbe := newProbeServer(t, nil)
+			defer secondaryProbe.Close()
+
+			primaryCalled := &atomic.Int64{}
+			primary := &stubProvider{chatFn: func(_ context.Context, _ ChatRequest, onDelta func(string, *ChatUsage) error) (*ChatUsage, error) {
+				primaryCalled.Add(1)
+				_ = onDelta("hello", nil)
+				return &ChatUsage{TotalTokens: 1}, nil
+			}}
+			secondary := &stubProvider{chatFn: func(_ context.Context, _ ChatRequest, _ func(string, *ChatUsage) error) (*ChatUsage, error) {
+				t.Fatal("secondary must not run when the primary probe succeeds")
+				return nil, nil
+			}}
+
+			r := NewRouter(
+				ProviderSlot{Name: "openai", Provider: primary, BaseURL: primaryProbe.URL + c.suffix, ProbeKey: "k"},
+				&ProviderSlot{Name: "vllm", Provider: secondary, BaseURL: secondaryProbe.URL, ProbeKey: "k"},
+				noop.NewTracerProvider().Tracer("test"),
+				500*time.Millisecond,
+			)
+
+			var deltas []string
+			_, err := r.Chat(context.Background(), ChatRequest{
+				Messages: []Message{{Role: "user", Content: "hi"}},
+			}, func(d string, _ *ChatUsage) error {
+				deltas = append(deltas, d)
+				return nil
+			})
+			require.NoError(t, err)
+			assert.Equal(t, c.wantPath, gotPath, "probe path must match the base URL convention")
+			assert.Equal(t, int64(1), primaryCalled.Load(),
+				"a healthy primary must be used, not failed over to the secondary")
+			assert.Equal(t, []string{"hello"}, deltas)
+		})
+	}
+}

@@ -26,6 +26,36 @@ sql:
           updated_at: "UpdatedAt"
           deleted_at: "DeletedAt"
   - engine: "postgresql"
+    queries: "queries/llmsettings.sql"
+    schema:
+      - "migrations/000004_create_users_table.up.sql"
+      - "migrations/000005_add_deleted_at_to_users_table.up.sql"
+      - "migrations/000017_create_user_llm_settings.up.sql"
+    gen:
+      go:
+        package: "db"
+        out: "internal/llmsettings/db"
+        sql_package: "pgx/v5"
+        emit_interface: true
+        emit_json_tags: false
+        emit_prepared_queries: false
+        emit_empty_slices: true
+        rename:
+          user_id: "UserID"
+          llm_base_url: "LLMBaseURL"
+          llm_api_key_enc: "LLMAPIKeyEnc"
+          llm_model: "LLMModel"
+          embedding_base_url: "EmbeddingBaseURL"
+          embedding_api_key_enc: "EmbeddingAPIKeyEnc"
+          embedding_model: "EmbeddingModel"
+          tavily_base_url: "TavilyBaseURL"
+          tavily_api_key_enc: "TavilyAPIKeyEnc"
+          fallback_base_url: "FallbackBaseURL"
+          fallback_api_key_enc: "FallbackAPIKeyEnc"
+          fallback_model: "FallbackModel"
+          created_at: "CreatedAt"
+          updated_at: "UpdatedAt"
+  - engine: "postgresql"
     queries: "queries/users.sql"
     schema:
       - "migrations/000004_create_users_table.up.sql"

@@ -61,11 +61,50 @@ class ChatMessage(BaseModel):
     tool_calls: list[ToolCall] | None = None
 
 
+class LLMOverride(BaseModel):
+    """Per-run BYOK LLM config forwarded by the Go chat handler
+    (openspec/changes/add-user-llm-byok D1/D2). `api_key` is secret: it
+    must reach the request-scoped holder (`agent.llm_effective`), never the
+    checkpointed `AgentState` (D11)."""
+
+    base_url: str
+    api_key: str
+    model: str
+
+
+class TavilyOverride(BaseModel):
+    """Per-run BYOK Tavily config (add-user-llm-byok D10). `api_key` is
+    secret under the same D11 rule as `LLMOverride.api_key`."""
+
+    base_url: str
+    api_key: str
+
+
+class LLMOverrideView(BaseModel):
+    """Checkpoint-safe projection of `LLMOverride`: non-secret fields plus
+    an opaque handle correlating the run to its request-scoped key holder
+    (add-user-llm-byok D11). Never carries `api_key`."""
+
+    handle: str
+    base_url: str
+    model: str
+
+
+class TavilyOverrideView(BaseModel):
+    """Checkpoint-safe projection of `TavilyOverride` (add-user-llm-byok
+    D11). Never carries `api_key`."""
+
+    handle: str
+    base_url: str
+
+
 class ChatRequest(BaseModel):
     messages: list[ChatMessage]
     agent: str | None = None
     model: str | None = None
     run_id: str | None = None  # server-minted uuid4; client echoes for resume
+    llm_config: LLMOverride | None = None
+    tavily_config: TavilyOverride | None = None
 
 
 # --- SSE event payloads (mirror Go chat handler envelope) -----------------

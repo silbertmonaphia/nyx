@@ -32,7 +32,7 @@ fails CI when the committed copy is stale.
 | Path | Role |
 |---|---|
 | `internal/middleware/` | stdlib-shaped middleware: RequestID, RealIP, Recoverer, Prometheus, Logging, CORS, RateLimit, Auth. |
-| `internal/middleware/huma_adapter.go` | `HumaAuth()` — the huma-shape variant of `Auth` for use as `Operation.Middlewares`. |
+| `internal/middleware/huma_adapter.go` | `NewHumaAuth(tokens)` — the huma-shape variant of `Auth` for use as `Operation.Middlewares`. |
 | `internal/platform/api/response.go` | `ErrorResponse` struct: `{error, code, request_id, details}` envelope. Implements `huma.StatusError` so handlers can return it directly. `ClassifyAndLog` keeps raw error text off the wire; `WriteError` is the stdlib equivalent for middleware. |
 | `internal/platform/api/humaerror.go` | `OverrideHumaErrors()` — replaces `huma.NewError` / `huma.NewErrorWithContext` so every error produced by huma (validation, panic, the prebuilt 4xx helpers, handler-returned errors) flows through the legacy envelope. |
 | `internal/platform/api/map.go` | `MapError(ctx, err, safeDetail)` — the single handler-layer funnel. Looks up the error against registered domain sentinels and returns the matching `*ErrorResponse`; unknown errors fall back to a 500 envelope via `ClassifyAndLog`. Domains register their sentinels from `init()`. |
@@ -108,7 +108,7 @@ Rules:
 
 ## Protected operations
 
-Attach `middleware.HumaAuth()` via `Operation.Middlewares` for endpoints
+Attach `middleware.NewHumaAuth(tokens)` via `Operation.Middlewares` for endpoints
 that require a JWT. Huma parses the body BEFORE running Middlewares — see
 the "Body parsed before auth" note in `cmd/api/main.go` for why a
 `http.MaxBytesReader` cap is installed at the router level.
@@ -120,11 +120,11 @@ huma.Register(api, huma.Operation{
     Path:        "/api/feeds/{id}",
     Tags:        []string{"feeds"},
     Security:    []map[string][]string{{"BearerAuth": {}}},
-    Middlewares: huma.Middlewares{middleware.HumaAuth()},
+    Middlewares: huma.Middlewares{middleware.NewHumaAuth(tokens)},
 }, h.DeleteFeed)
 ```
 
-`HumaAuth()` validates the `Authorization: Bearer <token>` header and
+`NewHumaAuth(tokens)` validates the `Authorization: Bearer <token>` header and
 stamps the resolved user on the request context. Handlers read the
 authenticated user via `reqctx.UserIDFromContext(ctx)`.
 

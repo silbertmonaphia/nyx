@@ -51,6 +51,15 @@ from .budget import BudgetGuard
 from .chat_store import ChatStore, ChatStoreUnavailable
 from .config import Settings, get_settings
 from .graph import build_graph, run_agent_stream
+from .llm_effective import (
+    LLMOverrideView,
+    OverrideSecrets,
+    llm_holder_handle,
+    llm_holder_key,
+    override_only_state,
+    resolve_llm,
+    run_overrides_from_request,
+)
 from .observability import (
     get_langfuse_handler,
     setup_langfuse,
@@ -79,6 +88,7 @@ from .types import (
     Event,
     NoteEvent,
     RunIDEvent,
+    TavilyOverride,
 )
 from .web_tools import build_local_tools
 
@@ -208,6 +218,8 @@ async def _refine_session_title(
     user_text: str,
     assistant_text: str,
     settings: Settings,
+    llm_override: LLMOverrideView | None = None,
+    secrets: OverrideSecrets | None = None,
 ) -> None:
     """One small LLM call → refined session title. NEVER raises.
 
@@ -217,12 +229,24 @@ async def _refine_session_title(
     consultation — an internal operation, not user-visible chat work. Any
     failure (client construction, LLM error, empty or non-text output,
     store fault) leaves the deterministic title in place.
+
+    `llm_override` + `secrets` (add-user-llm-byok) thread the run's BYOK
+    config in from the run handler: the override's endpoint/model/key win
+    over Settings, the key arriving only via the request-scoped holder
+    (D11).
     """
     try:
+        effective = resolve_llm(
+            override_only_state(llm_override),
+            settings,
+            planner=True,
+            api_key_from_holder=llm_holder_key(secrets),
+            holder_handle=llm_holder_handle(secrets),
+        )
         client = ChatOpenAI(
-            model=settings.planner_model,
-            base_url=settings.llm_base_url,
-            api_key=SecretStr(settings.llm_api_key or "no-key"),
+            model=effective.model,
+            base_url=effective.base_url,
+            api_key=SecretStr(effective.api_key),
             temperature=0,
             max_tokens=_TITLE_REFINEMENT_MAX_TOKENS,
             timeout=_TITLE_REFINEMENT_TIMEOUT_SECONDS,
@@ -271,6 +295,8 @@ def _spawn_title_refinement(
     user_text: str,
     assistant_text: str,
     settings: Settings,
+    llm_override: LLMOverrideView | None = None,
+    secrets: OverrideSecrets | None = None,
 ) -> None:
     """Spawn the fire-and-forget title refinement, tracked in `_TITLE_TASKS`.
 
@@ -291,6 +317,8 @@ def _spawn_title_refinement(
             user_text=user_text,
             assistant_text=assistant_text,
             settings=settings,
+            llm_override=llm_override,
+            secrets=secrets,
         ),
         name=f"agent-title-{run_id}",
     )
@@ -526,6 +554,8 @@ async def _build_checkpointer(database_url: str):
             ("agent.types", "StepKind"),
             ("agent.types", "ChatMessage"),
             ("agent.types", "Event"),
+            ("agent.types", "LLMOverrideView"),
+            ("agent.types", "TavilyOverrideView"),
         ]
     )
 
@@ -726,6 +756,25 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 # approval TTL, and intermediaries cut idle connections — an SSE comment
 # is protocol-legal and skipped by the existing frontend parser.
 _STREAM_KEEPALIVE_SECONDS = 15.0
+
+
+def _local_registry_for(
+    settings: Settings,
+    tavily_override: TavilyOverride | None,
+    shared: LocalToolRegistry | None,
+) -> LocalToolRegistry:
+    """The local tool registry for one run (add-user-llm-byok D10).
+
+    A run carrying a Tavily override gets a per-run registry built with
+    it — `ToolDispatcher` is already per-request, so only the registry
+    needs the override. Without an override the startup-shared registry
+    is returned untouched (identity, not a rebuild).
+    """
+    if tavily_override is not None:
+        return LocalToolRegistry(
+            build_local_tools(settings, tavily_override=tavily_override)
+        )
+    return shared or LocalToolRegistry()
 
 
 async def _pump_events(state: AgentState, *, sink: RunSink, **kwargs) -> None:
@@ -957,22 +1006,34 @@ async def _stream_agent_run(
             )
         )
 
+    secrets, llm_view, tavily_view = run_overrides_from_request(chat_req)
+
     state = new_state(
         user_id=user_id,
         run_id=run_id,
         request_id=request_id,
         messages=chat_req.messages,
         model=chat_req.model,
+        llm_override=llm_view,
+        tavily_override=tavily_view,
     )
 
     # CRITICAL-3: thread the user's bearer token into the RAG + tool clients.
     # The dispatcher composes the agent-native tools (web tools, when
     # enabled) with the request's MCP client — local names win on collision
     # (openspec/changes/agent-web-tools, design D1/D3).
+    tavily_override: TavilyOverride | None = None
+    if chat_req.tavily_config is not None and tavily_view is not None:
+        tavily_override = TavilyOverride(
+            base_url=tavily_view.base_url,
+            api_key=secrets.tavily_api_key or "",
+        )
     rag = RagClient(base_url=settings.rag_bridge_url, bearer_token=bearer_token)
     tools = ToolDispatcher(
         mcp=ToolsClient(base_url=settings.mcp_url, bearer_token=bearer_token),
-        local=getattr(app.state, "local_tools", None) or LocalToolRegistry(),
+        local=_local_registry_for(
+            settings, tavily_override, getattr(app.state, "local_tools", None)
+        ),
     )
 
     # Per-user preferences (openspec/changes/agent-user-preferences D5):
@@ -1032,6 +1093,7 @@ async def _stream_agent_run(
         tracer=app.state.tracer,
         prefs_text=prefs_text,
         approvals=approvals,
+        secrets=secrets,
     )
 
     graph_config: dict | None = None
@@ -1107,6 +1169,7 @@ async def _stream_agent_run(
                 graph=graph,
                 graph_config=graph_config,
                 resumed=resumed,
+                secrets=secrets,
             ),
             name=f"agent-pump-{run_id}",
         )
@@ -1278,7 +1341,13 @@ async def _stream_agent_run(
             if last_user_text and looks_like_preference(last_user_text):
                 prefs_task = asyncio.create_task(
                     _extract_and_store_prefs(
-                        prefs_store, user_id, run_id, last_user_text, settings
+                        prefs_store,
+                        user_id,
+                        run_id,
+                        last_user_text,
+                        settings,
+                        llm_override=llm_view,
+                        secrets=secrets,
                     ),
                     name=f"agent-prefs-{run_id}",
                 )
@@ -1310,6 +1379,8 @@ async def _stream_agent_run(
                 ),
                 assistant_text="".join(assistant_text_parts),
                 settings=settings,
+                llm_override=llm_view,
+                secrets=secrets,
             )
 
     # Frontend parser triggers its own terminator on `data: [DONE]`. Old clients
@@ -1323,6 +1394,8 @@ async def _extract_and_store_prefs(
     run_id: str,
     text: str,
     settings: Settings,
+    llm_override: LLMOverrideView | None = None,
+    secrets: OverrideSecrets | None = None,
 ) -> None:
     """Detached preference extraction + upsert for one turn (design D2/D4).
 
@@ -1340,9 +1413,17 @@ async def _extract_and_store_prefs(
       parse failure by contract; an upsert fault (or anything else) is
       warn-logged here and ends the task. Nothing is retried within the
       run (design D2).
+
+    `llm_override` + `secrets` (add-user-llm-byok D11) ride in from the
+    run handler so the extraction call uses the run's BYOK config.
     """
     try:
-        prefs = await extract_preferences(text, settings=settings)
+        prefs = await extract_preferences(
+            text,
+            settings=settings,
+            llm_override=llm_override,
+            secrets=secrets,
+        )
         for p in prefs:
             await prefs_store.upsert_pref(
                 user_id, p.key, p.value, source_session_id=run_id

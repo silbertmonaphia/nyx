@@ -45,6 +45,7 @@ from .net_guard import (
 )
 from .tool_dispatch import LocalTool
 from .tools_client import ToolError, ToolRejectedError, ToolUnavailableError
+from .types import TavilyOverride
 
 log = logging.getLogger("nyx.agent.web_tools")
 
@@ -317,13 +318,22 @@ async def _read_capped(response: httpx.Response, max_bytes: int) -> bytes:
 # --- web_search (tasks 3.1, 3.2) --------------------------------------------
 
 
-async def search_web(query: str, settings: Settings) -> dict[str, Any]:
+async def search_web(
+    query: str,
+    settings: Settings,
+    *,
+    tavily_override: TavilyOverride | None = None,
+) -> dict[str, Any]:
     """Query the Tavily Search API; return compact ranked results.
 
-    Runs keyless (no account, rate-limited) when `tavily_api_key` is
-    empty, with `Authorization: Bearer` when set. The fetch timeout is
-    reused for the provider call (the spec's env-key list carries no
-    separate search timeout).
+    The provider base URL and API key come from the run's Tavily override
+    when one is present (add-user-llm-byok D10: the deployment-configured
+    values are not consulted), otherwise from settings. The key is
+    optional either way: with no key from either source the tool runs
+    keyless (no account, rate-limited) with `X-Tavily-Access-Mode:
+    keyless`, and with a key it authenticates via `Authorization: Bearer`.
+    The fetch timeout is reused for the provider call (the spec's env-key
+    list carries no separate search timeout).
     """
     if not isinstance(query, str) or not query.strip():
         raise ToolError("web_search: 'query' must be a non-empty string")
@@ -339,7 +349,12 @@ async def search_web(query: str, settings: Settings) -> dict[str, Any]:
         "Accept": "application/json",
         "Content-Type": "application/json",
     }
-    api_key = settings.tavily_api_key.get_secret_value()
+    if tavily_override is not None:
+        base_url = tavily_override.base_url
+        api_key = tavily_override.api_key
+    else:
+        base_url = settings.tavily_base_url
+        api_key = settings.tavily_api_key.get_secret_value()
     if api_key:
         headers["Authorization"] = f"Bearer {api_key}"
     else:
@@ -357,7 +372,7 @@ async def search_web(query: str, settings: Settings) -> dict[str, Any]:
         ) as client:
             request = client.build_request(
                 "POST",
-                settings.tavily_base_url,
+                base_url,
                 json={"query": query, "max_results": count},
                 headers=headers,
             )
@@ -437,9 +452,13 @@ def _fetch_dispatch(settings: Settings) -> Callable[[dict], Awaitable[dict]]:
     return _dispatch
 
 
-def _search_dispatch(settings: Settings) -> Callable[[dict], Awaitable[dict]]:
+def _search_dispatch(
+    settings: Settings, tavily_override: TavilyOverride | None = None
+) -> Callable[[dict], Awaitable[dict]]:
     async def _dispatch(args: dict) -> dict:
-        return await search_web(args.get("query", ""), settings)
+        return await search_web(
+            args.get("query", ""), settings, tavily_override=tavily_override
+        )
 
     return _dispatch
 
@@ -491,8 +510,16 @@ WEB_SEARCH_SCHEMA: dict[str, Any] = {
 }
 
 
-def build_local_tools(settings: Settings) -> list[LocalTool]:
-    """The enabled web tools as `LocalTool` entries ([] when both flags off)."""
+def build_local_tools(
+    settings: Settings, *, tavily_override: TavilyOverride | None = None
+) -> list[LocalTool]:
+    """The enabled web tools as `LocalTool` entries ([] when both flags off).
+
+    `tavily_override` redirects `web_search` at the run's own provider
+    endpoint + credential (add-user-llm-byok D10); enablement stays a
+    deployment-level decision (`web_fetch_enabled` / `web_search_enabled`
+    are unchanged kill switches).
+    """
     tools: list[LocalTool] = []
     if settings.web_fetch_enabled:
         tools.append(
@@ -507,7 +534,7 @@ def build_local_tools(settings: Settings) -> list[LocalTool]:
             LocalTool(
                 name="web_search",
                 schema=WEB_SEARCH_SCHEMA,
-                dispatch=_search_dispatch(settings),
+                dispatch=_search_dispatch(settings, tavily_override),
             )
         )
     return tools

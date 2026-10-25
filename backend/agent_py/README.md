@@ -128,7 +128,7 @@ Boot-critical:
 
 | Env var | Default | Purpose |
 |---|---|---|
-| `PYTHON_AGENT_LLM_BASE_URL` / `_API_KEY` / `_MODEL` | OpenAI / `gpt-4o-mini` | Any OpenAI-compatible endpoint (dev default is vLLM) |
+| `PYTHON_AGENT_LLM_BASE_URL` / `_API_KEY` / `_MODEL` | OpenAI / `gpt-4o-mini` | Any OpenAI-compatible endpoint (dev default is vLLM). When the service runs behind the Go backend, each run's per-user `llm_config` override takes precedence; these values are the fallback for direct/dev/test use. |
 | `PYTHON_AGENT_DATABASE_URL` | — | Postgres: `agent.runs` + langGraph checkpoints (alembic on boot) |
 | `PYTHON_AGENT_REDIS_URL` | `redis://localhost:6380` | Per-user budget guard |
 | `PYTHON_AGENT_MCP_URL` / `RAG_BRIDGE_URL` | `:8080` host-dev | Go tool surface + RAG bridge |

@@ -34,6 +34,12 @@ from .approvals import (
 from .arg_refs import ArgReference, iter_references, scan_args
 from .budget import BudgetGuard
 from .config import Settings
+from .llm_effective import (
+    OverrideSecrets,
+    llm_holder_handle,
+    llm_holder_key,
+    resolve_llm,
+)
 from .observability import (
     agent_steps_total,
     agent_tokens_total,
@@ -87,6 +93,7 @@ async def executor_node(
     tools: ToolDispatcher,
     approvals: ApprovalGate | None = None,
     prefs_text: str = "",
+    secrets: OverrideSecrets | None = None,
 ) -> AgentState:
     plan: Plan | None = state.get("plan")
     if plan is None:
@@ -166,6 +173,7 @@ async def executor_node(
                         tools=tools,
                         approvals=approvals,
                         span=span,
+                        secrets=secrets,
                     )
                 elif step.kind.value == "llm":
                     await _run_llm(
@@ -176,6 +184,7 @@ async def executor_node(
                         budget,
                         span,
                         prefs_text=prefs_text,
+                        secrets=secrets,
                     )
                 elif step.kind.value == "react":
                     await _run_react(
@@ -188,6 +197,7 @@ async def executor_node(
                         span,
                         approvals=approvals,
                         prefs_text=prefs_text,
+                        secrets=secrets,
                     )
                 else:
                     raise ValueError(f"unsupported step kind: {step.kind}")
@@ -272,6 +282,7 @@ async def _run_tool(
     tools: ToolDispatcher,
     approvals: ApprovalGate | None = None,
     span: trace.Span,
+    secrets: OverrideSecrets | None = None,
 ) -> None:
     if not step.tool:
         raise _step_runtime_error("tool", "step has no tool name")
@@ -287,6 +298,7 @@ async def _run_tool(
         tracer=tracer,
         budget=budget,
         span=span,
+        secrets=secrets,
     )
     if not ok:
         # `error_text` is the safe, funnel-mapped message — it is the only
@@ -304,6 +316,7 @@ async def _run_llm(
     budget: BudgetGuard,
     span: trace.Span,
     prefs_text: str = "",
+    secrets: OverrideSecrets | None = None,
 ) -> None:
     decision = await budget.check_and_increment(state["user_id"], DEFAULT_ESTIMATED_TOKENS, tracer)
     if decision.decision == "exceeded":
@@ -311,11 +324,17 @@ async def _run_llm(
     if decision.decision == "unavailable":
         raise _BudgetUnavailableError()
 
-    model = state.get("model") or settings.llm_model
+    effective = resolve_llm(
+        state,
+        settings,
+        planner=False,
+        api_key_from_holder=llm_holder_key(secrets),
+        holder_handle=llm_holder_handle(secrets),
+    )
     client = ChatOpenAI(
-        base_url=settings.llm_base_url,
-        api_key=settings.llm_api_key or "no-key",
-        model=model,
+        base_url=effective.base_url,
+        api_key=effective.api_key,
+        model=effective.model,
         temperature=0.0,
     )
 
@@ -334,7 +353,7 @@ async def _run_llm(
     state["step_outputs"][step.id] = text
     state["events_so_far"].append(Event(kind="delta", payload=DeltaEvent(delta=text).model_dump()))
     _prompt, _completion, _total = accumulate_usage(state, resp)
-    agent_tokens_total.labels("executor", model).inc(_total)
+    agent_tokens_total.labels("executor", effective.model).inc(_total)
 
 
 async def _run_react(
@@ -347,13 +366,20 @@ async def _run_react(
     span: trace.Span,
     approvals: ApprovalGate | None = None,
     prefs_text: str = "",
+    secrets: OverrideSecrets | None = None,
 ) -> None:
     max_iters = step.max_iterations or settings.step_react_max_iterations
-    model = state.get("model") or settings.llm_model
+    effective = resolve_llm(
+        state,
+        settings,
+        planner=False,
+        api_key_from_holder=llm_holder_key(secrets),
+        holder_handle=llm_holder_handle(secrets),
+    )
     base_client = ChatOpenAI(
-        base_url=settings.llm_base_url,
-        api_key=settings.llm_api_key or "no-key",
-        model=model,
+        base_url=effective.base_url,
+        api_key=effective.api_key,
+        model=effective.model,
         temperature=0.0,
     )
 
@@ -397,7 +423,7 @@ async def _run_react(
             if text:
                 state["events_so_far"].append(Event(kind="delta", payload=DeltaEvent(delta=text).model_dump()))
             _prompt, _completion, _total = accumulate_usage(state, resp)
-            agent_tokens_total.labels("react", model).inc(_total)
+            agent_tokens_total.labels("react", effective.model).inc(_total)
 
             if not tool_calls:
                 # Final answer — done.
@@ -426,6 +452,7 @@ async def _run_react(
                     base_messages=messages,
                     step_prompt=step.prompt,
                     model_tool_call_id=tc_id,
+                    secrets=secrets,
                 )
                 messages.append(ToolMessage(content=content, tool_call_id=tc_id))
 
@@ -872,6 +899,7 @@ async def _dispatch_tool_with_retries(
     base_messages: list | None = None,
     step_prompt: str | None = None,
     model_tool_call_id: str | None = None,
+    secrets: OverrideSecrets | None = None,
 ) -> tuple[bool, Any, str]:
     """Dispatch one tool call under the two retry paths.
 
@@ -1041,6 +1069,7 @@ async def _dispatch_tool_with_retries(
                 tracer=tracer,
                 budget=budget,
                 tools=tools,
+                secrets=secrets,
             )
             if corrected is None:
                 used_by_tool[tool_name] = used + retries_made
@@ -1079,6 +1108,7 @@ async def _reprompt_for_corrected_call(
     tracer: trace.Tracer,
     budget: BudgetGuard,
     tools: ToolDispatcher,
+    secrets: OverrideSecrets | None = None,
 ) -> tuple[str, dict, str, list] | None:
     """Re-invoke the model to correct a rejected tool call.
 
@@ -1102,11 +1132,17 @@ async def _reprompt_for_corrected_call(
     if decision.decision == "unavailable":
         raise _BudgetUnavailableError()
 
-    model = state.get("model") or settings.llm_model
+    effective = resolve_llm(
+        state,
+        settings,
+        planner=False,
+        api_key_from_holder=llm_holder_key(secrets),
+        holder_handle=llm_holder_handle(secrets),
+    )
     base_client = ChatOpenAI(
-        base_url=settings.llm_base_url,
-        api_key=SecretStr(settings.llm_api_key or "no-key"),
-        model=model,
+        base_url=effective.base_url,
+        api_key=SecretStr(effective.api_key),
+        model=effective.model,
         temperature=0.0,
     )
     try:
@@ -1181,7 +1217,7 @@ async def _reprompt_for_corrected_call(
         raise _step_runtime_error("tool", f"re-prompt failed ({type(exc).__name__})") from exc
 
     _prompt, _completion, _total = accumulate_usage(state, resp)
-    agent_tokens_total.labels("executor", model).inc(_total)
+    agent_tokens_total.labels("executor", effective.model).inc(_total)
 
     tool_calls = _extract_tool_calls(resp)
     if not tool_calls:
