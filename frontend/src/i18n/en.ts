@@ -180,7 +180,7 @@ export const en: Translation = {
       gate: {
         title: 'LLM configuration required',
         description:
-          'The AI Agent needs your own model endpoint and API key to run. Fill in the three main-LLM fields to continue — Embedding and Tavily are optional.',
+          'The AI Agent needs your own model endpoint and API key to run. Fill in the three main-LLM fields to continue.',
       },
       sections: {
         llm: {
