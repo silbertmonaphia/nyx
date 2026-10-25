@@ -209,7 +209,7 @@ export const zh = {
           collapse: '收起重试模型字段',
         },
         agentNote:
-          '必须填满全部 8 个必填字段（主 LLM、Embedding、Tavily）后，AI Agent 才可用。',
+          '必须填满全部 8 个必填字段（主 LLM、Embedding、Tavily）后，AI Agent 才可用 —— localhost / 127.0.0.1 端点可以不填 API 密钥。',
       },
       fields: {
         baseUrl: '基础 URL',

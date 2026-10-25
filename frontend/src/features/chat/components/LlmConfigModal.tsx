@@ -54,6 +54,20 @@ interface LlmConfigFormValues {
   fallback: EndpointFormValues;
 }
 
+function isLoopbackUrl(value: string): boolean {
+  try {
+    const hostname = new URL(value).hostname;
+    return (
+      hostname === "localhost" ||
+      hostname === "::1" ||
+      hostname === "[::1]" ||
+      /^127\./.test(hostname)
+    );
+  } catch {
+    return false;
+  }
+}
+
 function isHttpUrl(value: string): boolean {
   try {
     const parsed = new URL(value);
@@ -80,29 +94,41 @@ function buildLlmConfigSchema(requireKeys: boolean) {
   const requiredModel = z
     .string()
     .refine((value) => value.trim() !== "", { error: required });
-  const requiredKey = z
-    .string()
-    .refine((value) => !requireKeys || value.trim() !== "", { error: required });
+  const keyRequired = (
+    value: { base_url: string; api_key: string },
+    ctx: z.RefinementCtx,
+  ) => {
+    if (!requireKeys) return;
+    if (value.api_key.trim() !== "") return;
+    if (isLoopbackUrl(value.base_url.trim())) return;
+    ctx.addIssue({ code: "custom", path: ["api_key"], message: required() });
+  };
   const optionalBaseUrl = z
     .string()
     .refine((value) => value.trim() === "" || isHttpUrl(value.trim()), {
       error: urlError,
     });
   return z.object({
-    llm: z.object({
-      base_url: requiredBaseUrl,
-      api_key: requiredKey,
-      model: requiredModel,
-    }),
-    embedding: z.object({
-      base_url: requiredBaseUrl,
-      api_key: requiredKey,
-      model: requiredModel,
-    }),
-    tavily: z.object({
-      base_url: requiredBaseUrl,
-      api_key: requiredKey,
-    }),
+    llm: z
+      .object({
+        base_url: requiredBaseUrl,
+        api_key: z.string(),
+        model: requiredModel,
+      })
+      .superRefine(keyRequired),
+    embedding: z
+      .object({
+        base_url: requiredBaseUrl,
+        api_key: z.string(),
+        model: requiredModel,
+      })
+      .superRefine(keyRequired),
+    tavily: z
+      .object({
+        base_url: requiredBaseUrl,
+        api_key: z.string(),
+      })
+      .superRefine(keyRequired),
     fallback: z
       .object({
         base_url: optionalBaseUrl,

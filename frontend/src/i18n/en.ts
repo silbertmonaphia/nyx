@@ -227,7 +227,7 @@ export const en: Translation = {
           collapse: 'Hide retry model fields',
         },
         agentNote:
-          'All eight required fields (main LLM, Embedding, Tavily) must be filled before the AI Agent becomes usable.',
+          'All eight required fields (main LLM, Embedding, Tavily) must be filled before the AI Agent becomes usable — API keys may be left empty for localhost / 127.0.0.1 endpoints.',
       },
       fields: {
         baseUrl: 'Base URL',

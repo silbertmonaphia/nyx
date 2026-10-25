@@ -106,6 +106,28 @@ describe('LlmConfigModal', () => {
     expect(useUiStore.getState().toasts).toHaveLength(0);
   });
 
+  it('accepts blank API keys for loopback endpoints', async () => {
+    const { save } = mockHook({ status: unconfigured });
+    renderModal();
+
+    await userEvent.type(input('llm-base-url'), 'http://localhost:8000/v1');
+    await userEvent.type(input('llm-model'), 'local-chat');
+    await userEvent.type(input('embedding-base-url'), 'http://127.0.0.1:8001/v1');
+    await userEvent.type(input('embedding-model'), 'local-embed');
+    await userEvent.type(input('tavily-base-url'), 'http://localhost:8899/search');
+
+    await userEvent.click(screen.getByTestId('llm-config-save'));
+
+    await vi.waitFor(() => {
+      expect(save.mutateAsync).toHaveBeenCalledTimes(1);
+    });
+    expect(save.mutateAsync.mock.calls[0][0]).toMatchObject({
+      llm: { base_url: 'http://localhost:8000/v1', api_key: '' },
+      embedding: { base_url: 'http://127.0.0.1:8001/v1', api_key: '' },
+      tavily: { base_url: 'http://localhost:8899/search', api_key: '' },
+    });
+  });
+
   it('shows an example placeholder in every empty input when unconfigured', () => {
     mockHook({ status: unconfigured });
     renderModal();
