@@ -78,9 +78,11 @@ EXPOSE 8080
 # unhealthy and triggers a restart cascade. The existing
 # /api/health endpoint remains the deep readiness signal for
 # operators (DB + cache status). See huma_handler.go for the
-# route registration and behaviour.
+# route registration and behaviour. The probe port follows $PORT
+# because Render injects a non-8080 port; 8080 stays the default
+# for compose and every other image consumer.
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
-    CMD wget -qO- http://127.0.0.1:8080/api/livez >/dev/null 2>&1 || exit 1
+    CMD wget -qO- http://127.0.0.1:${PORT:-8080}/api/livez >/dev/null 2>&1 || exit 1
 
 # ENTRYPOINT (not CMD) so docker-compose.yml can override the
 # binary args without rebuilding the image. The shim is what

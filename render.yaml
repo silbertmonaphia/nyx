@@ -1,0 +1,81 @@
+# Render blueprint — the Go backend (`nyx-api`).
+#
+# Apply: Render Dashboard → New → Blueprint → pick this repo → Apply.
+# The SPA is deployed separately on Vercel (see frontend/vercel.json).
+# The database is external (Supabase / Neon / RDS) — there is no
+# `databases:` block, so this blueprint never creates one.
+#
+# A service created by hand in the Render dashboard is NOT reconfigured
+# by this file — Render only reads render.yaml when the service is
+# created from a blueprint. To move an existing service onto this
+# config, mirror the settings by hand: docs/deployment.md has the table.
+#
+# The Python agent (backend/agent_py) is NOT part of this blueprint.
+# `/api/chat` proxies to it, so chat needs a separate service.
+
+services:
+  - type: web
+    name: nyx-api
+    runtime: docker
+    plan: free
+    region: singapore
+    dockerfilePath: ./backend/Dockerfile
+    dockerContext: ./backend
+    # `rootDir` is deliberately omitted. In the dashboard, a service
+    # with Root Directory = backend/ builds the same image: context
+    # backend/ + Dockerfile backend/Dockerfile. Here both paths are
+    # explicit and relative to the repo root (the blueprint spec's
+    # wording for dockerfilePath / dockerContext), which is the same
+    # build. Adding `rootDir: backend` would only scope build
+    # triggers, and the docs do not pin down whether it also re-bases
+    # the Dockerfile path.
+    # The backend has no `/` route — the default Render health check
+    # would 404 and fail every deploy. `/api/livez` is the shallow
+    # liveness probe (always 200 while the process serves HTTP);
+    # `/api/health` is the deep check that also probes the DB.
+    healthCheckPath: /api/livez
+    autoDeployTrigger: commit
+    envVars:
+      # External Postgres (Supabase / Neon / RDS). Paste the
+      # connection string at blueprint-apply time — it is never
+      # committed. Requirements:
+      #   - host: the pooler host (…pooler.supabase.com), not the
+      #     direct db.… host — Render's egress is IPv4-only and the
+      #     direct host is IPv6.
+      #   - sslmode=require
+      #   - the password must be URL-encoded
+      #   - port 6543 is PgBouncer *transaction* mode: add
+      #     `&default_query_exec_mode=simple_protocol` to the query
+      #     string, or pgx's prepared-statement cache breaks against
+      #     it ("prepared statement does not exist"). Port 5432 on the
+      #     pooler host is session mode and needs no such flag.
+      - key: DB_URL
+        sync: false
+      # Random value, >= 32 bytes so config.Load() and
+      # auth.NewTokenService accept it. Rotating it invalidates every
+      # access and refresh token that was already issued.
+      - key: JWT_SECRET
+        generateValue: true
+      # Comma-separated list of exact SPA origins. Empty (the default)
+      # blocks every cross-origin browser request — the deny-by-default
+      # posture in internal/platform/config. Exact match only: there is
+      # no `*.vercel.app` wildcard, so every Preview deployment origin
+      # has to be listed explicitly (or the list replaced by `*`).
+      - key: CORS_ALLOWED_ORIGINS
+        sync: false
+      # Migrations ship inside the image at ./migrations and are applied
+      # by golang-migrate before the server starts listening.
+      - key: MIGRATION_PATH
+        value: file://migrations
+      # Chat is off by default. Turning it on also needs the agent
+      # service and an LLM provider:
+      # - key: LLM_ENABLED
+      #   value: "true"
+      # - key: LLM_PROVIDER
+      #   value: "openai"
+      # - key: LLM_BASE_URL
+      #   value: "https://api.openai.com/v1"
+      # - key: LLM_API_KEY
+      #   sync: false
+      # - key: LLM_MODEL
+      #   value: "gpt-4o-mini"

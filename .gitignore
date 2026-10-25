@@ -7,6 +7,9 @@
 node_modules/
 *.tsbuildinfo
 
+# Vercel CLI local state (project.json — project/org ids)
+.vercel/
+
 # Go
 backend/main
 backend/api
