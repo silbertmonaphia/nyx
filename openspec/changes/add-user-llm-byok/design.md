@@ -61,6 +61,9 @@ The `sync.Once` guard is stored before the work runs today; a user who configure
 **D10 — Tavily override threads through the existing per-request tool seam.**
 `ToolDispatcher` is already constructed per request; only the local-tool registry is shared at startup. When a run carries `tavily_config`, `build_local_tools` builds a per-run registry; otherwise the shared one is untouched.
 
+**D15 — Tavily is optional; leaving it empty disables search for that run.**
+Tavily only powers `web_search`, so requiring it would block chat/planning/RAG for users who do not want search. The Tavily group is optional (base URL + key, the key may be empty for the provider's keyless tier). A per-user run without a Tavily override builds a per-run local registry WITHOUT `web_search` and never falls back to deployment-configured Tavily (strict BYOK); the planner catalogue derives from that registry, so the agent does not plan searches it cannot run. The modal red-warns the concrete impact.
+
 **D11 — The plaintext key never enters the checkpointed graph state.**
 The production agent checkpoints every node transition through `AsyncPostgresSaver`, which writes the state into the `langgraph` schema verbatim. Anything carried in `AgentState` therefore lands in Postgres in plaintext — including an API key. The override travels *outside* the state: a request-scoped holder consulted at client-construction time, with the state carrying only non-secret fields (base URL, model) plus an opaque handle. The same rule covers traces: the Langfuse/OTel scrubber only matches Bearer tokens, JWTs and `sk-`/`*-lf-` shapes, so a Tavily key or a self-hosted key would survive masking — the guarantee is "never put it in the state or a span", not "the scrubber will catch it".
 

@@ -20,6 +20,11 @@
 - **WHEN** a run carries a Tavily override and the model calls `web_search`
 - **THEN** the search request goes to the override's base URL with the override's credential, and the deployment-configured values are not consulted
 
+#### Scenario: A per-user run without Tavily has no search tool
+
+- **WHEN** a run carries a per-user LLM override but no Tavily override
+- **THEN** `web_search` is not registered for that run, the planner catalogue does not offer it, and the deployment-configured Tavily values are NOT used as a fallback
+
 #### Scenario: Keyless operation without an API key
 
 - **WHEN** `web_search` runs with no API key from either the override or configuration
