@@ -148,7 +148,7 @@ describe('LlmConfigModal', () => {
     await userEvent.type(input('llm-api-key'), 'sk-llm');
 
     expect(
-      screen.getAllByText(/cannot retrieve your feeds/).length,
+      screen.getAllByText(/RAG step and semantic search return no context/).length,
     ).toBeGreaterThan(0);
 
     await userEvent.click(screen.getByTestId('llm-config-save'));
@@ -320,7 +320,7 @@ describe('LlmConfigModal', () => {
     ).toHaveAttribute('href', 'https://api-docs.deepseek.com/');
     expect(screen.getByText('Embedding (optional)')).toBeInTheDocument();
     expect(
-      screen.getAllByText(/cannot retrieve your feeds/).length,
+      screen.getAllByText(/RAG step and semantic search return no context/).length,
     ).toBeGreaterThan(0);
     expect(
       screen.getByText(/may point at a different service than the main LLM/),

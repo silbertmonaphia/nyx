@@ -200,7 +200,7 @@ export const en: Translation = {
           title: 'Embedding (optional)',
           drives: 'Drives feed semantic search and RAG retrieval.',
           impact:
-            'Optional — leave this empty and the AI Agent cannot retrieve your feeds (RAG / semantic search). Chat, planning and tools keep working.',
+            'Optional — leave this empty and feed retrieval is unavailable: the agent\'s RAG step and semantic search return no context. Chat, planning, feed CRUD and the other tools keep working.',
           expand: 'Show embedding fields',
           collapse: 'Hide embedding fields',
           separateProvider:
@@ -235,7 +235,7 @@ export const en: Translation = {
           collapse: 'Hide retry model fields',
         },
         agentNote:
-          'Only the three main-LLM fields are required. API keys may be left empty for localhost / 127.0.0.1 endpoints. Embedding is optional: leave it empty and the agent cannot retrieve your feeds. Tavily is optional: leave it empty and the agent will not plan web searches.',
+          'Only the three main-LLM fields are required. API keys may be left empty for localhost / 127.0.0.1 endpoints. Embedding is optional: leave it empty and the agent\'s RAG step and semantic search return no context. Tavily is optional: leave it empty and the agent will not plan web searches.',
       },
       fields: {
         baseUrl: 'Base URL',

@@ -184,7 +184,7 @@ export const zh = {
           title: 'Embedding（可选）',
           drives: '驱动私人动态语义搜索与 RAG 检索。',
           impact:
-            '选填 —— 留空则 AI Agent 无法检索你的私人动态（RAG / 语义搜索）；聊天、规划与工具仍可正常使用。',
+            '选填 —— 留空则无法检索私人动态：agent 的 RAG 步骤与语义搜索只会拿到空上下文；聊天、规划、feed 增删改查与其他工具不受影响。',
           expand: '展开 Embedding 字段',
           collapse: '收起 Embedding 字段',
           separateProvider:
@@ -217,7 +217,7 @@ export const zh = {
           collapse: '收起重试模型字段',
         },
         agentNote:
-          '只有主 LLM 的三个字段为必填；localhost / 127.0.0.1 端点可以不填 API 密钥。Embedding 为选填：留空则 agent 无法检索你的私人动态。Tavily 为选填：留空则 agent 不会规划网络搜索。',
+          '只有主 LLM 的三个字段为必填；localhost / 127.0.0.1 端点可以不填 API 密钥。Embedding 为选填：留空则 agent 的 RAG 步骤与语义搜索拿不到上下文。Tavily 为选填：留空则 agent 不会规划网络搜索。',
       },
       fields: {
         baseUrl: '基础 URL',
