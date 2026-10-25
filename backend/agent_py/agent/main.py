@@ -762,6 +762,8 @@ def _local_registry_for(
     settings: Settings,
     tavily_override: TavilyOverride | None,
     shared: LocalToolRegistry | None,
+    *,
+    per_user_run: bool = False,
 ) -> LocalToolRegistry:
     """The local tool registry for one run (add-user-llm-byok D10).
 
@@ -770,6 +772,14 @@ def _local_registry_for(
     needs the override. Without an override the startup-shared registry
     is returned untouched (identity, not a rebuild).
     """
+    if per_user_run:
+        return LocalToolRegistry(
+            build_local_tools(
+                settings,
+                tavily_override=tavily_override,
+                allow_settings_search=False,
+            )
+        )
     if tavily_override is not None:
         return LocalToolRegistry(
             build_local_tools(settings, tavily_override=tavily_override)
@@ -1032,7 +1042,10 @@ async def _stream_agent_run(
     tools = ToolDispatcher(
         mcp=ToolsClient(base_url=settings.mcp_url, bearer_token=bearer_token),
         local=_local_registry_for(
-            settings, tavily_override, getattr(app.state, "local_tools", None)
+            settings,
+            tavily_override,
+            getattr(app.state, "local_tools", None),
+            per_user_run=llm_view is not None,
         ),
     )
 

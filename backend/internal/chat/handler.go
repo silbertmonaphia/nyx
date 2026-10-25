@@ -378,9 +378,11 @@ func (h *Handler) streamProxy(w http.ResponseWriter, r *http.Request, req ChatRe
 			APIKey:  stack.LLMAPIKey,
 			Model:   stack.LLMModel,
 		}
-		payload.TavilyConfig = &AgentTavilyConfig{
-			BaseURL: stack.TavilyBaseURL,
-			APIKey:  stack.TavilyAPIKey,
+		if stack.TavilyBaseURL != "" {
+			payload.TavilyConfig = &AgentTavilyConfig{
+				BaseURL: stack.TavilyBaseURL,
+				APIKey:  stack.TavilyAPIKey,
+			}
 		}
 	}
 

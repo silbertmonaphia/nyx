@@ -511,7 +511,10 @@ WEB_SEARCH_SCHEMA: dict[str, Any] = {
 
 
 def build_local_tools(
-    settings: Settings, *, tavily_override: TavilyOverride | None = None
+    settings: Settings,
+    *,
+    tavily_override: TavilyOverride | None = None,
+    allow_settings_search: bool = True,
 ) -> list[LocalTool]:
     """The enabled web tools as `LocalTool` entries ([] when both flags off).
 
@@ -529,7 +532,7 @@ def build_local_tools(
                 dispatch=_fetch_dispatch(settings),
             )
         )
-    if settings.web_search_enabled:
+    if settings.web_search_enabled and (tavily_override is not None or allow_settings_search):
         tools.append(
             LocalTool(
                 name="web_search",

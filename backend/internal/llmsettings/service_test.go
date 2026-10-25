@@ -228,7 +228,6 @@ func TestValidateUpdate(t *testing.T) {
 		}{
 			{func(in *UpdateInput) { in.LLMBaseURL = testRemoteLLMBaseURL; in.LLMAPIKey = "" }, "llm_api_key"},
 			{func(in *UpdateInput) { in.EmbeddingBaseURL = "https://embed.example.com/v1"; in.EmbeddingAPIKey = "" }, "embedding_api_key"},
-			{func(in *UpdateInput) { in.TavilyBaseURL = "https://api.tavily.com/search"; in.TavilyAPIKey = "" }, "tavily_api_key"},
 		} {
 			in := validCreateInput()
 			field.mutate(&in)
@@ -283,7 +282,6 @@ func TestValidateUpdate(t *testing.T) {
 			{func(in *UpdateInput) { in.LLMModel = "" }, "llm_model"},
 			{func(in *UpdateInput) { in.EmbeddingBaseURL = "" }, "embedding_base_url"},
 			{func(in *UpdateInput) { in.EmbeddingModel = "" }, "embedding_model"},
-			{func(in *UpdateInput) { in.TavilyBaseURL = "" }, "tavily_base_url"},
 		} {
 			in := validCreateInput()
 			field.mutate(&in)
@@ -386,6 +384,39 @@ func TestValidateUpdate(t *testing.T) {
 		in.FallbackModel = "new-fallback-model"
 		err := ValidateUpdate(&in, existing)
 		require.Error(t, err, "blank fallback key with no stored ciphertext is a partial group")
+	})
+
+	t.Run("create without Tavily is accepted", func(t *testing.T) {
+		in := validCreateInput()
+		in.TavilyBaseURL = ""
+		in.TavilyAPIKey = ""
+		assert.NoError(t, ValidateUpdate(&in, nil))
+	})
+
+	t.Run("Tavily key without a base URL is rejected", func(t *testing.T) {
+		in := validCreateInput()
+		in.TavilyBaseURL = ""
+		err := ValidateUpdate(&in, nil)
+		require.Error(t, err)
+		var fe *InvalidFieldError
+		require.ErrorAs(t, err, &fe)
+		assert.Equal(t, "tavily_base_url", fe.Field)
+	})
+
+	t.Run("remote Tavily without a key is accepted for the keyless tier", func(t *testing.T) {
+		in := validCreateInput()
+		in.TavilyAPIKey = ""
+		assert.NoError(t, ValidateUpdate(&in, nil))
+	})
+
+	t.Run("invalid Tavily URL is rejected", func(t *testing.T) {
+		in := validCreateInput()
+		in.TavilyBaseURL = "ftp://api.tavily.com/search"
+		err := ValidateUpdate(&in, nil)
+		require.Error(t, err)
+		var fe *InvalidFieldError
+		require.ErrorAs(t, err, &fe)
+		assert.Equal(t, "tavily_base_url", fe.Field)
 	})
 
 	t.Run("create with a blank key on a loopback endpoint is accepted", func(t *testing.T) {

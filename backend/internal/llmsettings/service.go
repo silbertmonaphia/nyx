@@ -69,8 +69,14 @@ func (s *Service) Save(ctx context.Context, userID int, in UpdateInput) error {
 	if out.EmbeddingAPIKeyEnc, err = s.resolveKey(in.EmbeddingAPIKey, "embedding_api_key", in.EmbeddingBaseURL, existing); err != nil {
 		return err
 	}
-	if out.TavilyAPIKeyEnc, err = s.resolveKey(in.TavilyAPIKey, "tavily_api_key", in.TavilyBaseURL, existing); err != nil {
-		return err
+	if in.TavilyBaseURL == "" {
+		out.TavilyBaseURL, out.TavilyAPIKeyEnc = "", ""
+	} else if in.TavilyAPIKey != "" {
+		if out.TavilyAPIKeyEnc, err = s.cipher.Encrypt(in.TavilyAPIKey); err != nil {
+			return err
+		}
+	} else if existing != nil {
+		out.TavilyAPIKeyEnc = existing.TavilyAPIKeyEnc
 	}
 
 	if in.FallbackBaseURL == "" && in.FallbackAPIKey == "" && in.FallbackModel == "" {
@@ -192,9 +198,13 @@ func validateRequiredConfig(in *UpdateInput) error {
 	for _, u := range []struct{ raw, field string }{
 		{in.LLMBaseURL, "llm_base_url"},
 		{in.EmbeddingBaseURL, "embedding_base_url"},
-		{in.TavilyBaseURL, "tavily_base_url"},
 	} {
 		if err := validateUserURL(u.raw, u.field); err != nil {
+			return err
+		}
+	}
+	if in.TavilyBaseURL != "" {
+		if err := validateUserURL(in.TavilyBaseURL, "tavily_base_url"); err != nil {
 			return err
 		}
 	}
@@ -203,7 +213,6 @@ func validateRequiredConfig(in *UpdateInput) error {
 		{in.LLMModel, "llm_model"},
 		{in.EmbeddingBaseURL, "embedding_base_url"},
 		{in.EmbeddingModel, "embedding_model"},
-		{in.TavilyBaseURL, "tavily_base_url"},
 	} {
 		if r.raw == "" {
 			return invalidField(r.field)
@@ -216,11 +225,13 @@ func validateCreateKeys(in *UpdateInput) error {
 	for _, k := range []struct{ raw, field, baseURL string }{
 		{in.LLMAPIKey, "llm_api_key", in.LLMBaseURL},
 		{in.EmbeddingAPIKey, "embedding_api_key", in.EmbeddingBaseURL},
-		{in.TavilyAPIKey, "tavily_api_key", in.TavilyBaseURL},
 	} {
 		if k.raw == "" && !isLoopbackBaseURL(k.baseURL) {
 			return invalidField(k.field)
 		}
+	}
+	if in.TavilyAPIKey != "" && in.TavilyBaseURL == "" {
+		return invalidField("tavily_base_url")
 	}
 	return nil
 }

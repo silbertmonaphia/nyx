@@ -74,13 +74,13 @@
             "$ref": "#/components/schemas/LlmEndpointInput"
           },
           "tavily": {
-            "$ref": "#/components/schemas/TavilyInput"
+            "$ref": "#/components/schemas/TavilyInput",
+            "description": "Optional search provider group. When omitted the agent does not plan web searches."
           }
         },
         "required": [
           "llm",
-          "embedding",
-          "tavily"
+          "embedding"
         ],
         "type": "object"
       },
@@ -398,18 +398,15 @@
         "additionalProperties": false,
         "properties": {
           "api_key": {
-            "description": "Write-only API key. Required on create; leave empty on update to keep the stored key.",
+            "description": "Write-only API key. Optional: an empty key uses the provider's keyless tier; on update, empty keeps the stored key.",
             "type": "string",
             "writeOnly": true
           },
           "base_url": {
-            "description": "Search provider base URL.",
+            "description": "Search provider base URL. Omit the whole section to run without web search.",
             "type": "string"
           }
         },
-        "required": [
-          "base_url"
-        ],
         "type": "object"
       },
       "TavilyResponse": {
@@ -1039,7 +1036,7 @@
         ]
       },
       "put": {
-        "description": "Validates and upserts the authenticated caller's LLM, embedding, Tavily, and optional retry-model configuration. API keys are write-only: a blank key on update keeps the stored key, while a create requires every required key. Responds with the masked configuration.",
+        "description": "Validates and upserts the authenticated caller's LLM, embedding, optional Tavily, and optional retry-model configuration. API keys are write-only: a blank key on update keeps the stored key; on create a key is required unless the endpoint is loopback. Omitting Tavily disables web search for the agent. Responds with the masked configuration.",
         "operationId": "update-llm-config",
         "requestBody": {
           "content": {

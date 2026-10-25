@@ -278,6 +278,24 @@ func TestHandler_PutLoopbackWithoutKeys(t *testing.T) {
 	assert.True(t, decodeConfig(t, rr).Configured)
 }
 
+func TestHandler_PutWithoutTavilyIsAccepted(t *testing.T) {
+	router, _, _, tokens := setupConfigRouter(t)
+	tok := mustToken(t, tokens, 1)
+
+	body := validPutBody()
+	delete(body, "tavily")
+
+	rr := configRequest(t, router, http.MethodPut, tok, body)
+	require.Equal(t, http.StatusOK, rr.Code, rr.Body.String())
+	got := decodeConfig(t, rr)
+	assert.True(t, got.Configured)
+	assert.Nil(t, got.Tavily)
+
+	rr = configRequest(t, router, http.MethodGet, tok, nil)
+	require.Equal(t, http.StatusOK, rr.Code)
+	assert.Nil(t, decodeConfig(t, rr).Tavily)
+}
+
 func TestHandler_PutClearsStoredFallback(t *testing.T) {
 	router, _, _, tokens := setupConfigRouter(t)
 	tok := mustToken(t, tokens, 1)

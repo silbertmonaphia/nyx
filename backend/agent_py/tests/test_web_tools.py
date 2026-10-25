@@ -806,3 +806,39 @@ async def test_search_oversized_body_is_capped(monkeypatch):
     settings = make_settings(web_search_enabled=True, tavily_api_key="k")
     with pytest.raises(ToolUnavailableError):  # capped body is truncated mid-JSON
         await search_web("q", settings)
+
+
+def test_build_local_tools_byok_run_without_tavily_skips_search():
+    settings = make_settings(web_fetch_enabled=True, web_search_enabled=True)
+
+    tools = build_local_tools(settings, allow_settings_search=False)
+
+    names = [tool.name for tool in tools]
+    assert names == ["web_fetch"]
+
+
+def test_local_registry_for_byok_run_without_tavily_has_no_search():
+    from agent.main import _local_registry_for
+    from agent.tool_dispatch import LocalToolRegistry
+
+    settings = make_settings(web_search_enabled=True)
+    shared = LocalToolRegistry(build_local_tools(settings))
+
+    per_run = _local_registry_for(settings, None, shared, per_user_run=True)
+
+    assert per_run is not shared
+    assert "web_search" not in per_run
+    assert "web_search" in shared
+
+
+def test_local_registry_for_byok_run_with_tavily_uses_the_override():
+    from agent.main import _local_registry_for
+
+    settings = make_settings(web_search_enabled=True)
+    override = TavilyOverride(
+        base_url="https://user-tavily.test/search", api_key="user-key"
+    )
+
+    per_run = _local_registry_for(settings, override, None, per_user_run=True)
+
+    assert "web_search" in per_run

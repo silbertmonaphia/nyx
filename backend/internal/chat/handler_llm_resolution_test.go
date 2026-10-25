@@ -256,3 +256,26 @@ func TestHandler_AgentForwardsResolvedPerUserConfig(t *testing.T) {
 	assert.Equal(t, stack.TavilyBaseURL, tavilyCfg.BaseURL)
 	assert.Equal(t, stack.TavilyAPIKey, tavilyCfg.APIKey)
 }
+
+func TestHandler_AgentPayloadOmitsTavilyWhenUnconfigured(t *testing.T) {
+	srv, captured := newUpstreamServer(t, http.StatusOK, cannedSSE, "text/event-stream")
+	proxy, err := NewAgentProxy(srv.URL, nil)
+	require.NoError(t, err)
+
+	stack := testUserStack()
+	stack.TavilyBaseURL = ""
+	stack.TavilyAPIKey = ""
+
+	router, tokens := newProxyHarnessWithResolver(t, proxy, &stubLLMResolver{stack: stack})
+	server := httptest.NewServer(router)
+	defer server.Close()
+
+	resp := postChat(t, server, bearerToken(t, tokens))
+	defer func() { _ = resp.Body.Close() }()
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+
+	var payload map[string]any
+	require.NoError(t, json.Unmarshal([]byte(captured.body), &payload))
+	assert.Contains(t, payload, "llm_config")
+	assert.NotContains(t, payload, "tavily_config")
+}
