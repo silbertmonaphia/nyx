@@ -61,7 +61,7 @@ The API SHALL expose `GET /api/me/llm-config`, `PUT /api/me/llm-config`, and `DE
 
 ### Requirement: PUT validates and upserts
 
-PUT SHALL accept all eleven fields (fallback optional as a group), validate URLs parse as http/https with a host and no userinfo, reject placeholder API keys, and upsert the row. On create, a missing required key SHALL be rejected; on update, an empty key field SHALL mean "keep the stored key". The fallback fields SHALL be all-or-nothing: a partial fallback section SHALL be rejected. User-supplied URLs MAY point at private or localhost addresses (self-hosted deployment).
+PUT SHALL accept all eleven fields (fallback optional as a group), validate URLs parse as http/https with a host and no userinfo, reject placeholder API keys, and upsert the row. On create, a missing required key SHALL be rejected UNLESS the corresponding base URL's host is loopback (`localhost`, `127.0.0.0/8`, `::1`) — a local model server needs no credential, and the stored key column stays empty, so no placeholder value is ever persisted. On update, an empty key field SHALL mean "keep the stored key". The fallback fields SHALL be all-or-nothing on base URL and model; a blank fallback key is acceptable only when the fallback base URL is loopback or a stored key exists. User-supplied URLs MAY point at private or localhost addresses (self-hosted deployment).
 
 #### Scenario: Create requires all eight
 
@@ -93,6 +93,16 @@ PUT SHALL accept all eleven fields (fallback optional as a group), validate URLs
 - **WHEN** a PUT supplies `http://localhost:8000/v1` as a base URL
 - **THEN** the configuration is accepted
 
+#### Scenario: Loopback endpoint needs no key
+
+- **WHEN** a PUT supplies a loopback base URL for a section and leaves its API key empty
+- **THEN** the configuration is accepted and the stored key for that section is empty (no placeholder secret is persisted)
+
+#### Scenario: Remote endpoint still requires a key
+
+- **WHEN** a PUT supplies a non-loopback base URL and leaves its API key empty
+- **THEN** the response is 400 naming that key field
+
 ### Requirement: Each slot reaches its own endpoint
 
 A user's main-LLM base URL and embedding base URL SHALL be honoured independently: chat traffic reaches the main-LLM endpoint and embedding traffic reaches the embedding endpoint. Resolving a user's configuration SHALL produce a client per slot — the embedding client is built from the embedding base URL, API key, and model, not reused from the chat client.
@@ -118,7 +128,7 @@ When a user has no configuration row, every user-facing LLM path SHALL be unavai
 
 ### Requirement: In-modal guidance names the provider, where to obtain credentials, and the affected features
 
-The config modal SHALL show, per section (main LLM, embedding, Tavily, optional retry model), in both UI languages: one example placeholder per empty input (URL and model name), a short description of what the group drives, where to obtain the credentials (provider sign-up/console URLs, plus the local-vLLM option for the LLM and embedding groups), a link to that provider's own documentation, and the note that all eight required fields must be present before AI Agent becomes usable. Each section's documentation link and guidance SHALL stand on its own — the embedding group is a separate provider on a separate endpoint with a separate failure mode, and its guidance MUST NOT be folded into the main-LLM group's text.
+The config modal SHALL show, per section (main LLM, embedding, Tavily, optional retry model), in both UI languages: one example placeholder per empty input (URL and model name), a short description of what the group drives, where to obtain the credentials (provider sign-up/console URLs, plus the local-vLLM option for the LLM and embedding groups), a link to that provider's own documentation, and the note that all eight required fields must be present before AI Agent becomes usable, except that API keys may be left empty for localhost / 127.0.0.1 endpoints. Each section's documentation link and guidance SHALL stand on its own — the embedding group is a separate provider on a separate endpoint with a separate failure mode, and its guidance MUST NOT be folded into the main-LLM group's text.
 
 The main-LLM section SHALL state the three provider capabilities AI Agent depends on — streaming chat completions, OpenAI-shaped tool calls, and structured (`json_schema`) output — and what is lost when each is missing: without tool calls the AI Agent is unavailable and only the single-turn chat path works, and without structured output the planner falls back to its legacy free-text path. That section SHALL also state that the base URL is an OpenAI-compatible endpoint whose path carries the provider's version prefix (e.g. a trailing `/v1`) with the placeholder showing that prefix, that the configured model must exist on the configured endpoint (the deployment does not probe at save time), and that an endpoint needing no credential still requires a non-placeholder value.
 
