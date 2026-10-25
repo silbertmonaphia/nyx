@@ -200,6 +200,7 @@ func TestValidateUserURL(t *testing.T) {
 const (
 	testFallbackModel     = "fallback-model"
 	testStoredFallbackEnc = "v1:stored-fallback"
+	testRemoteLLMBaseURL  = "https://api.example.com/v1"
 )
 
 func TestValidateUpdate(t *testing.T) {
@@ -225,9 +226,9 @@ func TestValidateUpdate(t *testing.T) {
 			mutate func(*UpdateInput)
 			want   string
 		}{
-			{func(in *UpdateInput) { in.LLMAPIKey = "" }, "llm_api_key"},
-			{func(in *UpdateInput) { in.EmbeddingAPIKey = "" }, "embedding_api_key"},
-			{func(in *UpdateInput) { in.TavilyAPIKey = "" }, "tavily_api_key"},
+			{func(in *UpdateInput) { in.LLMBaseURL = testRemoteLLMBaseURL; in.LLMAPIKey = "" }, "llm_api_key"},
+			{func(in *UpdateInput) { in.EmbeddingBaseURL = "https://embed.example.com/v1"; in.EmbeddingAPIKey = "" }, "embedding_api_key"},
+			{func(in *UpdateInput) { in.TavilyBaseURL = "https://api.tavily.com/search"; in.TavilyAPIKey = "" }, "tavily_api_key"},
 		} {
 			in := validCreateInput()
 			field.mutate(&in)
@@ -387,8 +388,37 @@ func TestValidateUpdate(t *testing.T) {
 		require.Error(t, err, "blank fallback key with no stored ciphertext is a partial group")
 	})
 
+	t.Run("create with a blank key on a loopback endpoint is accepted", func(t *testing.T) {
+		in := validCreateInput()
+		in.LLMAPIKey = ""
+		in.EmbeddingAPIKey = ""
+		in.TavilyBaseURL = "http://127.0.0.1:8899/search"
+		in.TavilyAPIKey = ""
+		assert.NoError(t, ValidateUpdate(&in, nil))
+	})
+
+	t.Run("create with a blank key on a remote endpoint is rejected", func(t *testing.T) {
+		in := validCreateInput()
+		in.LLMBaseURL = testRemoteLLMBaseURL
+		in.LLMAPIKey = ""
+		err := ValidateUpdate(&in, nil)
+		require.Error(t, err)
+		var fe *InvalidFieldError
+		require.ErrorAs(t, err, &fe)
+		assert.Equal(t, "llm_api_key", fe.Field)
+	})
+
+	t.Run("create accepts a loopback fallback without a key", func(t *testing.T) {
+		in := validCreateInput()
+		in.FallbackBaseURL = "http://localhost:9000/v1"
+		in.FallbackModel = "fallback-model"
+		in.FallbackAPIKey = ""
+		assert.NoError(t, ValidateUpdate(&in, nil))
+	})
+
 	t.Run("errors chain to the registered ErrInvalidConfig sentinel", func(t *testing.T) {
 		in := validCreateInput()
+		in.LLMBaseURL = testRemoteLLMBaseURL
 		in.LLMAPIKey = ""
 		err := ValidateUpdate(&in, nil)
 		require.Error(t, err)

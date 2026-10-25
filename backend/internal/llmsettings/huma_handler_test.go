@@ -196,7 +196,9 @@ func TestHandler_PutRejectsInvalidFieldsWithFieldDetails(t *testing.T) {
 			name: "missing required key on create",
 			body: func() map[string]any {
 				b := validPutBody()
-				delete(b["llm"].(map[string]any), "api_key")
+				llm := b["llm"].(map[string]any)
+				llm["base_url"] = testRemoteLLMBaseURL
+				delete(llm, "api_key")
 				return b
 			}(),
 			field: "llm_api_key",
@@ -250,6 +252,30 @@ func TestHandler_PutFallbackRoundTrips(t *testing.T) {
 	assert.Equal(t, "http://fallback:8000/v1", got.Fallback.BaseURL)
 	assert.Equal(t, "fallback-model", got.Fallback.Model)
 	assert.Equal(t, "…0009", got.Fallback.APIKeyMasked)
+}
+
+func TestHandler_PutLoopbackWithoutKeys(t *testing.T) {
+	router, _, _, tokens := setupConfigRouter(t)
+	tok := mustToken(t, tokens, 1)
+
+	body := validPutBody()
+	delete(body["llm"].(map[string]any), "api_key")
+	delete(body["embedding"].(map[string]any), "api_key")
+	body["tavily"] = map[string]any{
+		"base_url": "http://127.0.0.1:8899/search",
+	}
+
+	rr := configRequest(t, router, http.MethodPut, tok, body)
+	require.Equal(t, http.StatusOK, rr.Code, rr.Body.String())
+	got := decodeConfig(t, rr)
+	require.NotNil(t, got.LLM)
+	assert.Equal(t, "", got.LLM.APIKeyMasked)
+	require.NotNil(t, got.Tavily)
+	assert.Equal(t, "", got.Tavily.APIKeyMasked)
+
+	rr = configRequest(t, router, http.MethodGet, tok, nil)
+	require.Equal(t, http.StatusOK, rr.Code)
+	assert.True(t, decodeConfig(t, rr).Configured)
 }
 
 func TestHandler_PutClearsStoredFallback(t *testing.T) {
