@@ -98,6 +98,21 @@ PUT SHALL accept all eleven fields (Tavily and fallback optional as groups), val
 - **WHEN** a PUT omits the embedding section (or sends it empty)
 - **THEN** the configuration is accepted, the stored embedding fields are empty, and GET reports `embedding: null`; RAG retrieval returns the empty envelope and feed indexing is skipped
 
+#### Scenario: Embedding width is probed on save
+
+- **WHEN** a PUT supplies an embedding group whose endpoint is reachable and returns a vector whose width differs from the deployment's embedding width
+- **THEN** the response is 400 naming `embedding_model` and no configuration is stored
+
+#### Scenario: Unreachable embedding endpoint does not block the save
+
+- **WHEN** the embedding endpoint cannot be reached during the save-time probe
+- **THEN** the configuration is saved and the failure is logged; the runtime width guard still prevents a mismatched vector from being used
+
+#### Scenario: Embedding model is immutable after the first save
+
+- **WHEN** a configured user submits a different embedding model while the embedding group remains configured
+- **THEN** the response is 400 naming `embedding_model`, and the stored configuration is unchanged; the base URL and API key MAY still be updated
+
 #### Scenario: Partial embedding group is rejected
 
 - **WHEN** a PUT supplies a base URL without a model, or a model/key without a base URL

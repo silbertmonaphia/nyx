@@ -1,5 +1,31 @@
 # Spec Delta
 
+## ADDED Requirements
+
+### Requirement: Changing the embedding identity invalidates stored vectors
+
+The embedding model is immutable while the embedding group is configured (see `user-llm-config`). When a user's embedding base URL changes, the embedding group is removed, or the whole configuration is deleted, the system SHALL delete that user's stored feed embeddings and reset the user's backfill guard, so the next retrieval re-embeds with the current model. Rotating only the API key SHALL NOT invalidate vectors. Deletion failures MUST NOT fail the config save; the stale vectors remain until a later successful invalidation.
+
+#### Scenario: Endpoint change clears vectors and re-indexes
+
+- **WHEN** a configured user saves the same embedding model against a different base URL and then triggers retrieval
+- **THEN** the previous vectors are deleted, the lazy backfill re-embeds the feeds with the current model, and retrieval uses the new vectors
+
+#### Scenario: Model change requires clearing first
+
+- **WHEN** a configured user tries to submit a different embedding model without removing the embedding group
+- **THEN** the save is rejected; removing the group deletes the vectors, and re-adding a different model then re-indexes lazily
+
+#### Scenario: Key rotation keeps vectors
+
+- **WHEN** a user saves the same embedding endpoint and model with a new API key
+- **THEN** stored vectors are left untouched
+
+#### Scenario: Config removal clears vectors
+
+- **WHEN** a user deletes their LLM configuration
+- **THEN** their stored feed embeddings are deleted
+
 ## Purpose
 
 Feed embedding-indexing becomes per-user BYOK: the indexer resolves the feed owner's embedder; an unconfigured owner's writes still succeed (skip, warn, stay healable), and configuring later is picked up by the next backfill.
