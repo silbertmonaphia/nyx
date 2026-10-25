@@ -274,6 +274,8 @@ CPU caveat: a Qwen3-4B smoke test on CPU runs at a few tokens/sec after cold loa
 
 Safety: `LLM_BASE_URL` is validated at startup (scheme allowlist http/https, no userinfo, host refuses loopback / RFC1918 / link-local / multicast / unspecified unless `LLM_ALLOW_PRIVATE_URL=true`). The vLLM provider repeats the IP-class check inside its `http.Transport.DialContext` so DNS rebinding can't swap a public hostname's answer for a private IP between startup and the first dial. See `SECURITY.md` for the residual risk on the OpenAI provider path.
 
+Per-user config (BYOK): the variables above only seed the **operator** path. Every user-facing LLM path reads the requesting user's own row in `user_llm_settings` instead — chat model, embedding model, Tavily search — configured from the gear button next to AI Agent. `USER_LLM_ENCRYPTION_KEY` (≥ 32 bytes, required when `LLM_ENABLED=true`, identical on every replica and stable across restarts) encrypts those keys at rest with AES-256-GCM. Strict BYOK: a user with no saved config gets a 409 `llm_not_configured` refusal on chat, empty RAG retrieval, and skipped feed indexing — there is no `.env` fallback for user requests. Endpoints: `GET/PUT/DELETE /api/me/llm-config`.
+
 ## The agent (Plan-and-Execute)
 
 The project's main development focus. `backend/agent_py/` is a FastAPI + LangGraph service that

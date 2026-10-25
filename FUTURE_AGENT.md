@@ -117,6 +117,14 @@ Recommendation: the second. Each step has a stable `id` so SSE frames can be cor
 
 **Also landed in this slice** (beyond the original §1.3 bullets): the partial-failure banner — when a run terminates with any system-recognised failure (tool retry exhausted, plan-level error), the orchestrator emits `note{kind:"partial_failure", failed_steps:[…]}` before the final answer and the SPA renders a banner above the reply so the user is never silently shown an answer built on a failed plan. See `docs_agent/AgentFaultTolerance.md` for the full fault-surface index and the remaining unaddressed classes.
 
+### 1.4 Per-user BYOK LLM overrides — landed in `openspec/changes/add-user-llm-byok/`
+
+- [x] **Per-run override payload** — `/agent/run` accepts optional `llm_config` (`base_url`, `api_key`, `model`) and `tavily_config` (`base_url`, `api_key`) forwarded by the Go handler from the user's stored row. Absent fields keep today's `Settings` fallback, so direct/dev/test use is unchanged.
+- [x] **Secrets outside the checkpointed state** — the production `AsyncPostgresSaver` writes every `AgentState` channel into the `langgraph` schema verbatim, so the plaintext keys travel in a request-scoped holder consulted at client construction; the state carries only non-secret fields (base URL, model) plus an opaque handle. Keys are never attached to a span or log line — the Langfuse scrubber only matches Bearer/JWT/`sk-`/`*-lf-` shapes, so the guarantee is by construction.
+- [x] **All seven `ChatOpenAI` sites honor the override** — planner (structured + legacy), executor (`llm`, `react`, tool re-prompt), title refinement, and preference extraction. The planner now uses the user's model (previously `PYTHON_AGENT_LLM_PLANNER_MODEL`).
+- [x] **Per-run planner path** — a `deepseek` host in the override base URL selects the legacy free-text planner path for that run; otherwise the global structured-output flag applies.
+- [x] **Tavily override** — `web_search` reads endpoint and key from the run's override; a per-run local registry is built only when an override is present, leaving the shared startup registry untouched.
+
 ---
 
 ## P2 — Advanced autonomy
