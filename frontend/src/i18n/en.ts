@@ -210,8 +210,10 @@ export const en: Translation = {
             'The deployment requires 1024-dimension vectors, e.g. Qwen/Qwen3-Embedding-0.6B. A model emitting a different width is rejected at query time, not when saving.',
         },
         tavily: {
-          title: 'Tavily search',
+          title: 'Tavily search (optional)',
           drives: "Drives the agent's web_search tool.",
+          impact:
+            'Optional — leave this empty and the AI Agent will not plan web searches. Chat, planning and retrieval keep working.',
           credentials:
             'Create a key in the Tavily console (app.tavily.com) — the free tier covers light use.',
           docsLabel: 'Tavily search API documentation',
@@ -227,7 +229,7 @@ export const en: Translation = {
           collapse: 'Hide retry model fields',
         },
         agentNote:
-          'All eight required fields (main LLM, Embedding, Tavily) must be filled before the AI Agent becomes usable — API keys may be left empty for localhost / 127.0.0.1 endpoints.',
+          'The six required fields (main LLM, Embedding) must be filled before the AI Agent becomes usable — API keys may be left empty for localhost / 127.0.0.1 endpoints. Tavily is optional: leave it empty and the agent will not plan web searches.',
       },
       fields: {
         baseUrl: 'Base URL',

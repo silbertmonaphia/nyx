@@ -194,8 +194,10 @@ export const zh = {
             '部署要求 1024 维向量，例如 Qwen/Qwen3-Embedding-0.6B。维度不符的模型会在查询时被拒绝，而不是保存时。',
         },
         tavily: {
-          title: 'Tavily 搜索',
+          title: 'Tavily 搜索（可选）',
           drives: '驱动 Agent 的 web_search 工具。',
+          impact:
+            '选填 —— 留空则 AI Agent 不会规划网络搜索；聊天、规划与检索仍可正常使用。',
           credentials:
             '在 Tavily 控制台（app.tavily.com）创建密钥 — 免费额度足够轻度使用。',
           docsLabel: 'Tavily 搜索 API 文档',
@@ -209,7 +211,7 @@ export const zh = {
           collapse: '收起重试模型字段',
         },
         agentNote:
-          '必须填满全部 8 个必填字段（主 LLM、Embedding、Tavily）后，AI Agent 才可用 —— localhost / 127.0.0.1 端点可以不填 API 密钥。',
+          '必须填满 6 个必填字段（主 LLM、Embedding）后 AI Agent 才可用 —— localhost / 127.0.0.1 端点可以不填 API 密钥。Tavily 为选填：留空则 agent 不会规划网络搜索。',
       },
       fields: {
         baseUrl: '基础 URL',

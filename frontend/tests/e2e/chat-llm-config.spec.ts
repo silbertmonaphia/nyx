@@ -54,6 +54,34 @@ test.describe('LLM configuration gate (browser-level)', () => {
     await expect(page.getByTestId('chat-form')).toBeVisible();
   });
 
+  test('saves without Tavily, shows the red impact note, and opens the panel', async ({
+    page,
+  }) => {
+    const user = makeTestUser('e2e_llmcfg_notavily');
+    await registerViaUi(page, user);
+    await expect(
+      page.getByRole('dialog', { name: GATE_TITLE }),
+    ).toBeVisible();
+
+    const impact = page
+      .locator('p.text-destructive')
+      .filter({ hasText: /will not plan web searches/i });
+    await expect(impact).toBeVisible();
+
+    await page.locator('#llm-base-url').fill('https://llm.example.test/v1');
+    await page.locator('#llm-model').fill('e2e-main-model');
+    await page.locator('#llm-api-key').fill('sk-e2e-main-abcd');
+    await page
+      .locator('#embedding-base-url')
+      .fill('https://embed.example.test/v1');
+    await page.locator('#embedding-model').fill('e2e-embed-model');
+    await page.locator('#embedding-api-key').fill('sk-e2e-embed-ef12');
+
+    await page.getByTestId('llm-config-save').click();
+
+    await expect(page.getByTestId('chat-form')).toBeVisible();
+  });
+
   test('the gear reopens with non-key fields prefilled and keys masked', async ({
     page,
   }) => {

@@ -190,7 +190,7 @@ export interface paths {
         get: operations["get-llm-config"];
         /**
          * Save LLM configuration
-         * @description Validates and upserts the authenticated caller's LLM, embedding, Tavily, and optional retry-model configuration. API keys are write-only: a blank key on update keeps the stored key, while a create requires every required key. Responds with the masked configuration.
+         * @description Validates and upserts the authenticated caller's LLM, embedding, optional Tavily, and optional retry-model configuration. API keys are write-only: a blank key on update keeps the stored key; on create a key is required unless the endpoint is loopback. Omitting Tavily disables web search for the agent. Responds with the masked configuration.
          */
         put: operations["update-llm-config"];
         post?: never;
@@ -269,7 +269,8 @@ export interface components {
             /** @description Optional retry-model group. Supply all three fields or omit the section entirely. */
             fallback?: components["schemas"]["LlmEndpointInput"];
             llm: components["schemas"]["LlmEndpointInput"];
-            tavily: components["schemas"]["TavilyInput"];
+            /** @description Optional search provider group. When omitted the agent does not plan web searches. */
+            tavily?: components["schemas"]["TavilyInput"];
         };
         ErrorResponse: {
             /** Format: int64 */
@@ -376,10 +377,10 @@ export interface components {
             username: string;
         };
         TavilyInput: {
-            /** @description Write-only API key. Required on create; leave empty on update to keep the stored key. */
+            /** @description Write-only API key. Optional: an empty key uses the provider's keyless tier; on update, empty keeps the stored key. */
             api_key?: string;
-            /** @description Search provider base URL. */
-            base_url: string;
+            /** @description Search provider base URL. Omit the whole section to run without web search. */
+            base_url?: string;
         };
         TavilyResponse: {
             /** @description Masked preview of the stored key: the last four characters only. The plaintext key is write-only and never returned. */

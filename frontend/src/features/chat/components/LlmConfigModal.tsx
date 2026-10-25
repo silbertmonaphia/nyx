@@ -125,10 +125,18 @@ function buildLlmConfigSchema(requireKeys: boolean) {
       .superRefine(keyRequired),
     tavily: z
       .object({
-        base_url: requiredBaseUrl,
+        base_url: optionalBaseUrl,
         api_key: z.string(),
       })
-      .superRefine(keyRequired),
+      .superRefine((value, ctx) => {
+        if (value.api_key.trim() !== "" && value.base_url.trim() === "") {
+          ctx.addIssue({
+            code: "custom",
+            path: ["base_url"],
+            message: required(),
+          });
+        }
+      }),
     fallback: z
       .object({
         base_url: optionalBaseUrl,
@@ -487,6 +495,9 @@ export const LlmConfigModal = ({
             <div className="text-sm font-semibold">
               {t("llmConfig.sections.tavily.title")}
             </div>
+            <p className="text-xs font-medium text-destructive">
+              {t("llmConfig.sections.tavily.impact")}
+            </p>
             <Guidance
               lines={[
                 t("llmConfig.sections.tavily.drives"),

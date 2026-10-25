@@ -102,7 +102,7 @@ describe('LlmConfigModal', () => {
     await vi.waitFor(() => {
       expect(save.mutateAsync).not.toHaveBeenCalled();
     });
-    expect(screen.getAllByText('Required').length).toBeGreaterThanOrEqual(8);
+    expect(screen.getAllByText('Required').length).toBeGreaterThanOrEqual(6);
     expect(useUiStore.getState().toasts).toHaveLength(0);
   });
 
@@ -125,6 +125,46 @@ describe('LlmConfigModal', () => {
       llm: { base_url: 'http://localhost:8000/v1', api_key: '' },
       embedding: { base_url: 'http://127.0.0.1:8001/v1', api_key: '' },
       tavily: { base_url: 'http://localhost:8899/search', api_key: '' },
+    });
+  });
+
+  it('saves without a Tavily section and shows the red impact note', async () => {
+    const { save } = mockHook({ status: unconfigured });
+    renderModal();
+
+    await userEvent.type(input('llm-base-url'), 'https://api.deepseek.com/v1');
+    await userEvent.type(input('llm-model'), 'deepseek-chat');
+    await userEvent.type(input('llm-api-key'), 'sk-llm');
+    await userEvent.type(input('embedding-base-url'), 'https://api.deepseek.com/v1');
+    await userEvent.type(input('embedding-model'), 'embed-model');
+    await userEvent.type(input('embedding-api-key'), 'sk-emb');
+
+    expect(
+      screen.getAllByText(/will not plan web searches/).length,
+    ).toBeGreaterThan(0);
+
+    await userEvent.click(screen.getByTestId('llm-config-save'));
+
+    await vi.waitFor(() => {
+      expect(save.mutateAsync).toHaveBeenCalledTimes(1);
+    });
+    expect(save.mutateAsync.mock.calls[0][0]).toMatchObject({
+      tavily: { base_url: '', api_key: '' },
+    });
+  });
+
+  it('rejects a Tavily key without a base URL', async () => {
+    const { save } = mockHook({ status: unconfigured });
+    renderModal();
+
+    await fillRequiredFields();
+    await userEvent.type(input('tavily-api-key'), 'tvly-key');
+    await userEvent.clear(input('tavily-base-url'));
+
+    await userEvent.click(screen.getByTestId('llm-config-save'));
+
+    await vi.waitFor(() => {
+      expect(save.mutateAsync).not.toHaveBeenCalled();
     });
   });
 
@@ -255,7 +295,10 @@ describe('LlmConfigModal', () => {
         name: 'vLLM OpenAI-compatible server documentation',
       }),
     ).toBeInTheDocument();
-    expect(screen.getByText('Tavily search')).toBeInTheDocument();
+    expect(screen.getByText('Tavily search (optional)')).toBeInTheDocument();
+    expect(
+      screen.getAllByText(/will not plan web searches/).length,
+    ).toBeGreaterThan(0);
     expect(screen.getByText(/web_search/)).toBeInTheDocument();
     expect(screen.getByText(/app\.tavily\.com/)).toBeInTheDocument();
     expect(
@@ -263,7 +306,7 @@ describe('LlmConfigModal', () => {
     ).toBeInTheDocument();
     expect(screen.getByText(/shaped for the deployment's search provider/)).toBeInTheDocument();
     expect(
-      screen.getByText(/All eight required fields/),
+      screen.getByText(/six required fields/),
     ).toBeInTheDocument();
     expect(screen.getByText(/single-turn chat fallback path/)).toBeInTheDocument();
   });
