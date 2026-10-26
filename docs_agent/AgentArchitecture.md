@@ -40,8 +40,9 @@ references are intentionally frozen at that snapshot.
   at the SPA edge and forwards the verified id in `X-Nyx-User-Id`. The bearer token
   is a passthrough that Go's `/mcp` and `/internal/rag/retrieve` re-verify
   themselves.
-- Both runtimes refuse to start when the agent path is enabled without a ≥ 32-byte
-  token. The compose bridge / k8s NetworkPolicy, the unpublished 9000 port
+- The Python service refuses to start without a ≥ 32-byte token; the Go API stays
+  up but answers every agent-backed route 503 when the agent path is enabled
+  without one. The compose bridge / k8s NetworkPolicy, the unpublished 9000 port
   (only 9001 metrics), and the per-IP rate limit on `/agent/run` (`ratelimit.py`)
   remain defense-in-depth; every metadata/chat/GDPR SQL read is scoped by
   `user_id`, and the mutating-tool approval gate fails closed.

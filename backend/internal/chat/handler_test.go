@@ -19,6 +19,7 @@ import (
 	"go.opentelemetry.io/otel/trace/noop"
 
 	"nyx/internal/llm"
+	"nyx/internal/llmsettings"
 	"nyx/internal/middleware"
 	"nyx/internal/platform/api"
 	"nyx/internal/platform/auth"
@@ -154,6 +155,12 @@ func readSSEFrames(t *testing.T, body io.Reader) []sseFrame {
 func newTestServiceForHandler(p llm.Provider) *Service {
 	s := newTestService(p, "")
 	s.tracer = noop.NewTracerProvider().Tracer("test")
+	return s
+}
+
+func newMisconfiguredServiceForHandler(p llm.Provider) *Service {
+	s := newTestServiceForHandler(p)
+	s.agentMisconfigured = true
 	return s
 }
 
@@ -668,4 +675,52 @@ func TestRateLimit_RetryAfterHeader(t *testing.T) {
 
 	assert.Equal(t, http.StatusTooManyRequests, resp2.StatusCode)
 	assert.Equal(t, "60", resp2.Header.Get("Retry-After"))
+}
+
+func TestChat_MisconfiguredAgentReturns503(t *testing.T) {
+	svc := newMisconfiguredServiceForHandler(&chatStubProvider{})
+	router, tokens := buildRouter(t, svc, nil)
+	server := httptest.NewServer(router)
+	t.Cleanup(server.Close)
+
+	req, err := http.NewRequest(http.MethodPost, server.URL+"/api/chat",
+		bytes.NewReader(chatRequest(Message{Role: RoleUser, Content: "hi"})))
+	require.NoError(t, err)
+	req.Header.Set("Authorization", "Bearer "+bearerToken(t, tokens))
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := server.Client().Do(req)
+	require.NoError(t, err)
+	defer func() { _ = resp.Body.Close() }()
+
+	assert.Equal(t, http.StatusServiceUnavailable, resp.StatusCode)
+	assert.NotEqual(t, "text/event-stream", resp.Header.Get("Content-Type"),
+		"a misconfigured agent must not open the SSE envelope")
+	var env api.ErrorResponse
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&env))
+	assert.Equal(t, agentMisconfiguredMessage, env.Message)
+	assert.Equal(t, agentMisconfiguredDetail, env.Details)
+}
+
+func TestChat_MisconfiguredAgentReturns503BeforeLLMResolution(t *testing.T) {
+	svc := newMisconfiguredServiceForHandler(&chatStubProvider{})
+	resolver := &stubLLMResolver{err: llmsettings.ErrNotFound}
+	svc.SetResolver(resolver)
+	router, tokens := buildRouter(t, svc, nil)
+	server := httptest.NewServer(router)
+	t.Cleanup(server.Close)
+
+	req, err := http.NewRequest(http.MethodPost, server.URL+"/api/chat",
+		bytes.NewReader(chatRequest(Message{Role: RoleUser, Content: "hi"})))
+	require.NoError(t, err)
+	req.Header.Set("Authorization", "Bearer "+bearerToken(t, tokens))
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := server.Client().Do(req)
+	require.NoError(t, err)
+	defer func() { _ = resp.Body.Close() }()
+
+	assert.Equal(t, http.StatusServiceUnavailable, resp.StatusCode)
+	assert.Zero(t, resolver.callCount(),
+		"agent misconfiguration is decided before per-user LLM resolution")
 }

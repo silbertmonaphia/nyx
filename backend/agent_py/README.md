@@ -164,8 +164,9 @@ Every knob, default, and rationale → [`README_ALL.md`](README_ALL.md).
 
 The service does **not** verify JWTs. Every route except the exact `/healthz` probe requires
 `X-Nyx-Service-Token` matching the shared `AGENT_SERVICE_TOKEN` (at least 32 bytes, the same
-value on the Go backend and the agent; both refuse to start when the agent path is enabled
-without it). Go's chat handler verifies the user JWT and forwards the verified user id in
+value on the Go backend and the agent; the Python service refuses to start without it, while
+the Go API keeps running and answers its agent-backed routes 503). Go's chat handler verifies
+the user JWT and forwards the verified user id in
 `X-Nyx-User-Id`; the bearer token is a passthrough that Go re-verifies at `/mcp` and the RAG
 bridge. The compose `internal` network, the unpublished 9000 port, and the in-process per-IP
 rate limit on `/agent/run` (`PYTHON_AGENT_REQUESTS_PER_SECOND` 100 / `BURST` 200) remain

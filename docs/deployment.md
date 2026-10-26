@@ -250,8 +250,9 @@ In the browser: open the SPA, register, and watch the Network tab — the
   path needs only the LLM provider. Enabling the agent
   (`AGENT_ENABLED=true`) additionally requires `PYTHON_AGENT_URL` and the
   shared `AGENT_SERVICE_TOKEN` (the same ≥ 32-byte value on the agent
-  service); if either is missing the API refuses to start entirely, so
-  feeds and auth go down with chat.
+  service). If either is missing the API still starts and serves
+  auth/feeds, but `/api/chat`, sessions, and approvals return 503 until
+  the agent configuration is complete.
 - **The host name moves.** `https://<api>.onrender.com` is stable as
   long as the service name is, but a custom domain is nicer for
   `VITE_API_URL` and the CORS allowlist. Changing the service name

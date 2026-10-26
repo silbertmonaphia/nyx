@@ -100,7 +100,7 @@ English version: [SECURITY.md](SECURITY.md)
 
 Python agent 运行时（聊天记录、派生偏好、运行元数据、langGraph checkpoint 状态、审计轨迹）对主体数据的处理集中在 `docs/agent-deployment.md` 的 "GDPR 数据处理：导出与删除" 一节 —— 包括数据清单（每张表存储内容、保留窗口、删除覆盖）、`GET /agent/me/export` + `DELETE /agent/me` 的运维手册，以及 kill switch。此处重申安全相关的不变式：
 
-- **信任边界。** agent 的入站请求由共享的 `AGENT_SERVICE_TOKEN` 认证：纯 ASGI 中间件对除精确路径 `/healthz` 外的所有路由要求 `X-Nyx-Service-Token`，按字节做常量时间比较（非 ASCII 值干净地返回 401），并在任何 handler 之前拒绝；token 值不写日志。Go 层校验 JWT 并注入数值型 `X-Nyx-User-Id`。缺失/非整数头返回 400（绝不隐式使用 user 0），任何接口不接受跨用户参数，且无管理员越权。agent 路径开启时，两侧在缺少 ≥ 32 字节 token 时都拒绝启动。
+- **信任边界。** agent 的入站请求由共享的 `AGENT_SERVICE_TOKEN` 认证：纯 ASGI 中间件对除精确路径 `/healthz` 外的所有路由要求 `X-Nyx-Service-Token`，按字节做常量时间比较（非 ASCII 值干净地返回 401），并在任何 handler 之前拒绝；token 值不写日志。Go 层校验 JWT 并注入数值型 `X-Nyx-User-Id`。缺失/非整数头返回 400（绝不隐式使用 user 0），任何接口不接受跨用户参数，且无管理员越权。agent 路径开启时，Python 服务在缺少 ≥ 32 字节 token 时拒绝启动；Go API 保持运行，但所有 agent 路由 fail-closed（503）。
 - **删除是物理的。** `DELETE /agent/me` 在 chat sessions/messages、preferences、run metadata、langGraph checkpoint threads 上物理删除行（无墓碑），并追加一行审计记录。
 - **审计行仅承载计数，绝不承载内容。** `agent.data_audit_log.payload_summary` 按结构为 `dict[str, int]` —— 删除路径不得为刚删除的数据制造影子副本。
 - **备份恢复规则。** 恢复仅限 DR 场景；已记录的删除（在 `agent.data_audit_log` 中 `action = 'erase'` 可查）必须在恢复副本重新对外服务之前重新应用。

@@ -11,7 +11,7 @@ Two Go request builders cover every agent hop: `AgentProxy.Run` (`/agent/run`, S
 **Goals:**
 - A public agent rejects every caller except the Go backend, with no insecure local default.
 - One credential shared by both runtimes, simple enough to operate and rotate on Render.
-- Fail closed at startup on both sides when the credential is missing or weak.
+- Fail closed where each side needs the credential: Python refuses to boot without it; Go keeps the API up but fails every agent route closed.
 - Keep the existing user-JWT passthrough unchanged and unlogged.
 - Dev, eval, side-stack, and e2e harnesses keep working without a committed secret.
 
@@ -38,7 +38,7 @@ A `ServiceTokenMiddleware` wraps the whole app in `create_app`, added after the 
 
 ### Fail-closed on both sides
 
-Go's `config.Load` rejects an empty or short token when `AGENT_ENABLED=true`, and `cmd/api/main.go` repeats the check before wiring the proxy, matching the existing empty-`PYTHON_AGENT_URL` behavior. The key must be added to the explicit `bindEnvVars()` allowlist — `viper.AutomaticEnv()` alone ignores keys viper has not registered. Python rejects a missing or short token unconditionally. `auth.MinSecretBytes` (32) is reused for the Go minimum so the rule matches `JWT_SECRET`.
+Python rejects a missing or short token unconditionally — a public service must never run unauthenticated. Go does not take the whole API down for an agent-only misconfiguration: `cmd/api/main.go` validates the token before wiring the proxy and, when the token is missing/short (or `PYTHON_AGENT_URL` is unset), builds a Service that answers every agent-backed route 503 with a static detail while auth/feeds/MCP keep running. It never falls back to the single-turn path, because that would hide the misconfiguration. The key must be added to the explicit `bindEnvVars()` allowlist — `viper.AutomaticEnv()` alone ignores keys viper has not registered. `auth.MinSecretBytes` (32) is reused for the Go minimum so the rule matches `JWT_SECRET`.
 
 ### Token threading through the two Go builders
 

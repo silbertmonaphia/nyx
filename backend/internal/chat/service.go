@@ -71,8 +71,9 @@ type Service struct {
 	rag             *rag.Service
 	tracer          trace.Tracer
 
-	proxy    *AgentProxy
-	resolver LLMResolver
+	proxy              *AgentProxy
+	agentMisconfigured bool
+	resolver           LLMResolver
 }
 
 // NewService builds a Service from config. cfg supplies the per-
@@ -129,6 +130,16 @@ func NewServiceWithProxy(p llm.Provider, cfg *config.Config, tracer trace.Tracer
 	s := NewService(p, cfg, nil, tracer)
 	s.proxy = proxy
 	return s
+}
+
+func NewServiceWithMisconfiguredAgent(p llm.Provider, cfg *config.Config, tracer trace.Tracer) *Service {
+	s := NewService(p, cfg, nil, tracer)
+	s.agentMisconfigured = true
+	return s
+}
+
+func (s *Service) AgentMisconfigured() bool {
+	return s.agentMisconfigured
 }
 
 // IsAgentEnabled reports whether this Service is configured to

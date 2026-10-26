@@ -510,8 +510,8 @@ func mountChatRoute(router chi.Router, cfg *config.Config, db *pgxpool.Pool, fee
 	// is constructed only when all three keys are set: AGENT_ENABLED
 	// gates the handler dispatch, PYTHON_AGENT_URL supplies the
 	// upstream base URL, and AGENT_SERVICE_TOKEN authenticates the
-	// hop. With AGENT_ENABLED=false the chat service is built
-	// without a proxy and the legacy single-turn path runs unchanged.
+	// hop. A missing URL or token leaves the rest of the API up but
+	// answers every agent route 503 (never a silent single-turn fallback).
 	//
 	// Default http.Client transport — production can wrap this with
 	// otelhttp.NewTransport to add OTel spans on the outbound dial.
@@ -524,20 +524,23 @@ func mountChatRoute(router chi.Router, cfg *config.Config, db *pgxpool.Pool, fee
 	// disconnect.
 	var chatService *chat.Service
 	if cfg.AgentEnabled {
-		if cfg.PythonAgentURL == "" {
-			log.Fatal().Msg("AGENT_ENABLED=true but PYTHON_AGENT_URL is empty — refusing to start (fail closed)")
+		switch {
+		case cfg.PythonAgentURL == "":
+			log.Error().Msg("AGENT_ENABLED=true but PYTHON_AGENT_URL is empty — agent routes will return 503; the rest of the API keeps running")
+			chatService = chat.NewServiceWithMisconfiguredAgent(llmClient, cfg, tracerProvider.Tracer("nyx.chat"))
+		case len(cfg.AgentServiceToken) < auth.MinSecretBytes:
+			log.Error().Msg("AGENT_ENABLED=true but AGENT_SERVICE_TOKEN is missing or shorter than 32 bytes — agent routes will return 503; the rest of the API keeps running")
+			chatService = chat.NewServiceWithMisconfiguredAgent(llmClient, cfg, tracerProvider.Tracer("nyx.chat"))
+		default:
+			proxy, perr := chat.NewAgentProxy(cfg.PythonAgentURL, cfg.AgentServiceToken, nil)
+			if perr != nil {
+				log.Fatal().Err(perr).Msg("failed to construct AgentProxy")
+			}
+			chatService = chat.NewServiceWithProxy(llmClient, cfg, tracerProvider.Tracer("nyx.chat"), proxy)
+			log.Info().
+				Str("python_agent_url", cfg.PythonAgentURL).
+				Msg("Agent path enabled (Go handler is SSE proxy to Python LangGraph)")
 		}
-		if cfg.AgentServiceToken == "" {
-			log.Fatal().Msg("AGENT_ENABLED=true but AGENT_SERVICE_TOKEN is empty — refusing to start (fail closed)")
-		}
-		proxy, perr := chat.NewAgentProxy(cfg.PythonAgentURL, cfg.AgentServiceToken, nil)
-		if perr != nil {
-			log.Fatal().Err(perr).Msg("failed to construct AgentProxy")
-		}
-		chatService = chat.NewServiceWithProxy(llmClient, cfg, tracerProvider.Tracer("nyx.chat"), proxy)
-		log.Info().
-			Str("python_agent_url", cfg.PythonAgentURL).
-			Msg("Agent path enabled (Go handler is SSE proxy to Python LangGraph)")
 	} else {
 		chatService = chat.NewService(llmClient, cfg, ragSvc, tracerProvider.Tracer("nyx.chat"))
 	}

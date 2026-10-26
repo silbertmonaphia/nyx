@@ -209,6 +209,7 @@ jobs:
       working-directory: backend/agent_py
       env:
         AGENT_SERVICE_TOKEN: test-agent-service-token-0123456789abcdef
+        PYTHON_AGENT_LLM_BASE_URL: http://vllm:8000/v1
       run: .venv/bin/python -m pytest tests/test_service_auth.py tests/test_config.py -q
     - name: Eval unit gate
       if: steps.filter.outputs.agent == 'true'

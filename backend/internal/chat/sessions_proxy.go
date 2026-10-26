@@ -298,7 +298,11 @@ func (h *Handler) proxySession(w http.ResponseWriter, r *http.Request, method, p
 		return
 	}
 	if h.sessions == nil || h.service == nil || !h.service.IsAgentEnabled() {
-		api.WriteError(w, r, http.StatusServiceUnavailable, sessionsDisabledMessage, sessionsDisabledDetail)
+		detail := sessionsDisabledDetail
+		if h.service != nil && h.service.AgentMisconfigured() {
+			detail = agentMisconfiguredDetail
+		}
+		api.WriteError(w, r, http.StatusServiceUnavailable, sessionsDisabledMessage, detail)
 		return
 	}
 

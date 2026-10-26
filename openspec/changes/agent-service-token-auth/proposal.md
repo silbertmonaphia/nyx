@@ -8,7 +8,7 @@ The Python agent is now reachable from the public internet as a Render web servi
 
 - Add a shared secret `AGENT_SERVICE_TOKEN` (at least 32 bytes) to both runtimes. The Go backend stamps `X-Nyx-Service-Token` on every agent hop: `/agent/run`, all `/agent/sessions*` routes, and `/agent/approvals`.
 - Add a Python middleware that rejects any request without the correct token (constant-time comparison, HTTP 401 `{"detail":"unauthorized"}`), except the exact `/healthz` probe path.
-- Fail closed at startup: Go refuses to boot when `AGENT_ENABLED=true` without a valid token; Python always refuses to boot without one. **BREAKING** for existing deployments and local `.env` files — the same token must be set on both services before rollout.
+- Fail closed by feature: Python always refuses to boot without a token. Go keeps the API up but answers every agent-backed route 503 when `AGENT_ENABLED=true` without a valid token (or URL), rather than taking auth/feeds down with the agent. **BREAKING** for the agent feature — the same token must be set on both services before rollout.
 - Gate `/metrics` on the FastAPI port. The separate 9001 Prometheus exporter is outside FastAPI and stays unchanged.
 - Local dev, eval, and e2e tooling resolve one persisted token so `make dev`, the side stack, and eval runs agree without a committed default secret.
 - Update the affected specs, operator docs, security notes, and deployment runbook.
@@ -27,6 +27,6 @@ None.
 ## Impact
 
 - Code: Go `backend/internal/platform/config/config.go`, `backend/internal/chat/{agent_proxy,sessions_proxy,approvals_proxy,handler}.go`, `backend/cmd/api/main.go`; Python `backend/agent_py/agent/{config,main,service_auth}.py` plus route trust docstrings; tests in both runtimes; `scripts/{dev.sh,e2e-side-stack.sh}`, `scripts/lib/agent-token.sh`, `scripts/e2e/agent-service-auth.sh`, `evals/providers/agent_run.py`, `Makefile`, and the CI agent job.
-- Config: new `AGENT_SERVICE_TOKEN` (required when the agent path is enabled, same value on both services). No change when `AGENT_ENABLED=false`.
+- Config: new `AGENT_SERVICE_TOKEN` (same value on both services). On Go it is required to serve agent routes; without it the API stays up but agent routes return 503. On Python it is required to boot. No change when `AGENT_ENABLED=false`.
 - Docs: agent README/README.zh/README_ALL trust models and env tables, deployment docs, `SECURITY.md`/`SECURITY.zh.md`, root READMEs, `docs_agent/AgentArchitecture.md`, `CLAUDE.md`.
 - Rollout gates tracked in `openspec/changes/agent-service-token-auth-rollout/`.

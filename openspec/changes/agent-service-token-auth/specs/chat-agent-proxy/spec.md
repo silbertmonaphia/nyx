@@ -2,19 +2,24 @@
 
 ## ADDED Requirements
 
-### Requirement: Backend refuses to start with the agent path enabled and no service token
+### Requirement: Backend degrades agent routes when the agent path is misconfigured
 
-When `AGENT_ENABLED=true`, the Go API SHALL require `AGENT_SERVICE_TOKEN` to be at least 32 bytes and SHALL refuse to start when it is missing or shorter. The key SHALL be bound explicitly from the environment (the process's env-key allowlist), not inferred. When `AGENT_ENABLED=false`, an absent token SHALL NOT prevent startup. The token value MUST NOT be logged or returned.
+When `AGENT_ENABLED=true` but `PYTHON_AGENT_URL` is unset or `AGENT_SERVICE_TOKEN` is missing or shorter than 32 bytes, the Go API SHALL start and keep non-agent features (auth, feeds, MCP) available. The agent-backed routes (`POST /api/chat`, `/api/chat/sessions*`, `/api/chat/approvals`) SHALL respond HTTP 503 with the standard error envelope whose `details` is a static safe string naming the misconfiguration. The handler MUST NOT silently fall back to the single-turn chat path. When `AGENT_ENABLED=false`, the single-turn path runs and no token is required. The key SHALL be bound explicitly from the environment (the process's env-key allowlist), not inferred. The token value MUST NOT be logged or returned.
 
-#### Scenario: Missing token refuses startup
+#### Scenario: Missing token leaves non-agent features up
 
-- **WHEN** the service starts with `AGENT_ENABLED=true` and no `AGENT_SERVICE_TOKEN`
-- **THEN** startup fails with an error naming `AGENT_SERVICE_TOKEN` and no HTTP listener is bound
+- **WHEN** the service starts with `AGENT_ENABLED=true`, a valid `PYTHON_AGENT_URL`, and no `AGENT_SERVICE_TOKEN`
+- **THEN** the API binds and serves auth/feeds normally, and every agent-backed route returns 503 with a static misconfiguration detail
 
-#### Scenario: Short token refuses startup
+#### Scenario: Short token leaves non-agent features up
 
 - **WHEN** `AGENT_ENABLED=true` and `AGENT_SERVICE_TOKEN` is shorter than 32 bytes
-- **THEN** startup fails with an error naming `AGENT_SERVICE_TOKEN`
+- **THEN** the API binds and every agent-backed route returns 503 (no silent single-turn fallback)
+
+#### Scenario: Missing URL leaves non-agent features up
+
+- **WHEN** `AGENT_ENABLED=true` and `PYTHON_AGENT_URL` is unset
+- **THEN** the API binds and every agent-backed route returns 503 (no silent single-turn fallback)
 
 #### Scenario: Agent disabled needs no token
 

@@ -33,6 +33,11 @@ type Handler struct {
 	sessions *SessionsProxy
 }
 
+const (
+	agentMisconfiguredMessage = "Agent service unavailable"
+	agentMisconfiguredDetail  = "The agent service is misconfigured"
+)
+
 // NewHandler wraps a Service for HTTP. The service is what does the
 // actual work; the handler's only job is to translate the wire
 // format (JSON in, SSE out).
@@ -166,6 +171,10 @@ func (h *Handler) stream(w http.ResponseWriter, r *http.Request) {
 	}
 
 	userID := reqctx.UserIDFromContext(r.Context())
+	if h.service.AgentMisconfigured() {
+		api.WriteError(w, r, http.StatusServiceUnavailable, agentMisconfiguredMessage, agentMisconfiguredDetail)
+		return
+	}
 	stack, err := h.service.ResolveUserLLM(r.Context(), userID)
 	if err != nil {
 		if errors.Is(err, llmsettings.ErrNotFound) {

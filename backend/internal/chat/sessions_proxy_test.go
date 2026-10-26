@@ -574,3 +574,25 @@ func (r roundTripRecorder) RoundTrip(req *http.Request) (*http.Response, error) 
 	r.seen.Add(1)
 	return http.DefaultTransport.RoundTrip(req)
 }
+
+func TestSessionsRoutes_AgentMisconfigured_Returns503(t *testing.T) {
+	svc := newMisconfiguredServiceForHandler(&llmProviderUnused{})
+	router, tokens := buildRouter(t, svc, nil)
+	server := httptest.NewServer(router)
+	t.Cleanup(server.Close)
+
+	req, err := http.NewRequest(http.MethodGet, server.URL+"/api/chat/sessions", nil)
+	require.NoError(t, err)
+	req.Header.Set("Authorization", "Bearer "+bearerToken(t, tokens))
+
+	resp, err := server.Client().Do(req)
+	require.NoError(t, err)
+	defer func() { _ = resp.Body.Close() }()
+
+	assert.Equal(t, http.StatusServiceUnavailable, resp.StatusCode)
+	var env api.ErrorResponse
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&env))
+	assert.Equal(t, sessionsDisabledMessage, env.Message)
+	assert.Equal(t, agentMisconfiguredDetail, env.Details,
+		"details names the misconfiguration instead of claiming the agent is disabled")
+}

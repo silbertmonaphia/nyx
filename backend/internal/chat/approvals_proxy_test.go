@@ -453,3 +453,26 @@ func TestApprovals_LegacyHandlerHasNoForwarder(t *testing.T) {
 	assert.Nil(t, h.sessions,
 		"a legacy service must leave the approvals forwarder nil — the fail-closed gate")
 }
+
+func TestApprovals_AgentMisconfigured_FailsClosed(t *testing.T) {
+	svc := newMisconfiguredServiceForHandler(&llmProviderUnused{})
+	tokens, err := auth.NewTokenService([]byte(auth.TestSecret), 15*time.Minute)
+	require.NoError(t, err)
+
+	r := chi.NewRouter()
+	r.Use(middleware.RequestID)
+	r.Use(middleware.StoreRequest)
+	h := NewHandler(svc)
+	RegisterChatRoute(r, h, tokens, nil)
+	RegisterApprovalsRoute(r, h, tokens, nil)
+	server := httptest.NewServer(r)
+	t.Cleanup(server.Close)
+
+	status, _, raw := postApproval(t, server, "Bearer "+bearerToken(t, tokens), approvalApproveBodyFixture)
+
+	assert.Equal(t, http.StatusServiceUnavailable, status)
+	var env api.ErrorResponse
+	require.NoError(t, json.Unmarshal(raw, &env))
+	assert.Equal(t, approvalsDisabledMessage, env.Message)
+	assert.Equal(t, agentMisconfiguredDetail, env.Details)
+}

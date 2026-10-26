@@ -22,7 +22,7 @@ Set on the `agent` service in `docker-compose.yml`. `AGENT_ENABLED` and `PYTHON_
 | Var | Required? | Default | Notes |
 | --- | --- | --- | --- |
 | `AGENT_ENABLED` | yes | `false` | Flip to `true` to route `/api/chat` through the Python service. |
-| `AGENT_SERVICE_TOKEN` | yes (when `AGENT_ENABLED=true`) | unset | Shared credential (at least 32 bytes) stamped as `X-Nyx-Service-Token` on every Go → Python hop. MUST be the same value on both services. Generate with `openssl rand -hex 32`; both sides refuse startup when it is missing or short. |
+| `AGENT_SERVICE_TOKEN` | yes (when `AGENT_ENABLED=true`) | unset | Shared credential (at least 32 bytes) stamped as `X-Nyx-Service-Token` on every Go → Python hop. MUST be the same value on both services. Generate with `openssl rand -hex 32`. The Python service refuses to start when it is missing or short; the Go API stays up but every agent-backed route returns 503. |
 | `PYTHON_AGENT_DATABASE_URL` | yes (when `AGENT_ENABLED=true`) | unset | Must include `options=-c search_path=langgraph,agent`. The service refuses to start otherwise. |
 | `PYTHON_AGENT_MIGRATIONS_DISABLED` | no | `false` | Set `true` in compose; `false` in dev. |
 | `PYTHON_AGENT_RETENTION_ENABLED` | no | `true` | Hard-delete completed/failed metadata after the retention window. |

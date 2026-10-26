@@ -111,7 +111,7 @@ Langfuse 追踪可以直接从默认日志诊断：`PYTHON_AGENT_LANGFUSE_ENABLE
 
 ## 信任模型
 
-本服务**不**校验 JWT。除精确路径 `/healthz` 外，所有路由都要求 `X-Nyx-Service-Token` 与共享的 `AGENT_SERVICE_TOKEN` 一致（至少 32 字节，Go 后端与 agent 必须配置同一个值；agent 路径开启时缺省或过短会拒绝启动）。Go 的 chat handler 在 SPA 边缘校验用户 JWT，并通过 `X-Nyx-User-Id` 头转发已验证的用户 id；bearer token 只是透传，由 Go 在 `/mcp` 与 RAG 桥上重新校验。compose `internal` 网络、未发布的 9000 端口、以及 `/agent/run` 上的进程内按 IP 限流（`PYTHON_AGENT_REQUESTS_PER_SECOND` 100 / `BURST` 200）仍作为防线纵深。完整论述 → [`README_ALL.md` § Trust model](README_ALL.md#trust-model)。
+本服务**不**校验 JWT。除精确路径 `/healthz` 外，所有路由都要求 `X-Nyx-Service-Token` 与共享的 `AGENT_SERVICE_TOKEN` 一致（至少 32 字节，Go 后端与 agent 必须配置同一个值；Python 服务缺省或过短会拒绝启动，Go API 保持运行但 agent 路由返回 503）。Go 的 chat handler 在 SPA 边缘校验用户 JWT，并通过 `X-Nyx-User-Id` 头转发已验证的用户 id；bearer token 只是透传，由 Go 在 `/mcp` 与 RAG 桥上重新校验。compose `internal` 网络、未发布的 9000 端口、以及 `/agent/run` 上的进程内按 IP 限流（`PYTHON_AGENT_REQUESTS_PER_SECOND` 100 / `BURST` 200）仍作为防线纵深。完整论述 → [`README_ALL.md` § Trust model](README_ALL.md#trust-model)。
 
 ## 延伸阅读
 

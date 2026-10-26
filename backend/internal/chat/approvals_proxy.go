@@ -143,7 +143,11 @@ func (h *Handler) approvals(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if h.sessions == nil || h.service == nil || !h.service.IsAgentEnabled() {
-		api.WriteError(w, r, http.StatusServiceUnavailable, approvalsDisabledMessage, approvalsDisabledDetail)
+		detail := approvalsDisabledDetail
+		if h.service != nil && h.service.AgentMisconfigured() {
+			detail = agentMisconfiguredDetail
+		}
+		api.WriteError(w, r, http.StatusServiceUnavailable, approvalsDisabledMessage, detail)
 		return
 	}
 

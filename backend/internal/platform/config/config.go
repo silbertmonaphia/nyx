@@ -202,9 +202,9 @@ type Config struct {
 	// executor, budget guard, and tool dispatch live in the Python
 	// service under backend/agent_py/. AGENT_ENABLED is the master
 	// switch; PYTHON_AGENT_URL points at the orchestrator's
-	// /agent/run endpoint (default empty → operator has not
-	// configured the agent path → cmd/api/main.go keeps the
-	// single-turn chat handler wired). Plan / react / budget caps
+	// /agent/run endpoint (default empty while AGENT_ENABLED=true →
+	// agent routes answer 503 at runtime; AGENT_ENABLED=false keeps
+	// the single-turn chat handler wired). Plan / react / budget caps
 	// and the planner-model override were dropped from this Config
 	// when the Go agent package was deleted — those keys now live
 	// in the Python service's pydantic-settings (see
@@ -282,27 +282,13 @@ func Load() (*Config, error) {
 		}
 	}
 
-	if err := validateOptionalFeatures(&cfg); err != nil {
-		return nil, err
+	if cfg.MCPEnabled {
+		if err := validateMCPConfig(&cfg); err != nil {
+			return nil, err
+		}
 	}
 
 	return &cfg, nil
-}
-
-func validateOptionalFeatures(cfg *Config) error {
-	if cfg.MCPEnabled {
-		if err := validateMCPConfig(cfg); err != nil {
-			return err
-		}
-	}
-	return validateAgentConfig(cfg)
-}
-
-func validateAgentConfig(cfg *Config) error {
-	if cfg.AgentEnabled && len(cfg.AgentServiceToken) < auth.MinSecretBytes {
-		return fmt.Errorf("AGENT_SERVICE_TOKEN must be at least %d bytes when AGENT_ENABLED=true", auth.MinSecretBytes)
-	}
-	return nil
 }
 
 // setDefaults installs the viper defaults. Extracted so Load stays

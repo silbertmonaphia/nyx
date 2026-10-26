@@ -392,7 +392,8 @@ Go service that hosts the RAG bridge + MCP shim).
 
 The Python service does **not** verify JWTs. Inbound requests are authenticated with the
 shared `AGENT_SERVICE_TOKEN` (at least 32 bytes, the same value on the Go backend and the
-agent; both refuse to start when the agent path is enabled without it):
+agent; the Python service refuses to start without it, while the Go API keeps running and
+answers its agent-backed routes 503):
 
 - **Service-token gate**: a pure-ASGI middleware requires `X-Nyx-Service-Token` on every
   route except the exact `/healthz` probe path. Missing or mismatched values get HTTP 401

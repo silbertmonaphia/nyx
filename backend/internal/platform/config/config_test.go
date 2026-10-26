@@ -946,33 +946,29 @@ func TestLoad_AgentEnabledTrueHonoured(t *testing.T) {
 	}
 }
 
-func TestLoad_AgentServiceTokenRequiredWhenAgentEnabled(t *testing.T) {
+func TestLoad_AgentServiceTokenOptionalWhenAgentEnabled(t *testing.T) {
 	t.Setenv("DB_URL", "postgres://x")
 	t.Setenv("JWT_SECRET", auth.TestSecret)
 	t.Setenv("AGENT_ENABLED", "true")
 	t.Setenv("AGENT_SERVICE_TOKEN", "")
 
-	_, err := Load()
-	if err == nil {
-		t.Fatal("Load() error = nil, want an AGENT_SERVICE_TOKEN error")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v, want no error (agent routes degrade at runtime)", err)
 	}
-	if !strings.Contains(err.Error(), "AGENT_SERVICE_TOKEN") {
-		t.Fatalf("Load() error = %v, want it to name AGENT_SERVICE_TOKEN", err)
+	if cfg.AgentServiceToken != "" {
+		t.Errorf("AgentServiceToken = %q, want empty", cfg.AgentServiceToken)
 	}
 }
 
-func TestLoad_AgentServiceTokenRejectsShortValue(t *testing.T) {
+func TestLoad_AgentServiceTokenShortValueDoesNotFailLoad(t *testing.T) {
 	t.Setenv("DB_URL", "postgres://x")
 	t.Setenv("JWT_SECRET", auth.TestSecret)
 	t.Setenv("AGENT_ENABLED", "true")
 	t.Setenv("AGENT_SERVICE_TOKEN", strings.Repeat("s", auth.MinSecretBytes-1))
 
-	_, err := Load()
-	if err == nil {
-		t.Fatal("Load() error = nil, want an AGENT_SERVICE_TOKEN length error")
-	}
-	if !strings.Contains(err.Error(), "AGENT_SERVICE_TOKEN") {
-		t.Fatalf("Load() error = %v, want it to name AGENT_SERVICE_TOKEN", err)
+	if _, err := Load(); err != nil {
+		t.Fatalf("Load() error = %v, want no error (agent routes degrade at runtime)", err)
 	}
 }
 
