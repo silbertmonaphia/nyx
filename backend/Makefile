@@ -24,7 +24,14 @@ COVERAGE_MIN ?= 70
 #   - nyx/cmd/openapi: CLI that prints the huma-generated spec;
 #     34.6% today, mostly path-printing branches. Test value is low
 #     — add an entry when coverage rises or scope widens.
-COVERAGE_IGNORE ?= nyx/internal/platform/database nyx/internal/platform/cache nyx/cmd/openapi
+#   - nyx/cmd/api: ~700 lines of startup wiring (config → DB →
+#     domains → router). Behavior lives in the domain/platform
+#     packages it wires and is covered there; the package's own
+#     unit test (main_test.go) pins agentMisconfiguration, the one
+#     piece of logic in the file. 1.4% from the test alone — the
+#     rest is main(), which only a full-boot integration run could
+#     meaningfully cover.
+COVERAGE_IGNORE ?= nyx/internal/platform/database nyx/internal/platform/cache nyx/cmd/openapi nyx/cmd/api
 
 # Shell with pipefail so a `go test` failure (a FAIL line, build
 # error, etc.) isn't masked by the downstream awk's exit code. /bin/sh
