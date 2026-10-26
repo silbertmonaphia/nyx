@@ -1,5 +1,26 @@
 # Spec Delta
 
+## ADDED Requirements
+
+### Requirement: Backend refuses to start with the agent path enabled and no service token
+
+When `AGENT_ENABLED=true`, the Go API SHALL require `AGENT_SERVICE_TOKEN` to be at least 32 bytes and SHALL refuse to start when it is missing or shorter. The key SHALL be bound explicitly from the environment (the process's env-key allowlist), not inferred. When `AGENT_ENABLED=false`, an absent token SHALL NOT prevent startup. The token value MUST NOT be logged or returned.
+
+#### Scenario: Missing token refuses startup
+
+- **WHEN** the service starts with `AGENT_ENABLED=true` and no `AGENT_SERVICE_TOKEN`
+- **THEN** startup fails with an error naming `AGENT_SERVICE_TOKEN` and no HTTP listener is bound
+
+#### Scenario: Short token refuses startup
+
+- **WHEN** `AGENT_ENABLED=true` and `AGENT_SERVICE_TOKEN` is shorter than 32 bytes
+- **THEN** startup fails with an error naming `AGENT_SERVICE_TOKEN`
+
+#### Scenario: Agent disabled needs no token
+
+- **WHEN** `AGENT_ENABLED=false` and `AGENT_SERVICE_TOKEN` is unset
+- **THEN** the service starts normally on the single-turn chat path
+
 ## MODIFIED Requirements
 
 ### Requirement: Python service unavailable fails closed

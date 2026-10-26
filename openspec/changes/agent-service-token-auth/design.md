@@ -26,7 +26,7 @@ Two Go request builders cover every agent hop: `AgentProxy.Run` (`/agent/run`, S
 
 ### Static shared secret in a dedicated header
 
-`X-Nyx-Service-Token` carries the value of `AGENT_SERVICE_TOKEN` on every Go-to-Python request. The Python middleware compares it with `hmac.compare_digest`. Chosen over HMAC signing and mTLS because TLS already protects transport, the threat is unauthenticated public callers rather than captured-request replay, and both alternatives add substantial cross-runtime complexity and certificate/clock operations for a two-service system. The header is separate from `Authorization`, which continues to carry the end-user JWT to downstream MCP/RAG bridges.
+`X-Nyx-Service-Token` carries the value of `AGENT_SERVICE_TOKEN` on every Go-to-Python request. The Python middleware compares it with `hmac.compare_digest` on encoded bytes — the `str` overload raises `TypeError` on non-ASCII values, which would turn a hostile header into a 500. Chosen over HMAC signing and mTLS because TLS already protects transport, the threat is unauthenticated public callers rather than captured-request replay, and both alternatives add substantial cross-runtime complexity and certificate/clock operations for a two-service system. The header is separate from `Authorization`, which continues to carry the end-user JWT to downstream MCP/RAG bridges.
 
 ### One unprefixed env-var name for both runtimes
 
@@ -38,7 +38,7 @@ A `ServiceTokenMiddleware` wraps the whole app in `create_app`, added after the 
 
 ### Fail-closed on both sides
 
-Go's `config.Load` rejects an empty or short token when `AGENT_ENABLED=true`, and `cmd/api/main.go` repeats the check before wiring the proxy, matching the existing empty-`PYTHON_AGENT_URL` behavior. Python rejects a missing or short token unconditionally. `auth.MinSecretBytes` (32) is reused for the Go minimum so the rule matches `JWT_SECRET`.
+Go's `config.Load` rejects an empty or short token when `AGENT_ENABLED=true`, and `cmd/api/main.go` repeats the check before wiring the proxy, matching the existing empty-`PYTHON_AGENT_URL` behavior. The key must be added to the explicit `bindEnvVars()` allowlist — `viper.AutomaticEnv()` alone ignores keys viper has not registered. Python rejects a missing or short token unconditionally. `auth.MinSecretBytes` (32) is reused for the Go minimum so the rule matches `JWT_SECRET`.
 
 ### Token threading through the two Go builders
 
@@ -58,7 +58,7 @@ The Go SSE handler writes HTTP 200 and SSE headers before contacting the agent. 
 - **Mixed-token window** → Deploy Go first (old Python ignores the header), then Python. Rotation follows the same order; rollback is Python first, then Go. Recorded in the rollout change.
 - **Token leakage** → Never log either credential; middleware logs nothing; scripts print statuses only; docs use placeholders; gitleaks protects commits.
 - **Local dev breakage** → Existing `backend/.env` files lack the token. The resolver generates and persists one; agent-only mode must not source all of `backend/.env` (compose hostnames would leak).
-- **Import-time failure in tests** → `agent/main.py` builds the app at import; `tests/conftest.py` sets a test token before collection.
+- **Import-time failure in tests** → `agent/main.py` builds the app at import; `tests/conftest.py` sets a test token before collection. The eval suite is separate: `evals/tests/test_stub.py` constructs `Settings(...)` directly and the CI `Eval unit gate` sets no token, so it needs an explicit value or env.
 - **Byte vs character length** → Go counts bytes, Python counts characters; document ASCII hex/base64 generation (`openssl rand -hex 32`) so the two never disagree.
 - **`/healthz` remains public** → It pings Redis and the LLM provider per request; required by Render's probe, accepted as a minor public load/information surface.
 - **Single-token rotation** → No overlap window; the ordered rotation briefly rejects the side still on the old value. Acceptable for a two-service system; dual-token support is future work.

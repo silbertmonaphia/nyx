@@ -4,7 +4,7 @@
 
 ### Requirement: Service token gates every route except health
 
-The service SHALL require `X-Nyx-Service-Token` on every HTTP route except the exact path `/healthz`. A missing or incorrect value MUST be rejected with HTTP 401 and body `{"detail":"unauthorized"}` before any handler runs. The comparison SHALL be constant-time, and the header value MUST NOT appear in logs or responses. `/metrics` on the FastAPI port SHALL be gated; the separate Prometheus exporter port is unaffected.
+The service SHALL require `X-Nyx-Service-Token` on every HTTP route except the exact path `/healthz`. A missing or incorrect value MUST be rejected with HTTP 401 and body `{"detail":"unauthorized"}` before any handler runs. The comparison SHALL be constant-time and SHALL operate on bytes, so any header value — including non-ASCII input — is rejected with 401 rather than raising an error. The header value MUST NOT appear in logs or responses. `/metrics` on the FastAPI port SHALL be gated; the separate Prometheus exporter port is unaffected.
 
 #### Scenario: Missing token rejected
 
@@ -15,6 +15,11 @@ The service SHALL require `X-Nyx-Service-Token` on every HTTP route except the e
 
 - **WHEN** a request arrives with a `X-Nyx-Service-Token` value that does not match the configured token
 - **THEN** the service returns HTTP 401 with body `{"detail":"unauthorized"}` and the handler does not run
+
+#### Scenario: Non-ASCII token value rejected cleanly
+
+- **WHEN** a request carries `X-Nyx-Service-Token` with non-ASCII characters
+- **THEN** the service returns HTTP 401 with body `{"detail":"unauthorized"}` (never HTTP 500)
 
 #### Scenario: Health probe stays open
 
