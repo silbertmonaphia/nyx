@@ -510,8 +510,8 @@ func mountChatRoute(router chi.Router, cfg *config.Config, db *pgxpool.Pool, fee
 	// is constructed only when all three keys are set: AGENT_ENABLED
 	// gates the handler dispatch, PYTHON_AGENT_URL supplies the
 	// upstream base URL, and AGENT_SERVICE_TOKEN authenticates the
-	// hop. A missing URL or token leaves the rest of the API up but
-	// answers every agent route 503 (never a silent single-turn fallback).
+	// hop. A missing URL or token — or a plaintext public URL — leaves
+	// the rest of the API up but 503s every agent route (never a silent single-turn fallback).
 	//
 	// Default http.Client transport — production can wrap this with
 	// otelhttp.NewTransport to add OTel spans on the outbound dial.
@@ -524,12 +524,10 @@ func mountChatRoute(router chi.Router, cfg *config.Config, db *pgxpool.Pool, fee
 	// disconnect.
 	var chatService *chat.Service
 	if cfg.AgentEnabled {
+		misconfig := agentMisconfiguration(cfg)
 		switch {
-		case cfg.PythonAgentURL == "":
-			log.Error().Msg("AGENT_ENABLED=true but PYTHON_AGENT_URL is empty — agent routes will return 503; the rest of the API keeps running")
-			chatService = chat.NewServiceWithMisconfiguredAgent(llmClient, cfg, tracerProvider.Tracer("nyx.chat"))
-		case len(cfg.AgentServiceToken) < auth.MinSecretBytes:
-			log.Error().Msg("AGENT_ENABLED=true but AGENT_SERVICE_TOKEN is missing or shorter than 32 bytes — agent routes will return 503; the rest of the API keeps running")
+		case misconfig != nil:
+			log.Error().Err(misconfig).Msg("AGENT_ENABLED=true but the agent path is misconfigured — agent routes will return 503; the rest of the API keeps running")
 			chatService = chat.NewServiceWithMisconfiguredAgent(llmClient, cfg, tracerProvider.Tracer("nyx.chat"))
 		default:
 			proxy, perr := chat.NewAgentProxy(cfg.PythonAgentURL, cfg.AgentServiceToken, nil)
@@ -570,6 +568,16 @@ func mountChatRoute(router chi.Router, cfg *config.Config, db *pgxpool.Pool, fee
 		stopGC()
 		stopApprovalsGC()
 	}, ragSvc, ragIndexer
+}
+
+func agentMisconfiguration(cfg *config.Config) error {
+	switch {
+	case cfg.PythonAgentURL == "":
+		return errors.New("PYTHON_AGENT_URL is empty")
+	case len(cfg.AgentServiceToken) < auth.MinSecretBytes:
+		return errors.New("AGENT_SERVICE_TOKEN is missing or shorter than 32 bytes")
+	}
+	return config.ValidateAgentURL(cfg.PythonAgentURL, cfg.AgentAllowPrivateURL)
 }
 
 // mountRAGFacade builds the RAG stack (embedder / indexer /

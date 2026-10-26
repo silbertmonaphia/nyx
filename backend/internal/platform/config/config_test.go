@@ -998,3 +998,56 @@ func TestLoad_AgentServiceTokenOptionalWhenAgentDisabled(t *testing.T) {
 		t.Fatalf("Load() error = %v", err)
 	}
 }
+
+func TestValidateAgentURL(t *testing.T) {
+	cases := []struct {
+		name         string
+		rawURL       string
+		allowPrivate bool
+		wantErr      bool
+	}{
+		{name: "https public agent", rawURL: "https://nyx-agent.onrender.com"},
+		{name: "https public agent with port", rawURL: "https://nyx-agent.onrender.com:443"},
+		{name: "http loopback literal", rawURL: "http://127.0.0.1:9000"},
+		{name: "http loopback ipv6", rawURL: "http://[::1]:9000"},
+		{name: "http localhost", rawURL: "http://localhost:9000"},
+		{name: "http service discovery name", rawURL: "http://agent:9000"},
+		{name: "http public host", rawURL: "http://nyx-agent.onrender.com", wantErr: true},
+		{name: "http rfc1918 literal", rawURL: "http://10.0.0.5:9000", wantErr: true},
+		{name: "http link local metadata", rawURL: "http://169.254.169.254", wantErr: true},
+		{name: "http public host allowed by opt in", rawURL: "http://nyx-agent.onrender.com", allowPrivate: true},
+		{name: "http private dns name allowed by opt in", rawURL: "http://agent.internal.example.com", allowPrivate: true},
+		{name: "wrong scheme", rawURL: "ftp://agent:9000", wantErr: true},
+		{name: "userinfo", rawURL: "https://user:pass@agent.example.com", wantErr: true},
+		{name: "missing host", rawURL: "https://", wantErr: true},
+		{name: "malformed url", rawURL: "http://%zz", wantErr: true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			err := ValidateAgentURL(tc.rawURL, tc.allowPrivate)
+			if tc.wantErr {
+				if err == nil {
+					t.Fatalf("ValidateAgentURL(%q, %v) = nil, want error", tc.rawURL, tc.allowPrivate)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("ValidateAgentURL(%q, %v) = %v, want nil", tc.rawURL, tc.allowPrivate, err)
+			}
+		})
+	}
+}
+
+func TestLoad_BindsAgentAllowPrivateURL(t *testing.T) {
+	t.Setenv("DB_URL", "postgres://x")
+	t.Setenv("JWT_SECRET", auth.TestSecret)
+	t.Setenv("AGENT_ALLOW_PRIVATE_URL", "true")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if !cfg.AgentAllowPrivateURL {
+		t.Error("AgentAllowPrivateURL = false, want true from env")
+	}
+}

@@ -209,9 +209,10 @@ type Config struct {
 	// when the Go agent package was deleted — those keys now live
 	// in the Python service's pydantic-settings (see
 	// openspec/changes/agent-langgraph/design.md §9).
-	AgentEnabled      bool   `mapstructure:"AGENT_ENABLED"`
-	PythonAgentURL    string `mapstructure:"PYTHON_AGENT_URL"`
-	AgentServiceToken string `mapstructure:"AGENT_SERVICE_TOKEN"`
+	AgentEnabled         bool   `mapstructure:"AGENT_ENABLED"`
+	PythonAgentURL       string `mapstructure:"PYTHON_AGENT_URL"`
+	AgentServiceToken    string `mapstructure:"AGENT_SERVICE_TOKEN"`
+	AgentAllowPrivateURL bool   `mapstructure:"AGENT_ALLOW_PRIVATE_URL"`
 }
 
 func Load() (*Config, error) {
@@ -415,6 +416,7 @@ func setDefaults() {
 	viper.SetDefault("AGENT_ENABLED", false)
 	viper.SetDefault("PYTHON_AGENT_URL", "")
 	viper.SetDefault("AGENT_SERVICE_TOKEN", "")
+	viper.SetDefault("AGENT_ALLOW_PRIVATE_URL", false)
 }
 
 // bindEnvVars explicitly wires every env-sourced viper key. See Load
@@ -442,6 +444,7 @@ func bindEnvVars() {
 		"RAG_TOP_K", "RAG_MAX_CONTEXT_CHARS", "RAG_MAX_BACKFILL_PER_REQUEST",
 		"MCP_ENABLED", "MCP_PATH", "MCP_MAX_BODY_BYTES",
 		"AGENT_ENABLED", "PYTHON_AGENT_URL", "AGENT_SERVICE_TOKEN",
+		"AGENT_ALLOW_PRIVATE_URL",
 		"USER_LLM_ENCRYPTION_KEY",
 	} {
 		_ = viper.BindEnv(key)
@@ -745,7 +748,7 @@ func validateLLMBaseURL(rawURL string, allowPrivate bool) error {
 		return fmt.Errorf("LLM_BASE_URL is not a valid URL: %w", err)
 	}
 	switch u.Scheme {
-	case "http", "https":
+	case schemeHTTP, schemeHTTPS:
 	default:
 		return fmt.Errorf("LLM_BASE_URL scheme must be http or https, got %q", u.Scheme)
 	}
@@ -790,6 +793,48 @@ func checkHostNotPrivate(host string) error {
 		}
 	}
 	return nil
+}
+
+const (
+	schemeHTTP  = "http"
+	schemeHTTPS = "https"
+)
+
+func ValidateAgentURL(rawURL string, allowPrivate bool) error {
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		return fmt.Errorf("PYTHON_AGENT_URL is not a valid URL: %w", err)
+	}
+	switch u.Scheme {
+	case schemeHTTP, schemeHTTPS:
+	default:
+		return fmt.Errorf("PYTHON_AGENT_URL scheme must be http or https, got %q", u.Scheme)
+	}
+	if u.User != nil {
+		return fmt.Errorf("PYTHON_AGENT_URL must not contain userinfo (user:password@host)")
+	}
+	host := u.Hostname()
+	if host == "" {
+		return fmt.Errorf("PYTHON_AGENT_URL is missing a host")
+	}
+	if u.Scheme == schemeHTTPS || allowPrivate {
+		return nil
+	}
+	if isLoopbackHost(host) || !strings.Contains(host, ".") {
+		return nil
+	}
+	return fmt.Errorf(
+		"PYTHON_AGENT_URL must use https for host %q: the Go-to-agent hop sends AGENT_SERVICE_TOKEN in a header, so plaintext transport exposes the credential",
+		host,
+	)
+}
+
+func isLoopbackHost(host string) bool {
+	if strings.EqualFold(host, "localhost") {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
 }
 
 // ipClassRefused returns (true, reason) when the IP belongs to a

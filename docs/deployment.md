@@ -252,7 +252,10 @@ In the browser: open the SPA, register, and watch the Network tab — the
   shared `AGENT_SERVICE_TOKEN` (the same ≥ 32-byte value on the agent
   service). If either is missing the API still starts and serves
   auth/feeds, but `/api/chat`, sessions, and approvals return 503 until
-  the agent configuration is complete.
+  the agent configuration is complete. A publicly reachable agent must be
+  addressed over `https://` — the hop carries the service token in a
+  header, so a plain-`http://` URL to a public host is refused at startup
+  (loopback and private service names stay allowed).
 - **The host name moves.** `https://<api>.onrender.com` is stable as
   long as the service name is, but a custom domain is nicer for
   `VITE_API_URL` and the CORS allowlist. Changing the service name

@@ -22,6 +22,8 @@ Set on the `agent` service in `docker-compose.yml`. `AGENT_ENABLED` and `PYTHON_
 | Var | Required? | Default | Notes |
 | --- | --- | --- | --- |
 | `AGENT_ENABLED` | yes | `false` | Flip to `true` to route `/api/chat` through the Python service. |
+| `PYTHON_AGENT_URL` | yes (when `AGENT_ENABLED=true`) | unset | Agent base URL, read by the Go backend. Must be `https://` unless the host is loopback (`127.0.0.1` / `::1` / `localhost`) or a dot-less service-discovery name such as the compose `agent` host — the hop sends `AGENT_SERVICE_TOKEN` in a header, so plaintext transport to a publicly routable host would expose it. A rejected URL leaves the API up with every agent-backed route answering 503. |
+| `AGENT_ALLOW_PRIVATE_URL` | no | `false` | Set `true` to allow `http://` to a private-network host whose name contains dots (e.g. `http://agent.internal.example.com`). |
 | `AGENT_SERVICE_TOKEN` | yes (when `AGENT_ENABLED=true`) | unset | Shared credential (at least 32 bytes) stamped as `X-Nyx-Service-Token` on every Go → Python hop. MUST be the same value on both services. Generate with `openssl rand -hex 32`. The Python service refuses to start when it is missing or short; the Go API stays up but every agent-backed route returns 503. |
 | `PYTHON_AGENT_DATABASE_URL` | yes (when `AGENT_ENABLED=true`) | unset | Must include `options=-c search_path=langgraph,agent`. The service refuses to start otherwise. |
 | `PYTHON_AGENT_MIGRATIONS_DISABLED` | no | `false` | Set `true` in compose; `false` in dev. |
@@ -38,7 +40,7 @@ The `PYTHON_AGENT_DATABASE_URL` shape: `postgresql://${POSTGRES_USER}:${POSTGRES
 
 ## Public deployment (Render): service-token gate
 
-The agent is reachable from the public internet on Render, so the service-token gate is mandatory there. `AGENT_SERVICE_TOKEN` is configured on both services (`nyx-api` and the dashboard-created agent web service) with the same value.
+The agent is reachable from the public internet on Render, so the service-token gate is mandatory there. `AGENT_SERVICE_TOKEN` is configured on both services (`nyx-api` and the dashboard-created agent web service) with the same value. The Go service must address it over `https://`: `PYTHON_AGENT_URL` is refused at startup when it points at a publicly routable host over plain `http://`, because the hop carries the service token in a header. A refused URL leaves the API up with every agent-backed route answering 503.
 
 1. Generate once: `openssl rand -hex 32`; set it as a secret env var on both Render services. Local dev / eval / e2e instead resolve it through `scripts/lib/agent-token.sh` (exported env → `backend/.env`). The resolver never generates or persists a value: `backend/.env` is the single local source of truth, so the Go backend, the Python agent, and the compose services all read one file and cannot drift. When nothing is configured it fails with the command that adds the variable rather than silently creating a credential on disk.
 2. Confirm the agent service's Render health-check path is exactly `/healthz`; it is the only unauthenticated route. A `/` path receives 401 and the deploy never becomes healthy.

@@ -101,7 +101,7 @@ make dev-vllm-embed   # 向量模型  (Qwen3-Embedding-0.6B, :8001, 支撑 RAG)
 - API 文档 —— <http://localhost:8080/api/swagger>
 - 链路 —— <http://localhost:16686>（Jaeger）· Langfuse 在 :3000，用 `make dev-up-langfuse` 启动
 
-聊天由 `LLM_ENABLED=true` 开启；再加上 `AGENT_ENABLED=true` 则会路由到 agent，而不是普通的单轮 RAG 聊天。agent 路径还需要 `PYTHON_AGENT_URL` 与共享的 `AGENT_SERVICE_TOKEN`（至少 32 字节，Go API 与 agent 服务必须一致 —— 每次 Go → Python 调用都以 `X-Nyx-Service-Token` 携带）。其余一切不受影响。
+聊天由 `LLM_ENABLED=true` 开启；再加上 `AGENT_ENABLED=true` 则会路由到 agent，而不是普通的单轮 RAG 聊天。agent 路径还需要 `PYTHON_AGENT_URL` 与共享的 `AGENT_SERVICE_TOKEN`（至少 32 字节，Go API 与 agent 服务必须一致 —— 每次 Go → Python 调用都以 `X-Nyx-Service-Token` 携带）。公网可达的 agent 必须用 `https://` 地址访问；`http://` 只对 loopback 与私网服务名放行。其余一切不受影响。
 
 ## 部署
 

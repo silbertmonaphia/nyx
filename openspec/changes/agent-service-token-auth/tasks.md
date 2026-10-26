@@ -8,6 +8,7 @@
 - [x] 1.4 Update the stale trust-model comments in `agent_proxy.go`, `sessions_proxy.go`, `approvals_proxy.go`, and `handler.go` in place (no new comment lines). Verify `python3 scripts/check_no_comments.py --staged` passes on the Go diff.
 - [x] 1.5 Document the new variable in `backend/.env.example` (required to serve agent routes when `AGENT_ENABLED=true`; missing/short leaves the rest of the API up but every agent route 503; generated with `openssl rand -hex 32`, same value as the agent). Verify the commented placeholder and the degrade note are present.
 - [x] 1.6 Run the Go suites: `cd backend && SKIP_CONTAINERS=true go test ./... -count=1`.
+- [x] 1.7 Refuse a plaintext hop to a public host: add `config.ValidateAgentURL` (`https://` always accepted; `http://` only for a loopback host or a dot-less service-discovery name; `AGENT_ALLOW_PRIVATE_URL=true` as the opt-out; another scheme or embedded userinfo refused) and wire it into `cmd/api/main.go` next to the existing token check, so a rejected URL degrades the agent routes to 503 like the missing-token case. Add the `AGENT_ALLOW_PRIVATE_URL` field, default, and `bindEnvVars()` entry. Verify `go build ./...`, the new config table test, the full Go suite, and that the local side stack (`http://127.0.0.1:<port>`) still wires the proxy.
 
 ## 2. Python agent
 
