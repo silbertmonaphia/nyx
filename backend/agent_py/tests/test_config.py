@@ -199,6 +199,21 @@ def test_langfuse_defaults(monkeypatch):
     assert s.langfuse_secret_key.get_secret_value() == ""
 
 
+def test_otel_defaults(monkeypatch):
+    for key in ("OTEL_ENABLED", "OTEL_ENDPOINT", "OTEL_SERVICE_NAME"):
+        monkeypatch.delenv(f"PYTHON_AGENT_{key}", raising=False)
+    s = Settings(_env_file=None, llm_base_url="http://vllm:8000/v1")
+    assert s.otel_enabled is True
+    assert s.otel_endpoint == "http://localhost:4318"
+    assert s.otel_service_name == "nyx-agent"
+
+
+def test_otel_enabled_env_override(monkeypatch):
+    monkeypatch.setenv("PYTHON_AGENT_OTEL_ENABLED", "false")
+    s = Settings(_env_file=None, llm_base_url="http://vllm:8000/v1")
+    assert s.otel_enabled is False
+
+
 @pytest.mark.parametrize(
     "kwargs,missing_var",
     [

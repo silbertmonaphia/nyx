@@ -324,6 +324,9 @@ prefs, audit):
   as Go. `traceparent` continuity exists browser→Go only: the Go→agent
   proxy injects no context (`agent_proxy.go` uses a plain transport) and
   agent_py extracts none, so agent spans are currently Jaeger roots.
+  Kill switch: `PYTHON_AGENT_OTEL_ENABLED=false` skips Jaeger exporter
+  construction (no background export-retry diagnostics when no collector
+  runs); the Langfuse pipeline is unaffected.
 - **Langfuse (opt-in)**: `PYTHON_AGENT_LANGFUSE_ENABLED=true` exports per-run
   LLM traces (planner/executor prompts, replies, provider usage, plan/step/tool
   observations) to a self-hosted Langfuse. The LangChain callback is attached to

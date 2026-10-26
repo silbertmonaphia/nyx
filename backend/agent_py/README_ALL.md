@@ -308,6 +308,16 @@ incremented by `AuditLog.retention_delete`, not the cron); spans
 `agent.chat.retention`, `agent.audit.retention`, `agent.gdpr.export` /
 `agent.gdpr.erase` + per-endpoint `agent.sessions.*`.
 
+## OTel spans: Jaeger (on by default)
+
+Run/step/tool spans export over OTLP/HTTP to Jaeger (`make up` publishes
+the `:16686` UI and `:4318` OTLP/HTTP receiver). Export is on by default;
+`PYTHON_AGENT_OTEL_ENABLED=false` skips the Jaeger exporter entirely (the
+separate Langfuse pipeline is unaffected), so a deployment without a
+collector does not emit background export-retry diagnostics. `PYTHON_AGENT_OTEL_ENDPOINT` defaults to
+`http://localhost:4318` for host dev; the compose agent service sets
+`http://jaeger:4318`.
+
 ## LLM tracing: Langfuse (opt-in)
 
 Structured, per-run LLM traces — planner and executor prompts, model

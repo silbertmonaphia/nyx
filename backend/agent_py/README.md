@@ -142,6 +142,7 @@ Common flags:
 | `PYTHON_AGENT_TOOL_RETRY_MAX` | `2` | Retries per tool call (validator + transient paths) |
 | `PYTHON_AGENT_WEB_FETCH_ENABLED` / `WEB_SEARCH_ENABLED` | `false` | Agent-native web tools; search runs keyless without `TAVILY_API_KEY` |
 | `PYTHON_AGENT_SWEEP_ENABLED` | `true` | Stale-run reaper kill switch |
+| `PYTHON_AGENT_OTEL_ENABLED` | `true` | Jaeger span export; `false` → no Jaeger exporter constructed |
 | `PYTHON_AGENT_LANGFUSE_ENABLED` | `false` | LLM-level traces to a Langfuse instance |
 | `PYTHON_AGENT_APPROVAL_TTL_SECONDS` | `300` | Wall-clock window a mutating-call confirmation stays open before it closes as denied |
 | `PYTHON_AGENT_CHAT_RETENTION_DAYS` / `…_GRACE_DAYS` | `365` / `7` | Chat-history retention (floor 365 days) + soft-delete grace |

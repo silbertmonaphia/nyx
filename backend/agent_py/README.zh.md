@@ -97,6 +97,7 @@ cd backend/agent_py && pytest tests/ -v
 | `PYTHON_AGENT_TOOL_RETRY_MAX` | `2` | 每次工具调用的重试上限（校验 + 瞬时两条路径） |
 | `PYTHON_AGENT_WEB_FETCH_ENABLED` / `WEB_SEARCH_ENABLED` | `false` | agent 原生 web 工具；不带 `TAVILY_API_KEY` 时搜索走 keyless 档 |
 | `PYTHON_AGENT_SWEEP_ENABLED` | `true` | 僵尸运行清扫的 kill switch |
+| `PYTHON_AGENT_OTEL_ENABLED` | `true` | Jaeger span 导出；`false` → 不构建 Jaeger exporter |
 | `PYTHON_AGENT_LANGFUSE_ENABLED` | `false` | 导出 LLM 级追踪到 Langfuse 实例 |
 | `PYTHON_AGENT_CHAT_RETENTION_DAYS` / `…_GRACE_DAYS` | `365` / `7` | 聊天历史保留期（下限 365 天）+ 软删除宽限期 |
 | `PYTHON_AGENT_PREFS_ENABLED` | `true` | 偏好抽取 + planner 注入的 kill switch |

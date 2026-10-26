@@ -103,6 +103,7 @@ class Settings(BaseSettings):
     # encountered while exporting spans batch" — 2026-10 dev-agent report).
     otel_endpoint: str = "http://localhost:4318"
     otel_service_name: str = "nyx-agent"
+    otel_enabled: bool = True
 
     # --- Per-IP rate limit (defense in depth; /agent/run is on the
     # private network and has no app-layer auth — see README "Trust

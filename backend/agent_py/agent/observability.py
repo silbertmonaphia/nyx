@@ -78,11 +78,27 @@ _provider: TracerProvider | None = None
 
 
 def setup_observability(settings: Settings) -> trace.Tracer:
-    """Build the OTel tracer provider once. Idempotent — safe to call from FastAPI lifespan."""
+    """Build the OTel tracer provider once. Idempotent — safe to call from FastAPI lifespan.
+
+    `PYTHON_AGENT_OTEL_ENABLED=false` skips exporter and provider construction
+    entirely and leaves the global provider untouched, so no span-export retry
+    diagnostics are emitted when the deployment has no Jaeger collector.
+    """
     global _provider
     if _provider is not None:
         return trace.get_tracer(_TRACER_NAME)
+    if not settings.otel_enabled:
+        logger.info(
+            "Jaeger span export disabled (PYTHON_AGENT_OTEL_ENABLED=false); "
+            "no exporter constructed"
+        )
+        return trace.get_tracer(_TRACER_NAME)
 
+    logger.info(
+        "Jaeger span export enabled (endpoint=%s service_name=%s)",
+        settings.otel_endpoint,
+        settings.otel_service_name,
+    )
     resource = Resource.create({"service.name": settings.otel_service_name})
     # Span export must never traverse an HTTP proxy: the endpoint is always
     # internal (Jaeger on the host, or in-network in compose), and a proxy
