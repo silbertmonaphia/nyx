@@ -2,7 +2,6 @@
 .env
 .env.*
 !.env.example
-backend/agent_py/.service-token
 
 # Node.js
 node_modules/
