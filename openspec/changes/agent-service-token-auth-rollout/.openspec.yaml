@@ -1,0 +1,7 @@
+schema: spec-driven
+created: 2026-10-26
+goal: Track the production rollout gates for the Go-to-agent service token
+  (shared Render env var on both services, health-path precheck, Go-first
+  deploy order, rotation drill, rollback) so the implementation change can
+  archive independently
+skip_specs: true
