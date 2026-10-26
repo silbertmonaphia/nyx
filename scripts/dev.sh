@@ -222,21 +222,25 @@ if $detach; then
   # Detached mode: each child runs as a backgrounded pipeline so the
   # script can wait on both simultaneously. Output tees to terminal +
   # per-process log file; PIDs land in /tmp/nyx-*.pid for `make stop`.
+  started_pid_files=()
+  children_reaped=false
   cleanup() {
     local code=$?
-    [[ -f "$BACKEND_PID"    ]] && kill "$(cat "$BACKEND_PID")"    2>/dev/null || true
-    [[ -f "$FRONTEND_PID"   ]] && kill "$(cat "$FRONTEND_PID")"   2>/dev/null || true
-    [[ -f "$AGENT_PID"      ]] && kill "$(cat "$AGENT_PID")"      2>/dev/null || true
-    [[ -f "$VLLM_MAIN_PID"  ]] && kill "$(cat "$VLLM_MAIN_PID")"  2>/dev/null || true
-    [[ -f "$VLLM_EMBED_PID" ]] && kill "$(cat "$VLLM_EMBED_PID")" 2>/dev/null || true
-    rm -f "$BACKEND_PID" "$FRONTEND_PID" "$AGENT_PID" \
-          "$VLLM_MAIN_PID" "$VLLM_EMBED_PID"
+    local file pid
+    for file in "${started_pid_files[@]}"; do
+      pid="$(cat "$file" 2>/dev/null || true)"
+      if [[ -n "$pid" && "$children_reaped" != true ]]; then
+        kill "$pid" 2>/dev/null || true
+      fi
+      rm -f "$file"
+    done
     exit "$code"
   }
   trap cleanup INT TERM EXIT
 
   if needs_backend; then
     echo ">> backend  → $BACKEND_LOG"
+    started_pid_files+=("$BACKEND_PID")
     # Capture the subshell's PID (the one that exec's into the process
     # we actually want to control) before tee steals the rightmost
     # slot of the pipeline. $BASHPID is the current subshell's PID; $!
@@ -248,12 +252,14 @@ if $detach; then
 
   if needs_frontend; then
     echo ">> frontend → $FRONTEND_LOG"
+    started_pid_files+=("$FRONTEND_PID")
     ( cd frontend && echo $BASHPID > "$FRONTEND_PID" && exec npm run dev ) \
       2>&1 | tee "$FRONTEND_LOG" &
   fi
 
   if needs_agent; then
     echo ">> agent    → $AGENT_LOG"
+    started_pid_files+=("$AGENT_PID")
     # Boot the Python orchestrator locally. `python -m agent.main`
     # is the entrypoint added in the `python -m agent.main boots` fix.
     ( cd backend/agent_py && echo $BASHPID > "$AGENT_PID" && exec .venv/bin/python -m agent.main ) \
@@ -262,6 +268,7 @@ if $detach; then
 
   if needs_vllm_main; then
     echo ">> vllm-main → $VLLM_MAIN_LOG  (first run downloads the model)"
+    started_pid_files+=("$VLLM_MAIN_PID")
     ( echo $BASHPID > "$VLLM_MAIN_PID" && exec "$vllm_bin" serve Qwen/Qwen3-4B-Instruct-2507-FP8 \
         --host 0.0.0.0 --port 8000 --tensor-parallel-size 1 \
         --gpu-memory-utilization 0.9 --max-model-len 4096 \
@@ -271,6 +278,7 @@ if $detach; then
 
   if needs_vllm_embed; then
     echo ">> vllm-embed → $VLLM_EMBED_LOG  (first run downloads the model)"
+    started_pid_files+=("$VLLM_EMBED_PID")
     ( echo $BASHPID > "$VLLM_EMBED_PID" && exec "$vllm_bin" serve Qwen/Qwen3-Embedding-0.6B \
         --port 8001 --enforce-eager --gpu-memory-utilization 0.1 --max-model-len 256 ) \
       2>&1 | tee "$VLLM_EMBED_LOG" &
@@ -323,6 +331,7 @@ if $detach; then
       fi
     fi
   done
+  children_reaped=true
   exit "$exit_code"
 else
   # Foreground mode: replace the script with the single child process
