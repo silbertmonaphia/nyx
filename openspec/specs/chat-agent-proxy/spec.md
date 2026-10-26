@@ -50,22 +50,27 @@ When the proxy cannot reach `PYTHON_AGENT_URL` (connection refused, DNS failure,
 
 #### Scenario: Python returns 401 (JWT rejected)
 
-- **WHEN** the Python service rejects the forwarded Bearer token with 401
-- **THEN** the chat handler MUST NOT translate this into a different client error — the response is forwarded byte-for-byte (the operator's Python service is misconfigured; not a client issue)
+- **WHEN** the Python service returns HTTP 401 for any reason, including a missing or mismatched `X-Nyx-Service-Token` or an upstream authentication rejection it surfaces
+- **THEN** the chat handler MUST NOT translate this into a different client error — the response is forwarded byte-for-byte (the deployment is misconfigured; not a client issue)
 
 ### Requirement: Forward Bearer token
 
-The proxy SHALL forward the user's `Authorization: Bearer <access_token>` header from the chat request to the Python service. The proxy MUST NOT use a service-to-service token, MUST NOT mint a new token, and MUST NOT log the token value.
+The proxy SHALL forward the user's `Authorization: Bearer <access_token>` header from the chat request to the Python service. It SHALL also stamp `X-Nyx-Service-Token` from `AGENT_SERVICE_TOKEN` on every request to the Python service. The proxy MUST NOT repurpose `Authorization` for the service credential, MUST NOT mint a new user token, and MUST NOT log either token value.
 
 #### Scenario: Token forwarded
 
 - **WHEN** a chat request arrives with `Authorization: Bearer eyJhbGc...`
 - **THEN** the proxy's HTTP client sends the same header on the request to `PYTHON_AGENT_URL/agent/run`
 
+#### Scenario: Service token stamped
+
+- **WHEN** the proxy sends any request to the Python service
+- **THEN** the request carries `X-Nyx-Service-Token` equal to the configured `AGENT_SERVICE_TOKEN`, alongside the unchanged `Authorization` passthrough
+
 #### Scenario: Token never logged
 
 - **WHEN** the proxy logs the request
-- **THEN** the token value does not appear in any log line; only a fingerprint (e.g. first 6 chars + `…`) MAY appear for debugging
+- **THEN** neither the user token nor the service token value appears in any log line; only a fingerprint (e.g. first 6 chars + `…`) of the user token MAY appear for debugging
 
 ### Requirement: Single-turn fallback parity preserved
 
@@ -107,7 +112,7 @@ The Go chat package SHALL register the following authenticated REST routes under
 - `POST /api/chat/sessions/{session_id}/resume` — refresh the session's activity timestamp
 - `DELETE /api/chat/sessions/{session_id}` — soft-delete a session
 
-Each route SHALL forward to the Python agent at `PYTHON_AGENT_URL` under the matching `/agent/sessions...` path with the verified `X-Nyx-User-Id` header (from `reqctx`) and the user's `Authorization` header as a passthrough. The response status and body SHALL be forwarded verbatim (JSON in, JSON out; no SSE). Query strings SHALL be forwarded without transformation.
+Each route SHALL forward to the Python agent at `PYTHON_AGENT_URL` under the matching `/agent/sessions...` path with the verified `X-Nyx-User-Id` header (from `reqctx`), the user's `Authorization` header as a passthrough, and `X-Nyx-Service-Token` carrying `AGENT_SERVICE_TOKEN`. The response status and body SHALL be forwarded verbatim (JSON in, JSON out; no SSE). Query strings SHALL be forwarded without transformation.
 
 When `AGENT_ENABLED=false` or `PYTHON_AGENT_URL` is unset, the routes SHALL respond `503` with the standard error envelope (`{"error": "...", "details": "..."}`) — sessions do not exist in the single-turn world; this is not a client error.
 
@@ -116,7 +121,7 @@ When the agent is unreachable (connection refused / DNS failure / timeout), the 
 #### Scenario: Authenticated list proxies through
 
 - **WHEN** an authenticated client calls `GET /api/chat/sessions?limit=10`
-- **THEN** the handler sends `GET <PYTHON_AGENT_URL>/agent/sessions?limit=10` with `X-Nyx-User-Id` set to the verified user id, and the client receives the agent's response status and JSON body unchanged
+- **THEN** the handler sends `GET <PYTHON_AGENT_URL>/agent/sessions?limit=10` with `X-Nyx-User-Id` set to the verified user id and `X-Nyx-Service-Token` set to `AGENT_SERVICE_TOKEN`, and the client receives the agent's response status and JSON body unchanged
 
 #### Scenario: Unauthenticated request is rejected before the proxy
 
@@ -140,12 +145,12 @@ When the agent is unreachable (connection refused / DNS failure / timeout), the 
 
 ### Requirement: Approval route forwards decisions to the Python service
 
-When `AGENT_ENABLED=true`, the Go API SHALL expose `POST /api/chat/approvals`, authenticated with the project's standard Bearer JWT middleware (same as every protected chat route). The handler SHALL forward the request body to `PYTHON_AGENT_URL/agent/approvals`, stamping the verified user id as `X-Nyx-User-Id`, and SHALL NOT mint a service token or forward the user's token value to any log. The upstream status and body SHALL be passed through unchanged; the handler MUST NOT interpret or shortcut a decision. When the agent proxy is disabled or unreachable, the route SHALL fail closed with an error response — an approval MUST never be auto-granted, and the failure MUST NOT fall back to any other path.
+When `AGENT_ENABLED=true`, the Go API SHALL expose `POST /api/chat/approvals`, authenticated with the project's standard Bearer JWT middleware (same as every protected chat route). The handler SHALL forward the request body to `PYTHON_AGENT_URL/agent/approvals`, stamping the verified user id as `X-Nyx-User-Id` and `X-Nyx-Service-Token` from `AGENT_SERVICE_TOKEN`, and SHALL NOT log either token value. The upstream status and body SHALL be passed through unchanged; the handler MUST NOT interpret or shortcut a decision. When the agent proxy is disabled or unreachable, the route SHALL fail closed with an error response — an approval MUST never be auto-granted, and the failure MUST NOT fall back to any other path.
 
 #### Scenario: Authenticated decision is forwarded
 
 - **WHEN** an authenticated user posts `{"run_id": ..., "approval_id": ..., "decision": "approve"}` and the Python service accepts it
-- **THEN** the client receives the Python service's status and body, and the forwarded request carried the verified user id in `X-Nyx-User-Id`
+- **THEN** the client receives the Python service's status and body, and the forwarded request carried the verified user id in `X-Nyx-User-Id` and the service credential in `X-Nyx-Service-Token`
 
 #### Scenario: Missing or invalid JWT is rejected at the edge
 
@@ -160,7 +165,7 @@ When `AGENT_ENABLED=true`, the Go API SHALL expose `POST /api/chat/approvals`, a
 #### Scenario: Token value never logged
 
 - **WHEN** the handler logs the approval request
-- **THEN** the token value does not appear in any log line
+- **THEN** neither the user token value nor the service token value appears in any log line
 
 ### Requirement: Over-long streams fail closed at a configurable cap
 
@@ -213,3 +218,44 @@ When a user configures a retry-model fallback, the single-turn path SHALL probe 
 
 - **WHEN** a user configures a main base URL without a version path segment together with a fallback
 - **THEN** the probe targets the base URL with the version path segment appended
+
+### Requirement: Backend degrades agent routes when the agent path is misconfigured
+
+When `AGENT_ENABLED=true` but `PYTHON_AGENT_URL` is unset or `AGENT_SERVICE_TOKEN` is missing or shorter than 32 bytes, the Go API SHALL start and keep non-agent features (auth, feeds, MCP) available. The agent-backed routes (`POST /api/chat`, `/api/chat/sessions*`, `/api/chat/approvals`) SHALL respond HTTP 503 with the standard error envelope whose `details` is a static safe string naming the misconfiguration. The handler MUST NOT silently fall back to the single-turn chat path. When `AGENT_ENABLED=false`, the single-turn path runs and no token is required. The key SHALL be bound explicitly from the environment (the process's env-key allowlist), not inferred. The token value MUST NOT be logged or returned.
+
+The Go→agent hop carries the token in a request header, so the transport has to protect it. `PYTHON_AGENT_URL` SHALL be refused when it uses `http://` for any host that is neither loopback (`127.0.0.1`, `::1`, `localhost`) nor a dot-less service-discovery name; non-loopback IP literals are always refused, including IPv4-mapped IPv6 forms. `https://` is always accepted, and `AGENT_ALLOW_PRIVATE_URL=true` opts out of the host rule for any dotted host name. A URL with another scheme, or one carrying embedded userinfo, SHALL be refused as well. A refused URL SHALL degrade the agent-backed routes exactly like the other misconfigurations — the API keeps serving auth, feeds, and MCP.
+
+#### Scenario: Missing token leaves non-agent features up
+
+- **WHEN** the service starts with `AGENT_ENABLED=true`, a valid `PYTHON_AGENT_URL`, and no `AGENT_SERVICE_TOKEN`
+- **THEN** the API binds and serves auth/feeds normally, and every agent-backed route returns 503 with a static misconfiguration detail
+
+#### Scenario: Short token leaves non-agent features up
+
+- **WHEN** `AGENT_ENABLED=true` and `AGENT_SERVICE_TOKEN` is shorter than 32 bytes
+- **THEN** the API binds and every agent-backed route returns 503 (no silent single-turn fallback)
+
+#### Scenario: Missing URL leaves non-agent features up
+
+- **WHEN** `AGENT_ENABLED=true` and `PYTHON_AGENT_URL` is unset
+- **THEN** the API binds and every agent-backed route returns 503 (no silent single-turn fallback)
+
+#### Scenario: Plaintext URL to a public host leaves non-agent features up
+
+- **WHEN** `AGENT_ENABLED=true` and `PYTHON_AGENT_URL` is `http://` with a publicly routable host
+- **THEN** the API binds and every agent-backed route returns 503 (no silent single-turn fallback)
+
+#### Scenario: Non-loopback IP literal over plain http leaves non-agent features up
+
+- **WHEN** `AGENT_ENABLED=true` and `PYTHON_AGENT_URL` is `http://` with a non-loopback IP literal (for example an IPv4-mapped IPv6 form such as `[::ffff:808:808]`)
+- **THEN** the API binds and every agent-backed route returns 503 (no silent single-turn fallback)
+
+#### Scenario: Loopback and private service names keep plain http
+
+- **WHEN** `AGENT_ENABLED=true` and `PYTHON_AGENT_URL` is `http://127.0.0.1:9000` or `http://agent:9000`
+- **THEN** the agent proxy is wired and the agent-backed routes are served
+
+#### Scenario: Agent disabled needs no token
+
+- **WHEN** `AGENT_ENABLED=false` and `AGENT_SERVICE_TOKEN` is unset
+- **THEN** the service starts normally on the single-turn chat path

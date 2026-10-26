@@ -45,6 +45,6 @@ Command used: `AGENT_SERVICE_TOKEN=<redacted> AGENT_URL=https://nyx-agent.onrend
 
 ## References
 
-- `openspec/changes/agent-service-token-auth/` — implementation change (proposal, design, specs, tasks).
+- `openspec/changes/archive/2026-10-27-agent-service-token-auth/` — implementation change (proposal, design, specs, tasks), archived 2026-10-27.
 - `openspec/specs/chat-agent-proxy/spec.md` + `openspec/specs/agent-python-service/spec.md` — behaviour specs synced at archive.
 - `docs/agent-deployment.md` — env setup, deploy order, verification curls, rotation, rollback.
