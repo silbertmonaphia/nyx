@@ -88,6 +88,10 @@ class StubTransport:
 
     def get_json(self, path: str, *, headers: dict, timeout: float) -> dict:
         self.log.append(("get", path))
+        if self.status_code >= 400:
+            raise agent_run.ProviderError(
+                f"GET {path} -> HTTP {self.status_code}", status=self.status_code
+            )
         if path.startswith("/api/feeds"):
             if self.feeds_pages is not None:
                 assert self.feeds_pages, f"unexpected extra feeds GET: {path}"
@@ -97,6 +101,10 @@ class StubTransport:
 
     def post_json(self, path: str, *, headers: dict, body: dict, timeout: float) -> dict:
         self.log.append(("post", path, dict(body), dict(headers)))
+        return self.json_responses.get(path, {})
+
+    def put_json(self, path: str, *, headers: dict, body: dict, timeout: float) -> dict:
+        self.log.append(("put", path, dict(body), dict(headers)))
         return self.json_responses.get(path, {})
 
     def stream_sse(self, path: str, *, headers: dict, body: dict, timeout: float, on_frame):
@@ -112,6 +120,9 @@ class StubTransport:
 
 class UnreachableTransport(StubTransport):
     def status(self, path: str, *, timeout: float) -> int:
+        raise agent_run.ProviderError(f"GET {path} failed: ConnectError")
+
+    def get_json(self, path: str, *, headers: dict, timeout: float) -> dict:
         raise agent_run.ProviderError(f"GET {path} failed: ConnectError")
 
 
@@ -139,6 +150,9 @@ def make_config(tmp_path: Path, **overrides) -> agent_run.Config:
         "web_search_mode": "on",
         "prefs_timeout_seconds": 5.0,
         "agent_service_token": "test-agent-service-token-0123456789abcdef",
+        "embed_base_url": "http://embed.test/v1",
+        "embed_model": "test-embed-model",
+        "embed_api_key": "",
     }
     values.update(overrides)
     return agent_run.Config(**values)
@@ -150,12 +164,14 @@ def make_runtime(
     *,
     prefs: ScriptedPrefs | None = None,
     clock: FakeClock | None = None,
+    models: StubTransport | None = None,
 ) -> agent_run.Runtime:
     fake = clock or FakeClock()
     return agent_run.Runtime(
         agent=agent,
         api=api,
         prefs=prefs or ScriptedPrefs([True]),
+        models=models or StubTransport(),
         sleeper=fake.sleep,
         monotonic=fake.monotonic,
         clock=FIXED_CLOCK,
@@ -399,6 +415,158 @@ class TestEvalUser:
             "Authorization": "Bearer tok",
             "X-Nyx-User-Id": "11",
         }
+
+
+class TestEvalLlmConfigSeeding:
+    def test_embedding_config_is_seeded_before_fixtures(self, tmp_path: Path) -> None:
+        shared: list[tuple] = []
+        agent = StubTransport(sse=simple_turn("run-1", "ok"), log=shared)
+        api = StubTransport(
+            json_responses={agent_run.LOGIN_PATH: auth_payload()}, log=shared
+        )
+        agent_run.execute_case(
+            {
+                "prompt": "总结我的收藏",
+                "vars": {"case_id": "rag", "fixtures": ["秋刀鱼笔记"]},
+            },
+            config=make_config(tmp_path),
+            runtime=make_runtime(agent, api),
+        )
+        puts = [entry for entry in shared if entry[0] == "put"]
+        assert len(puts) == 1
+        assert puts[0][1] == agent_run.LLM_CONFIG_PATH
+        assert puts[0][2] == {
+            "embedding": {
+                "base_url": "http://embed.test/v1",
+                "api_key": "",
+                "model": "test-embed-model",
+            }
+        }
+        assert puts[0][3]["Authorization"] == "Bearer test-access-token"
+        assert agent_run.SERVICE_TOKEN_HEADER not in puts[0][3]
+        feed_index = shared.index(
+            next(e for e in shared if e[0] == "post" and e[1] == agent_run.FEEDS_PATH)
+        )
+        stream_index = next(i for i, e in enumerate(shared) if e[0] == "stream")
+        assert shared.index(puts[0]) < feed_index < stream_index
+
+    def test_seeding_is_cached_across_invocations(self, tmp_path: Path) -> None:
+        config = make_config(tmp_path)
+        first_agent = StubTransport(sse=simple_turn("run-1", "ok"))
+        first_api = StubTransport(
+            json_responses={agent_run.LOGIN_PATH: auth_payload()}
+        )
+        agent_run.execute_case(
+            {"prompt": "hello", "vars": {"case_id": "case-1"}},
+            config=config,
+            runtime=make_runtime(first_agent, first_api),
+        )
+        assert (tmp_path / agent_run.LLM_CONFIG_MARKER).exists()
+
+        second_agent = StubTransport(sse=simple_turn("run-2", "ok"))
+        second_api = StubTransport(json_responses={})
+        agent_run.execute_case(
+            {"prompt": "hello", "vars": {"case_id": "case-1"}},
+            config=config,
+            runtime=make_runtime(second_agent, second_api),
+        )
+        assert [e for e in second_api.log if e[0] == "put"] == []
+
+    def test_changed_embedding_model_reseeds(self, tmp_path: Path) -> None:
+        first_api = StubTransport(json_responses={agent_run.LOGIN_PATH: auth_payload()})
+        agent_run.execute_case(
+            {"prompt": "hello", "vars": {"case_id": "case-1"}},
+            config=make_config(tmp_path),
+            runtime=make_runtime(StubTransport(), first_api),
+        )
+
+        second_api = StubTransport(json_responses={})
+        agent_run.execute_case(
+            {"prompt": "hello", "vars": {"case_id": "case-1"}},
+            config=make_config(tmp_path, embed_model="other-embed-model"),
+            runtime=make_runtime(StubTransport(), second_api),
+        )
+        puts = [e for e in second_api.log if e[0] == "put"]
+        assert len(puts) == 1
+        assert puts[0][2]["embedding"]["model"] == "other-embed-model"
+
+    def test_marker_never_stores_the_api_key(self, tmp_path: Path) -> None:
+        config = make_config(tmp_path, embed_api_key="eval-embed-key-abc123")
+        api = StubTransport(json_responses={agent_run.LOGIN_PATH: auth_payload()})
+        agent_run.execute_case(
+            {"prompt": "hello", "vars": {"case_id": "case-1"}},
+            config=config,
+            runtime=make_runtime(StubTransport(), api),
+        )
+        marker = (tmp_path / agent_run.LLM_CONFIG_MARKER).read_text(encoding="utf-8")
+        assert "eval-embed-key-abc123" not in marker
+        assert json.loads(marker)["key_present"] is True
+
+    def test_put_failure_names_the_remediation(self, tmp_path: Path) -> None:
+        class FailingPut(StubTransport):
+            def put_json(self, path, *, headers, body, timeout):
+                self.log.append(("put", path))
+                raise agent_run.ProviderError(
+                    "PUT /api/me/llm-config -> HTTP 400: embedding_model", status=400
+                )
+
+        api = FailingPut(json_responses={agent_run.LOGIN_PATH: auth_payload()})
+        with pytest.raises(agent_run.ProviderError) as excinfo:
+            agent_run.execute_case(
+                {"prompt": "hello", "vars": {"case_id": "case-1"}},
+                config=make_config(tmp_path),
+                runtime=make_runtime(StubTransport(), api),
+            )
+        message = str(excinfo.value)
+        assert "embedding" in message
+        assert "EVAL_RUN_STAMP" in message
+        assert not (tmp_path / agent_run.LLM_CONFIG_MARKER).exists()
+
+    def test_unreachable_embedding_endpoint_fails_before_put(self, tmp_path: Path) -> None:
+        api = StubTransport(json_responses={agent_run.LOGIN_PATH: auth_payload()})
+        with pytest.raises(agent_run.ProviderError) as excinfo:
+            agent_run.execute_case(
+                {"prompt": "hello", "vars": {"case_id": "case-1"}},
+                config=make_config(tmp_path),
+                runtime=make_runtime(
+                    StubTransport(), api, models=UnreachableTransport()
+                ),
+            )
+        message = str(excinfo.value)
+        assert "embedding endpoint preflight failed" in message
+        assert "http://embed.test/v1/models" in message
+        assert [e for e in api.log if e[0] == "put"] == []
+
+    def test_embedding_endpoint_http_error_fails_before_put(self, tmp_path: Path) -> None:
+        api = StubTransport(json_responses={agent_run.LOGIN_PATH: auth_payload()})
+        with pytest.raises(agent_run.ProviderError) as excinfo:
+            agent_run.execute_case(
+                {"prompt": "hello", "vars": {"case_id": "case-1"}},
+                config=make_config(tmp_path),
+                runtime=make_runtime(
+                    StubTransport(), api, models=StubTransport(status_code=503)
+                ),
+            )
+        assert "HTTP 503" in str(excinfo.value)
+        assert [e for e in api.log if e[0] == "put"] == []
+
+    def test_missing_embedding_model_fails_before_put(self, tmp_path: Path) -> None:
+        api = StubTransport(json_responses={agent_run.LOGIN_PATH: auth_payload()})
+        models = StubTransport(
+            json_responses={
+                agent_run.EMBEDDING_PROBE_PATH: {"data": [{"id": "other-embed"}]}
+            }
+        )
+        with pytest.raises(agent_run.ProviderError) as excinfo:
+            agent_run.execute_case(
+                {"prompt": "hello", "vars": {"case_id": "case-1"}},
+                config=make_config(tmp_path),
+                runtime=make_runtime(StubTransport(), api, models=models),
+            )
+        message = str(excinfo.value)
+        assert "test-embed-model" in message
+        assert "other-embed" in message
+        assert [e for e in api.log if e[0] == "put"] == []
 
 
 class TestFixtureSeeding:
@@ -1184,6 +1352,9 @@ class TestConfig:
                 "EVAL_DB_DSN": "postgresql://other",
                 "EVAL_WEB_SEARCH": "off",
                 "EVAL_PREFS_TIMEOUT_SECONDS": "7",
+                "EVAL_EMBED_BASE_URL": "http://embed:3/v1/",
+                "EVAL_EMBED_MODEL": "other-embed",
+                "EVAL_EMBED_API_KEY": " embed-key ",
             }
         )
         assert config.go_api_url == "http://go:1"
@@ -1193,6 +1364,9 @@ class TestConfig:
         assert config.db_dsn == "postgresql://other"
         assert config.web_search_mode == "off"
         assert config.prefs_timeout_seconds == 7.0
+        assert config.embed_base_url == "http://embed:3/v1"
+        assert config.embed_model == "other-embed"
+        assert config.embed_api_key == "embed-key"
 
     def test_defaults_follow_the_dev_stack(self) -> None:
         config = agent_run.resolve_config({})
@@ -1201,6 +1375,9 @@ class TestConfig:
         assert config.db_dsn == agent_run.DEFAULT_DB_DSN
         assert config.prefs_timeout_seconds == 60.0
         assert config.web_search_mode == "on"
+        assert config.embed_base_url == "http://localhost:8001/v1"
+        assert config.embed_model == "Qwen/Qwen3-Embedding-0.6B"
+        assert config.embed_api_key == ""
 
     def test_stamp_is_persisted_for_the_next_process(self, tmp_path: Path) -> None:
         first = agent_run.resolve_config({"EVAL_ARTIFACTS_DIR": str(tmp_path)})

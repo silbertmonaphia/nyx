@@ -45,12 +45,12 @@ The harness SHALL exercise each case by calling the agent's production run endpo
 
 ### Requirement: Eval user and fixture seeding
 
-The harness SHALL run against a dedicated per-run eval user (created via the registration API), never a real user's account. Cases that need retrieval fixtures (feeds for RAG-dependent shapes) SHALL declare them; the harness seeds the fixtures for the eval user before the case runs. Seed data MUST be identifiable as eval data.
+The harness SHALL run against a dedicated per-run eval user (created via the registration API), never a real user's account. Cases that need retrieval fixtures (feeds for RAG-dependent shapes) SHALL declare them; the harness seeds the fixtures for the eval user before the case runs. Seed data MUST be identifiable as eval data. Under strict BYOK the harness SHALL first persist the eval user's embedding group through `PUT /api/me/llm-config` (endpoint configurable with `EVAL_EMBED_BASE_URL` / `EVAL_EMBED_MODEL` / `EVAL_EMBED_API_KEY`), so feed indexing and the RAG bridge resolve a per-user embedder. The embedding endpoint SHALL be preflighted; an unreachable or non-2xx endpoint MUST fail the run with the URL it tried.
 
 #### Scenario: RAG case has retrievable content
 
 - **WHEN** a case declares feed fixtures and runs
-- **THEN** the eval user's feed list contains those feeds before the prompt is sent, and the case's plan/answer can retrieve them
+- **THEN** the eval user's embedding group is configured before the fixtures are created, the feed list contains those feeds before the prompt is sent, and the case's plan/answer can retrieve them
 
 ### Requirement: Plan-shape grading
 

@@ -209,6 +209,12 @@ as a per-run eval user and grades with deterministic assertions — no LLM judge
   (+ `PYTHON_AGENT_WEB_SEARCH_ENABLED=true`). The stub serves the hostile payloads the security line keys
   on and a canned result set for everything else; the keyless Tavily tier IP-rate-limits after a handful of
   runs and stalls web samples for minutes, which is external noise in a rate.
+- Under strict BYOK the harness seeds the eval user's embedding group before fixtures
+  (`PUT /api/me/llm-config`), so feed indexing and the Go RAG bridge resolve a per-user embedder; without
+  it RAG cases retrieve nothing. The endpoint is preflighted (`EVAL_EMBED_BASE_URL`, default
+  `http://localhost:8001/v1`; `EVAL_EMBED_MODEL`, default `Qwen/Qwen3-Embedding-0.6B`;
+  `EVAL_EMBED_API_KEY` for a non-loopback endpoint). The harness still calls `POST /agent/run` directly,
+  so the agent's chat/planner model remains the one in this service's `.env`.
 
 ### Manual live-run runbook
 

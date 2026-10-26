@@ -11,7 +11,10 @@ with exactly the headers the Go proxy sets (`Authorization: Bearer
 <jwt>`, `X-Nyx-User-Id: <id>`), and consumes the true SSE stream
 (`event: <kind>` plus a flat JSON `data:` payload). The eval user is
 registered/logged in through the Go API, which is what the MCP and RAG
-bridges re-verify the bearer token against.
+bridges re-verify the bearer token against. Before fixtures are seeded,
+the provider persists that user's embedding BYOK config through
+`PUT /api/me/llm-config` (strict BYOK: the Go RAG bridge and feed
+indexer resolve the embedder from `user_llm_settings`).
 
 Mutating tool calls are gated fail-closed by the agent's approval gate,
 so every `confirm_request` frame is answered immediately with `POST
@@ -51,6 +54,11 @@ Environment (names frozen by the Makefile integration owner):
                                   stack owns the real flag; the weather case
                                   is the tripwire for a mismatch)
     EVAL_PREFS_TIMEOUT_SECONDS    extraction-landed bound, default 60
+    EVAL_EMBED_BASE_URL           embedding endpoint seeded into the eval
+                                  user's BYOK row (default http://localhost:8001/v1)
+    EVAL_EMBED_MODEL              embedding model for that row
+                                  (default Qwen/Qwen3-Embedding-0.6B)
+    EVAL_EMBED_API_KEY            optional key for a non-loopback endpoint
 
 Transcript contract (frozen; the provider's graded output):
     {"status": "completed"|"error"|"skipped",
@@ -85,6 +93,8 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 
 DEFAULT_GO_API_URL = "http://localhost:8180"
 DEFAULT_AGENT_URL = "http://localhost:9100"
+DEFAULT_EMBED_BASE_URL = "http://localhost:8001/v1"
+DEFAULT_EMBED_MODEL = "Qwen/Qwen3-Embedding-0.6B"
 DEFAULT_DB_DSN = (
     "postgresql://postgres:postgres@localhost:5433/nyx"
     "?options=-c%20search_path%3Dlanggraph%2Cagent"
@@ -97,6 +107,10 @@ FEED_TITLE_PREFIX = "eval-"
 REGISTER_PATH = "/api/register"
 LOGIN_PATH = "/api/login"
 FEEDS_PATH = "/api/feeds"
+LLM_CONFIG_PATH = "/api/me/llm-config"
+LLM_CONFIG_MARKER = "eval_llm_config.json"
+LLM_CONFIG_TIMEOUT_SECONDS = 15.0
+EMBEDDING_PROBE_PATH = "/models"
 RUN_PATH = "/agent/run"
 APPROVALS_PATH = "/agent/approvals"
 SERVICE_TOKEN_HEADER = "X-Nyx-Service-Token"
@@ -173,12 +187,24 @@ class Config:
     web_search_mode: str
     prefs_timeout_seconds: float
     agent_service_token: str = ""
+    embed_base_url: str = DEFAULT_EMBED_BASE_URL
+    embed_model: str = DEFAULT_EMBED_MODEL
+    embed_api_key: str = ""
 
 
 class Transport(Protocol):
     """The HTTP seam; unit tests stub this instead of touching a socket."""
 
     def post_json(
+        self,
+        path: str,
+        *,
+        headers: dict[str, str],
+        body: dict[str, Any],
+        timeout: float,
+    ) -> dict[str, Any]: ...
+
+    def put_json(
         self,
         path: str,
         *,
@@ -219,6 +245,7 @@ class Runtime:
     agent: Transport
     api: Transport
     prefs: PrefsReader
+    models: Transport | None = None
     sleeper: Callable[[float], None] = time.sleep
     monotonic: Callable[[], float] = time.monotonic
     clock: Callable[[], datetime] = lambda: datetime.now(timezone.utc)
@@ -312,6 +339,26 @@ class HttpTransport:
         if response.status_code >= 400:
             raise ProviderError(
                 f"POST {url} -> HTTP {response.status_code}: {response.text[:300]}",
+                status=response.status_code,
+            )
+        return _json_object(response, url)
+
+    def put_json(
+        self,
+        path: str,
+        *,
+        headers: dict[str, str],
+        body: dict[str, Any],
+        timeout: float,
+    ) -> dict[str, Any]:
+        url = self._url(path)
+        try:
+            response = self._client.put(url, headers=headers, json=body, timeout=timeout)
+        except httpx.HTTPError as exc:
+            raise ProviderError(f"PUT {url} failed: {exc!r}") from exc
+        if response.status_code >= 400:
+            raise ProviderError(
+                f"PUT {url} -> HTTP {response.status_code}: {response.text[:300]}",
                 status=response.status_code,
             )
         return _json_object(response, url)
@@ -434,6 +481,7 @@ def build_runtime(config: Config) -> Runtime:
         agent=HttpTransport(config.agent_url, client=client),
         api=HttpTransport(config.go_api_url, client=client),
         prefs=AsyncpgPrefsReader(config.db_dsn),
+        models=HttpTransport(config.embed_base_url, client=client),
     )
 
 
@@ -466,6 +514,11 @@ def resolve_config(env: dict[str, str] | None = None) -> Config:
         go_api_url=(source.get("EVAL_GO_API_URL") or DEFAULT_GO_API_URL).rstrip("/"),
         agent_url=(source.get("EVAL_AGENT_URL") or DEFAULT_AGENT_URL).rstrip("/"),
         agent_service_token=(source.get("EVAL_AGENT_SERVICE_TOKEN") or "").strip(),
+        embed_base_url=(
+            source.get("EVAL_EMBED_BASE_URL") or DEFAULT_EMBED_BASE_URL
+        ).rstrip("/"),
+        embed_model=source.get("EVAL_EMBED_MODEL") or DEFAULT_EMBED_MODEL,
+        embed_api_key=(source.get("EVAL_EMBED_API_KEY") or "").strip(),
         artifacts_dir=artifacts_dir,
         run_stamp=run_stamp,
         db_dsn=source.get("EVAL_DB_DSN") or DEFAULT_DB_DSN,
@@ -553,6 +606,101 @@ def ensure_eval_user(config: Config, runtime: Runtime) -> EvalUser:
     )
     cache_path.chmod(0o600)
     return user
+
+
+def ensure_eval_llm_config(config: Config, runtime: Runtime, user: EvalUser) -> None:
+    """Seed the eval user's embedding BYOK row (strict-BYOK RAG gate).
+
+    The Go RAG bridge and feed indexer resolve a per-user embedder from
+    `user_llm_settings`; an unconfigured eval user retrieves nothing and
+    indexes nothing. The marker stores only non-secret fields, so a
+    rotated key does not rewrite the row; `key_present` tracks the
+    keyless-vs-keyed shape that the PUT validation cares about.
+    """
+    marker_path = config.artifacts_dir / LLM_CONFIG_MARKER
+    if _llm_config_marker_matches(marker_path, config, user):
+        return
+    if runtime.models is not None:
+        probe_url = f"{config.embed_base_url}{EMBEDDING_PROBE_PATH}"
+        headers = {}
+        if config.embed_api_key:
+            headers["Authorization"] = f"Bearer {config.embed_api_key}"
+        try:
+            served = runtime.models.get_json(
+                EMBEDDING_PROBE_PATH,
+                headers=headers,
+                timeout=PREFLIGHT_TIMEOUT_SECONDS,
+            )
+        except ProviderError as exc:
+            raise ProviderError(
+                f"embedding endpoint preflight failed at {probe_url} ({exc})"
+            ) from exc
+        served_ids = _served_model_ids(served)
+        if served_ids and config.embed_model not in served_ids:
+            raise ProviderError(
+                f"embedding model {config.embed_model!r} is not served at "
+                f"{probe_url}; served: {', '.join(sorted(served_ids))}"
+            )
+    body = {
+        "embedding": {
+            "base_url": config.embed_base_url,
+            "api_key": config.embed_api_key,
+            "model": config.embed_model,
+        }
+    }
+    try:
+        runtime.api.put_json(
+            LLM_CONFIG_PATH,
+            headers=auth_headers(user),
+            body=body,
+            timeout=LLM_CONFIG_TIMEOUT_SECONDS,
+        )
+    except ProviderError as exc:
+        raise ProviderError(
+            f"seeding the eval user's embedding config failed: {exc}; "
+            "if the embedding model changed, clear the eval user's config "
+            "or use a new EVAL_RUN_STAMP"
+        ) from exc
+    marker_path.write_text(
+        json.dumps(
+            {
+                "user_id": user.user_id,
+                "embedding_base_url": config.embed_base_url,
+                "embedding_model": config.embed_model,
+                "key_present": bool(config.embed_api_key),
+            },
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+
+
+def _served_model_ids(payload: dict[str, Any]) -> set[str]:
+    data = payload.get("data")
+    if not isinstance(data, list):
+        return set()
+    return {
+        item["id"]
+        for item in data
+        if isinstance(item, dict) and isinstance(item.get("id"), str)
+    }
+
+
+def _llm_config_marker_matches(
+    path: Path, config: Config, user: EvalUser
+) -> bool:
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return False
+    if not isinstance(raw, dict):
+        return False
+    return (
+        raw.get("user_id") == user.user_id
+        and raw.get("embedding_base_url") == config.embed_base_url
+        and raw.get("embedding_model") == config.embed_model
+        and raw.get("key_present") == bool(config.embed_api_key)
+    )
 
 
 def _authenticate(api: Transport, email: str, password: str, sleeper: Callable[[float], None]) -> dict[str, Any]:
@@ -1007,6 +1155,7 @@ def execute_case(
             return skipped_transcript(case_id, absent, runtime)
     turns = turn_script(request, variables)
     user = ensure_eval_user(config, runtime)
+    ensure_eval_llm_config(config, runtime, user)
     seed_fixtures(runtime, user, variables.get("fixtures"))
 
     snapshot_requested = tool_effect_declared(variables)
