@@ -23,19 +23,7 @@ agent_token_from_env_file() {
   printf '%s' "$value"
 }
 
-read_persisted_token() {
-  local persisted="$1"
-  local value
-  value="$(tr -d '\r\n' < "$persisted")"
-  if ! agent_token_is_valid "$value"; then
-    echo "agent-token: $persisted is shorter than $AGENT_TOKEN_MIN_BYTES bytes" >&2
-    return 1
-  fi
-  printf '%s' "$value"
-}
-
 resolve_agent_service_token() {
-  local root="${AGENT_TOKEN_ROOT:-.}"
   local candidate="${AGENT_SERVICE_TOKEN:-}"
 
   if [[ -n "$candidate" ]]; then
@@ -56,26 +44,10 @@ resolve_agent_service_token() {
     return 0
   fi
 
-  local persisted="$root/backend/agent_py/.service-token"
-  if [[ -f "$persisted" ]]; then
-    read_persisted_token "$persisted"
-    return $?
-  fi
-
-  if ! candidate="$(openssl rand -hex 32 2>/dev/null)" || ! agent_token_is_valid "$candidate"; then
-    echo "agent-token: failed to generate a token with openssl" >&2
-    return 1
-  fi
-  if ( umask 077; set -C; printf '%s\n' "$candidate" > "$persisted" ) 2>/dev/null; then
-    chmod 600 "$persisted" 2>/dev/null || true
-    printf '%s' "$candidate"
-    return 0
-  fi
-  if [[ ! -f "$persisted" ]]; then
-    echo "agent-token: failed to persist $persisted" >&2
-    return 1
-  fi
-  read_persisted_token "$persisted"
+  echo "agent-token: AGENT_SERVICE_TOKEN is not configured — refusing to generate one." >&2
+  echo "agent-token: the Go backend and the Python agent both read it from backend/.env; set it there once:" >&2
+  echo "agent-token:   printf 'AGENT_SERVICE_TOKEN=%s\n' \"\$(openssl rand -hex 32)\" >> backend/.env" >&2
+  return 1
 }
 
 export_agent_service_token() {

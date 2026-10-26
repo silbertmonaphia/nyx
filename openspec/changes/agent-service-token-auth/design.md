@@ -46,7 +46,7 @@ Python rejects a missing or short token unconditionally — a public service mus
 
 ### Persisted local token for dev, eval, and e2e
 
-`scripts/lib/agent-token.sh` resolves the token in this order: exported env, an `AGENT_SERVICE_TOKEN=` assignment parsed from `backend/.env`, a gitignored `backend/agent_py/.service-token`, then generates one with `openssl rand -hex 32` (mode 600). Persisting the generated value keeps separately started backend and agent processes in agreement across runs. Compose needs no new `environment:` entry because both services already read `backend/.env`; Python consumes the unprefixed name.
+`scripts/lib/agent-token.sh` resolves the token in this order: exported env, then an `AGENT_SERVICE_TOKEN=` assignment parsed from `backend/.env`. It never generates or persists a value. `backend/.env` is the single local source of truth, so the separately started Go backend and Python agent processes read the same file and cannot drift — which is also what the compose services do (`env_file: backend/.env` on both). When nothing is configured the resolver fails with the command that adds the variable instead of silently creating a credential on disk. Compose needs no new `environment:` entry because both services already read `backend/.env`; Python consumes the unprefixed name.
 
 ### Keep the SSE 401 behavior, document it
 
