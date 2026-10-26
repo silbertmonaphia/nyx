@@ -820,7 +820,10 @@ func ValidateAgentURL(rawURL string, allowPrivate bool) error {
 	if u.Scheme == schemeHTTPS || allowPrivate {
 		return nil
 	}
-	if isLoopbackHost(host) || !strings.Contains(host, ".") {
+	if isLoopbackHost(host) {
+		return nil
+	}
+	if net.ParseIP(host) == nil && !strings.Contains(host, ".") {
 		return nil
 	}
 	return fmt.Errorf(

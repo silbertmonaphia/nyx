@@ -23,7 +23,7 @@ Set on the `agent` service in `docker-compose.yml`. `AGENT_ENABLED` and `PYTHON_
 | --- | --- | --- | --- |
 | `AGENT_ENABLED` | yes | `false` | Flip to `true` to route `/api/chat` through the Python service. |
 | `PYTHON_AGENT_URL` | yes (when `AGENT_ENABLED=true`) | unset | Agent base URL, read by the Go backend. Must be `https://` unless the host is loopback (`127.0.0.1` / `::1` / `localhost`) or a dot-less service-discovery name such as the compose `agent` host — the hop sends `AGENT_SERVICE_TOKEN` in a header, so plaintext transport to a publicly routable host would expose it. A rejected URL leaves the API up with every agent-backed route answering 503. |
-| `AGENT_ALLOW_PRIVATE_URL` | no | `false` | Set `true` to allow `http://` to a private-network host whose name contains dots (e.g. `http://agent.internal.example.com`). |
+| `AGENT_ALLOW_PRIVATE_URL` | no | `false` | Set `true` to allow `http://` to any dotted host name (e.g. `http://agent.internal.example.com`). The host must genuinely be private — the opt-out would equally permit a plaintext hop to a public host. |
 | `AGENT_SERVICE_TOKEN` | yes (when `AGENT_ENABLED=true`) | unset | Shared credential (at least 32 bytes) stamped as `X-Nyx-Service-Token` on every Go → Python hop. MUST be the same value on both services. Generate with `openssl rand -hex 32`. The Python service refuses to start when it is missing or short; the Go API stays up but every agent-backed route returns 503. |
 | `PYTHON_AGENT_DATABASE_URL` | yes (when `AGENT_ENABLED=true`) | unset | Must include `options=-c search_path=langgraph,agent`. The service refuses to start otherwise. |
 | `PYTHON_AGENT_MIGRATIONS_DISABLED` | no | `false` | Set `true` in compose; `false` in dev. |

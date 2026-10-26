@@ -6,7 +6,7 @@
 
 When `AGENT_ENABLED=true` but `PYTHON_AGENT_URL` is unset or `AGENT_SERVICE_TOKEN` is missing or shorter than 32 bytes, the Go API SHALL start and keep non-agent features (auth, feeds, MCP) available. The agent-backed routes (`POST /api/chat`, `/api/chat/sessions*`, `/api/chat/approvals`) SHALL respond HTTP 503 with the standard error envelope whose `details` is a static safe string naming the misconfiguration. The handler MUST NOT silently fall back to the single-turn chat path. When `AGENT_ENABLED=false`, the single-turn path runs and no token is required. The key SHALL be bound explicitly from the environment (the process's env-key allowlist), not inferred. The token value MUST NOT be logged or returned.
 
-The Go→agent hop carries the token in a request header, so the transport has to protect it. `PYTHON_AGENT_URL` SHALL be refused when it uses `http://` with a publicly routable host: `https://` is always accepted, and `http://` is accepted for a loopback host (`127.0.0.1`, `::1`, `localhost`) or a dot-less service-discovery name, unless `AGENT_ALLOW_PRIVATE_URL=true` opts out for a private name that contains dots. A URL with another scheme, or one carrying embedded userinfo, SHALL be refused as well. A refused URL SHALL degrade the agent-backed routes exactly like the other misconfigurations — the API keeps serving auth, feeds, and MCP.
+The Go→agent hop carries the token in a request header, so the transport has to protect it. `PYTHON_AGENT_URL` SHALL be refused when it uses `http://` for any host that is neither loopback (`127.0.0.1`, `::1`, `localhost`) nor a dot-less service-discovery name; non-loopback IP literals are always refused, including IPv4-mapped IPv6 forms. `https://` is always accepted, and `AGENT_ALLOW_PRIVATE_URL=true` opts out of the host rule for any dotted host name. A URL with another scheme, or one carrying embedded userinfo, SHALL be refused as well. A refused URL SHALL degrade the agent-backed routes exactly like the other misconfigurations — the API keeps serving auth, feeds, and MCP.
 
 #### Scenario: Missing token leaves non-agent features up
 
@@ -26,6 +26,11 @@ The Go→agent hop carries the token in a request header, so the transport has t
 #### Scenario: Plaintext URL to a public host leaves non-agent features up
 
 - **WHEN** `AGENT_ENABLED=true` and `PYTHON_AGENT_URL` is `http://` with a publicly routable host
+- **THEN** the API binds and every agent-backed route returns 503 (no silent single-turn fallback)
+
+#### Scenario: Non-loopback IP literal over plain http leaves non-agent features up
+
+- **WHEN** `AGENT_ENABLED=true` and `PYTHON_AGENT_URL` is `http://` with a non-loopback IP literal (for example an IPv4-mapped IPv6 form such as `[::ffff:808:808]`)
 - **THEN** the API binds and every agent-backed route returns 503 (no silent single-turn fallback)
 
 #### Scenario: Loopback and private service names keep plain http
