@@ -932,6 +932,7 @@ func TestLoad_AgentEnabledTrueHonoured(t *testing.T) {
 	t.Setenv("JWT_SECRET", auth.TestSecret)
 	t.Setenv("AGENT_ENABLED", "true")
 	t.Setenv("PYTHON_AGENT_URL", "http://agent:9000")
+	t.Setenv("AGENT_SERVICE_TOKEN", strings.Repeat("s", auth.MinSecretBytes))
 
 	cfg, err := Load()
 	if err != nil {
@@ -942,5 +943,62 @@ func TestLoad_AgentEnabledTrueHonoured(t *testing.T) {
 	}
 	if cfg.PythonAgentURL != "http://agent:9000" {
 		t.Errorf("PythonAgentURL = %q, want %q", cfg.PythonAgentURL, "http://agent:9000")
+	}
+}
+
+func TestLoad_AgentServiceTokenRequiredWhenAgentEnabled(t *testing.T) {
+	t.Setenv("DB_URL", "postgres://x")
+	t.Setenv("JWT_SECRET", auth.TestSecret)
+	t.Setenv("AGENT_ENABLED", "true")
+	t.Setenv("AGENT_SERVICE_TOKEN", "")
+
+	_, err := Load()
+	if err == nil {
+		t.Fatal("Load() error = nil, want an AGENT_SERVICE_TOKEN error")
+	}
+	if !strings.Contains(err.Error(), "AGENT_SERVICE_TOKEN") {
+		t.Fatalf("Load() error = %v, want it to name AGENT_SERVICE_TOKEN", err)
+	}
+}
+
+func TestLoad_AgentServiceTokenRejectsShortValue(t *testing.T) {
+	t.Setenv("DB_URL", "postgres://x")
+	t.Setenv("JWT_SECRET", auth.TestSecret)
+	t.Setenv("AGENT_ENABLED", "true")
+	t.Setenv("AGENT_SERVICE_TOKEN", strings.Repeat("s", auth.MinSecretBytes-1))
+
+	_, err := Load()
+	if err == nil {
+		t.Fatal("Load() error = nil, want an AGENT_SERVICE_TOKEN length error")
+	}
+	if !strings.Contains(err.Error(), "AGENT_SERVICE_TOKEN") {
+		t.Fatalf("Load() error = %v, want it to name AGENT_SERVICE_TOKEN", err)
+	}
+}
+
+func TestLoad_AgentServiceTokenHonoured(t *testing.T) {
+	token := strings.Repeat("s", auth.MinSecretBytes)
+	t.Setenv("DB_URL", "postgres://x")
+	t.Setenv("JWT_SECRET", auth.TestSecret)
+	t.Setenv("AGENT_ENABLED", "true")
+	t.Setenv("AGENT_SERVICE_TOKEN", token)
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg.AgentServiceToken != token {
+		t.Errorf("AgentServiceToken = %q, want the env value", cfg.AgentServiceToken)
+	}
+}
+
+func TestLoad_AgentServiceTokenOptionalWhenAgentDisabled(t *testing.T) {
+	t.Setenv("DB_URL", "postgres://x")
+	t.Setenv("JWT_SECRET", auth.TestSecret)
+	t.Setenv("AGENT_ENABLED", "false")
+	t.Setenv("AGENT_SERVICE_TOKEN", "")
+
+	if _, err := Load(); err != nil {
+		t.Fatalf("Load() error = %v", err)
 	}
 }

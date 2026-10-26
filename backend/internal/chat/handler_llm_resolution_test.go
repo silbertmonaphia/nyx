@@ -156,7 +156,7 @@ func TestHandler_UnconfiguredAgentModeRefusedBeforeUpstream(t *testing.T) {
 	}))
 	defer upstream.Close()
 
-	proxy, err := NewAgentProxy(upstream.URL, nil)
+	proxy, err := NewAgentProxy(upstream.URL, testServiceToken, nil)
 	require.NoError(t, err)
 	router, tokens := newProxyHarnessWithResolver(t, proxy, &stubLLMResolver{err: llmsettings.ErrNotFound})
 	server := httptest.NewServer(router)
@@ -227,7 +227,7 @@ func TestHandler_ResolveFailureReturns500WithSafeDetails(t *testing.T) {
 func TestHandler_AgentForwardsResolvedPerUserConfig(t *testing.T) {
 	upstream, captured := newUpstreamServer(t, http.StatusOK, cannedSSE, "text/event-stream")
 
-	proxy, err := NewAgentProxy(upstream.URL, nil)
+	proxy, err := NewAgentProxy(upstream.URL, testServiceToken, nil)
 	require.NoError(t, err)
 	stack := testUserStack()
 	router, tokens := newProxyHarnessWithResolver(t, proxy, &stubLLMResolver{stack: stack})
@@ -259,7 +259,7 @@ func TestHandler_AgentForwardsResolvedPerUserConfig(t *testing.T) {
 
 func TestHandler_AgentPayloadOmitsTavilyWhenUnconfigured(t *testing.T) {
 	srv, captured := newUpstreamServer(t, http.StatusOK, cannedSSE, "text/event-stream")
-	proxy, err := NewAgentProxy(srv.URL, nil)
+	proxy, err := NewAgentProxy(srv.URL, testServiceToken, nil)
 	require.NoError(t, err)
 
 	stack := testUserStack()
@@ -287,7 +287,7 @@ func TestHandler_MissingMainLLMReturns409(t *testing.T) {
 	stack.LLMAPIKey = ""
 	stack.LLMModel = ""
 
-	proxy, err := NewAgentProxy("http://127.0.0.1:1", nil)
+	proxy, err := NewAgentProxy("http://127.0.0.1:1", testServiceToken, nil)
 	require.NoError(t, err)
 	router, tokens := newProxyHarnessWithResolver(t, proxy, &stubLLMResolver{stack: stack})
 	server := httptest.NewServer(router)

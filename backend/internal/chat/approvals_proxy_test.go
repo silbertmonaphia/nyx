@@ -178,8 +178,10 @@ func TestApprovals_DecisionForwardedVerbatim(t *testing.T) {
 			assert.Equal(t, "application/json", last.contentType)
 			assert.Equal(t, "1", last.userID,
 				"X-Nyx-User-Id carries the verified user id (bearerToken mints sub=1)")
+			assert.Equal(t, testServiceToken, last.serviceToken,
+				"X-Nyx-Service-Token carries AGENT_SERVICE_TOKEN")
 			assert.Equal(t, bearer, last.authorization,
-				"Authorization is a passthrough — Go MUST NOT mint a service token")
+				"Authorization is a passthrough alongside the service credential")
 		})
 	}
 }

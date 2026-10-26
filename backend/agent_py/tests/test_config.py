@@ -4,9 +4,17 @@ to start when targeting api.openai.com without a key (spec scenario
 
 from __future__ import annotations
 
+import os
+import subprocess
+import sys
+from pathlib import Path
+
 import pytest
+from pydantic import ValidationError
 
 from agent.config import Settings
+
+AGENT_PY_DIR = Path(__file__).resolve().parents[1]
 
 
 @pytest.mark.parametrize(
@@ -403,3 +411,57 @@ def test_approval_ttl_below_one_refused(value):
             approval_ttl_seconds=value,
         )
     assert "PYTHON_AGENT_APPROVAL_TTL_SECONDS must be >= 1" in str(excinfo.value)
+
+
+def test_service_token_required(monkeypatch):
+    monkeypatch.delenv("AGENT_SERVICE_TOKEN", raising=False)
+    with pytest.raises(ValidationError) as excinfo:
+        Settings(_env_file=None)
+    assert "AGENT_SERVICE_TOKEN" in str(excinfo.value)
+
+
+@pytest.mark.parametrize("token", ["short", "x" * 31])
+def test_service_token_rejects_short_value(monkeypatch, token):
+    monkeypatch.setenv("AGENT_SERVICE_TOKEN", token)
+    with pytest.raises(ValidationError) as excinfo:
+        Settings(_env_file=None)
+    assert "AGENT_SERVICE_TOKEN" in str(excinfo.value)
+    assert token not in str(excinfo.value)
+
+
+def test_short_token_never_leaks_in_startup_error(tmp_path):
+    token = "LEAKMARKERTOKEN_0123456789abcde"  # noqa: S105
+    env = os.environ.copy()
+    env["AGENT_SERVICE_TOKEN"] = token
+    env["PYTHON_AGENT_LLM_BASE_URL"] = "http://vllm:8000/v1"
+    env["PYTHONPATH"] = str(AGENT_PY_DIR)
+    result = subprocess.run(
+        [sys.executable, "-c", "import agent.main"],
+        cwd=tmp_path,
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=120,
+        check=False,
+    )
+    assert result.returncode != 0
+    combined = result.stdout + result.stderr
+    assert "AGENT_SERVICE_TOKEN" in combined
+    assert token not in combined
+
+
+def test_service_token_reads_unprefixed_alias(monkeypatch):
+    token = "config-test-service-token-0123456789"  # noqa: S105
+    monkeypatch.setenv("AGENT_SERVICE_TOKEN", token)
+    monkeypatch.setenv("PYTHON_AGENT_SERVICE_TOKEN", "prefixed-value-0123456789")
+    s = Settings(_env_file=None, llm_base_url="http://vllm:8000/v1")
+    assert s.service_token.get_secret_value() == token
+
+
+def test_service_token_accepts_field_name(monkeypatch):
+    monkeypatch.delenv("AGENT_SERVICE_TOKEN", raising=False)
+    token = "config-test-service-token-0123456789"  # noqa: S105
+    s = Settings(
+        _env_file=None, llm_base_url="http://vllm:8000/v1", service_token=token
+    )
+    assert s.service_token.get_secret_value() == token

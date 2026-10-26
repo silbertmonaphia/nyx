@@ -34,31 +34,31 @@ import (
 //     operators see agent-side failures clearly.
 //   - HTTP 4xx → Run returns the response; the handler forwards
 //     the body verbatim. The operator's Python service is
-//     misconfigured when 4xx fires (e.g. missing X-Nyx-User-Id),
-//     not the client; the spec requires we surface it unchanged.
+//     misconfigured when 4xx fires (missing X-Nyx-User-Id or a
+//     service-token mismatch), not the client; surface unchanged.
 //   - HTTP 2xx → Run returns the response; the handler forwards
 //     the SSE body verbatim.
 //
-// Trust model: this hop is on the private network (compose bridge /
-// k8s NetworkPolicy restricting ingress to the Go backend). Python
-// does NOT verify the JWT — Go verified it at the SPA edge. The
-// proxy threads two things through:
-//
-//   - X-Nyx-User-Id: the verified user id from reqctx. Python reads
-//     this header to key the budget guard + per-user scope.
-//   - Authorization: the original bearer token, forwarded as a
-//     passthrough so Python can present it to Go's /mcp and
-//     /internal/rag/retrieve (which re-verify it). The proxy MUST
-//     NOT log the token value — use the TokenFingerprint helper if
-//     a log line needs a distinguishing tag for debugging.
+// Trust model: the Python service is public-facing, so every hop is
+// authenticated with the shared AGENT_SERVICE_TOKEN. Python does NOT
+// verify the JWT — Go verified it at the SPA edge. The proxy sends
+// three credentials:
+//   - X-Nyx-Service-Token: the shared credential; Python rejects
+//     requests without it, so X-Nyx-User-Id is only trusted behind
+//     this hop. The id from reqctx keys the budget guard + scope.
+//   - Authorization: the user's original bearer token, forwarded as
+//     a passthrough to Go's /mcp + /internal/rag/retrieve (re-verified
+//     there). Never log either credential; TokenFingerprint is the
+//     user-token tag.
 //
 // Thread-safety: AgentProxy has no mutable state; the underlying
 // *http.Client is safe for concurrent use. The constructor does
 // not start goroutines.
 type AgentProxy struct {
-	baseURL    string // e.g. "http://agent:9000" — trailing "/" stripped
-	runPath    string // typically "/agent/run"
-	httpClient *http.Client
+	baseURL      string // e.g. "http://agent:9000" — trailing "/" stripped
+	runPath      string // typically "/agent/run"
+	serviceToken string // AGENT_SERVICE_TOKEN, sent as ServiceTokenHeader
+	httpClient   *http.Client
 }
 
 // defaultResponseHeaderTimeout bounds how long the transport waits
@@ -68,11 +68,13 @@ type AgentProxy struct {
 // a wedged upstream — it never touches the streamed body itself.
 const defaultResponseHeaderTimeout = 30 * time.Second
 
+const ServiceTokenHeader = "X-Nyx-Service-Token" //nolint:gosec // header name, not a credential
+
 // NewAgentProxy builds a proxy that posts to baseURL + runPath.
-// baseURL is required (an empty PYTHON_AGENT_URL at boot time
-// means the operator has not configured the agent path; the
-// handler's IsAgentEnabled() gates this so the constructor is
-// only called when the operator explicitly opted in).
+// baseURL and serviceToken are required (empty values mean the
+// operator has not configured the agent path; the handler's
+// IsAgentEnabled() gates this so the constructor is only called
+// when the operator explicitly opted in).
 //
 // httpClient is supplied by the caller so test code can plug in
 // a controlled transport; nil builds a default one. Production
@@ -91,9 +93,12 @@ const defaultResponseHeaderTimeout = 30 * time.Second
 // default client adds only a ResponseHeaderTimeout so a wedged
 // upstream fails fast instead of holding the request open for the
 // full stream cap.
-func NewAgentProxy(baseURL string, httpClient *http.Client) (*AgentProxy, error) {
+func NewAgentProxy(baseURL, serviceToken string, httpClient *http.Client) (*AgentProxy, error) {
 	if baseURL == "" {
 		return nil, errors.New("chat: PYTHON_AGENT_URL is empty")
+	}
+	if serviceToken == "" {
+		return nil, errors.New("chat: AGENT_SERVICE_TOKEN is empty")
 	}
 	if httpClient == nil {
 		transport := http.DefaultTransport
@@ -105,9 +110,10 @@ func NewAgentProxy(baseURL string, httpClient *http.Client) (*AgentProxy, error)
 		httpClient = &http.Client{Transport: transport}
 	}
 	return &AgentProxy{
-		baseURL:    strings.TrimRight(baseURL, "/"),
-		runPath:    "/agent/run",
-		httpClient: httpClient,
+		baseURL:      strings.TrimRight(baseURL, "/"),
+		runPath:      "/agent/run",
+		serviceToken: serviceToken,
+		httpClient:   httpClient,
 	}, nil
 }
 
@@ -147,6 +153,7 @@ func (p *AgentProxy) Run(ctx context.Context, payload AgentRunPayload, userID in
 		return nil, ErrAgentUnavailable
 	}
 	httpReq.Header.Set("X-Nyx-User-Id", strconv.Itoa(userID))
+	httpReq.Header.Set(ServiceTokenHeader, p.serviceToken)
 	if bearerToken != "" {
 		httpReq.Header.Set("Authorization", bearerToken)
 	}

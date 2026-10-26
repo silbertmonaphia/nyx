@@ -6,10 +6,10 @@ Routes:
     unchanged. User id read from `X-Nyx-User-Id` (set by Go after JWT verification).
     The `Authorization` header is forwarded as a passthrough to the MCP and RAG
     bridges (which re-verify the JWT); the Python service itself does NOT verify it.
-    The trust boundary at this hop is the private network — Python is reachable only
-    by Go in compose / k8s deployments (see FUTURE_AGENT.md + docker-compose.yml).
+    Every route except `/healthz` requires `X-Nyx-Service-Token` matching
+    `AGENT_SERVICE_TOKEN`; the Go backend is the only intended caller.
   - GET  /healthz     — 200 with `{"status":"ok"}` when Redis is reachable; 503 otherwise.
-  - GET  /metrics     — Prometheus counters.
+  - GET  /metrics     — Prometheus counters (service token required).
   - GET/POST/DELETE /agent/sessions* — chat-session REST surface (list, replay,
     create, resume, soft-delete), registered from `agent.api.chat_sessions`.
     Same trust model as /agent/run: owner-scoped via `X-Nyx-User-Id`; the
@@ -78,6 +78,7 @@ from .rag_client import RagClient
 from .ratelimit import IpRateLimiter, RateLimitMiddleware
 from .retention import RetentionCron
 from .run_metadata import RunMetadata, RunMetadataUnavailable, build_pool
+from .service_auth import ServiceTokenMiddleware
 from .state import AgentState, new_state
 from .step_trace import StepTrace
 from .sweeper import StaleRunSweeper
@@ -626,16 +627,20 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     settings = settings or get_settings()
     app = FastAPI(title="nyx-agent", lifespan=lifespan)
 
-    # Per-IP rate limit on /agent/run only. /healthz and /metrics stay
-    # open for compose / Prometheus scraping. See ratelimit.py for the
-    # rationale (defense-in-depth for the no-auth-at-this-hop trust
-    # boundary).
+    # Per-IP rate limit on /agent/run only. /healthz stays open for
+    # compose / Prometheus scraping. See ratelimit.py for the rationale
+    # (defense-in-depth behind the service-token gate, which runs as the
+    # outermost middleware).
     app.add_middleware(
         RateLimitMiddleware,
         limiter=IpRateLimiter(
             requests_per_second=settings.requests_per_second,
             burst=settings.burst,
         ),
+    )
+    app.add_middleware(
+        ServiceTokenMiddleware,
+        expected_token=settings.service_token.get_secret_value(),
     )
 
     @app.get("/healthz")
@@ -672,18 +677,18 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.post("/agent/run")
     async def agent_run(req: Request) -> StreamingResponse:
-        # Trust model: this hop is on the private network (compose bridge / k8s
-        # NetworkPolicy restricting ingress to the backend). Python does NOT
-        # verify the JWT — Go's chat handler has already verified it. We read
-        # the user id from `X-Nyx-User-Id` (set by Go after verification) and
-        # forward the Authorization bearer token as a passthrough to the MCP
-        # and RAG bridges, which re-verify it themselves.
+        # Trust model: the service-token middleware authenticates the Go
+        # caller before this handler runs. Python does NOT verify the JWT —
+        # Go's chat handler has already verified it. We read the user id from
+        # `X-Nyx-User-Id` (set by Go after verification) and forward the
+        # Authorization bearer token as a passthrough to the MCP and RAG
+        # bridges, which re-verify it themselves.
         #
-        # The 400 below is NOT an auth check (this hop has no auth). It exists
-        # to make a misconfigured caller fail loudly with a clear message
-        # rather than silently running with user_id=0 — the budget guard keys
-        # on user_id, and 0 would either bypass enforcement or collide with
-        # any real user whose id happens to be 0.
+        # The 400 below validates the caller's header, not the service token.
+        # It exists to make a misconfigured caller fail loudly with a clear
+        # message rather than silently running with user_id=0 — the budget
+        # guard keys on user_id, and 0 would either bypass enforcement or
+        # collide with any real user whose id happens to be 0.
         user_id_raw = req.headers.get("x-nyx-user-id", "").strip()
         if not user_id_raw:
             raise HTTPException(

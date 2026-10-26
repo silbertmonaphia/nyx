@@ -61,6 +61,7 @@ start_agent() {
     PYTHON_AGENT_MCP_URL="http://localhost:${GO_PORT}/mcp" \
     PYTHON_AGENT_RAG_BRIDGE_URL="http://localhost:${GO_PORT}/internal/rag/retrieve" \
     PYTHON_AGENT_OTEL_ENDPOINT='http://localhost:4318' \
+    AGENT_SERVICE_TOKEN="$AGENT_SERVICE_TOKEN" \
       ./.venv/bin/python -m agent.main > "$(logfile agent)" 2>&1 &
     echo $! > "$(pidfile agent)"
   )
@@ -80,6 +81,7 @@ start_backend() {
     AGENT_ENABLED='true' \
     MCP_ENABLED='true' \
     PYTHON_AGENT_URL="http://127.0.0.1:${AGENT_PORT}" \
+    AGENT_SERVICE_TOKEN="$AGENT_SERVICE_TOKEN" \
     CORS_ALLOWED_ORIGINS="http://localhost:${VITE_PORT},http://127.0.0.1:${VITE_PORT}" \
       go run ./cmd/api > "$(logfile backend)" 2>&1 &
     echo $! > "$(pidfile backend)"
@@ -120,6 +122,14 @@ cmd_up() {
       exit 1
     fi
   done
+  # shellcheck disable=SC1091
+  . "$ROOT/scripts/lib/agent-token.sh"
+  AGENT_TOKEN_ROOT="$ROOT"
+  export AGENT_TOKEN_ROOT
+  if ! export_agent_service_token; then
+    echo "failed to resolve AGENT_SERVICE_TOKEN" >&2
+    exit 1
+  fi
   start_agent
   start_backend
   start_frontend

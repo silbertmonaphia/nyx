@@ -343,10 +343,9 @@ def _require_user_id(request: Request) -> int:
     """Read the Go-verified user id from `X-Nyx-User-Id`.
 
     Shared implementation (`api/deps.require_user_id`, review N4
-    2026-10-14): the 400 is not an auth check (this hop has no auth —
-    the network is the trust boundary) but a loud failure for a
-    misconfigured caller, which would otherwise silently export or erase
-    user 0's data.
+    2026-10-14): the service-token middleware has already authenticated
+    the caller, and this 400 is a loud failure for a misconfigured caller,
+    which would otherwise silently export or erase user 0's data.
     """
     return _deps_require_user_id(request)
 

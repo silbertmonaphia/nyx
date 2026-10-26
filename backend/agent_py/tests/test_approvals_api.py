@@ -18,6 +18,7 @@ from fastapi import FastAPI
 from agent.approvals import DECISION_APPROVE, ApprovalStore
 from agent.approvals_api import router
 from agent.chat_store import ChatStoreUnavailable
+from tests.service_auth_fixtures import SERVICE_AUTH_HEADERS
 
 
 class _StubRunMetadata:
@@ -53,7 +54,7 @@ def _app(redis=None, run_metadata=None, chat_store=None) -> FastAPI:
 
 def _client(app: FastAPI) -> httpx.AsyncClient:
     return httpx.AsyncClient(
-        transport=httpx.ASGITransport(app=app), base_url="http://test"
+        transport=httpx.ASGITransport(app=app), base_url="http://test", headers=SERVICE_AUTH_HEADERS
     )
 
 

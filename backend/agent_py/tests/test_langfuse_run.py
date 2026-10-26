@@ -31,6 +31,7 @@ from agent import observability as obs_module
 from agent.config import Settings
 from agent.main import create_app
 from agent.types import ChatMessage, ChatRequest
+from tests.service_auth_fixtures import SERVICE_AUTH_HEADERS
 
 _PLAN: dict[str, Any] = {
     "steps": [
@@ -301,7 +302,9 @@ async def traced_app(monkeypatch):
 
 async def _post_chat(app, body, user_id: int = 42):
     transport = httpx.ASGITransport(app=app)
-    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+    async with httpx.AsyncClient(
+        transport=transport, base_url="http://test", headers=SERVICE_AUTH_HEADERS
+    ) as client:
         return await client.post(
             "/agent/run",
             json=body,

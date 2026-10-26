@@ -18,6 +18,8 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+const testServiceToken = "test-service-token-0123456789abcdef"
+
 // newUpstreamServer wires a canned httptest.Server that returns the
 // supplied response body + status, and records every inbound request
 // header + body so a test can assert on them. The server is the
@@ -32,6 +34,7 @@ func newUpstreamServer(t *testing.T, status int, body string, ct string) (*httpt
 		captured.path = r.URL.Path
 		captured.authorization = r.Header.Get("Authorization")
 		captured.userID = r.Header.Get("X-Nyx-User-Id")
+		captured.serviceToken = r.Header.Get(ServiceTokenHeader)
 		captured.contentType = r.Header.Get("Content-Type")
 		captured.accept = r.Header.Get("Accept")
 		buf, err := io.ReadAll(r.Body)
@@ -51,6 +54,7 @@ type capturedRequest struct {
 	path          string
 	authorization string
 	userID        string
+	serviceToken  string
 	contentType   string
 	accept        string
 	body          string
@@ -78,7 +82,7 @@ const cannedSSE = "event: plan\n" +
 
 func TestAgentProxy_Run_ForwardsRequestBody(t *testing.T) {
 	srv, captured := newUpstreamServer(t, http.StatusOK, cannedSSE, "text/event-stream; charset=utf-8")
-	proxy, err := NewAgentProxy(srv.URL, nil)
+	proxy, err := NewAgentProxy(srv.URL, testServiceToken, nil)
 	require.NoError(t, err)
 
 	resp, err := proxy.Run(context.Background(), AgentRunPayload{ChatRequest: ChatRequest{
@@ -94,6 +98,8 @@ func TestAgentProxy_Run_ForwardsRequestBody(t *testing.T) {
 		"Authorization header forwarded verbatim — proxy MUST NOT re-mint or strip the token")
 	assert.Equal(t, "42", captured.userID,
 		"X-Nyx-User-Id header set from the verified user id")
+	assert.Equal(t, testServiceToken, captured.serviceToken,
+		"X-Nyx-Service-Token carries AGENT_SERVICE_TOKEN")
 	assert.Equal(t, "application/json", captured.contentType)
 	assert.Equal(t, "text/event-stream", captured.accept)
 	assert.Contains(t, captured.body, `"messages"`,
@@ -110,7 +116,7 @@ func TestAgentProxy_Run_ForwardsRequestBody(t *testing.T) {
 // upstream bytes verbatim.
 func TestAgentProxy_Run_ReturnsBodyBytesForHandlerToForward(t *testing.T) {
 	srv, _ := newUpstreamServer(t, http.StatusOK, cannedSSE, "text/event-stream; charset=utf-8")
-	proxy, err := NewAgentProxy(srv.URL, nil)
+	proxy, err := NewAgentProxy(srv.URL, testServiceToken, nil)
 	require.NoError(t, err)
 
 	resp, err := proxy.Run(context.Background(), AgentRunPayload{ChatRequest: ChatRequest{
@@ -140,7 +146,7 @@ func TestAgentProxy_Run_ConnectionRefused_ReturnsErrAgentUnavailable(t *testing.
 	url := srv.URL
 	srv.Close() // listener gone — dial will fail
 
-	proxy, err := NewAgentProxy(url, nil)
+	proxy, err := NewAgentProxy(url, testServiceToken, nil)
 	require.NoError(t, err)
 
 	resp, err := proxy.Run(context.Background(), AgentRunPayload{}, 42, "Bearer t")
@@ -161,7 +167,7 @@ func TestAgentProxy_Run_5xx_ReturnsErrAgentUnavailable(t *testing.T) {
 	for _, status := range []int{500, 502, 503, 504} {
 		t.Run(http.StatusText(status), func(t *testing.T) {
 			srv, _ := newUpstreamServer(t, status, "internal error", "text/plain")
-			proxy, err := NewAgentProxy(srv.URL, nil)
+			proxy, err := NewAgentProxy(srv.URL, testServiceToken, nil)
 			require.NoError(t, err)
 
 			resp, err := proxy.Run(context.Background(), AgentRunPayload{}, 42, "Bearer t")
@@ -188,7 +194,7 @@ func TestAgentProxy_Run_4xx_ReturnsResponseForByteForByteForward(t *testing.T) {
 		t.Run(http.StatusText(status), func(t *testing.T) {
 			body := `{"error":"unauthorized"}`
 			srv, _ := newUpstreamServer(t, status, body, "application/json")
-			proxy, err := NewAgentProxy(srv.URL, nil)
+			proxy, err := NewAgentProxy(srv.URL, testServiceToken, nil)
 			require.NoError(t, err)
 
 			resp, err := proxy.Run(context.Background(), AgentRunPayload{}, 42, "Bearer t")
@@ -210,7 +216,7 @@ func TestAgentProxy_Run_4xx_ReturnsResponseForByteForByteForward(t *testing.T) {
 // the SSE body intact.
 func TestAgentProxy_Run_2xx_ReturnsResponse(t *testing.T) {
 	srv, _ := newUpstreamServer(t, http.StatusOK, cannedSSE, "text/event-stream")
-	proxy, err := NewAgentProxy(srv.URL, nil)
+	proxy, err := NewAgentProxy(srv.URL, testServiceToken, nil)
 	require.NoError(t, err)
 
 	resp, err := proxy.Run(context.Background(), AgentRunPayload{}, 42, "Bearer t")
@@ -236,7 +242,7 @@ func TestAgentProxy_Run_CtxCanceled_NetworkError(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	proxy, err := NewAgentProxy(srv.URL, &http.Client{Timeout: 50 * time.Millisecond})
+	proxy, err := NewAgentProxy(srv.URL, testServiceToken, &http.Client{Timeout: 50 * time.Millisecond})
 	require.NoError(t, err)
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -258,8 +264,17 @@ func TestAgentProxy_Run_CtxCanceled_NetworkError(t *testing.T) {
 // constructor refuses rather than silently building a proxy that
 // would always fail with ErrAgentUnavailable.
 func TestNewAgentProxy_RejectsEmptyBaseURL(t *testing.T) {
-	_, err := NewAgentProxy("", nil)
+	_, err := NewAgentProxy("", testServiceToken, nil)
 	require.Error(t, err)
+}
+
+func TestNewAgentProxy_RejectsEmptyServiceToken(t *testing.T) {
+	_, err := NewAgentProxy("http://agent.test", "", nil)
+	require.Error(t, err)
+}
+
+func TestServiceTokenHeaderLiteral(t *testing.T) {
+	assert.Equal(t, "X-Nyx-Service-Token", ServiceTokenHeader)
 }
 
 // TestNewAgentProxy_DefaultClientCarriesNoStreamTimeout pins the
@@ -271,7 +286,7 @@ func TestNewAgentProxy_RejectsEmptyBaseURL(t *testing.T) {
 // ResponseHeaderTimeout so a wedged upstream fails fast without
 // touching a live stream.
 func TestNewAgentProxy_DefaultClientCarriesNoStreamTimeout(t *testing.T) {
-	proxy, err := NewAgentProxy("http://agent.test", nil)
+	proxy, err := NewAgentProxy("http://agent.test", testServiceToken, nil)
 	require.NoError(t, err)
 	require.NotNil(t, proxy.httpClient)
 
@@ -290,7 +305,7 @@ func TestNewAgentProxy_DefaultClientCarriesNoStreamTimeout(t *testing.T) {
 // doubled "//" path on the outbound URL.
 func TestNewAgentProxy_TrimsTrailingSlash(t *testing.T) {
 	srv, captured := newUpstreamServer(t, http.StatusOK, cannedSSE, "text/event-stream")
-	proxy, err := NewAgentProxy(srv.URL+"/", nil) // trailing slash
+	proxy, err := NewAgentProxy(srv.URL+"/", testServiceToken, nil) // trailing slash
 	require.NoError(t, err)
 
 	resp, err := proxy.Run(context.Background(), AgentRunPayload{}, 42, "Bearer t")
@@ -335,7 +350,7 @@ func TestTokenFingerprint(t *testing.T) {
 
 func TestAgentProxy_Run_ForwardsPerUserConfig(t *testing.T) {
 	srv, captured := newUpstreamServer(t, http.StatusOK, cannedSSE, "text/event-stream")
-	proxy, err := NewAgentProxy(srv.URL, nil)
+	proxy, err := NewAgentProxy(srv.URL, testServiceToken, nil)
 	require.NoError(t, err)
 
 	model := "client-model"
@@ -389,7 +404,7 @@ func TestAgentProxy_Run_ForwardsPerUserConfig(t *testing.T) {
 
 func TestAgentProxy_Run_MatchesAgentPayloadFixture(t *testing.T) {
 	srv, captured := newUpstreamServer(t, http.StatusOK, cannedSSE, "text/event-stream")
-	proxy, err := NewAgentProxy(srv.URL, nil)
+	proxy, err := NewAgentProxy(srv.URL, testServiceToken, nil)
 	require.NoError(t, err)
 
 	payload := AgentRunPayload{

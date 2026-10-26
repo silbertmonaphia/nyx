@@ -17,7 +17,7 @@
 # the `docker compose` plugin on PATH. Backend invocations assume
 # `make up` has been run.
 
-.PHONY: dev dev-backend dev-frontend dev-agent dev-vllm-main dev-vllm-embed dev-infra dev-pgsql-inspect dev-redis-inspect dev-gpu-inspect dev-gpu-watch up down up-vllm down-vllm dev-up-langfuse dev-down-langfuse logs status stop help eval-golden eval-security eval-run
+.PHONY: dev dev-backend dev-frontend dev-agent dev-vllm-main dev-vllm-embed dev-infra dev-pgsql-inspect dev-redis-inspect dev-gpu-inspect dev-gpu-watch up down up-vllm down-vllm dev-up-langfuse dev-down-langfuse logs status stop help eval-golden eval-security eval-run e2e-agent-auth
 
 COMPOSE := docker compose
 
@@ -158,8 +158,14 @@ eval-golden:
 eval-security:
 	@$(MAKE) --no-print-directory eval-run EVAL_CONFIG=evals/promptfooconfig.security.yaml EVAL_CORPUS_GLOB=evals/cases/security.yaml EVAL_BASELINE_RATE=
 
+#: Verify the agent service-token gate against a running stack (AGENT_URL, default side stack :9100).
+e2e-agent-auth:
+	@./scripts/e2e/agent-service-auth.sh
+
 eval-run:
 	@set -e; \
+	EVAL_AGENT_SERVICE_TOKEN="$${EVAL_AGENT_SERVICE_TOKEN:-$$(bash scripts/lib/agent-token.sh)}"; \
+	export EVAL_AGENT_SERVICE_TOKEN; \
 	go_code=$$(curl -s -o /dev/null -w '%{http_code}' -m 3 "$(EVAL_GO_API_URL)/api/feeds" || true); \
 	agent_code=$$(curl -s -o /dev/null -w '%{http_code}' -m 5 "$(EVAL_AGENT_URL)/healthz" || true); \
 	if [ "$$go_code" = "000" ] || [ "$$agent_code" != "200" ]; then \
@@ -174,6 +180,7 @@ eval-run:
 	$(EVAL_PYTHON) evals/validate.py; \
 	EVAL_RUN_STAMP=$$stamp EVAL_ARTIFACTS_DIR="$$dir" \
 	EVAL_GO_API_URL=$(EVAL_GO_API_URL) EVAL_AGENT_URL=$(EVAL_AGENT_URL) EVAL_WEB_SEARCH=$(EVAL_WEB_SEARCH) \
+	EVAL_AGENT_SERVICE_TOKEN="$$EVAL_AGENT_SERVICE_TOKEN" \
 	EVAL_BUDGET_STACK=$(EVAL_BUDGET_STACK) EVAL_MODEL=$(EVAL_MODEL) \
 	npx -y promptfoo@$(EVAL_PROMPTFOO_VERSION) eval --config $(EVAL_CONFIG) \
 	  --max-concurrency 1 --no-progress-bar $(if $(EVAL_FILTER),--filter-pattern "$(EVAL_FILTER)",) \

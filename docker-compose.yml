@@ -453,6 +453,8 @@ services:
       # scraped by Prometheus on the bridge network too.
       - "127.0.0.1:9001:9001"
     env_file:
+      # Supplies AGENT_SERVICE_TOKEN; the Go backend reads the same value
+      # from its own env_file so the two sides can never drift.
       - backend/.env
     environment:
       # In-network hostnames for the bridges the agent calls into.
@@ -871,10 +873,10 @@ services:
     networks: [default, internal]
 
 # Network topology: the Python agent service is reachable ONLY by the
-# Go backend. The trust model at /agent/run is the private network —
-# Python does not verify JWTs, and there is no app-layer auth at this
-# hop (see FUTURE_AGENT.md + backend/agent_py/README.md "Trust model").
-# To make that network boundary structural rather than conventional,
+# Go backend in this compose topology. Every hop is authenticated with
+# the shared AGENT_SERVICE_TOKEN (X-Nyx-Service-Token); Python does not
+# verify JWTs (see backend/agent_py/README.md "Trust model").
+# To make the network boundary structural rather than conventional,
 # we split into two bridge networks:
 #
 #   default — the conventional compose bridge. frontend lives here and

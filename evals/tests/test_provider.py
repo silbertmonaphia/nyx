@@ -138,6 +138,7 @@ def make_config(tmp_path: Path, **overrides) -> agent_run.Config:
         "db_dsn": "postgresql://unused",
         "web_search_mode": "on",
         "prefs_timeout_seconds": 5.0,
+        "agent_service_token": "test-agent-service-token-0123456789abcdef",
     }
     values.update(overrides)
     return agent_run.Config(**values)
@@ -962,6 +963,31 @@ class TestPreflight:
         assert "http://agent.test/healthz" in message
         assert "503" in message
 
+    def test_missing_service_token_refused(self, tmp_path: Path) -> None:
+        runtime = make_runtime(StubTransport(), StubTransport())
+        with pytest.raises(agent_run.ProviderError) as excinfo:
+            agent_run.preflight(
+                make_config(tmp_path, agent_service_token=""), runtime
+            )
+        assert "EVAL_AGENT_SERVICE_TOKEN" in str(excinfo.value)
+
+
+class TestServiceTokenHeader:
+    def test_agent_calls_carry_the_service_token(self, tmp_path: Path) -> None:
+        _, agent, api = run_single_prompt(tmp_path)
+        agent_headers = [
+            entry[3] for entry in agent.log if entry[0] in ("stream", "post")
+        ]
+        assert agent_headers
+        assert all(
+            headers.get(agent_run.SERVICE_TOKEN_HEADER)
+            == "test-agent-service-token-0123456789abcdef"
+            for headers in agent_headers
+        )
+        api_headers = [entry[3] for entry in api.log if entry[0] == "post"]
+        assert api_headers
+        assert all(agent_run.SERVICE_TOKEN_HEADER not in h for h in api_headers)
+
 
 PROMPTFOO_CONFIG_JSON = json.dumps(
     {
@@ -1025,6 +1051,9 @@ class TestExecProtocol:
         monkeypatch.setattr(agent_run, "build_runtime", lambda config: make_runtime(agent, api))
         monkeypatch.setenv("EVAL_ARTIFACTS_DIR", str(tmp_path))
         monkeypatch.setenv("EVAL_RUN_STAMP", "20260101T000000Z")
+        monkeypatch.setenv(
+            "EVAL_AGENT_SERVICE_TOKEN", "test-agent-service-token-0123456789abcdef"
+        )
         monkeypatch.setattr(
             sys,
             "argv",
@@ -1055,6 +1084,9 @@ class TestExecProtocol:
         monkeypatch.setenv("EVAL_ARTIFACTS_DIR", str(tmp_path))
         monkeypatch.setenv("EVAL_GO_API_URL", "http://go.test")
         monkeypatch.setenv("EVAL_AGENT_URL", "http://agent.test")
+        monkeypatch.setenv(
+            "EVAL_AGENT_SERVICE_TOKEN", "test-agent-service-token-0123456789abcdef"
+        )
         monkeypatch.setattr(
             sys,
             "argv",

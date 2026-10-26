@@ -42,6 +42,8 @@ directly.
 Environment (names frozen by the Makefile integration owner):
     EVAL_GO_API_URL               Go API base, default http://localhost:8180
     EVAL_AGENT_URL                Python agent base, default http://localhost:9100
+    EVAL_AGENT_SERVICE_TOKEN      shared agent credential (>= 32 bytes; sent
+                                  as X-Nyx-Service-Token on agent calls only)
     EVAL_ARTIFACTS_DIR            artifact root (Makefile creates it)
     EVAL_RUN_STAMP                UTC stamp used in the eval-user email
     EVAL_DB_DSN                   prefs-poll DSN (default: dev stack)
@@ -97,6 +99,7 @@ LOGIN_PATH = "/api/login"
 FEEDS_PATH = "/api/feeds"
 RUN_PATH = "/agent/run"
 APPROVALS_PATH = "/agent/approvals"
+SERVICE_TOKEN_HEADER = "X-Nyx-Service-Token"
 GO_HEALTH_PATH = "/api/health"
 AGENT_HEALTH_PATH = "/healthz"
 
@@ -169,6 +172,7 @@ class Config:
     db_dsn: str
     web_search_mode: str
     prefs_timeout_seconds: float
+    agent_service_token: str = ""
 
 
 class Transport(Protocol):
@@ -461,6 +465,7 @@ def resolve_config(env: dict[str, str] | None = None) -> Config:
     return Config(
         go_api_url=(source.get("EVAL_GO_API_URL") or DEFAULT_GO_API_URL).rstrip("/"),
         agent_url=(source.get("EVAL_AGENT_URL") or DEFAULT_AGENT_URL).rstrip("/"),
+        agent_service_token=(source.get("EVAL_AGENT_SERVICE_TOKEN") or "").strip(),
         artifacts_dir=artifacts_dir,
         run_stamp=run_stamp,
         db_dsn=source.get("EVAL_DB_DSN") or DEFAULT_DB_DSN,
@@ -487,6 +492,10 @@ def _read_or_create_stamp(artifacts_dir: Path) -> str:
 
 def preflight(config: Config, runtime: Runtime) -> None:
     """Fail loudly, naming the exact URL, when a dependency is unreachable."""
+    if len(config.agent_service_token.encode("utf-8")) < 32:
+        raise ProviderError(
+            "preflight failed: EVAL_AGENT_SERVICE_TOKEN must be at least 32 bytes"
+        )
     checks = (
         ("Go API", runtime.api, GO_HEALTH_PATH, f"{config.go_api_url}{GO_HEALTH_PATH}"),
         (
@@ -607,6 +616,13 @@ def _expiry_epoch(raw: Any) -> float | None:
     if parsed.tzinfo is None:
         parsed = parsed.replace(tzinfo=timezone.utc)
     return parsed.timestamp()
+
+
+def agent_headers(user: EvalUser, service_token: str) -> dict[str, str]:
+    headers = auth_headers(user)
+    if service_token:
+        headers[SERVICE_TOKEN_HEADER] = service_token
+    return headers
 
 
 def auth_headers(user: EvalUser) -> dict[str, str]:
@@ -897,6 +913,7 @@ def run_turn(
     prompt: str,
     *,
     echo_run_id: str | None,
+    service_token: str,
 ) -> tuple[list[Frame], str, str, str | None]:
     """Run one production turn, approving gates as they appear.
 
@@ -916,7 +933,13 @@ def run_turn(
                 seen_run_id["value"] = value
         elif frame.event == "confirm_request":
             try:
-                approve(runtime, user, frame, echo_run_id)
+                approve(
+                    runtime,
+                    user,
+                    frame,
+                    echo_run_id,
+                    service_token=service_token,
+                )
             except ProviderError as exc:
                 approval_errors.append(str(exc))
 
@@ -925,7 +948,7 @@ def run_turn(
         body["run_id"] = echo_run_id
     raw_sse = runtime.agent.stream_sse(
         RUN_PATH,
-        headers=auth_headers(user),
+        headers=agent_headers(user, service_token),
         body=body,
         timeout=RUN_READ_TIMEOUT_SECONDS,
         on_frame=on_frame,
@@ -944,6 +967,8 @@ def approve(
     user: EvalUser,
     frame: Frame,
     fallback_run_id: str | None,
+    *,
+    service_token: str,
 ) -> None:
     """Answer a `confirm_request` immediately (mutating calls fail closed)."""
     run_id = frame.data.get("run_id") or fallback_run_id
@@ -954,7 +979,7 @@ def approve(
         )
     runtime.agent.post_json(
         APPROVALS_PATH,
-        headers=auth_headers(user),
+        headers=agent_headers(user, service_token),
         body={
             "run_id": str(run_id),
             "approval_id": str(approval_id),
@@ -1001,7 +1026,11 @@ def execute_case(
     for index, turn in enumerate(turns):
         echo = None if turn["new_session"] else previous_run_id
         frames, run_id, session_id, raw = run_turn(
-            runtime, user, turn["prompt"], echo_run_id=echo
+            runtime,
+            user,
+            turn["prompt"],
+            echo_run_id=echo,
+            service_token=config.agent_service_token,
         )
         previous_run_id = run_id or previous_run_id
         if sample_blocks:

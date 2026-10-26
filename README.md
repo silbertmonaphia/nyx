@@ -121,7 +121,10 @@ Then open:
 - Traces — <http://localhost:16686> (Jaeger) · Langfuse on :3000 via `make dev-up-langfuse`
 
 Chat is gated by `LLM_ENABLED=true`; adding `AGENT_ENABLED=true` routes it through the agent
-instead of the plain single-turn RAG chat. Everything else works the same either way.
+instead of the plain single-turn RAG chat. The agent path also needs `PYTHON_AGENT_URL` and the
+shared `AGENT_SERVICE_TOKEN` (at least 32 bytes, the same value on the Go API and the agent
+service — every Go → Python hop carries it as `X-Nyx-Service-Token`). Everything else works the
+same either way.
 
 ## Deploy
 

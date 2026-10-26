@@ -8,20 +8,37 @@ from __future__ import annotations
 
 import os
 
-from pydantic import SecretStr, model_validator
+from pydantic import Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+MIN_SERVICE_TOKEN_BYTES = 32
 
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
         env_prefix="PYTHON_AGENT_",
         env_file=".env",
+        populate_by_name=True,
+        hide_input_in_errors=True,
         extra="ignore",
     )
 
     # --- Server ---
     port: int = 9000
     metrics_port: int = 9001
+    service_token: SecretStr = Field(
+        default=SecretStr(""), validation_alias="AGENT_SERVICE_TOKEN"
+    )
+
+    @field_validator("service_token")
+    @classmethod
+    def _validate_service_token(cls, value: SecretStr) -> SecretStr:
+        raw = value.get_secret_value()
+        if len(raw.encode("utf-8")) < MIN_SERVICE_TOKEN_BYTES:
+            raise ValueError(
+                f"AGENT_SERVICE_TOKEN must be at least {MIN_SERVICE_TOKEN_BYTES} bytes"
+            )
+        return value
 
     # --- LLM ---
     llm_base_url: str = "https://api.openai.com/v1"
@@ -105,10 +122,10 @@ class Settings(BaseSettings):
     otel_service_name: str = "nyx-agent"
     otel_enabled: bool = True
 
-    # --- Per-IP rate limit (defense in depth; /agent/run is on the
-    # private network and has no app-layer auth — see README "Trust
-    # model" + docker-compose.yml networks: section). Limits apply
-    # per source IP per 1-second sliding window. Generous enough that
+    # --- Per-IP rate limit (defense in depth behind the service-token
+    # gate; /agent/run is authenticated by AGENT_SERVICE_TOKEN — see
+    # README "Trust model" + docker-compose.yml networks: section).
+    # Limits apply per source IP per 1-second sliding window. Generous enough that
     # a single Go backend instance never trips; tight enough that a
     # compromised container can't drain the LLM budget.
     requests_per_second: float = 100.0
@@ -252,13 +269,13 @@ class Settings(BaseSettings):
     # loudly at startup. NEVER enable in a deployed environment.
     web_fetch_allow_private: bool = False
 
-    # NOTE: there is intentionally NO JWT verification config here. The Python
-    # service trusts the network boundary (compose bridge / k8s NetworkPolicy
-    # restricting ingress to the Go backend). Go verifies the user JWT at the
-    # SPA edge and forwards the verified user_id via the `X-Nyx-User-Id`
-    # header; the bearer token is forwarded as a passthrough to the MCP and
-    # RAG bridges (Go re-verifies on those endpoints). See FUTURE_AGENT.md +
-    # docker-compose.yml for the trust model.
+    # NOTE: there is intentionally NO JWT verification config here. The Go
+    # backend verifies the user JWT at the SPA edge and forwards the
+    # verified user_id via the `X-Nyx-User-Id` header; inbound requests are
+    # authenticated by the shared AGENT_SERVICE_TOKEN (X-Nyx-Service-Token).
+    # The bearer token is forwarded as a passthrough to the MCP and RAG
+    # bridges (Go re-verifies on those endpoints). See README "Trust model"
+    # + docker-compose.yml for the service-token contract.
 
     @model_validator(mode="after")
     def _validate_planner_retry(self) -> Settings:

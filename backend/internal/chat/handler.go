@@ -359,9 +359,8 @@ func (h *Handler) streamProxy(w http.ResponseWriter, r *http.Request, req ChatRe
 	// Forward the user's Authorization header verbatim as a
 	// passthrough to /mcp + /internal/rag/retrieve (Go re-verifies
 	// on those endpoints). The Python agent itself does NOT verify
-	// it — the network boundary is the trust boundary at this hop.
-	// The Go proxy MUST NOT mint a service-to-service token, MUST
-	// NOT re-validate, MUST NOT log the value.
+	// it — the shared service token authenticates this hop. The
+	// Go proxy MUST NOT re-validate or log either credential value.
 	bearer := r.Header.Get("Authorization")
 
 	// Wall-clock bound on the upstream stream — the same

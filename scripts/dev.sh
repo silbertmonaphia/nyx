@@ -198,6 +198,15 @@ if needs_agent || $agent_enabled_in_env; then
   if [[ -z "${PYTHON_AGENT_URL:-}" ]]; then
     export PYTHON_AGENT_URL='http://127.0.0.1:9000'
   fi
+
+  # shellcheck disable=SC1091
+  . "$REPO_ROOT/scripts/lib/agent-token.sh"
+  AGENT_TOKEN_ROOT="$REPO_ROOT"
+  export AGENT_TOKEN_ROOT
+  if ! export_agent_service_token; then
+    echo "failed to resolve AGENT_SERVICE_TOKEN for the agent path" >&2
+    exit 1
+  fi
 fi
 
 # --- vllm preflight (host-run chat / embedding models) --------------------

@@ -38,6 +38,8 @@ import asyncpg
 import httpx
 import pytest
 
+from tests.service_auth_fixtures import SERVICE_AUTH_HEADERS
+
 _DSN = os.environ.get("TEST_ASYNC_PG_DSN")
 
 pytestmark = pytest.mark.skipif(
@@ -139,7 +141,9 @@ async def _call(
     if user_id is not None:
         headers["X-Nyx-User-Id"] = str(user_id)
     transport = httpx.ASGITransport(app=app)
-    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+    async with httpx.AsyncClient(
+        transport=transport, base_url="http://test", headers=SERVICE_AUTH_HEADERS
+    ) as client:
         return await client.request(method, path, headers=headers)
 
 

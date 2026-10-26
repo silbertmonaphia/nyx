@@ -88,7 +88,7 @@ standalone:
 
 ```bash
 cd backend/agent_py
-cp .env.example .env        # fill in PYTHON_AGENT_LLM_BASE_URL + PYTHON_AGENT_LLM_API_KEY
+cp .env.example .env        # fill in PYTHON_AGENT_LLM_BASE_URL + PYTHON_AGENT_LLM_API_KEY + AGENT_SERVICE_TOKEN
 uv sync --locked --extra dev
 python -m agent.main        # or: uvicorn agent.main:app --port 9000 --reload
 ```
@@ -133,6 +133,7 @@ Boot-critical:
 | `PYTHON_AGENT_REDIS_URL` | `redis://localhost:6380` | Per-user budget guard |
 | `PYTHON_AGENT_MCP_URL` / `RAG_BRIDGE_URL` | `:8080` host-dev | Go tool surface + RAG bridge |
 | `AGENT_BUDGET_PER_USER_PER_HOUR` | `200000` | Tokens/user/hour (unprefixed — shared cross-runtime contract) |
+| `AGENT_SERVICE_TOKEN` | — | Shared Go → Python credential (at least 32 bytes, same value on both services; sent as `X-Nyx-Service-Token`). Unprefixed; the service refuses to start without it. |
 
 Common flags:
 
@@ -161,13 +162,14 @@ Every knob, default, and rationale → [`README_ALL.md`](README_ALL.md).
 
 ## Trust model
 
-The service does **not** verify JWTs. It runs on the private compose / k8s network — port 9000
-is not published, only `127.0.0.1:9001` for metrics. Go's chat handler verifies the user JWT
-and forwards the verified user id in `X-Nyx-User-Id`; the bearer token is a passthrough that Go
-re-verifies at `/mcp` and the RAG bridge. An in-process per-IP rate limit on `/agent/run`
-(`PYTHON_AGENT_REQUESTS_PER_SECOND` 100 / `BURST` 200) backstops a compromised container — it
-is **not** an auth layer. If port 9000 ever becomes reachable beyond this network, add one
-(mTLS / shared secret / firewall). Full rationale → [`README_ALL.md` § Trust model](README_ALL.md#trust-model).
+The service does **not** verify JWTs. Every route except the exact `/healthz` probe requires
+`X-Nyx-Service-Token` matching the shared `AGENT_SERVICE_TOKEN` (at least 32 bytes, the same
+value on the Go backend and the agent; both refuse to start when the agent path is enabled
+without it). Go's chat handler verifies the user JWT and forwards the verified user id in
+`X-Nyx-User-Id`; the bearer token is a passthrough that Go re-verifies at `/mcp` and the RAG
+bridge. The compose `internal` network, the unpublished 9000 port, and the in-process per-IP
+rate limit on `/agent/run` (`PYTHON_AGENT_REQUESTS_PER_SECOND` 100 / `BURST` 200) remain
+defense-in-depth. Full rationale → [`README_ALL.md` § Trust model](README_ALL.md#trust-model).
 
 ## Learn more
 

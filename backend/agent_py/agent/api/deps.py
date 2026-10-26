@@ -15,10 +15,9 @@ from fastapi import HTTPException, Request
 def require_user_id(request: Request) -> int:
     """Read the Go-verified user id from `X-Nyx-User-Id`.
 
-    NOT an auth check — this hop has no auth (the private network is the
-    trust boundary; Go verifies the JWT and injects the header). It is a
-    loud 400 for a misconfigured caller, which would otherwise silently
-    read or write user 0's data.
+    The service-token middleware has already authenticated the caller, so
+    this is NOT an auth check: it is a loud 400 for a misconfigured caller,
+    which would otherwise silently read or write user 0's data.
     """
     user_id_raw = request.headers.get("x-nyx-user-id", "").strip()
     if not user_id_raw:

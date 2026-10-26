@@ -31,6 +31,7 @@ from fakeredis import aioredis as fakeaioredis
 from agent.budget import BudgetGuard
 from agent.sweeper import StaleRunSweeper, agent_runs_swept_total
 from agent.types import ChatMessage, ChatRequest
+from tests.service_auth_fixtures import SERVICE_AUTH_HEADERS
 
 _DSN = os.environ.get("TEST_ASYNC_PG_DSN")
 
@@ -241,7 +242,9 @@ def _patch_llm(monkeypatch, llm_cls=_PlanLlm):
 
 async def _post_chat(app, body, user_id: int = 42):
     transport = httpx.ASGITransport(app=app)
-    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+    async with httpx.AsyncClient(
+        transport=transport, base_url="http://test", headers=SERVICE_AUTH_HEADERS
+    ) as client:
         return await client.post(
             "/agent/run",
             json=body,

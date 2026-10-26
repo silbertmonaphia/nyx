@@ -37,6 +37,7 @@ type capturedSessionRequest struct {
 	rawQuery      string
 	authorization string
 	userID        string
+	serviceToken  string
 	contentType   string
 	body          string
 }
@@ -75,6 +76,7 @@ func newSessionUpstream(t *testing.T, status int, body string) (*httptest.Server
 			rawQuery:      r.URL.RawQuery,
 			authorization: r.Header.Get("Authorization"),
 			userID:        r.Header.Get("X-Nyx-User-Id"),
+			serviceToken:  r.Header.Get(ServiceTokenHeader),
 			contentType:   r.Header.Get("Content-Type"),
 			body:          string(buf),
 		}
@@ -103,7 +105,7 @@ func (u *sessionUpstream) snapshot() (capturedSessionRequest, int) {
 // the whole setup a session test needs.
 func mustAgentProxy(t *testing.T, baseURL string) *AgentProxy {
 	t.Helper()
-	proxy, err := NewAgentProxy(baseURL, nil)
+	proxy, err := NewAgentProxy(baseURL, testServiceToken, nil)
 	require.NoError(t, err)
 	return proxy
 }
@@ -223,8 +225,10 @@ func TestSessionsRoutes_ForwardToAgent(t *testing.T) {
 				"the caller's content type rides through")
 			assert.Equal(t, "1", last.userID,
 				"X-Nyx-User-Id carries the verified user id (bearerToken mints sub=1)")
+			assert.Equal(t, testServiceToken, last.serviceToken,
+				"X-Nyx-Service-Token carries AGENT_SERVICE_TOKEN")
 			assert.Equal(t, bearer, last.authorization,
-				"Authorization forwarded verbatim — Go MUST NOT mint a service token")
+				"Authorization forwarded verbatim alongside the service credential")
 		})
 	}
 }
@@ -317,7 +321,7 @@ func TestSessionsProxy_ForwardBoundedBySessionsTimeout(t *testing.T) {
 	t.Cleanup(srv.Close)
 
 	// Mirror production wiring: the shared client has no Timeout.
-	proxy, err := NewSessionsProxy(srv.URL, &http.Client{})
+	proxy, err := NewSessionsProxy(srv.URL, testServiceToken, &http.Client{})
 	require.NoError(t, err)
 
 	start := time.Now()
@@ -502,7 +506,12 @@ func TestSessionsRoutes_NotChargedAgainstStreamLimiter(t *testing.T) {
 // fail-closed contract: an empty PYTHON_AGENT_URL must never produce
 // a proxy (the handler answers 503 instead of a misleading 502).
 func TestNewSessionsProxy_RejectsEmptyBaseURL(t *testing.T) {
-	_, err := NewSessionsProxy("", nil)
+	_, err := NewSessionsProxy("", testServiceToken, nil)
+	require.Error(t, err)
+}
+
+func TestNewSessionsProxy_RejectsEmptyServiceToken(t *testing.T) {
+	_, err := NewSessionsProxy("http://agent.test", "", nil)
 	require.Error(t, err)
 }
 
@@ -535,7 +544,7 @@ func TestNewSessionsProxy_TrimsTrailingSlash(t *testing.T) {
 func TestSessionsRoutes_DerivedFromAgentProxy(t *testing.T) {
 	var seen atomic.Int32
 	srv, _ := newSessionUpstream(t, http.StatusOK, `{"sessions":[]}`)
-	proxy, err := NewAgentProxy(srv.URL, &http.Client{Transport: roundTripRecorder{seen: &seen}})
+	proxy, err := NewAgentProxy(srv.URL, testServiceToken, &http.Client{Transport: roundTripRecorder{seen: &seen}})
 	require.NoError(t, err)
 
 	harness, tokens := newSessionsHarness(t, proxy, nil)

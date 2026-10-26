@@ -507,11 +507,11 @@ func mountChatRoute(router chi.Router, cfg *config.Config, db *pgxpool.Pool, fee
 
 	// Agent path (AGENT_ENABLED=true → Go chat handler is a thin
 	// SSE proxy to the Python LangGraph orchestrator). The proxy
-	// is constructed only when both flags are set: AGENT_ENABLED
-	// gates the handler dispatch and PYTHON_AGENT_URL supplies the
-	// upstream base URL. With AGENT_ENABLED=false the chat service
-	// is built without a proxy and the legacy single-turn path
-	// runs unchanged (byte-for-byte identical to pre-agent-langgraph).
+	// is constructed only when all three keys are set: AGENT_ENABLED
+	// gates the handler dispatch, PYTHON_AGENT_URL supplies the
+	// upstream base URL, and AGENT_SERVICE_TOKEN authenticates the
+	// hop. With AGENT_ENABLED=false the chat service is built
+	// without a proxy and the legacy single-turn path runs unchanged.
 	//
 	// Default http.Client transport — production can wrap this with
 	// otelhttp.NewTransport to add OTel spans on the outbound dial.
@@ -527,7 +527,10 @@ func mountChatRoute(router chi.Router, cfg *config.Config, db *pgxpool.Pool, fee
 		if cfg.PythonAgentURL == "" {
 			log.Fatal().Msg("AGENT_ENABLED=true but PYTHON_AGENT_URL is empty — refusing to start (fail closed)")
 		}
-		proxy, perr := chat.NewAgentProxy(cfg.PythonAgentURL, nil)
+		if cfg.AgentServiceToken == "" {
+			log.Fatal().Msg("AGENT_ENABLED=true but AGENT_SERVICE_TOKEN is empty — refusing to start (fail closed)")
+		}
+		proxy, perr := chat.NewAgentProxy(cfg.PythonAgentURL, cfg.AgentServiceToken, nil)
 		if perr != nil {
 			log.Fatal().Err(perr).Msg("failed to construct AgentProxy")
 		}

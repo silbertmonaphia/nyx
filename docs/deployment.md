@@ -23,8 +23,10 @@ is needed (`withCredentials: false` on the axios instance).
 | `frontend/vercel.json` | Vercel build config for the SPA (root directory `frontend`) |
 | `backend/Dockerfile` | The image Render builds; the liveness probe follows `$PORT` |
 
-The Python agent (`backend/agent_py`) is **not** part of either config —
-see [Caveats](#caveats).
+The Python agent (`backend/agent_py`) is **not** part of either config — it is a
+dashboard-created Render web service. See [`agent-deployment.md`](agent-deployment.md)
+for its env setup, the shared `AGENT_SERVICE_TOKEN`, health-path precheck, deploy
+order, rotation, and rollback.
 
 ---
 
@@ -243,9 +245,13 @@ In the browser: open the SPA, register, and watch the Network tab — the
   that only applies to a Render-managed database. With an external
   database (Supabase), the provider's own free-tier rules apply
   instead.
-- **The chat path needs more than this blueprint.** `/api/chat` proxies
-  to the Python agent (`backend/agent_py`) plus an LLM provider. Without
-  them, feeds and auth work and chat does not.
+- **The chat path needs more than this blueprint.** With
+  `AGENT_ENABLED=false` feeds and auth work, and the single-turn chat
+  path needs only the LLM provider. Enabling the agent
+  (`AGENT_ENABLED=true`) additionally requires `PYTHON_AGENT_URL` and the
+  shared `AGENT_SERVICE_TOKEN` (the same ≥ 32-byte value on the agent
+  service); if either is missing the API refuses to start entirely, so
+  feeds and auth go down with chat.
 - **The host name moves.** `https://<api>.onrender.com` is stable as
   long as the service name is, but a custom domain is nicer for
   `VITE_API_URL` and the CORS allowlist. Changing the service name

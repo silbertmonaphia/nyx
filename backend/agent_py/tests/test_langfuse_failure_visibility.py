@@ -57,6 +57,7 @@ from agent.budget import BudgetGuard
 from agent.config import Settings
 from agent.main import create_app
 from agent.types import ChatMessage, ChatRequest
+from tests.service_auth_fixtures import SERVICE_AUTH_HEADERS
 
 AGENT_PY_DIR = Path(__file__).resolve().parents[1]
 
@@ -247,7 +248,9 @@ async def _boot_app(
 
 async def _post_chat(app: Any, body: dict) -> httpx.Response:
     transport = httpx.ASGITransport(app=app)
-    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+    async with httpx.AsyncClient(
+        transport=transport, base_url="http://test", headers=SERVICE_AUTH_HEADERS
+    ) as client:
         return await client.post(
             "/agent/run",
             json=body,

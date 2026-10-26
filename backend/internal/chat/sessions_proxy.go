@@ -39,9 +39,9 @@ import (
 //     it as 502.
 //  3. The caller's Authorization header rides along as a passthrough
 //     (same trust model as /agent/run): Go verified the JWT at the
-//     SPA edge, this hop is on the private network, and Python does
-//     not verify tokens. Go MUST NOT mint a service-to-service
-//     token for this hop and MUST NOT log the value.
+//     SPA edge, Python does not verify tokens, and every hop carries
+//     the shared AGENT_SERVICE_TOKEN in X-Nyx-Service-Token. Neither
+//     credential value may be logged.
 
 // sessionsBasePath is the upstream prefix every session call shares.
 // The Python agent mounts the same names as the public routes, so
@@ -94,13 +94,14 @@ const (
 // Thread-safety: no mutable state; the *http.Client is safe for
 // concurrent use, and the constructor starts no goroutines.
 type SessionsProxy struct {
-	baseURL    string // e.g. "http://agent:9000" — trailing "/" stripped
-	httpClient *http.Client
+	baseURL      string // e.g. "http://agent:9000" — trailing "/" stripped
+	serviceToken string // AGENT_SERVICE_TOKEN, sent as ServiceTokenHeader
+	httpClient   *http.Client
 }
 
 // NewSessionsProxy builds a proxy that forwards to baseURL under
-// /agent/sessions. baseURL is required — an empty PYTHON_AGENT_URL
-// means the operator never configured the agent path, and the
+// /agent/sessions. baseURL and serviceToken are required — an empty
+// value means the operator never configured the agent path, and the
 // handler's IsAgentEnabled() gate is what decides between "disabled
 // (503)" and "configured (proxy)"; a proxy built on "" could only
 // ever fail with a misleading 502.
@@ -110,16 +111,20 @@ type SessionsProxy struct {
 // its timeouts and any OTel instrumentation — is reused across both
 // agent hops. A nil client gets a plain client with the default
 // timeout.
-func NewSessionsProxy(baseURL string, httpClient *http.Client) (*SessionsProxy, error) {
+func NewSessionsProxy(baseURL, serviceToken string, httpClient *http.Client) (*SessionsProxy, error) {
 	if baseURL == "" {
 		return nil, errors.New("chat: PYTHON_AGENT_URL is empty")
+	}
+	if serviceToken == "" {
+		return nil, errors.New("chat: AGENT_SERVICE_TOKEN is empty")
 	}
 	if httpClient == nil {
 		httpClient = &http.Client{Timeout: defaultSessionsTimeout}
 	}
 	return &SessionsProxy{
-		baseURL:    strings.TrimRight(baseURL, "/"),
-		httpClient: httpClient,
+		baseURL:      strings.TrimRight(baseURL, "/"),
+		serviceToken: serviceToken,
+		httpClient:   httpClient,
 	}, nil
 }
 
@@ -141,11 +146,11 @@ type sessionProxyRequest struct {
 // Forward sends one session call upstream and returns the raw
 // response. The caller owns resp.Body and MUST close it.
 //
-// Header policy is deny-by-default: only X-Nyx-User-Id (the verified
-// user id) and Authorization (passthrough) are set, plus the content
-// type. Cookies, Host, X-Forwarded-*, and hop-by-hop headers are NOT
-// forwarded — Python has no business seeing the SPA's cookie jar, and
-// a forwarded Host would defeat the upstream's own routing.
+// Header policy is deny-by-default: only X-Nyx-Service-Token, the
+// verified X-Nyx-User-Id, and Authorization (passthrough) are set,
+// plus the content type. Cookies, Host, X-Forwarded-*, and
+// hop-by-hop headers are NOT forwarded — Python has no business
+// seeing the SPA's cookie jar, and a forwarded Host breaks routing.
 //
 // Returns a non-nil error ONLY when the call could not be made or
 // completed (malformed base URL, transport failure, timeout, or a
@@ -179,6 +184,7 @@ func (p *SessionsProxy) Forward(ctx context.Context, req sessionProxyRequest) (*
 		return nil, fmt.Errorf("chat: build agent session request: %w", err)
 	}
 	httpReq.Header.Set("X-Nyx-User-Id", strconv.Itoa(req.userID))
+	httpReq.Header.Set(ServiceTokenHeader, p.serviceToken)
 	if req.bearer != "" {
 		httpReq.Header.Set("Authorization", req.bearer)
 	}
@@ -199,9 +205,9 @@ func (p *SessionsProxy) Forward(ctx context.Context, req sessionProxyRequest) (*
 }
 
 // newSessionsProxyFromService derives the session proxy from the
-// service's agent proxy: same base URL, same transport. Returns nil
-// when the service runs in legacy mode (AGENT_ENABLED=false), which
-// is the signal the session routes use to answer 503.
+// service's agent proxy: same base URL, transport, and service token.
+// Returns nil when the service runs in legacy mode (AGENT_ENABLED=
+// false), which is the signal the session routes use to answer 503.
 //
 // Deriving rather than wiring a second proxy in cmd/api keeps the two
 // agent hops on one configuration surface: AGENT_ENABLED +
@@ -215,7 +221,7 @@ func newSessionsProxyFromService(s *Service) *SessionsProxy {
 	if agent == nil {
 		return nil
 	}
-	proxy, err := NewSessionsProxy(agent.baseURL, agent.httpClient)
+	proxy, err := NewSessionsProxy(agent.baseURL, agent.serviceToken, agent.httpClient)
 	if err != nil {
 		// Unreachable: NewAgentProxy already rejects an empty base
 		// URL, so the derived proxy can only fail if that invariant

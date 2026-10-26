@@ -27,13 +27,12 @@ import (
 // approval semantics (ownership checks, first-wins idempotency,
 // expiry), and this layer is a transport hop.
 //
-// Trust model is identical to the other two agent hops: the network
-// boundary is the trust boundary, so Python does NOT verify the JWT.
-// Go verified it at the SPA edge and stamps the verified user id as
+// Trust model is identical to the other two agent hops: Python does
+// NOT verify the JWT; the shared AGENT_SERVICE_TOKEN authenticates
+// the Go caller, which stamps the verified user id as
 // X-Nyx-User-Id; the caller's Authorization header rides along as a
-// passthrough only because the Python service may need it for its own
-// bearer-scoped calls (e.g. /mcp). Go MUST NOT mint a
-// service-to-service token and MUST NOT log the token value.
+// passthrough for the Python service's own bearer-scoped calls
+// (e.g. /mcp). Neither credential value may be logged.
 //
 // Fail-closed is the whole point of the endpoint: an unreachable or
 // disabled agent answers an error envelope, and an approval is never
@@ -131,12 +130,12 @@ func RegisterApprovalsRoute(router chi.Router, h *Handler, tokens auth.TokenServ
 //     contract; the Go layer must not wrap or remap it).
 //
 // The forwarder is the JSON proxy derived from the service's
-// AgentProxy (newSessionsProxyFromService): same base URL, same
-// transport, and a forwarding contract (header policy, verbatim relay)
-// that is already pinned by the session-route tests. Reusing it keeps
+// AgentProxy (newSessionsProxyFromService): same base URL, transport,
+// service token, and forwarding contract (header policy, verbatim
+// relay) already pinned by the session-route tests. Reusing it keeps
 // every agent hop on one configuration surface — AGENT_ENABLED +
-// PYTHON_AGENT_URL — so the approvals hop can never be
-// half-configured.
+// PYTHON_AGENT_URL + AGENT_SERVICE_TOKEN — so the approvals hop can
+// never be half-configured.
 func (h *Handler) approvals(w http.ResponseWriter, r *http.Request) {
 	userID := reqctx.UserIDFromContext(r.Context())
 	if userID == 0 {

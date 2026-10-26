@@ -18,6 +18,10 @@ from urllib.parse import urlparse
 
 import pytest
 
+from tests.service_auth_fixtures import TEST_SERVICE_TOKEN
+
+os.environ["AGENT_SERVICE_TOKEN"] = TEST_SERVICE_TOKEN
+
 _DSN = os.environ.get("TEST_ASYNC_PG_DSN")
 
 

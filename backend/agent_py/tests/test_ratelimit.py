@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import time
 
 import pytest
@@ -11,6 +12,7 @@ from agent.config import Settings
 from agent.main import create_app
 from agent.ratelimit import IpRateLimiter
 from agent.types import ChatMessage, ChatRequest
+from tests.service_auth_fixtures import SERVICE_AUTH_HEADERS
 
 
 class _StubStructuredChain:
@@ -207,28 +209,32 @@ def test_ip_rate_limiter_evict_idle_threshold():
 async def test_middleware_returns_429_after_burst(app_low_burst):
     """Burst=2 app: third request from the same client IP gets 429."""
     transport = ASGITransport(app=app_low_burst)
-    async with AsyncClient(transport=transport, base_url="http://test") as client:
+    async with AsyncClient(
+        transport=transport, base_url="http://test", headers=SERVICE_AUTH_HEADERS
+    ) as client:
         body = ChatRequest(messages=[ChatMessage(role="user", content="hi")]).model_dump()
         headers = {
             "X-Nyx-User-Id": "42",
             "Authorization": "Bearer whatever",
         }
-        # First two fit within the burst window — both stream 200.
-        r1 = await client.post("/agent/run", json=body, headers=headers)
-        r2 = await client.post("/agent/run", json=body, headers=headers)
-        assert r1.status_code == 200
-        assert r2.status_code == 200
-        # Third is over the burst cap — middleware short-circuits with 429.
-        r3 = await client.post("/agent/run", json=body, headers=headers)
-        assert r3.status_code == 429
-        assert "rate limit exceeded" in r3.text
+        responses = await asyncio.gather(
+            client.post("/agent/run", json=body, headers=headers),
+            client.post("/agent/run", json=body, headers=headers),
+            client.post("/agent/run", json=body, headers=headers),
+        )
+        statuses = sorted(r.status_code for r in responses)
+        assert statuses == [200, 200, 429]
+        rejected = next(r for r in responses if r.status_code == 429)
+        assert "rate limit exceeded" in rejected.text
 
 
 @pytest.mark.asyncio
 async def test_middleware_does_not_gate_healthz(app_low_burst):
     """/healthz must NOT be rate-limited — compose scrapes it constantly."""
     transport = ASGITransport(app=app_low_burst)
-    async with AsyncClient(transport=transport, base_url="http://test") as client:
+    async with AsyncClient(
+        transport=transport, base_url="http://test", headers=SERVICE_AUTH_HEADERS
+    ) as client:
         # Burst=2 — fire 5 healthz calls; all should succeed (or 503
         # because Redis is stubbed, but never 429).
         for _ in range(5):

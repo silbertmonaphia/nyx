@@ -58,7 +58,7 @@ flowchart TB
 
 ```bash
 cd backend/agent_py
-cp .env.example .env        # 填入 PYTHON_AGENT_LLM_BASE_URL + PYTHON_AGENT_LLM_API_KEY
+cp .env.example .env        # 填入 PYTHON_AGENT_LLM_BASE_URL + PYTHON_AGENT_LLM_API_KEY + AGENT_SERVICE_TOKEN
 uv sync --locked --extra dev
 python -m agent.main        # 或：uvicorn agent.main:app --port 9000 --reload
 ```
@@ -88,6 +88,7 @@ cd backend/agent_py && pytest tests/ -v
 | `PYTHON_AGENT_REDIS_URL` | `redis://localhost:6380` | 每用户预算护栏 |
 | `PYTHON_AGENT_MCP_URL` / `RAG_BRIDGE_URL` | `:8080` host-dev | Go 工具面 + RAG 桥 |
 | `AGENT_BUDGET_PER_USER_PER_HOUR` | `200000` | 每用户每小时 token 上限（无前缀 —— 跨运行时的共享契约） |
+| `AGENT_SERVICE_TOKEN` | — | Go → Python 的共享凭据（至少 32 字节，两端必须一致；以 `X-Nyx-Service-Token` 发送）。无前缀；缺失时服务拒绝启动。 |
 
 常用开关：
 
@@ -110,7 +111,7 @@ Langfuse 追踪可以直接从默认日志诊断：`PYTHON_AGENT_LANGFUSE_ENABLE
 
 ## 信任模型
 
-本服务**不**校验 JWT。它运行在私有 compose / k8s 网络内 —— 9000 端口不对外发布，只有 `127.0.0.1:9001` 供指标抓取。Go 的 chat handler 在 SPA 边缘校验用户 JWT，并通过 `X-Nyx-User-Id` 头转发已验证的用户 id；bearer token 只是透传，由 Go 在 `/mcp` 与 RAG 桥上重新校验。`/agent/run` 上有进程内按 IP 限流（`PYTHON_AGENT_REQUESTS_PER_SECOND` 100 / `BURST` 200）作为防线纵深 —— 它**不是**鉴权层。若 9000 端口哪天暴露到这个网络之外，必须先加一层鉴权（mTLS / 共享密钥 / 防火墙）。完整论述 → [`README_ALL.md` § Trust model](README_ALL.md#trust-model)。
+本服务**不**校验 JWT。除精确路径 `/healthz` 外，所有路由都要求 `X-Nyx-Service-Token` 与共享的 `AGENT_SERVICE_TOKEN` 一致（至少 32 字节，Go 后端与 agent 必须配置同一个值；agent 路径开启时缺省或过短会拒绝启动）。Go 的 chat handler 在 SPA 边缘校验用户 JWT，并通过 `X-Nyx-User-Id` 头转发已验证的用户 id；bearer token 只是透传，由 Go 在 `/mcp` 与 RAG 桥上重新校验。compose `internal` 网络、未发布的 9000 端口、以及 `/agent/run` 上的进程内按 IP 限流（`PYTHON_AGENT_REQUESTS_PER_SECOND` 100 / `BURST` 200）仍作为防线纵深。完整论述 → [`README_ALL.md` § Trust model](README_ALL.md#trust-model)。
 
 ## 延伸阅读
 

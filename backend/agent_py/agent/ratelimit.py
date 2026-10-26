@@ -2,11 +2,10 @@
 
 Defense-in-depth against an LLM-cost-exhaustion attack from a
 compromised container on the same bridge network as the agent.
-The /agent/run hop has no app-layer auth — the network is the trust
-boundary (see backend/agent_py/README.md "Trust model"). Per-IP rate
-limiting is the in-process backstop for "what if a future container
-on the internal network is compromised and floods us with /agent/run
-calls".
+The service-token gate authenticates the caller first; this limiter
+is the in-process backstop for "what if a future caller with the
+service token is compromised and floods us with /agent/run calls"
+(see backend/agent_py/README.md "Trust model").
 
 The legitimate traffic pattern is: the Go backend (one container IP)
 calls /agent/run at roughly the user chat throughput rate, well below
@@ -87,8 +86,9 @@ class IpRateLimiter:
 
 class RateLimitMiddleware(BaseHTTPMiddleware):
     """ASGI middleware that gates /agent/run by client IP. /healthz
-    and /metrics stay open so compose + Prometheus can scrape without
-    being rate-limited."""
+    and /metrics are exempt so compose + Prometheus can scrape without
+    being rate-limited; the service-token gate still applies to
+    /metrics."""
 
     # Amortized visitor-dict eviction. Every Nth request we sweep
     # `evict_idle()` on the limiter so the dict doesn't grow over

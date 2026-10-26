@@ -10,4 +10,5 @@ nyx_agent.egg-info/
 tests/
 .env
 .env.*
+.service-token
 *.md

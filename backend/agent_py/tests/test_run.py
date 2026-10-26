@@ -18,6 +18,7 @@ from fakeredis import aioredis as fakeaioredis
 from agent.config import Settings
 from agent.main import create_app
 from agent.types import ChatMessage, ChatRequest
+from tests.service_auth_fixtures import SERVICE_AUTH_HEADERS
 
 
 class _StubStructuredChain:
@@ -292,7 +293,9 @@ async def _post_chat(app, body, user_id: int = 42):
     does not verify it.
     """
     transport = httpx.ASGITransport(app=app)
-    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+    async with httpx.AsyncClient(
+        transport=transport, base_url="http://test", headers=SERVICE_AUTH_HEADERS
+    ) as client:
         return await client.post(
             "/agent/run",
             json=body,
@@ -514,13 +517,15 @@ async def test_plan_too_large_stream_carries_partial_failure_note(app_and_state)
 @pytest.mark.asyncio
 async def test_agent_run_missing_user_id_header_returns_400(app_and_state):
     """The Python service does not verify JWTs — Go sets X-Nyx-User-Id after
-    JWT verification. A caller that omits the header gets a 400 (NOT 401 —
-    this hop has no auth, just a sanity check so user_id never silently
-    defaults to 0 and collides with the budget guard's per-user keying).
+    JWT verification. Behind the service-token gate, a caller that omits the
+    header gets a 400 (NOT 401), a sanity check so user_id never silently
+    defaults to 0 and collides with the budget guard's per-user keying.
     """
     app = app_and_state
     transport = httpx.ASGITransport(app=app)
-    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+    async with httpx.AsyncClient(
+        transport=transport, base_url="http://test", headers=SERVICE_AUTH_HEADERS
+    ) as client:
         resp = await client.post(
             "/agent/run",
             json=ChatRequest(messages=[ChatMessage(role="user", content="hi")]).model_dump(),
@@ -535,7 +540,9 @@ async def test_agent_run_non_integer_user_id_header_returns_400(app_and_state):
     """Defense against a misconfigured caller sending garbage in X-Nyx-User-Id."""
     app = app_and_state
     transport = httpx.ASGITransport(app=app)
-    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+    async with httpx.AsyncClient(
+        transport=transport, base_url="http://test", headers=SERVICE_AUTH_HEADERS
+    ) as client:
         resp = await client.post(
             "/agent/run",
             json=ChatRequest(messages=[ChatMessage(role="user", content="hi")]).model_dump(),

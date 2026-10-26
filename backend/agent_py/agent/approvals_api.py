@@ -126,9 +126,9 @@ async def _run_ownership_verified(
 def _require_user_id(request: Request) -> int:
     """Read the Go-verified user id from `X-Nyx-User-Id`.
 
-    Mirrors `/agent/run` and the sessions router exactly: the 400 is not
-    an auth check (this hop has no auth — the network is the trust
-    boundary) but a loud failure for a misconfigured caller.
+    Mirrors `/agent/run` and the sessions router exactly: the service-token
+    middleware has already authenticated the caller, and this 400 is a loud
+    failure for a misconfigured caller rather than a second auth check.
     """
     user_id_raw = request.headers.get("x-nyx-user-id", "").strip()
     if not user_id_raw:

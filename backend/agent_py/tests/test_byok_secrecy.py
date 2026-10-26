@@ -31,6 +31,8 @@ from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 
+from tests.service_auth_fixtures import SERVICE_AUTH_HEADERS
+
 _DSN = os.environ.get("TEST_ASYNC_PG_DSN")
 
 pytestmark = pytest.mark.skipif(
@@ -182,7 +184,7 @@ async def app_ctx(monkeypatch):
 async def _post_chat(app, body: dict, user_id: int = 77) -> httpx.Response:
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(
-        transport=transport, base_url="http://test", timeout=30.0
+        transport=transport, base_url="http://test", timeout=30.0, headers=SERVICE_AUTH_HEADERS
     ) as client:
         return await client.post(
             "/agent/run",

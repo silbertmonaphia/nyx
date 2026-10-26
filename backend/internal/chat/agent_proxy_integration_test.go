@@ -107,7 +107,7 @@ func newProxyHarness(t *testing.T, proxy *AgentProxy) (http.Handler, auth.TokenS
 func TestAgentProxy_Integration_HandlerForwardsPythonBytesByteForByte(t *testing.T) {
 	srv, lastAuth, lastUserID := cannedPythonSSEUpstream(t, cannedPythonSSEBytes)
 
-	proxy, err := NewAgentProxy(srv.URL, nil)
+	proxy, err := NewAgentProxy(srv.URL, testServiceToken, nil)
 	require.NoError(t, err)
 
 	harness, tokens := newProxyHarness(t, proxy)
@@ -165,7 +165,7 @@ func TestAgentProxy_Integration_FailClosedOnConnectionRefused(t *testing.T) {
 	deadURL := deadSrv.URL
 	deadSrv.Close()
 
-	proxy, err := NewAgentProxy(deadURL, nil)
+	proxy, err := NewAgentProxy(deadURL, testServiceToken, nil)
 	require.NoError(t, err)
 
 	harness, tokens := newProxyHarness(t, proxy)
@@ -238,7 +238,7 @@ func TestAgentProxy_Integration_FailClosedOnPython5xx(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	proxy, err := NewAgentProxy(srv.URL, nil)
+	proxy, err := NewAgentProxy(srv.URL, testServiceToken, nil)
 	require.NoError(t, err)
 
 	harness, tokens := newProxyHarness(t, proxy)
@@ -291,7 +291,7 @@ func TestAgentProxy_Integration_MultiFrameUpstreamStreamed(t *testing.T) {
 
 	srv, _, _ := cannedPythonSSEUpstream(t, body)
 
-	proxy, err := NewAgentProxy(srv.URL, nil)
+	proxy, err := NewAgentProxy(srv.URL, testServiceToken, nil)
 	require.NoError(t, err)
 	harness, tokens := newProxyHarness(t, proxy)
 	server := httptest.NewServer(harness)
@@ -352,7 +352,7 @@ func TestAgentProxy_Integration_StreamCapCutEmitsTypedTerminalFrames(t *testing.
 	}))
 	defer srv.Close()
 
-	proxy, err := NewAgentProxy(srv.URL, nil)
+	proxy, err := NewAgentProxy(srv.URL, testServiceToken, nil)
 	require.NoError(t, err)
 
 	// 200ms stream cap: the handler must cut the silent stream
@@ -447,7 +447,7 @@ func TestAgentProxy_Integration_StreamCapAfterUpstreamTerminalEmitsNothing(t *te
 	}))
 	defer srv.Close()
 
-	proxy, err := NewAgentProxy(srv.URL, nil)
+	proxy, err := NewAgentProxy(srv.URL, testServiceToken, nil)
 	require.NoError(t, err)
 
 	cfg := &config.Config{

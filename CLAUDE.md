@@ -55,7 +55,7 @@ Local dev orchestrator (`Makefile` at repo root):
 - `backend/internal/reqctx/` — typed values stashed on `context.Context` (auth claims, request ID, etc.).
 - `backend/internal/{feed,user}/db/` — sqlc output, **do not edit by hand**. Regenerate with `make sqlc`. See `backend/SQLC.md`.
 - `backend/queries/*.sql` — sqlc input.
-- `backend/agent_py/` — Python Plan-and-Execute agent orchestrator (FastAPI + LangGraph + Pydantic + redis-py + OpenTelemetry + prometheus-client). Default-off via `AGENT_ENABLED=false`; the Go chat handler is a thin SSE proxy when enabled. Separate runtime in the same monorepo — `make dev` boots it alongside backend + frontend; compose brings it up under the `app` profile. See `FUTURE_AGENT.md` + `backend/agent_py/README.md`.
+- `backend/agent_py/` — Python Plan-and-Execute agent orchestrator (FastAPI + LangGraph + Pydantic + redis-py + OpenTelemetry + prometheus-client). Default-off via `AGENT_ENABLED=false`; the Go chat handler is a thin SSE proxy when enabled. The agent path also requires the shared `AGENT_SERVICE_TOKEN` (≥ 32 bytes, same value both sides; sent as `X-Nyx-Service-Token`). Separate runtime in the same monorepo — `make dev` boots it alongside backend + frontend; compose brings it up under the `app` profile. See `FUTURE_AGENT.md` + `backend/agent_py/README.md`.
 - `frontend/src/features/{feeds,auth}/` — components, hooks, services, types, store. `services/api.ts` (axios), `store/` (Zustand), `test/setup.js` (IntersectionObserver polyfill).
 - Adding an HTTP endpoint: see `backend/HUMA.md`.
 

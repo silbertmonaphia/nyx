@@ -34,26 +34,30 @@ references are intentionally frozen at that snapshot.
         Optional: Langfuse (LLM traces)      Tavily + public web (agent-native web tools)
 ```
 
-- The Python service **never verifies JWTs**. Go verifies at the SPA edge and
-  forwards the verified id in `X-Nyx-User-Id`. The bearer token is a passthrough
-  that Go's `/mcp` and `/internal/rag/retrieve` re-verify themselves.
-- Trust boundary at this hop is the **network** (compose bridge / k8s
-  NetworkPolicy). Port 9000 is not published to the host; only 9001 (metrics).
-- Defense in depth on top of that: per-IP rate limit on `/agent/run`
-  (`ratelimit.py`), every metadata/chat/GDPR SQL read is scoped by `user_id`,
-  and the mutating-tool approval gate fails closed.
+- The Python service **never verifies JWTs**. Every request except the exact
+  `/healthz` probe must carry `X-Nyx-Service-Token` matching the shared
+  `AGENT_SERVICE_TOKEN` (`service_auth.py`; constant-time over bytes). Go verifies
+  at the SPA edge and forwards the verified id in `X-Nyx-User-Id`. The bearer token
+  is a passthrough that Go's `/mcp` and `/internal/rag/retrieve` re-verify
+  themselves.
+- Both runtimes refuse to start when the agent path is enabled without a ≥ 32-byte
+  token. The compose bridge / k8s NetworkPolicy, the unpublished 9000 port
+  (only 9001 metrics), and the per-IP rate limit on `/agent/run` (`ratelimit.py`)
+  remain defense-in-depth; every metadata/chat/GDPR SQL read is scoped by
+  `user_id`, and the mutating-tool approval gate fails closed.
 - Owner-scoped subject endpoints: `/agent/sessions*` (history sidebar) and
   `/agent/me/export` + `DELETE /agent/me` (GDPR) read `X-Nyx-User-Id` directly and
-  have **no admin override**. The SPA reaches sessions/approvals through Go
-  (`/api/chat/sessions*`, `/api/chat/approvals`); the GDPR endpoints are
-  operator-only and are not proxied.
+  have **no admin override**; the service token still gates them. The SPA reaches
+  sessions/approvals through Go (`/api/chat/sessions*`, `/api/chat/approvals`); the
+  GDPR endpoints are operator-only and are not proxied.
 - Approval decisions are Redis-brokered (`approvals.py`), so a decision recorded
   on any replica resolves the waiting run.
 
 ## 2. Request lifecycle
 
-1. `POST /agent/run` (`main.py:642`) — no auth, but **400 if `X-Nyx-User-Id`
-   missing or non-integer** (prevents silent `user_id=0` budget collisions).
+1. `POST /agent/run` (`main.py:642`) — behind the service-token middleware, and
+   **400 if `X-Nyx-User-Id` is missing or non-integer** (prevents silent
+   `user_id=0` budget collisions).
 2. Body validated as `ChatRequest` (`types.py:64`): `{messages, agent?, model?,
    run_id?}`. There is no `session_id` field; the client echoes the active
    session id as `run_id`.

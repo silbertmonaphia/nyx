@@ -17,11 +17,12 @@ The existing `agent` dev path (`make dev-agent`) runs alembic **inline** on life
 
 ## Required env vars (production)
 
-Set on the `agent` service in `docker-compose.yml`. None of these are required when `AGENT_ENABLED=false`; the existing chat path doesn't touch them.
+Set on the `agent` service in `docker-compose.yml`. `AGENT_ENABLED` and `PYTHON_AGENT_URL` are read by the Go backend; `AGENT_SERVICE_TOKEN` MUST be the same value on both the backend and the agent service. None of these are required when `AGENT_ENABLED=false`; the existing chat path doesn't touch them.
 
 | Var | Required? | Default | Notes |
 | --- | --- | --- | --- |
 | `AGENT_ENABLED` | yes | `false` | Flip to `true` to route `/api/chat` through the Python service. |
+| `AGENT_SERVICE_TOKEN` | yes (when `AGENT_ENABLED=true`) | unset | Shared credential (at least 32 bytes) stamped as `X-Nyx-Service-Token` on every Go → Python hop. MUST be the same value on both services. Generate with `openssl rand -hex 32`; both sides refuse startup when it is missing or short. |
 | `PYTHON_AGENT_DATABASE_URL` | yes (when `AGENT_ENABLED=true`) | unset | Must include `options=-c search_path=langgraph,agent`. The service refuses to start otherwise. |
 | `PYTHON_AGENT_MIGRATIONS_DISABLED` | no | `false` | Set `true` in compose; `false` in dev. |
 | `PYTHON_AGENT_RETENTION_ENABLED` | no | `true` | Hard-delete completed/failed metadata after the retention window. |
@@ -34,6 +35,16 @@ Set on the `agent` service in `docker-compose.yml`. None of these are required w
 The `PYTHON_AGENT_DATABASE_URL` shape: `postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}?options=-c%20search_path%3Dlanggraph%2Cagent`. The `options=` value is URL-encoded (`%20` for space, `%3D` for `=`) because compose interpolates unencoded values into the env literally; URL-encoding is the no-decoding-required form.
 
 `PUBLIC` is intentionally **not** in the search path. The Python service never reads Go's tables. Adding `public` would be misleading documentation without changing runtime behavior.
+
+## Public deployment (Render): service-token gate
+
+The agent is reachable from the public internet on Render, so the service-token gate is mandatory there. `AGENT_SERVICE_TOKEN` is configured on both services (`nyx-api` and the dashboard-created agent web service) with the same value.
+
+1. Generate once: `openssl rand -hex 32`; set it as a secret env var on both Render services. Local dev / eval / e2e instead resolve it through `scripts/lib/agent-token.sh` (exported env → `backend/.env` → persisted `backend/agent_py/.service-token` → generate).
+2. Confirm the agent service's Render health-check path is exactly `/healthz`; it is the only unauthenticated route. A `/` path receives 401 and the deploy never becomes healthy.
+3. Deploy the Go backend first (the old agent image ignores the header), verify login, feeds, chat, sessions, and approvals still work, then deploy the agent image.
+4. Verify against the agent URL: no token or a wrong token on `/agent/run`, `/agent/sessions*`, `/agent/me/*`, and `/agent/approvals` returns 401 `{"detail":"unauthorized"}`; `/healthz` returns 200; `/metrics` on the application port returns 401; a valid token plus `X-Nyx-User-Id` reaches the handler. `make e2e-agent-auth` automates these checks against a local stack (`AGENT_URL` selects the target).
+5. Rotation: set the new value on Go first, then on the agent (no dual-token overlap, so the side still on the old value is briefly rejected). During that window an approval routed through the agent can surface a 401 that the SPA treats as an expired session (forced re-login), so rotate outside active sessions. Rollback: redeploy the previous agent image first (it ignores the header), then revert Go or restore the previous token on both.
 
 ## Rollout order
 
@@ -126,7 +137,7 @@ Companion to `openspec/changes/agent-gdpr-compliance/` (Slice 4 of `docs_agent/A
 
 **Precondition for an erasure while the subject may be chatting:** run the erase when no run for the subject is in flight, then re-check `agent.chat_user_prefs` for the user after a few seconds. A turn streaming at erase time can write its assistant message into a just-deleted session (contained and warn-logged — the FK rejection surfaces as store-unavailable) and its late preference extraction is skipped by the in-SQL source-session guard, but the precondition removes the ambiguity entirely. If a run was in flight, re-run the erase (idempotent).
 
-Both are scoped to the numeric user id in the `X-Nyx-User-Id` header — the same Go-verified header `/agent/sessions*` uses. A missing / non-integer header is a 400 (never an implicit user 0) and there is no admin override or cross-user parameter. This hop has no auth of its own: the agent service's network boundary is the trust boundary, so the operator invocations below must run from a host that can reach the agent port (host dev: `http://localhost:9000`; compose: from inside the compose network) and the header value must be the *Go* user id (the `users.id` behind the subject's JWT).
+Both are scoped to the numeric user id in the `X-Nyx-User-Id` header — the same Go-verified header `/agent/sessions*` uses. A missing / non-integer header is a 400 (never an implicit user 0) and there is no admin override or cross-user parameter. The service-token gate still applies: operator invocations MUST carry `X-Nyx-Service-Token` set to `AGENT_SERVICE_TOKEN` (host dev: `http://localhost:9000`; compose: from inside the compose network; Render: the public agent URL), and the user-id header value must be the *Go* user id (the `users.id` behind the subject's JWT).
 
 ### Data inventory (what a subject's data touches)
 
@@ -150,7 +161,8 @@ Export a subject:
 
 ```bash
 curl -fsS -X GET http://localhost:9000/agent/me/export \
-  -H "X-Nyx-User-Id: 42" | jq .
+  -H "X-Nyx-User-Id: 42" \
+  -H "X-Nyx-Service-Token: $AGENT_SERVICE_TOKEN" | jq .
 # → {"user_id": 42, "exported_at": "2026-10-14T12:00:00+00:00",
 #    "sessions": [{"id": "…", "title": "…", "started_at": "…", "deleted_at": null, …}],
 #    "messages": [{"id": 123, "session_id": "…", "role": "user", "content": "…", "tool_calls": null, "steps": null, "tokens": 8, "prompt_tokens": null, "completion_tokens": null, "created_at": "…"}],
@@ -166,7 +178,8 @@ Erase a subject:
 
 ```bash
 curl -fsS -X DELETE http://localhost:9000/agent/me \
-  -H "X-Nyx-User-Id: 42" | jq .
+  -H "X-Nyx-User-Id: 42" \
+  -H "X-Nyx-Service-Token: $AGENT_SERVICE_TOKEN" | jq .
 # → {"deleted": {"sessions": 3, "messages": 12, "prefs": 1, "runs": 2, "threads": 4, "thread_failures": 0}}
 ```
 

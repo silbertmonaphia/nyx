@@ -282,7 +282,8 @@ The project's main development focus. `backend/agent_py/` is a FastAPI + LangGra
 turns `/api/chat` into an agent run: a **planner** decomposes the request into typed steps, an
 **executor** runs them, and **tool dispatch** calls out through the existing surfaces. With
 `AGENT_ENABLED=true` the Go chat handler becomes a thin SSE proxy to it (`PYTHON_AGENT_URL`;
-`make dev` and compose point it at the agent service). The transport is the existing
+`make dev` and compose point it at the agent service), authenticating every hop with the shared
+`AGENT_SERVICE_TOKEN` (`X-Nyx-Service-Token`). The transport is the existing
 `text/event-stream`; the frame kinds are `run_id` (opens every fresh run — echo it to resume),
 `plan`, `step_start`, `tool_call`, `tool_result`, `step_end`, `delta`, `done`, `note`, `error`,
 and `terminator`. The SPA chat panel renders the intermediate steps plus a partial-failure

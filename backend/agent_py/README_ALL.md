@@ -366,7 +366,7 @@ budget guard ── Redis counter `agent:budget:u={user_id}:h={utc_hour}`,
 
 ```
 cp .env.example .env
-# fill in PYTHON_AGENT_LLM_BASE_URL + PYTHON_AGENT_LLM_API_KEY
+# fill in PYTHON_AGENT_LLM_BASE_URL + PYTHON_AGENT_LLM_API_KEY + AGENT_SERVICE_TOKEN
 uv sync --locked --extra dev
 python -m agent.main
 # or
@@ -390,26 +390,28 @@ Go service that hosts the RAG bridge + MCP shim).
 
 ## Trust model
 
-The Python service does **not** verify JWTs. It runs on the private compose / k8s
-network — port 9000 is not exposed to the host (`docker-compose.yml` only publishes
-`127.0.0.1:9001:9001` for metrics scraping). The trust boundary at this hop is the
-network, not application auth:
+The Python service does **not** verify JWTs. Inbound requests are authenticated with the
+shared `AGENT_SERVICE_TOKEN` (at least 32 bytes, the same value on the Go backend and the
+agent; both refuse to start when the agent path is enabled without it):
 
+- **Service-token gate**: a pure-ASGI middleware requires `X-Nyx-Service-Token` on every
+  route except the exact `/healthz` probe path. Missing or mismatched values get HTTP 401
+  `{"detail":"unauthorized"}` before any handler or rate-limit state; the comparison is
+  constant-time over bytes, so non-ASCII header values are rejected cleanly.
+  `/metrics` on the FastAPI port is gated too; the separate Prometheus exporter on 9001
+  is outside FastAPI and unchanged.
 - **Go's chat handler** verifies the user JWT at the SPA edge, then forwards the
   verified user id in the `X-Nyx-User-Id` header. Python reads this header directly
   and uses it for the per-user budget counter and per-owner scoping on tool calls.
 - The `Authorization` bearer token is forwarded as a passthrough to Go's `/mcp` and
   `/internal/rag/retrieve` endpoints, which re-verify it themselves (Python never
   decodes the token).
-- **Rate limit (defense-in-depth, not auth)**: `/agent/run` carries an in-process
-  per-IP sliding-window limiter (`PYTHON_AGENT_REQUESTS_PER_SECOND`, default `100`;
-  `PYTHON_AGENT_BURST`, default `200` — burst is the ceiling within any 1-second
-  window). `/healthz` and `/metrics` stay unmetered for compose / Prometheus
-  scraping. This backstops a compromised container on the private network flooding
-  `/agent/run` and burning LLM budget; it does not replace the auth layer above.
+- **Defense-in-depth**: the compose `internal` network, the unpublished 9000 port, and
+  an in-process per-IP sliding-window limiter on `/agent/run`
+  (`PYTHON_AGENT_REQUESTS_PER_SECOND`, default `100`; `PYTHON_AGENT_BURST`, default
+  `200` — burst is the ceiling within any 1-second window). `/healthz` and `/metrics`
+  are exempt from the limiter; `/metrics` still requires the service token.
 
-If you ever expose port 9000 to a network where the Python service is not the only
-reachable caller, you MUST add an auth layer (mTLS, a shared service secret, or a
-network-level firewall). Today this is enforced by `docker-compose.yml` and the
-intended k8s `NetworkPolicy`. See `FUTURE_AGENT.md` for the operator-facing
-rationale and `docker-compose.yml` for the bridge-network contract.
+Rotation is ordered (Go first, then the agent) and briefly rejects whichever side still
+holds the old value. See [`docs/agent-deployment.md`](../../docs/agent-deployment.md) for
+the env setup, health-path precheck, deploy order, rotation, and rollback runbook.

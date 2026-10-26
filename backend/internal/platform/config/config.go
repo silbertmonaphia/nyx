@@ -209,8 +209,9 @@ type Config struct {
 	// when the Go agent package was deleted — those keys now live
 	// in the Python service's pydantic-settings (see
 	// openspec/changes/agent-langgraph/design.md §9).
-	AgentEnabled   bool   `mapstructure:"AGENT_ENABLED"`
-	PythonAgentURL string `mapstructure:"PYTHON_AGENT_URL"`
+	AgentEnabled      bool   `mapstructure:"AGENT_ENABLED"`
+	PythonAgentURL    string `mapstructure:"PYTHON_AGENT_URL"`
+	AgentServiceToken string `mapstructure:"AGENT_SERVICE_TOKEN"`
 }
 
 func Load() (*Config, error) {
@@ -281,13 +282,27 @@ func Load() (*Config, error) {
 		}
 	}
 
-	if cfg.MCPEnabled {
-		if err := validateMCPConfig(&cfg); err != nil {
-			return nil, err
-		}
+	if err := validateOptionalFeatures(&cfg); err != nil {
+		return nil, err
 	}
 
 	return &cfg, nil
+}
+
+func validateOptionalFeatures(cfg *Config) error {
+	if cfg.MCPEnabled {
+		if err := validateMCPConfig(cfg); err != nil {
+			return err
+		}
+	}
+	return validateAgentConfig(cfg)
+}
+
+func validateAgentConfig(cfg *Config) error {
+	if cfg.AgentEnabled && len(cfg.AgentServiceToken) < auth.MinSecretBytes {
+		return fmt.Errorf("AGENT_SERVICE_TOKEN must be at least %d bytes when AGENT_ENABLED=true", auth.MinSecretBytes)
+	}
+	return nil
 }
 
 // setDefaults installs the viper defaults. Extracted so Load stays
@@ -413,6 +428,7 @@ func setDefaults() {
 	// frame rather than silently routing to the legacy path).
 	viper.SetDefault("AGENT_ENABLED", false)
 	viper.SetDefault("PYTHON_AGENT_URL", "")
+	viper.SetDefault("AGENT_SERVICE_TOKEN", "")
 }
 
 // bindEnvVars explicitly wires every env-sourced viper key. See Load
@@ -439,7 +455,7 @@ func bindEnvVars() {
 		"EMBEDDING_DIMENSIONS",
 		"RAG_TOP_K", "RAG_MAX_CONTEXT_CHARS", "RAG_MAX_BACKFILL_PER_REQUEST",
 		"MCP_ENABLED", "MCP_PATH", "MCP_MAX_BODY_BYTES",
-		"AGENT_ENABLED", "PYTHON_AGENT_URL",
+		"AGENT_ENABLED", "PYTHON_AGENT_URL", "AGENT_SERVICE_TOKEN",
 		"USER_LLM_ENCRYPTION_KEY",
 	} {
 		_ = viper.BindEnv(key)

@@ -41,6 +41,8 @@ import fakeredis.aioredis as fakeaioredis
 import httpx
 import pytest
 
+from tests.service_auth_fixtures import SERVICE_AUTH_HEADERS
+
 _DSN = os.environ.get("TEST_ASYNC_PG_DSN")
 
 pytestmark = pytest.mark.skipif(
@@ -226,7 +228,7 @@ async def app_ctx(monkeypatch):
 async def _post_chat(app, body, user_id: int = 42) -> httpx.Response:
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(
-        transport=transport, base_url="http://test", timeout=30.0
+        transport=transport, base_url="http://test", timeout=30.0, headers=SERVICE_AUTH_HEADERS
     ) as client:
         return await client.post(
             "/agent/run",
@@ -238,7 +240,7 @@ async def _post_chat(app, body, user_id: int = 42) -> httpx.Response:
 async def _post_session(app, user_id: int = 42) -> str:
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(
-        transport=transport, base_url="http://test", timeout=30.0
+        transport=transport, base_url="http://test", timeout=30.0, headers=SERVICE_AUTH_HEADERS
     ) as client:
         resp = await client.post(
             "/agent/sessions", headers={"X-Nyx-User-Id": str(user_id)}
