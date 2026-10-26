@@ -1,14 +1,24 @@
-import { describe, it, expect, beforeEach, vi, type Mock } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { describe, it, expect, beforeEach, afterEach, vi, type Mock } from 'vitest';
+import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { LlmConfigModal } from './LlmConfigModal';
 import { useLlmConfig } from '../hooks/useLlmConfig';
+import { useAuthStore } from '~/store/authStore';
 import { useUiStore } from '~/store/uiStore';
 import type { LlmConfigStatus, LlmConfigUpdateInput } from '../types/llmConfig';
 
 vi.mock('../hooks/useLlmConfig');
 
 const mockedUseLlmConfig = useLlmConfig as unknown as ReturnType<typeof vi.fn>;
+
+function makeUser(id: number) {
+  return {
+    id,
+    username: `user-${id}`,
+    created_at: '2026-10-14T00:00:00Z',
+    updated_at: '2026-10-14T00:00:00Z',
+  };
+}
 
 const unconfigured: LlmConfigStatus = {
   configured: false,
@@ -46,6 +56,7 @@ interface HookOverrides {
   status?: LlmConfigStatus | null;
   save?: MutationMock;
   remove?: MutationMock;
+  userId?: number | null;
 }
 
 function mockHook(overrides: HookOverrides = {}) {
@@ -58,6 +69,7 @@ function mockHook(overrides: HookOverrides = {}) {
     overrides.remove ??
     { mutateAsync: vi.fn().mockResolvedValue(undefined), isPending: false };
   mockedUseLlmConfig.mockReturnValue({
+    userId: overrides.userId !== undefined ? overrides.userId : 1,
     status,
     configured: status ? status.configured : null,
     isLoading: false,
@@ -100,7 +112,12 @@ describe('LlmConfigModal', () => {
   beforeEach(() => {
     mockedUseLlmConfig.mockReset();
     useUiStore.setState({ toasts: [] });
+    useAuthStore.setState({ user: makeUser(1), isAuthenticated: true });
     document.body.innerHTML = '';
+  });
+
+  afterEach(() => {
+    useAuthStore.setState({ user: null, isAuthenticated: false });
   });
 
   it('blocks submission on missing required fields and shows per-field errors', async () => {
@@ -408,20 +425,13 @@ describe('LlmConfigModal', () => {
     expect(screen.getByText('LLM configuration required')).toBeInTheDocument();
   });
 
-  it('hides the close button in blocking mode and shows it otherwise', () => {
+  it('shows the close button in blocking mode too', () => {
     mockHook({ status: unconfigured });
-    const { unmount } = renderModal({ blocking: true });
-    expect(
-      screen.queryByRole('button', { name: /close/i }),
-    ).not.toBeInTheDocument();
-    unmount();
-
-    mockHook({ status: configuredStatus });
-    renderModal();
+    renderModal({ blocking: true });
     expect(
       screen.getAllByRole('button', { name: /close/i }).length,
     ).toBeGreaterThan(0);
-    expect(screen.getByText('LLM configuration')).toBeInTheDocument();
+    expect(screen.getByText('LLM configuration required')).toBeInTheDocument();
   });
 
   it('rejects a non-http base URL with the URL error', async () => {
@@ -439,5 +449,142 @@ describe('LlmConfigModal', () => {
     expect(
       screen.getAllByText('Enter a valid http(s) URL').length,
     ).toBe(1);
+  });
+
+  it('never carries the previous identity\'s API key into the next one', async () => {
+    const { save } = mockHook({ status: unconfigured, userId: 1 });
+    const view = render(
+      <LlmConfigModal open onOpenChange={vi.fn()} />,
+    );
+
+    await userEvent.type(input('llm-base-url'), 'https://llm-a.example.test/v1');
+    await userEvent.type(input('llm-model'), 'model-a');
+    await userEvent.type(input('llm-api-key'), 'sk-user-a-secret');
+    await expandOptionalSections();
+    await userEvent.type(input('embedding-base-url'), 'https://embed-a.example.test/v1');
+    await userEvent.type(input('embedding-model'), 'embed-model-a');
+    await userEvent.type(input('embedding-api-key'), 'sk-user-a-embed');
+    await userEvent.type(input('tavily-base-url'), 'https://tavily-a.example.test/search');
+    await userEvent.type(input('tavily-api-key'), 'tvly-user-a');
+
+    mockHook({ status: unconfigured, userId: 2, save });
+    view.rerender(<LlmConfigModal open onOpenChange={vi.fn()} />);
+
+    await waitFor(() => {
+      expect(input('llm-api-key').value).toBe('');
+    });
+    expect(input('llm-base-url').value).toBe('');
+    expect(input('llm-model').value).toBe('');
+    expect(document.getElementById('embedding-api-key')).toBeNull();
+    expect(document.getElementById('tavily-api-key')).toBeNull();
+
+    await userEvent.type(input('llm-base-url'), 'https://llm-b.example.test/v1');
+    await userEvent.type(input('llm-model'), 'model-b');
+    await userEvent.type(input('llm-api-key'), 'sk-user-b-secret');
+    await userEvent.click(screen.getByTestId('llm-config-save'));
+
+    await vi.waitFor(() => {
+      expect(save.mutateAsync).toHaveBeenCalledTimes(1);
+    });
+    const payload = save.mutateAsync.mock.calls[0][0] as LlmConfigUpdateInput;
+    expect(payload).toEqual({
+      llm: {
+        base_url: 'https://llm-b.example.test/v1',
+        api_key: 'sk-user-b-secret',
+        model: 'model-b',
+      },
+      embedding: { base_url: '', api_key: '', model: '' },
+      tavily: { base_url: '', api_key: '' },
+    });
+  });
+
+  it('ignores a save that resolves after the identity changed', async () => {
+    let resolveSave: (status: LlmConfigStatus) => void = () => undefined;
+    const pending = new Promise<LlmConfigStatus>((resolve) => {
+      resolveSave = resolve;
+    });
+    const onSaved = vi.fn();
+    const onOpenChange = vi.fn();
+    mockHook({
+      status: unconfigured,
+      userId: 1,
+      save: { mutateAsync: vi.fn(() => pending), isPending: false },
+    });
+    const view = render(
+      <LlmConfigModal open onOpenChange={onOpenChange} onSaved={onSaved} />,
+    );
+
+    await userEvent.type(input('llm-base-url'), 'https://llm-a.example.test/v1');
+    await userEvent.type(input('llm-model'), 'model-a');
+    await userEvent.type(input('llm-api-key'), 'sk-user-a-secret');
+    await userEvent.click(screen.getByTestId('llm-config-save'));
+
+    useAuthStore.setState({ user: makeUser(2), isAuthenticated: true });
+    mockHook({ status: unconfigured, userId: 2 });
+    view.rerender(
+      <LlmConfigModal open onOpenChange={onOpenChange} onSaved={onSaved} />,
+    );
+
+    resolveSave(configuredStatus);
+
+    await waitFor(() => {
+      expect(input('llm-base-url').value).toBe('');
+    });
+    expect(input('llm-api-key').value).toBe('');
+    expect(onSaved).not.toHaveBeenCalled();
+    expect(onOpenChange).not.toHaveBeenCalledWith(false);
+  });
+
+  it('does not signal a dismissal when a save closes the modal', async () => {
+    const onDismissed = vi.fn();
+    mockHook({ status: configuredStatus });
+    renderModal({ onDismissed });
+
+    await userEvent.click(screen.getByTestId('llm-config-save'));
+
+    await vi.waitFor(() => {
+      expect(
+        useUiStore
+          .getState()
+          .toasts.some((toast) => toast.message === 'LLM configuration saved'),
+      ).toBe(true);
+    });
+    expect(onDismissed).not.toHaveBeenCalled();
+  });
+
+  it('drops the plaintext API key from the form after a successful save', async () => {
+    const savedStatus: LlmConfigStatus = {
+      ...configuredStatus,
+      llm: {
+        base_url: 'https://llm.example.test/v1',
+        model: 'deepseek-chat',
+        api_key_masked: '••••cret',
+      },
+    };
+    const { save } = mockHook({
+      status: unconfigured,
+      save: {
+        mutateAsync: vi.fn().mockResolvedValue(savedStatus),
+        isPending: false,
+      },
+    });
+    const view = render(<LlmConfigModal open onOpenChange={vi.fn()} />);
+
+    await userEvent.type(input('llm-base-url'), 'https://llm.example.test/v1');
+    await userEvent.type(input('llm-model'), 'deepseek-chat');
+    await userEvent.type(input('llm-api-key'), 'sk-user-a-secret');
+    await userEvent.click(screen.getByTestId('llm-config-save'));
+
+    await vi.waitFor(() => {
+      expect(save.mutateAsync).toHaveBeenCalledTimes(1);
+    });
+
+    mockHook({ status: savedStatus, save });
+    view.rerender(<LlmConfigModal open onOpenChange={vi.fn()} />);
+
+    await waitFor(() => {
+      expect(input('llm-api-key').value).toBe('');
+    });
+    expect(input('llm-base-url').value).toBe('https://llm.example.test/v1');
   });
 });

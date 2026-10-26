@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { useForm, type UseFormRegisterReturn } from "react-hook-form";
 import { useTranslation } from "react-i18next";
 import { zodResolver } from "@hookform/resolvers/zod";
@@ -7,6 +7,7 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { Button } from "~/components/ui/Button";
 import { Input } from "~/components/ui/Input";
 import { Label } from "~/components/ui/Label";
+import { useAuthStore } from "~/store/authStore";
 import { useUiStore } from "~/store/uiStore";
 import { t as translate } from "~/i18n";
 import { useLlmConfig } from "../hooks/useLlmConfig";
@@ -206,6 +207,26 @@ function toFormValues(status: LlmConfigStatus | null): LlmConfigFormValues {
   };
 }
 
+function currentUserId(): number | null {
+  return useAuthStore.getState().user?.id ?? null;
+}
+
+function sameFormValues(
+  a: LlmConfigFormValues,
+  b: LlmConfigFormValues,
+): boolean {
+  return (
+    a.llm?.base_url === b.llm?.base_url &&
+    a.llm?.api_key === b.llm?.api_key &&
+    a.llm?.model === b.llm?.model &&
+    a.embedding?.base_url === b.embedding?.base_url &&
+    a.embedding?.api_key === b.embedding?.api_key &&
+    a.embedding?.model === b.embedding?.model &&
+    a.tavily?.base_url === b.tavily?.base_url &&
+    a.tavily?.api_key === b.tavily?.api_key
+  );
+}
+
 function toUpdateInput(values: LlmConfigFormValues): LlmConfigUpdateInput {
   return {
     llm: {
@@ -252,6 +273,7 @@ function ConfigField({
       <Input
         id={id}
         type={type}
+        autoComplete={type === "password" ? "new-password" : undefined}
         placeholder={placeholder}
         aria-invalid={error ? true : undefined}
         disabled={disabled}
@@ -297,6 +319,7 @@ function Guidance({
 interface LlmConfigModalProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
+  onDismissed?: () => void;
   blocking?: boolean;
   onSaved?: () => void;
 }
@@ -304,19 +327,21 @@ interface LlmConfigModalProps {
 export const LlmConfigModal = ({
   open,
   onOpenChange,
+  onDismissed,
   blocking = false,
   onSaved,
 }: LlmConfigModalProps) => {
   const { t } = useTranslation();
   const addToast = useUiStore((state) => state.addToast);
-  const { status, save, remove } = useLlmConfig({ enabled: open });
+  const { userId, status, save, remove } = useLlmConfig({ enabled: open });
   const configured = status?.configured === true;
   const schema = useMemo(() => buildLlmConfigSchema(!configured), [configured]);
   const {
     register,
     handleSubmit,
     reset,
-    formState: { errors, isDirty },
+    getValues,
+    formState: { errors },
   } = useForm<LlmConfigFormValues>({
     resolver: zodResolver(schema),
     defaultValues: toFormValues(null),
@@ -337,12 +362,29 @@ export const LlmConfigModal = ({
   const showTavily =
     tavilyOverride ?? (status?.tavily != null || tavilyError);
   const [confirmClearOpen, setConfirmClearOpen] = useState(false);
+  const previousUserIdRef = useRef<number | null>(null);
 
   useEffect(() => {
+    if (previousUserIdRef.current !== userId) {
+      const replacesSignedInUser = previousUserIdRef.current !== null;
+      previousUserIdRef.current = userId;
+      if (replacesSignedInUser) {
+        setEmbeddingOverride(null);
+        setTavilyOverride(null);
+        setConfirmClearOpen(false);
+        reset(toFormValues(null));
+        return;
+      }
+    }
     if (!open) return;
-    if (isDirty) return;
-    reset(toFormValues(status));
-  }, [open, status, reset, isDirty]);
+    const fromStatus = toFormValues(status);
+    const current = getValues();
+    const untouched =
+      sameFormValues(current, fromStatus) ||
+      sameFormValues(current, toFormValues(null));
+    if (!untouched) return;
+    reset(fromStatus);
+  }, [open, status, userId, reset, getValues]);
 
   const keyPlaceholder = (
     section: { api_key_masked: string } | null | undefined,
@@ -352,8 +394,11 @@ export const LlmConfigModal = ({
       : t("llmConfig.fields.keyPlaceholder");
 
   const submit = handleSubmit(async (values) => {
+    const ownerId = userId;
     try {
-      await save.mutateAsync(toUpdateInput(values));
+      const saved = await save.mutateAsync(toUpdateInput(values));
+      if (currentUserId() !== ownerId) return;
+      reset(toFormValues(saved));
       addToast(t("llmConfig.toasts.saved"), "success");
       onSaved?.();
       onOpenChange(false);
@@ -365,8 +410,11 @@ export const LlmConfigModal = ({
   });
 
   const executeClear = async () => {
+    const ownerId = userId;
     try {
       await remove.mutateAsync();
+      if (currentUserId() !== ownerId) return;
+      reset(toFormValues(null));
       addToast(t("llmConfig.toasts.cleared"), "success");
       setConfirmClearOpen(false);
       onOpenChange(false);
@@ -377,21 +425,14 @@ export const LlmConfigModal = ({
     }
   };
 
+  const handleDialogOpenChange = (nextOpen: boolean) => {
+    if (!nextOpen) onDismissed?.();
+    onOpenChange(nextOpen);
+  };
+
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent
-        className="max-h-[85vh] overflow-y-auto sm:max-w-2xl"
-        hideClose={blocking}
-        onEscapeKeyDown={
-          blocking ? (event) => event.preventDefault() : undefined
-        }
-        onPointerDownOutside={
-          blocking ? (event) => event.preventDefault() : undefined
-        }
-        onInteractOutside={
-          blocking ? (event) => event.preventDefault() : undefined
-        }
-      >
+    <Dialog open={open} onOpenChange={handleDialogOpenChange}>
+      <DialogContent className="max-h-[85vh] overflow-y-auto sm:max-w-2xl">
         <DialogHeader>
           <DialogTitle>
             {blocking

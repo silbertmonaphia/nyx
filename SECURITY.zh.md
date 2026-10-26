@@ -94,6 +94,7 @@ English version: [SECURITY.md](SECURITY.md)
 - **仓库卫生** —— `.env` 已 gitignore，无硬编码密钥，多阶段 Dockerfile，非 root USER，prod compose 将 DB/Redis/Jaeger 隔离在内网。
 - **日志注入** —— zerolog 对用户输入做 JSON 转义；通过 `X-Request-ID` 的响应拆分被 `net/http` 响应头校验阻断。
 - **授权** —— 无对象级漏洞。Feed create/update/delete 需鉴权且按 owner 限定：每条查询均带 `WHERE user_id = @user_id`，跨 owner 写入映射为 404（单一 `feed.ErrNotFound`，不泄露 `ErrForbidden`）；`GET /api/feeds` 需鉴权，仅返回调用者自己的行。`feeds.user_id` 列以 FK 指向 `users.id` 且无级联（用户通过 `deleted_at` 软删除；未来硬删除路径必须先重分配或删除该用户的 feeds）。
+- **按用户的 LLM 凭据** —— `user_llm_settings` 以 `user_id` 为主键并 `ON DELETE CASCADE`，读写一律经 JWT 校验后的 `reqctx.UserIDFromContext` 走 `WHERE user_id = @user_id`，API key 落库加密、响应只回掩码、明文仅可写。前端侧配置弹窗按身份隔离：`authStore.user.id` 变化（含登出→登录）时表单状态重置，弹窗打开状态由身份持有而非布尔量，清除上一个身份的 `llm-config` 查询缓存，且身份已变后返回的保存/清除结果一律丢弃 —— 常驻组件不得把上一用户的 key 带进下一用户的会话。该保证的边界是单标签页：`authStore.user` 未做跨标签同步，共享浏览器配置下另一个标签页可能通过 `BroadcastChannel` 握手采纳了另一身份的 token，却仍保留旧的 `user`，直到它自己的 401 触发登出。该缺口作为后续项跟踪。
 
 ## 数据处理
 

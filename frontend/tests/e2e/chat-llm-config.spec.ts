@@ -10,6 +10,8 @@ import {
 
 const GATE_TITLE = 'LLM configuration required';
 
+const SAVE_RESPONSE_TIMEOUT = 15_000;
+
 test.describe('LLM configuration gate (browser-level)', () => {
   test('a fresh user sees the blocking modal instead of the chat panel', async ({
     page,
@@ -19,9 +21,38 @@ test.describe('LLM configuration gate (browser-level)', () => {
 
     const gate = page.getByRole('dialog', { name: GATE_TITLE });
     await expect(gate).toBeVisible();
-    await expect(gate.getByRole('button', { name: 'Close' })).toHaveCount(0);
+    await expect(gate.getByRole('button', { name: 'Close' })).toHaveCount(1);
     await expect(page.getByTestId('chat-form')).not.toBeVisible();
     await expect(page.getByTestId('llm-config-clear')).toHaveCount(0);
+  });
+
+  test('closing the gate returns to the feed view and stays closed until the agent is reopened', async ({
+    page,
+  }) => {
+    const user = makeTestUser('e2e_llmcfg_dismiss');
+    await registerViaUi(page, user);
+    const gate = page.getByRole('dialog', { name: GATE_TITLE });
+    await expect(gate).toBeVisible();
+
+    await gate.getByRole('button', { name: 'Close' }).click();
+    await expect(gate).not.toBeVisible();
+    await expect(page.getByTestId('chat-form')).not.toBeVisible();
+    await expect(page.getByTestId('feed-list-empty')).toBeVisible();
+
+    await page.waitForTimeout(1500);
+    await expect(gate).not.toBeVisible();
+
+    await page.getByRole('button', { name: 'Open AI Agent' }).click();
+    await expect(gate).toBeVisible();
+    await expect(page.getByTestId('chat-form')).not.toBeVisible();
+
+    await page.keyboard.press('Escape');
+    await expect(gate).not.toBeVisible();
+
+    await page.getByRole('button', { name: 'Open AI Agent' }).click();
+    await expect(gate).toBeVisible();
+    await page.mouse.click(20, 400);
+    await expect(gate).not.toBeVisible();
   });
 
   test('saving all eight required fields opens the chat panel', async ({
@@ -52,8 +83,10 @@ test.describe('LLM configuration gate (browser-level)', () => {
 
     await expect(
       page.getByTestId('toast').filter({ hasText: 'LLM configuration saved' }),
-    ).toBeVisible();
-    await expect(page.getByTestId('chat-form')).toBeVisible();
+    ).toBeVisible({ timeout: SAVE_RESPONSE_TIMEOUT });
+    await expect(page.getByTestId('chat-form')).toBeVisible({
+      timeout: SAVE_RESPONSE_TIMEOUT,
+    });
   });
 
   test('saves without Tavily, shows the red impact note, and opens the panel', async ({
@@ -83,7 +116,9 @@ test.describe('LLM configuration gate (browser-level)', () => {
 
     await page.getByTestId('llm-config-save').click();
 
-    await expect(page.getByTestId('chat-form')).toBeVisible();
+    await expect(page.getByTestId('chat-form')).toBeVisible({
+      timeout: SAVE_RESPONSE_TIMEOUT,
+    });
   });
 
   test('an embedding-only config saves but keeps the agent gated', async ({
@@ -106,7 +141,7 @@ test.describe('LLM configuration gate (browser-level)', () => {
 
     await expect(
       page.getByTestId('toast').filter({ hasText: 'LLM configuration saved' }),
-    ).toBeVisible();
+    ).toBeVisible({ timeout: SAVE_RESPONSE_TIMEOUT });
     await expect(
       page.getByRole('dialog', { name: GATE_TITLE }),
     ).toBeVisible();
@@ -169,8 +204,10 @@ test.describe('LLM configuration gate (browser-level)', () => {
     await page.getByTestId('llm-config-save').click();
     await expect(
       page.getByTestId('toast').filter({ hasText: 'LLM configuration saved' }),
-    ).toBeVisible();
-    await expect(page.getByTestId('chat-form')).toBeVisible();
+    ).toBeVisible({ timeout: SAVE_RESPONSE_TIMEOUT });
+    await expect(page.getByTestId('chat-form')).toBeVisible({
+      timeout: SAVE_RESPONSE_TIMEOUT,
+    });
     await closeChatPanel(page);
 
     await page.getByTestId('llm-config-button').click();
@@ -231,5 +268,80 @@ test.describe('LLM configuration gate (browser-level)', () => {
       page.getByRole('dialog', { name: GATE_TITLE }),
     ).toBeVisible();
     await expect(page.getByTestId('chat-form')).not.toBeVisible();
+  });
+
+  test('a second user never inherits the first user\'s LLM configuration', async ({
+    page,
+  }) => {
+    const userA = makeTestUser('e2e_llmcfg_usera');
+    await registerViaUi(page, userA);
+    await expect(
+      page.getByRole('dialog', { name: GATE_TITLE }),
+    ).toBeVisible();
+
+    await page.locator('#llm-base-url').fill('https://llm-a.example.test/v1');
+    await page.locator('#llm-model').fill('user-a-model');
+    await page.locator('#llm-api-key').fill('sk-user-a-secret');
+    await page.getByTestId('llm-config-save').click();
+    await expect(
+      page.getByTestId('toast').filter({ hasText: 'LLM configuration saved' }),
+    ).toBeVisible({ timeout: SAVE_RESPONSE_TIMEOUT });
+    await expect(page.getByTestId('chat-form')).toBeVisible({
+      timeout: SAVE_RESPONSE_TIMEOUT,
+    });
+
+    await closeChatPanel(page);
+    await page.getByRole('button', { name: /^Logout$/i }).click();
+    await expect(
+      page.getByRole('heading', { name: 'Login or Register' }),
+    ).toBeVisible();
+
+    const savedBodies: string[] = [];
+    page.on('request', (request) => {
+      if (
+        request.method() === 'PUT' &&
+        request.url().includes('/me/llm-config')
+      ) {
+        savedBodies.push(request.postData() ?? '');
+      }
+    });
+
+    const userB = makeTestUser('e2e_llmcfg_userb');
+    await page.getByRole('button', { name: /Register/i }).last().click();
+    await page.getByLabel(/Username/i).fill(userB.username);
+    await page.getByLabel(/Password/i).fill(userB.password);
+    await page.getByRole('button', { name: /^Register$/i }).click();
+    await expect(page.getByText(/Successfully registered!/i)).toBeVisible();
+
+    await expect(
+      page.getByRole('dialog', { name: GATE_TITLE }),
+    ).toBeVisible();
+    await expect(page.locator('#llm-base-url')).toHaveValue('');
+    await expect(page.locator('#llm-model')).toHaveValue('');
+    await expect(page.locator('#llm-api-key')).toHaveValue('');
+    await expect(page.locator('#llm-api-key')).not.toHaveAttribute(
+      'placeholder',
+      /cret/,
+    );
+
+    await page.locator('#llm-base-url').fill('https://llm-b.example.test/v1');
+    await page.locator('#llm-model').fill('user-b-model');
+    await page.locator('#llm-api-key').fill('sk-user-b-secret');
+    const userBSave = page.waitForResponse(
+      (r) =>
+        r.request().method() === 'PUT' &&
+        r.url().includes('/me/llm-config'),
+      { timeout: SAVE_RESPONSE_TIMEOUT },
+    );
+    await page.getByTestId('llm-config-save').click();
+    expect((await userBSave).status()).toBe(200);
+
+    expect(savedBodies.length).toBeGreaterThan(0);
+    expect(savedBodies[savedBodies.length - 1]).toContain('sk-user-b-secret');
+    for (const body of savedBodies) {
+      expect(body).not.toContain('sk-user-a-secret');
+      expect(body).not.toContain('user-a-model');
+      expect(body).not.toContain('llm-a.example.test');
+    }
   });
 });

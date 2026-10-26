@@ -30,6 +30,7 @@ import { logger } from './services/logger';
 import { ChatPanel } from './features/chat/components/ChatPanel';
 import { resetFeedStateForNewUser } from './features/feeds/services/resetFeedState';
 import { useChatStateReset } from './features/chat/hooks/useChatStateReset';
+import { resetLlmConfigStateForNewUser } from './features/chat/services/resetLlmConfigState';
 import { LlmConfigModal } from './features/chat/components/LlmConfigModal';
 import { useLlmConfig } from './features/chat/hooks/useLlmConfig';
 import { useChatStore } from './features/chat/store/chatStore';
@@ -55,7 +56,9 @@ function App() {
   const [showLogoutAll, setShowLogoutAll] = useState(false);
   const [loggingOutAll, setLoggingOutAll] = useState(false);
   const llmFeatureEnabled = import.meta.env.VITE_LLM_FEATURE_ENABLED !== 'false';
-  const [llmSettingsOpen, setLlmSettingsOpen] = useState(false);
+  const [llmSettingsOwner, setLlmSettingsOwner] = useState<number | null>(null);
+  const llmSettingsOpen =
+    llmSettingsOwner !== null && llmSettingsOwner === user?.id;
   const llmGateOpen = useChatStore((state) => state.llmGateOpen);
   const setLlmGateOpen = useChatStore((state) => state.setLlmGateOpen);
   const {
@@ -75,8 +78,16 @@ function App() {
   const llmModalBlocking = llmGate || llmGateOpen;
 
   const handleLlmModalChange = (open: boolean) => {
-    setLlmSettingsOpen(open);
-    if (!open) setLlmGateOpen(false);
+    if (!open) {
+      setLlmSettingsOwner(null);
+      setLlmGateOpen(false);
+    }
+  };
+
+  const handleLlmModalDismissed = () => {
+    setLlmGateOpen(false);
+    setLlmSettingsOwner(null);
+    if (llmModalBlocking) setChatDismissed(true);
   };
 
   const handleLlmSaved = () => {
@@ -99,6 +110,7 @@ function App() {
   // previous user.
   useEffect(() => {
     resetFeedStateForNewUser();
+    resetLlmConfigStateForNewUser(user?.id ?? null);
   }, [user?.id]);
 
   // The input stays fully controlled by `searchTerm` (instant typing),
@@ -140,6 +152,7 @@ function App() {
   const handleLogoutAll = async () => {
     if (loggingOutAll) return;
     setLoggingOutAll(true);
+    setLlmSettingsOwner(null);
     const ok = await logoutAll();
     setLoggingOutAll(false);
     setShowLogoutAll(false);
@@ -228,7 +241,7 @@ function App() {
                   <Button
                     variant="outline"
                     size="icon"
-                    onClick={() => setLlmSettingsOpen(true)}
+                    onClick={() => setLlmSettingsOwner(user?.id ?? null)}
                     aria-label={t('nav.llmConfig')}
                     title={t('nav.llmConfig')}
                     className="shrink-0"
@@ -251,7 +264,15 @@ function App() {
                   <UserIcon className="h-4 w-4" />
                   <span>{user?.username}</span>
                 </div>
-                <Button variant="outline" size="sm" onClick={() => logout()} className="gap-2">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => {
+                    setLlmSettingsOwner(null);
+                    logout();
+                  }}
+                  className="gap-2"
+                >
                   <LogOut className="h-4 w-4" />
                   {t('nav.logout')}
                 </Button>
@@ -430,6 +451,7 @@ function App() {
           open={llmSettingsOpen || llmGate || llmGateOpen}
           blocking={llmModalBlocking}
           onOpenChange={handleLlmModalChange}
+          onDismissed={handleLlmModalDismissed}
           onSaved={handleLlmSaved}
         />
       )}

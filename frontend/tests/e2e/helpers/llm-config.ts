@@ -66,10 +66,17 @@ export async function readAccessToken(page: Page): Promise<string> {
 }
 
 export async function closeChatPanel(page: Page): Promise<void> {
-  if ((await page.getByTestId('chat-form').count()) > 0) {
+  const chatForm = page.getByTestId('chat-form');
+  for (let attempt = 0; attempt < 3; attempt++) {
+    if ((await chatForm.count()) === 0) return;
     await page.keyboard.press('Escape');
-    await expect(page.getByTestId('chat-form')).toHaveCount(0);
+    await page.waitForTimeout(300);
+    if ((await chatForm.count()) > 0) {
+      await page.mouse.click(20, 400);
+      await page.waitForTimeout(300);
+    }
   }
+  await expect(chatForm).toHaveCount(0);
 }
 
 export function llmConfigSeedBody(overrides: LlmConfigSeedOverrides = {}) {

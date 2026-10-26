@@ -78,6 +78,7 @@ interface HookOverrides {
   status?: LlmConfigStatus | null;
   isLoading?: boolean;
   isUnavailable?: boolean;
+  userId?: number | null;
   save?: { mutateAsync: ReturnType<typeof vi.fn>; isPending: boolean };
   remove?: { mutateAsync: ReturnType<typeof vi.fn>; isPending: boolean };
 }
@@ -97,6 +98,7 @@ function mockHook(overrides: HookOverrides = {}) {
       isPending: false,
     } satisfies HookOverrides['remove']);
   mockUseLlmConfig.mockReturnValue({
+    userId: overrides.userId !== undefined ? overrides.userId : 1,
     status,
     configured: status ? status.configured : null,
     agentReady: status ? status.llm !== null : null,
@@ -110,11 +112,14 @@ function mockHook(overrides: HookOverrides = {}) {
 }
 
 function authenticate() {
-  mockUseAuthStore.mockReturnValue({
+  const state = {
     isAuthenticated: true,
     user: { id: 1, username: 'testuser' },
     logout: vi.fn(),
-  });
+  };
+  mockUseAuthStore.mockReturnValue(state);
+  mockUseAuthStore.getState = vi.fn().mockReturnValue(state);
+  return state;
 }
 
 async function fillRequiredFields() {
@@ -176,8 +181,33 @@ describe('App LLM config gating', () => {
     expect(
       screen.getByText(/Fill in the main-LLM fields/),
     ).toBeInTheDocument();
-    expect(screen.queryByText('Close')).not.toBeInTheDocument();
+    expect(screen.getByText('Close')).toBeInTheDocument();
     expect(screen.queryByTestId('llm-config-clear')).not.toBeInTheDocument();
+  });
+
+  it('closes the gate from the close button and dismisses the chat panel', async () => {
+    authenticate();
+    mockHook({ status: unconfiguredStatus });
+    const view = render(<App />);
+
+    await screen.findByText('LLM configuration required');
+    await userEvent.click(screen.getByText('Close').closest('button')!);
+
+    await waitFor(() => {
+      expect(
+        screen.queryByText('LLM configuration required'),
+      ).not.toBeInTheDocument();
+    });
+    expect(screen.queryByTestId('chat-panel-mock')).not.toBeInTheDocument();
+
+    await userEvent.click(
+      screen.getByRole('button', { name: 'Open AI Agent' }),
+    );
+    view.rerender(<App />);
+    expect(
+      await screen.findByText('LLM configuration required'),
+    ).toBeInTheDocument();
+    expect(screen.queryByTestId('chat-panel-mock')).not.toBeInTheDocument();
   });
 
   it('does not gate while the status query is loading', () => {
@@ -264,7 +294,7 @@ describe('App LLM config gating', () => {
     expect(
       await screen.findByText('LLM configuration required'),
     ).toBeInTheDocument();
-    expect(screen.queryByText('Close')).not.toBeInTheDocument();
+    expect(screen.getByText('Close')).toBeInTheDocument();
 
     await fillRequiredFields();
     await userEvent.click(screen.getByTestId('llm-config-save'));
@@ -302,6 +332,59 @@ describe('App LLM config gating', () => {
         screen.getByText('LLM configuration required'),
       ).toBeInTheDocument();
     });
-    expect(screen.queryByText('Close')).not.toBeInTheDocument();
+    expect(screen.getByText('Close')).toBeInTheDocument();
+  });
+
+  it('closing the settings modal keeps the chat panel open', async () => {
+    authenticate();
+    mockHook({ status: configuredStatus });
+    render(<App />);
+
+    expect(await screen.findByTestId('chat-panel-mock')).toBeInTheDocument();
+    await userEvent.click(await screen.findByTestId('llm-config-button'));
+    expect(await screen.findByText('LLM configuration')).toBeInTheDocument();
+
+    await userEvent.click(screen.getByText('Close').closest('button')!);
+
+    await waitFor(() => {
+      expect(screen.queryByText('LLM configuration')).not.toBeInTheDocument();
+    });
+    expect(screen.getByTestId('chat-panel-mock')).toBeInTheDocument();
+  });
+
+  it('closes the modal and drops the previous user\'s values when the identity changes', async () => {
+    authenticate();
+    mockHook({ status: configuredStatus, userId: 1 });
+    const view = render(<App />);
+
+    await userEvent.click(await screen.findByTestId('llm-config-button'));
+    expect(await screen.findByText('LLM configuration')).toBeInTheDocument();
+    const baseUrl = document.getElementById('llm-base-url') as HTMLInputElement;
+    const apiKey = document.getElementById('llm-api-key') as HTMLInputElement;
+    await userEvent.type(baseUrl, 'https://llm-a.example.test/v1');
+    await userEvent.type(apiKey, 'sk-user-a-secret');
+
+    const secondUser = {
+      isAuthenticated: true,
+      user: { id: 2, username: 'otheruser' },
+      logout: vi.fn(),
+    };
+    mockUseAuthStore.mockReturnValue(secondUser);
+    mockUseAuthStore.getState = vi.fn().mockReturnValue(secondUser);
+    mockHook({ status: unconfiguredStatus, userId: 2 });
+    view.rerender(<App />);
+
+    await waitFor(() => {
+      expect(screen.queryByText('LLM configuration')).not.toBeInTheDocument();
+    });
+    await waitFor(() => {
+      expect(
+        (document.getElementById('llm-base-url') as HTMLInputElement).value,
+      ).toBe('');
+    });
+    expect(
+      (document.getElementById('llm-api-key') as HTMLInputElement).value,
+    ).toBe('');
+    expect(screen.getByText('LLM configuration required')).toBeInTheDocument();
   });
 });

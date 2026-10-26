@@ -164,7 +164,7 @@ export const zh = {
       gate: {
         title: '需要先配置 LLM',
         description:
-          'AI Agent 需要你自己的模型端点与 API 密钥；填写主 LLM 三项即可使用。不填也不影响 feed 等其他功能。',
+          'AI Agent 需要你自己的模型端点与 API 密钥；填写主 LLM 三项即可使用。不填也不影响 feed 等其他功能，可以先关闭窗口稍后再配置。',
       },
       sections: {
         llm: {
