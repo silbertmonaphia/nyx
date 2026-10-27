@@ -62,6 +62,8 @@ func configRequest(t *testing.T, router *chi.Mux, method, token string, body any
 	return rr
 }
 
+const testPrivateLLMBaseURL = "http://127.0.0.1:8000/v1"
+
 func validPutBody() map[string]any {
 	return map[string]any{
 		"llm": map[string]any{
@@ -229,6 +231,47 @@ func TestHandler_PutRejectsInvalidFieldsWithFieldDetails(t *testing.T) {
 			} else {
 				assert.NotNil(t, env.Details)
 			}
+			assert.Nil(t, repo.rows[1], "a rejected PUT must not write a row")
+		})
+	}
+}
+
+func TestHandler_PutRejectsPrivateBaseURLWhenBYOKPrivateIsDenied(t *testing.T) {
+	platapi.OverrideHumaErrors()
+	svc, repo, _ := newTestService(t)
+	svc.SetBYOKAllowPrivate(false)
+	tokens, err := auth.NewTokenService([]byte(auth.TestSecret), 15*time.Minute)
+	require.NoError(t, err)
+	router := chi.NewMux()
+	router.Use(middleware.StoreRequest)
+	hapi := humachi.New(router, platapi.HumaConfig())
+	RegisterLLMConfigOpsTest(hapi, NewHandler(svc), tokens, true)
+
+	tok := mustToken(t, tokens, 1)
+	for _, field := range []string{"llm_base_url", "embedding_base_url", "tavily_base_url"} {
+		t.Run(field, func(t *testing.T) {
+			body := validPutBody()
+			body["llm"].(map[string]any)["base_url"] = "http://203.0.113.10:8000/v1"
+			body["embedding"].(map[string]any)["base_url"] = "http://203.0.113.20:8001/v1"
+			switch field {
+			case "llm_base_url":
+				body["llm"].(map[string]any)["base_url"] = testPrivateLLMBaseURL
+			case "embedding_base_url":
+				body["embedding"].(map[string]any)["base_url"] = "http://10.1.2.3:8001/v1"
+			case "tavily_base_url":
+				body["tavily"].(map[string]any)["base_url"] = "http://169.254.169.254/search"
+			}
+
+			rr := configRequest(t, router, http.MethodPut, tok, body)
+			require.Equal(t, http.StatusBadRequest, rr.Code)
+
+			var env platapi.ErrorResponse
+			require.NoError(t, json.Unmarshal(rr.Body.Bytes(), &env))
+			assert.Equal(t, http.StatusBadRequest, env.Code)
+			assert.Equal(t, field, env.Details)
+			assert.NotContains(t, rr.Body.String(), "127.0.0.1")
+			assert.NotContains(t, rr.Body.String(), "169.254.169.254")
+			assert.NotContains(t, rr.Body.String(), "10.1.2.3")
 			assert.Nil(t, repo.rows[1], "a rejected PUT must not write a row")
 		})
 	}

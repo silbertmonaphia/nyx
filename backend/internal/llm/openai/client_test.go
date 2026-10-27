@@ -20,6 +20,7 @@ import (
 	"go.opentelemetry.io/otel/trace/noop"
 
 	"nyx/internal/llm"
+	"nyx/internal/llm/ssrf"
 	"nyx/internal/platform/config"
 )
 
@@ -30,10 +31,11 @@ import (
 func newTestClient(t *testing.T, serverURL string) *Client {
 	t.Helper()
 	cfg := &config.Config{
-		LLMEnabled: true,
-		LLMBaseURL: serverURL,
-		LLMAPIKey:  "sk-real-test-key-1234567890",
-		LLMModel:   "test-model",
+		LLMEnabled:         true,
+		LLMBaseURL:         serverURL,
+		LLMAPIKey:          "sk-real-test-key-1234567890",
+		LLMModel:           "test-model",
+		LLMAllowPrivateURL: true,
 	}
 	tracer := noop.NewTracerProvider().Tracer("test")
 	c, err := NewClient(cfg, tracer)
@@ -628,4 +630,98 @@ func TestEmbed_UpstreamErrorReturnsSentinel(t *testing.T) {
 	_, err := c.Embed(context.Background(), llm.EmbedRequest{Model: "m", Inputs: []string{"x"}})
 	require.Error(t, err)
 	assert.True(t, errors.Is(err, llm.ErrProviderUnavailable))
+}
+
+func TestNewClient_RefusesPrivateBaseURLByDefault(t *testing.T) {
+	cfg := &config.Config{
+		LLMEnabled: true,
+		LLMBaseURL: "http://127.0.0.1:8000/v1",
+		LLMAPIKey:  "sk-real-test-key-1234567890",
+		LLMModel:   "test-model",
+	}
+	tracer := noop.NewTracerProvider().Tracer("test")
+	_, err := NewClient(cfg, tracer)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "LLM_ALLOW_PRIVATE_URL")
+}
+
+func TestNewClient_AllowsPrivateWithOperatorFlag(t *testing.T) {
+	cfg := &config.Config{
+		LLMEnabled:         true,
+		LLMBaseURL:         "http://127.0.0.1:8000/v1",
+		LLMAPIKey:          "sk-real-test-key-1234567890",
+		LLMModel:           "test-model",
+		LLMAllowPrivateURL: true,
+	}
+	tracer := noop.NewTracerProvider().Tracer("test")
+	_, err := NewClient(cfg, tracer)
+	require.NoError(t, err)
+}
+
+func TestNewClient_GuardedTransportStillStreams(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		writeSSE(w, `{"choices":[{"delta":{"content":"hello"}}]}`)
+		writeSSE(w, `{"choices":[{"delta":{}}],"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}}`)
+		writeSSE(w, `[DONE]`)
+	}))
+	defer server.Close()
+
+	orig := ssrf.ResolveHost
+	ssrf.ResolveHost = func(host string) ([]net.IP, error) {
+		return []net.IP{net.ParseIP("93.184.216.34")}, nil
+	}
+	t.Cleanup(func() { ssrf.ResolveHost = orig })
+
+	cfg := &config.Config{
+		LLMEnabled: true,
+		LLMBaseURL: server.URL,
+		LLMAPIKey:  "sk-real-test-key-1234567890",
+		LLMModel:   "test-model",
+	}
+	tracer := noop.NewTracerProvider().Tracer("test")
+	c, err := NewClient(cfg, tracer)
+	require.NoError(t, err)
+
+	var got []string
+	usage, err := c.Chat(context.Background(), llm.ChatRequest{
+		Messages: []llm.Message{{Role: "user", Content: "hi"}},
+	}, func(delta string, _ *llm.ChatUsage) error {
+		got = append(got, delta)
+		return nil
+	})
+	require.NoError(t, err)
+	require.NotEmpty(t, got)
+	assert.Equal(t, "hello", got[0])
+	require.NotNil(t, usage)
+	assert.Equal(t, 2, usage.TotalTokens)
+}
+
+func TestNewClient_PerDialRecheckRefusesReboundHost(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Error("request must not reach the server after rebinding")
+	}))
+	defer server.Close()
+
+	orig := ssrf.ResolveHost
+	ssrf.ResolveHost = func(host string) ([]net.IP, error) {
+		return []net.IP{net.ParseIP("93.184.216.34")}, nil
+	}
+
+	cfg := &config.Config{
+		LLMEnabled: true,
+		LLMBaseURL: server.URL,
+		LLMAPIKey:  "sk-real-test-key-1234567890",
+		LLMModel:   "test-model",
+	}
+	tracer := noop.NewTracerProvider().Tracer("test")
+	c, err := NewClient(cfg, tracer)
+	require.NoError(t, err)
+
+	ssrf.ResolveHost = orig
+
+	_, err = c.ChatDelta(context.Background(), llm.ChatRequest{
+		Messages: []llm.Message{{Role: "user", Content: "hi"}},
+	}, func(llm.Delta) error { return nil })
+	require.Error(t, err)
+	assert.ErrorIs(t, err, llm.ErrProviderUnavailable)
 }

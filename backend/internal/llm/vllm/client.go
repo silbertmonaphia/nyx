@@ -58,8 +58,10 @@ import (
 	"time"
 
 	"go.opentelemetry.io/otel/attribute"
+
 	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/trace"
+	"nyx/internal/llm/ssrf"
 
 	"nyx/internal/llm"
 	"nyx/internal/platform/config"
@@ -789,93 +791,12 @@ func buildRequest(model string, req llm.ChatRequest) (outboundRequest, error) {
 // allowPrivate=true disables the check entirely (used for dev
 // compose where vLLM lives on a container-network address).
 func newHTTPClient(parsed *url.URL, timeout time.Duration, allowPrivate bool) (*http.Client, error) {
-	if !allowPrivate {
-		if err := checkHost(parsed.Hostname()); err != nil {
-			return nil, err
-		}
-	}
-
-	transport := &http.Transport{
-		Proxy: http.ProxyFromEnvironment,
-		DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
-			host, port, err := net.SplitHostPort(addr)
-			if err != nil {
-				return nil, &net.OpError{Op: "dial", Net: network, Source: nil, Addr: nil, Err: err}
-			}
-			if !allowPrivate {
-				if err := checkHost(host); err != nil {
-					return nil, &net.OpError{Op: "dial", Net: network, Source: nil, Addr: nil, Err: err}
-				}
-			}
-			var d net.Dialer
-			return d.DialContext(ctx, network, net.JoinHostPort(host, port))
-		},
-		ForceAttemptHTTP2:     true,
-		MaxIdleConns:          100,
-		IdleConnTimeout:       90 * time.Second,
-		TLSHandshakeTimeout:   10 * time.Second,
-		ExpectContinueTimeout: 1 * time.Second,
-	}
-
-	return &http.Client{
-		Transport: transport,
-		Timeout:   timeout,
-	}, nil
-}
-
-// checkHost resolves the host and refuses loopback, RFC1918, link-
-// local, multicast, and unspecified addresses. The check fires once
-// at startup (cheap typo guard) AND once per dial inside DialContext
-// (closes the DNS-rebinding window).
-func checkHost(host string) error {
-	if host == "" {
-		return errors.New("LLM_BASE_URL host is empty")
-	}
-	// IP literal? Resolve directly without DNS.
-	if ip := net.ParseIP(host); ip != nil {
-		if refused, reason := ipClassRefused(ip); refused {
-			return fmt.Errorf("LLM_BASE_URL points at a private/restricted address (%s); set LLM_ALLOW_PRIVATE_URL=true to override", reason)
-		}
-		return nil
-	}
-	addrs, err := net.LookupIP(host)
+	client, err := ssrf.NewHTTPClient(parsed, timeout, allowPrivate, "LLM_BASE_URL")
 	if err != nil {
-		return fmt.Errorf("LLM_BASE_URL DNS lookup failed for %q: %w", host, err)
-	}
-	if len(addrs) == 0 {
-		return fmt.Errorf("LLM_BASE_URL DNS lookup returned no addresses for %q", host)
-	}
-	for _, ip := range addrs {
-		if refused, reason := ipClassRefused(ip); refused {
-			return fmt.Errorf("LLM_BASE_URL resolves to a private/restricted address (%s); set LLM_ALLOW_PRIVATE_URL=true to override", reason)
+		if errors.Is(err, ssrf.ErrPrivateAddress) {
+			return nil, fmt.Errorf("%w; set LLM_ALLOW_PRIVATE_URL=true to override", err)
 		}
+		return nil, err
 	}
-	return nil
-}
-
-// ipClassRefused returns (true, reason) when the IP belongs to a
-// class we refuse by default. Uses net.IP's classification methods
-// (Go 1.17+) so RFC1918 + ULA + link-local + IPv4-mapped IPv6 are
-// all covered without rolling CIDR checks by hand.
-func ipClassRefused(ip net.IP) (bool, string) {
-	switch {
-	case ip.IsUnspecified():
-		return true, "unspecified (0.0.0.0 / ::)"
-	case ip.IsLoopback():
-		return true, "loopback (127.0.0.0/8 / ::1)"
-	case ip.IsPrivate():
-		// Covers RFC1918 (10/8, 172.16/12, 192.168/16) and ULA (fc00::/7).
-		return true, "private (RFC1918 / ULA)"
-	case ip.IsLinkLocalUnicast():
-		return true, "link-local unicast (169.254/16 / fe80::/10)"
-	case ip.IsLinkLocalMulticast():
-		return true, "link-local multicast"
-	case ip.IsInterfaceLocalMulticast():
-		return true, "interface-local multicast (ff01::/16)"
-	case ip.IsMulticast():
-		// Site-local / org-local multicast — operators don't
-		// legitimately point an LLM URL at a multicast group.
-		return true, "multicast"
-	}
-	return false, ""
+	return client, nil
 }

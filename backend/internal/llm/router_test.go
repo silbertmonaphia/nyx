@@ -1042,3 +1042,35 @@ func TestRouter_ProbeNormalizesVersionSuffix(t *testing.T) {
 		})
 	}
 }
+
+func TestWithProbeHTTP_OverridesProbeClient(t *testing.T) {
+	sentinel := &http.Client{Timeout: 7 * time.Second}
+	router := NewRouter(
+		ProviderSlot{Name: "primary"},
+		nil,
+		noop.NewTracerProvider().Tracer("test"),
+		time.Second,
+		WithProbeHTTP(sentinel),
+	)
+	if router.probeHTTP != sentinel {
+		t.Fatalf("probe client not overridden")
+	}
+	if router.probeHTTP.Timeout != 7*time.Second {
+		t.Fatalf("probe client timeout lost")
+	}
+}
+
+func TestNewRouter_DefaultProbeClientWhenNoOption(t *testing.T) {
+	router := NewRouter(
+		ProviderSlot{Name: "primary"},
+		nil,
+		noop.NewTracerProvider().Tracer("test"),
+		3*time.Second,
+	)
+	if router.probeHTTP == nil {
+		t.Fatal("default probe client missing")
+	}
+	if router.probeHTTP.Timeout != 3*time.Second {
+		t.Fatalf("probe timeout not preserved, got %v", router.probeHTTP.Timeout)
+	}
+}

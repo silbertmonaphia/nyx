@@ -69,16 +69,30 @@ type Router struct {
 // opt in via SetFallbackToolsEnabled after verifying both
 // providers' tool-call integration tests are green in CI; the
 // router will otherwise refuse to fail over tool-bearing requests.
-func NewRouter(primary ProviderSlot, secondary *ProviderSlot, tracer trace.Tracer, probeTimeout time.Duration) *Router {
+func NewRouter(primary ProviderSlot, secondary *ProviderSlot, tracer trace.Tracer, probeTimeout time.Duration, opts ...RouterOption) *Router {
 	if probeTimeout <= 0 {
 		probeTimeout = 2 * time.Second
 	}
-	return &Router{
+	router := &Router{
 		primary:      primary,
 		secondary:    secondary,
 		probeHTTP:    &http.Client{Timeout: probeTimeout},
 		tracer:       tracer,
 		probeTimeout: probeTimeout,
+	}
+	for _, opt := range opts {
+		opt(router)
+	}
+	return router
+}
+
+type RouterOption func(*Router)
+
+func WithProbeHTTP(client *http.Client) RouterOption {
+	return func(r *Router) {
+		if client != nil {
+			r.probeHTTP = client
+		}
 	}
 }
 
@@ -491,9 +505,9 @@ func (r *Router) Embed(ctx context.Context, req EmbedRequest) ([][]float32, erro
 
 // probe issues GET {base}/v1/models with a hard deadline. Any
 // non-2xx, network error, DNS failure, or ctx deadline → error.
-// The probe reuses boot-time SSRF validation: both URLs already
-// passed validateLLMBaseURL, so per-dial IP-class re-checks would
-// be redundant work for the same policy.
+// The probe dials through probeHTTP: the default client trusts the
+// operator's boot-time validation; resolvers dialing user-supplied
+// URLs inject a guarded client via WithProbeHTTP.
 //
 // Tracer span: llm.router.probe with attribute llm.slot.
 // probe must never fail the request — it only influences which

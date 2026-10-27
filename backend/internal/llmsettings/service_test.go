@@ -3,12 +3,14 @@ package llmsettings
 import (
 	"context"
 	"errors"
+	"net"
 	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"nyx/internal/llm/ssrf"
 	"nyx/internal/platform/crypto"
 )
 
@@ -58,7 +60,9 @@ func newTestService(t *testing.T) (*Service, *stubRepo, *crypto.Cipher) {
 	cipher, err := crypto.NewCipher(testEncryptionSecret)
 	require.NoError(t, err)
 	repo := newStubRepo()
-	return NewService(repo, cipher), repo, cipher
+	svc := NewService(repo, cipher)
+	svc.SetBYOKAllowPrivate(true)
+	return svc, repo, cipher
 }
 
 func validCreateInput() UpdateInput {
@@ -72,6 +76,13 @@ func validCreateInput() UpdateInput {
 		TavilyBaseURL:    "https://api.tavily.com/search",
 		TavilyAPIKey:     "tvly-real-key-0003",
 	}
+}
+
+func validPublicCreateInput() UpdateInput {
+	in := validCreateInput()
+	in.LLMBaseURL = "http://203.0.113.10:8000/v1"
+	in.EmbeddingBaseURL = "http://203.0.113.20:8001/v1"
+	return in
 }
 
 func seedEncrypted(t *testing.T, svc *Service, repo *stubRepo, userID int) *EncryptedSettings {
@@ -186,7 +197,7 @@ func TestValidateUserURL(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			err := validateUserURL(c.raw, "llm_base_url")
+			err := validateUserURL(c.raw, "llm_base_url", true)
 			if c.wantErr {
 				require.Error(t, err)
 				assert.ErrorIs(t, err, ErrInvalidConfig)
@@ -205,6 +216,7 @@ const (
 )
 
 func TestValidateUpdate(t *testing.T) {
+	stubPublicResolve(t)
 	existing := &EncryptedSettings{
 		UserID:             1,
 		LLMBaseURL:         "http://old:8000/v1",
@@ -218,7 +230,7 @@ func TestValidateUpdate(t *testing.T) {
 	}
 
 	t.Run("create with all eight required fields passes", func(t *testing.T) {
-		in := validCreateInput()
+		in := validPublicCreateInput()
 		assert.NoError(t, ValidateUpdate(&in, nil))
 	})
 
@@ -230,7 +242,7 @@ func TestValidateUpdate(t *testing.T) {
 			{func(in *UpdateInput) { in.LLMBaseURL = testRemoteLLMBaseURL; in.LLMAPIKey = "" }, "llm_api_key"},
 			{func(in *UpdateInput) { in.EmbeddingBaseURL = testEmbedBaseURL; in.EmbeddingAPIKey = "" }, "embedding_api_key"},
 		} {
-			in := validCreateInput()
+			in := validPublicCreateInput()
 			field.mutate(&in)
 			err := ValidateUpdate(&in, nil)
 			require.Error(t, err)
@@ -241,7 +253,7 @@ func TestValidateUpdate(t *testing.T) {
 	})
 
 	t.Run("update with blank keys passes keep-through", func(t *testing.T) {
-		in := validCreateInput()
+		in := validPublicCreateInput()
 		in.EmbeddingModel = existing.EmbeddingModel
 		in.LLMAPIKey = ""
 		in.EmbeddingAPIKey = ""
@@ -250,7 +262,7 @@ func TestValidateUpdate(t *testing.T) {
 	})
 
 	t.Run("changing the embedding model after it is set is rejected", func(t *testing.T) {
-		in := validCreateInput()
+		in := validPublicCreateInput()
 		in.EmbeddingModel = "bge-m3"
 		err := ValidateUpdate(&in, existing)
 		require.Error(t, err)
@@ -260,7 +272,7 @@ func TestValidateUpdate(t *testing.T) {
 	})
 
 	t.Run("updating the embedding URL with the same model is allowed", func(t *testing.T) {
-		in := validCreateInput()
+		in := validPublicCreateInput()
 		in.EmbeddingModel = existing.EmbeddingModel
 		in.EmbeddingBaseURL = testEmbedBaseURL
 		assert.NoError(t, ValidateUpdate(&in, existing))
@@ -268,11 +280,11 @@ func TestValidateUpdate(t *testing.T) {
 
 	t.Run("update with all-empty fallback clears a stored group", func(t *testing.T) {
 		stored := *existing
-		stored.FallbackBaseURL = "http://fallback:8000/v1"
+		stored.FallbackBaseURL = "http://203.0.113.30:9000/v1"
 		stored.FallbackAPIKeyEnc = testStoredFallbackEnc
 		stored.FallbackModel = testFallbackModel
 
-		in := validCreateInput()
+		in := validPublicCreateInput()
 		in.FallbackBaseURL = ""
 		in.FallbackAPIKey = ""
 		in.FallbackModel = ""
@@ -281,12 +293,12 @@ func TestValidateUpdate(t *testing.T) {
 
 	t.Run("update keeping a stored fallback key with new endpoint passes", func(t *testing.T) {
 		stored := *existing
-		stored.FallbackBaseURL = "http://fallback:8000/v1"
+		stored.FallbackBaseURL = "http://203.0.113.30:9000/v1"
 		stored.FallbackAPIKeyEnc = testStoredFallbackEnc
 		stored.FallbackModel = testFallbackModel
 
-		in := validCreateInput()
-		in.FallbackBaseURL = "http://fallback2:8000/v1"
+		in := validPublicCreateInput()
+		in.FallbackBaseURL = "http://203.0.113.31:9000/v1"
 		in.FallbackAPIKey = ""
 		in.FallbackModel = "fallback-model-2"
 		assert.NoError(t, ValidateUpdate(&in, &stored))
@@ -302,7 +314,7 @@ func TestValidateUpdate(t *testing.T) {
 			{func(in *UpdateInput) { in.EmbeddingBaseURL = "" }, "embedding_base_url"},
 			{func(in *UpdateInput) { in.EmbeddingModel = "" }, "embedding_model"},
 		} {
-			in := validCreateInput()
+			in := validPublicCreateInput()
 			field.mutate(&in)
 			err := ValidateUpdate(&in, existing)
 			require.Error(t, err)
@@ -321,7 +333,7 @@ func TestValidateUpdate(t *testing.T) {
 			{func(in *UpdateInput) { in.EmbeddingAPIKey = "your-key" }, "embedding_api_key"},
 			{func(in *UpdateInput) { in.TavilyAPIKey = "sk-xxx" }, "tavily_api_key"},
 		} {
-			in := validCreateInput()
+			in := validPublicCreateInput()
 			field.mutate(&in)
 			err := ValidateUpdate(&in, existing)
 			require.Error(t, err)
@@ -332,7 +344,7 @@ func TestValidateUpdate(t *testing.T) {
 	})
 
 	t.Run("bad scheme names the field", func(t *testing.T) {
-		in := validCreateInput()
+		in := validPublicCreateInput()
 		in.EmbeddingBaseURL = "gopher://embed:8001"
 		err := ValidateUpdate(&in, nil)
 		require.Error(t, err)
@@ -342,7 +354,7 @@ func TestValidateUpdate(t *testing.T) {
 	})
 
 	t.Run("fallback group passes complete", func(t *testing.T) {
-		in := validCreateInput()
+		in := validPublicCreateInput()
 		in.FallbackBaseURL = testFallbackURL
 		in.FallbackAPIKey = testFallbackKey
 		in.FallbackModel = "Qwen/Qwen2.5-3B-Instruct"
@@ -350,7 +362,7 @@ func TestValidateUpdate(t *testing.T) {
 	})
 
 	t.Run("fallback group passes empty", func(t *testing.T) {
-		in := validCreateInput()
+		in := validPublicCreateInput()
 		assert.NoError(t, ValidateUpdate(&in, nil))
 	})
 
@@ -373,7 +385,7 @@ func TestValidateUpdate(t *testing.T) {
 			},
 		}
 		for i, partial := range partials {
-			in := validCreateInput()
+			in := validPublicCreateInput()
 			partial(&in)
 			err := ValidateUpdate(&in, nil)
 			require.Error(t, err, "partial combination %d must be rejected", i)
@@ -390,7 +402,7 @@ func TestValidateUpdate(t *testing.T) {
 		withFallback.FallbackAPIKeyEnc = "v1:stored-fallback"
 		withFallback.FallbackModel = "old-fallback-model"
 
-		in := validCreateInput()
+		in := validPublicCreateInput()
 		in.FallbackBaseURL = "http://new-fallback:8000/v1"
 		in.FallbackModel = "new-fallback-model"
 		assert.NoError(t, ValidateUpdate(&in, withFallback),
@@ -398,7 +410,7 @@ func TestValidateUpdate(t *testing.T) {
 	})
 
 	t.Run("fallback partial with no stored key on update is rejected", func(t *testing.T) {
-		in := validCreateInput()
+		in := validPublicCreateInput()
 		in.FallbackBaseURL = "http://new-fallback:8000/v1"
 		in.FallbackModel = "new-fallback-model"
 		err := ValidateUpdate(&in, existing)
@@ -406,7 +418,7 @@ func TestValidateUpdate(t *testing.T) {
 	})
 
 	t.Run("create without embedding is accepted", func(t *testing.T) {
-		in := validCreateInput()
+		in := validPublicCreateInput()
 		in.EmbeddingBaseURL = ""
 		in.EmbeddingAPIKey = ""
 		in.EmbeddingModel = ""
@@ -421,7 +433,7 @@ func TestValidateUpdate(t *testing.T) {
 			{func(in *UpdateInput) { in.EmbeddingModel = "" }, "embedding_model"},
 			{func(in *UpdateInput) { in.EmbeddingBaseURL = "" }, "embedding_base_url"},
 		} {
-			in := validCreateInput()
+			in := validPublicCreateInput()
 			field.mutate(&in)
 			err := ValidateUpdate(&in, nil)
 			require.Error(t, err)
@@ -432,7 +444,7 @@ func TestValidateUpdate(t *testing.T) {
 	})
 
 	t.Run("remote embedding without a key is rejected", func(t *testing.T) {
-		in := validCreateInput()
+		in := validPublicCreateInput()
 		in.EmbeddingBaseURL = testEmbedBaseURL
 		in.EmbeddingAPIKey = ""
 		err := ValidateUpdate(&in, nil)
@@ -443,21 +455,21 @@ func TestValidateUpdate(t *testing.T) {
 	})
 
 	t.Run("loopback embedding without a key is accepted", func(t *testing.T) {
-		in := validCreateInput()
+		in := validPublicCreateInput()
 		in.EmbeddingBaseURL = "http://127.0.0.1:8001/v1"
 		in.EmbeddingAPIKey = ""
-		assert.NoError(t, ValidateUpdate(&in, nil))
+		assert.NoError(t, ValidateUpdateWithPolicy(&in, nil, true))
 	})
 
 	t.Run("create without Tavily is accepted", func(t *testing.T) {
-		in := validCreateInput()
+		in := validPublicCreateInput()
 		in.TavilyBaseURL = ""
 		in.TavilyAPIKey = ""
 		assert.NoError(t, ValidateUpdate(&in, nil))
 	})
 
 	t.Run("Tavily key without a base URL is rejected", func(t *testing.T) {
-		in := validCreateInput()
+		in := validPublicCreateInput()
 		in.TavilyBaseURL = ""
 		err := ValidateUpdate(&in, nil)
 		require.Error(t, err)
@@ -467,13 +479,13 @@ func TestValidateUpdate(t *testing.T) {
 	})
 
 	t.Run("remote Tavily without a key is accepted for the keyless tier", func(t *testing.T) {
-		in := validCreateInput()
+		in := validPublicCreateInput()
 		in.TavilyAPIKey = ""
 		assert.NoError(t, ValidateUpdate(&in, nil))
 	})
 
 	t.Run("invalid Tavily URL is rejected", func(t *testing.T) {
-		in := validCreateInput()
+		in := validPublicCreateInput()
 		in.TavilyBaseURL = "ftp://api.tavily.com/search"
 		err := ValidateUpdate(&in, nil)
 		require.Error(t, err)
@@ -483,16 +495,18 @@ func TestValidateUpdate(t *testing.T) {
 	})
 
 	t.Run("create with a blank key on a loopback endpoint is accepted", func(t *testing.T) {
-		in := validCreateInput()
+		in := validPublicCreateInput()
+		in.LLMBaseURL = "http://127.0.0.1:8000/v1"
+		in.EmbeddingBaseURL = "http://127.0.0.1:8001/v1"
 		in.LLMAPIKey = ""
 		in.EmbeddingAPIKey = ""
 		in.TavilyBaseURL = "http://127.0.0.1:8899/search"
 		in.TavilyAPIKey = ""
-		assert.NoError(t, ValidateUpdate(&in, nil))
+		assert.NoError(t, ValidateUpdateWithPolicy(&in, nil, true))
 	})
 
 	t.Run("create with a blank key on a remote endpoint is rejected", func(t *testing.T) {
-		in := validCreateInput()
+		in := validPublicCreateInput()
 		in.LLMBaseURL = testRemoteLLMBaseURL
 		in.LLMAPIKey = ""
 		err := ValidateUpdate(&in, nil)
@@ -503,15 +517,15 @@ func TestValidateUpdate(t *testing.T) {
 	})
 
 	t.Run("create accepts a loopback fallback without a key", func(t *testing.T) {
-		in := validCreateInput()
+		in := validPublicCreateInput()
 		in.FallbackBaseURL = "http://localhost:9000/v1"
 		in.FallbackModel = "fallback-model"
 		in.FallbackAPIKey = ""
-		assert.NoError(t, ValidateUpdate(&in, nil))
+		assert.NoError(t, ValidateUpdateWithPolicy(&in, nil, true))
 	})
 
 	t.Run("errors chain to the registered ErrInvalidConfig sentinel", func(t *testing.T) {
-		in := validCreateInput()
+		in := validPublicCreateInput()
 		in.LLMBaseURL = testRemoteLLMBaseURL
 		in.LLMAPIKey = ""
 		err := ValidateUpdate(&in, nil)
@@ -611,7 +625,7 @@ func TestSaveTrackingEmbedding_ProbesTheEmbeddingWidth(t *testing.T) {
 
 func TestValidateUpdate_MainLLMIsOptional(t *testing.T) {
 	t.Run("embedding-only config is accepted", func(t *testing.T) {
-		in := validCreateInput()
+		in := validPublicCreateInput()
 		in.LLMBaseURL = ""
 		in.LLMAPIKey = ""
 		in.LLMModel = ""
@@ -619,7 +633,7 @@ func TestValidateUpdate_MainLLMIsOptional(t *testing.T) {
 	})
 
 	t.Run("main model without a base URL is rejected", func(t *testing.T) {
-		in := validCreateInput()
+		in := validPublicCreateInput()
 		in.LLMBaseURL = ""
 		err := ValidateUpdate(&in, nil)
 		require.Error(t, err)
@@ -629,7 +643,7 @@ func TestValidateUpdate_MainLLMIsOptional(t *testing.T) {
 	})
 
 	t.Run("main key without a base URL is rejected", func(t *testing.T) {
-		in := validCreateInput()
+		in := validPublicCreateInput()
 		in.LLMBaseURL = ""
 		in.LLMModel = ""
 		err := ValidateUpdate(&in, nil)
@@ -647,4 +661,88 @@ func TestValidateUpdate_MainLLMIsOptional(t *testing.T) {
 		require.ErrorAs(t, err, &fe)
 		assert.Equal(t, "llm_base_url", fe.Field)
 	})
+}
+
+func TestValidateUserURL_PrivateDeniedByDefault(t *testing.T) {
+	orig := ssrf.ResolveHost
+	ssrf.ResolveHost = func(host string) ([]net.IP, error) {
+		return []net.IP{net.ParseIP("192.168.0.9")}, nil
+	}
+	t.Cleanup(func() { ssrf.ResolveHost = orig })
+
+	for _, raw := range []string{
+		"http://127.0.0.1:8000/v1",
+		"http://10.1.2.3:8000/v1",
+		"http://169.254.169.254/latest",
+		"http://rebind.example:8000/v1",
+	} {
+		err := validateUserURL(raw, "llm_base_url", false)
+		require.Error(t, err)
+		var fe *InvalidFieldError
+		require.ErrorAs(t, err, &fe)
+		assert.Equal(t, "llm_base_url", fe.Field)
+	}
+}
+
+func TestValidateUserURL_AllowPrivateFlagPermits(t *testing.T) {
+	for _, raw := range []string{
+		"http://127.0.0.1:8000/v1",
+		"http://10.1.2.3:8000/v1",
+		"http://169.254.169.254/latest",
+	} {
+		assert.NoError(t, validateUserURL(raw, "llm_base_url", true))
+	}
+}
+
+func TestValidateUpdate_PrivateURLRejectedPerField(t *testing.T) {
+	for _, tc := range []struct {
+		field  string
+		mutate func(*UpdateInput)
+	}{
+		{"llm_base_url", func(in *UpdateInput) { in.LLMBaseURL = "http://127.0.0.1:8000/v1" }},
+		{"embedding_base_url", func(in *UpdateInput) { in.EmbeddingBaseURL = "http://10.9.9.9:8001/v1" }},
+		{"tavily_base_url", func(in *UpdateInput) { in.TavilyBaseURL = "http://169.254.169.254/search" }},
+		{"fallback_base_url", func(in *UpdateInput) {
+			in.FallbackBaseURL = "http://192.168.5.5:9000/v1"
+			in.FallbackModel = "m"
+			in.FallbackAPIKey = "sk-fallback-key-7777"
+		}},
+	} {
+		in := validPublicCreateInput()
+		tc.mutate(&in)
+		err := ValidateUpdate(&in, nil)
+		require.Error(t, err, tc.field)
+		var fe *InvalidFieldError
+		require.ErrorAs(t, err, &fe)
+		assert.Equal(t, tc.field, fe.Field)
+	}
+}
+
+func TestValidateUpdateWithPolicy_FlagOnAcceptsLoopback(t *testing.T) {
+	in := validCreateInput()
+	in.FallbackBaseURL = "http://127.0.0.1:9000/v1"
+	in.FallbackModel = testFallbackModel
+	assert.NoError(t, ValidateUpdateWithPolicy(&in, nil, true))
+	assert.Error(t, ValidateUpdateWithPolicy(&in, nil, false))
+}
+
+func TestService_Save_RefusesPrivateBaseURLWhenBYOKPrivateIsDenied(t *testing.T) {
+	cipher, err := crypto.NewCipher(testEncryptionSecret)
+	require.NoError(t, err)
+	repo := newStubRepo()
+	svc := NewService(repo, cipher)
+	svc.SetBYOKAllowPrivate(false)
+
+	err = svc.Save(context.Background(), 1, validCreateInput())
+	require.Error(t, err)
+	var fe *InvalidFieldError
+	require.ErrorAs(t, err, &fe)
+	assert.Equal(t, "llm_base_url", fe.Field)
+	assert.Nil(t, repo.rows[1])
+}
+
+func TestService_Save_AcceptsPrivateBaseURLWhenBYOKPrivateIsAllowed(t *testing.T) {
+	svc, repo, _ := newTestService(t)
+	require.NoError(t, svc.Save(context.Background(), 1, validCreateInput()))
+	assert.NotNil(t, repo.rows[1])
 }

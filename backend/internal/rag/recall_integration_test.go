@@ -998,10 +998,11 @@ func TestRegenerateRecallVectors(t *testing.T) {
 	tracer := noop.NewTracerProvider().Tracer("rag-recall-regen")
 
 	client, err := openai.NewClient(&config.Config{
-		LLMEnabled: true,
-		LLMBaseURL: baseURL,
-		LLMAPIKey:  apiKey,
-		LLMModel:   model,
+		LLMEnabled:         true,
+		LLMBaseURL:         baseURL,
+		LLMAPIKey:          apiKey,
+		LLMModel:           model,
+		LLMAllowPrivateURL: true,
 	}, tracer)
 	require.NoError(t, err)
 

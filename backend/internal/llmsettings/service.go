@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"strings"
 
+	"nyx/internal/llm/ssrf"
 	"nyx/internal/platform/config"
 	"nyx/internal/platform/crypto"
 )
@@ -15,9 +16,10 @@ import (
 const maskTailChars = 4
 
 type Service struct {
-	repo           Repository
-	cipher         *crypto.Cipher
-	embeddingProbe func(ctx context.Context, baseURL, apiKey, model string) error
+	repo             Repository
+	cipher           *crypto.Cipher
+	embeddingProbe   func(ctx context.Context, baseURL, apiKey, model string) error
+	byokAllowPrivate bool
 }
 
 func NewService(repo Repository, cipher *crypto.Cipher) *Service {
@@ -26,6 +28,10 @@ func NewService(repo Repository, cipher *crypto.Cipher) *Service {
 
 func (s *Service) SetEmbeddingProbe(fn func(ctx context.Context, baseURL, apiKey, model string) error) {
 	s.embeddingProbe = fn
+}
+
+func (s *Service) SetBYOKAllowPrivate(allowed bool) {
+	s.byokAllowPrivate = allowed
 }
 
 type UpdateInput struct {
@@ -61,7 +67,7 @@ func (s *Service) SaveTrackingEmbedding(ctx context.Context, userID int, in Upda
 		return false, err
 	}
 	embeddingChanged := embeddingIdentityChanged(existing, &in)
-	if err = ValidateUpdate(&in, existing); err != nil {
+	if err = ValidateUpdateWithPolicy(&in, existing, s.byokAllowPrivate); err != nil {
 		return false, err
 	}
 	if err = s.probeEmbedding(ctx, existing, &in); err != nil {
@@ -268,7 +274,11 @@ func MaskKey(key string) string {
 }
 
 func ValidateUpdate(in *UpdateInput, existing *EncryptedSettings) error {
-	if err := validateRequiredConfig(in, existing); err != nil {
+	return ValidateUpdateWithPolicy(in, existing, false)
+}
+
+func ValidateUpdateWithPolicy(in *UpdateInput, existing *EncryptedSettings, allowPrivate bool) error {
+	if err := validateRequiredConfig(in, existing, allowPrivate); err != nil {
 		return err
 	}
 	if existing == nil {
@@ -279,17 +289,17 @@ func ValidateUpdate(in *UpdateInput, existing *EncryptedSettings) error {
 	if err := validateProvidedKeys(in); err != nil {
 		return err
 	}
-	return validateFallbackGroup(in, existing)
+	return validateFallbackGroup(in, existing, allowPrivate)
 }
 
-func validateRequiredConfig(in *UpdateInput, existing *EncryptedSettings) error {
-	if err := validateLLMGroup(in); err != nil {
+func validateRequiredConfig(in *UpdateInput, existing *EncryptedSettings, allowPrivate bool) error {
+	if err := validateLLMGroup(in, allowPrivate); err != nil {
 		return err
 	}
-	if err := validateEmbeddingGroup(in, existing); err != nil {
+	if err := validateEmbeddingGroup(in, existing, allowPrivate); err != nil {
 		return err
 	}
-	if err := validateTavilyGroup(in); err != nil {
+	if err := validateTavilyGroup(in, allowPrivate); err != nil {
 		return err
 	}
 	if !anyGroupSet(in) && in.FallbackBaseURL == "" && in.FallbackModel == "" {
@@ -302,14 +312,14 @@ func anyGroupSet(in *UpdateInput) bool {
 	return in.LLMBaseURL != "" || in.EmbeddingBaseURL != "" || in.TavilyBaseURL != ""
 }
 
-func validateLLMGroup(in *UpdateInput) error {
+func validateLLMGroup(in *UpdateInput, allowPrivate bool) error {
 	if in.LLMBaseURL == "" {
 		if in.LLMModel != "" || in.LLMAPIKey != "" {
 			return invalidField("llm_base_url")
 		}
 		return nil
 	}
-	if err := validateUserURL(in.LLMBaseURL, "llm_base_url"); err != nil {
+	if err := validateUserURL(in.LLMBaseURL, "llm_base_url", allowPrivate); err != nil {
 		return err
 	}
 	if in.LLMModel == "" {
@@ -318,14 +328,14 @@ func validateLLMGroup(in *UpdateInput) error {
 	return nil
 }
 
-func validateEmbeddingGroup(in *UpdateInput, existing *EncryptedSettings) error {
+func validateEmbeddingGroup(in *UpdateInput, existing *EncryptedSettings, allowPrivate bool) error {
 	if in.EmbeddingBaseURL == "" {
 		if in.EmbeddingModel != "" || in.EmbeddingAPIKey != "" {
 			return invalidField("embedding_base_url")
 		}
 		return nil
 	}
-	if err := validateUserURL(in.EmbeddingBaseURL, "embedding_base_url"); err != nil {
+	if err := validateUserURL(in.EmbeddingBaseURL, "embedding_base_url", allowPrivate); err != nil {
 		return err
 	}
 	if in.EmbeddingModel == "" {
@@ -337,11 +347,11 @@ func validateEmbeddingGroup(in *UpdateInput, existing *EncryptedSettings) error 
 	return nil
 }
 
-func validateTavilyGroup(in *UpdateInput) error {
+func validateTavilyGroup(in *UpdateInput, allowPrivate bool) error {
 	if in.TavilyBaseURL == "" {
 		return nil
 	}
-	return validateUserURL(in.TavilyBaseURL, "tavily_base_url")
+	return validateUserURL(in.TavilyBaseURL, "tavily_base_url", allowPrivate)
 }
 
 func validateCreateKeys(in *UpdateInput) error {
@@ -386,7 +396,7 @@ func validateProvidedKeys(in *UpdateInput) error {
 	return nil
 }
 
-func validateFallbackGroup(in *UpdateInput, existing *EncryptedSettings) error {
+func validateFallbackGroup(in *UpdateInput, existing *EncryptedSettings, allowPrivate bool) error {
 	if in.FallbackBaseURL == "" && in.FallbackAPIKey == "" && in.FallbackModel == "" {
 		return nil
 	}
@@ -400,7 +410,7 @@ func validateFallbackGroup(in *UpdateInput, existing *EncryptedSettings) error {
 	if fallbackKey == "" && !isLoopbackBaseURL(in.FallbackBaseURL) {
 		return invalidField("fallback")
 	}
-	if err := validateUserURL(in.FallbackBaseURL, "fallback_base_url"); err != nil {
+	if err := validateUserURL(in.FallbackBaseURL, "fallback_base_url", allowPrivate); err != nil {
 		return err
 	}
 	if in.FallbackAPIKey != "" {
@@ -411,7 +421,7 @@ func validateFallbackGroup(in *UpdateInput, existing *EncryptedSettings) error {
 	return nil
 }
 
-func validateUserURL(raw, field string) error {
+func validateUserURL(raw, field string, allowPrivate bool) error {
 	u, err := url.Parse(raw)
 	if err != nil {
 		return invalidFieldWrap(field, fmt.Errorf("not a valid URL: %w", err))
@@ -426,6 +436,11 @@ func validateUserURL(raw, field string) error {
 	}
 	if u.User != nil {
 		return invalidField(field)
+	}
+	if !allowPrivate {
+		if err := ssrf.CheckHostBestEffort(u.Hostname(), field); err != nil {
+			return invalidFieldWrap(field, err)
+		}
 	}
 	return nil
 }

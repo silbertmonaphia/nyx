@@ -127,6 +127,8 @@ type Config struct {
 	LLMMaxStreamDuration  string `mapstructure:"LLM_MAX_STREAM_DURATION"`
 	LLMAllowPrivateURL    bool   `mapstructure:"LLM_ALLOW_PRIVATE_URL"`
 
+	BYOKAllowPrivateURL bool `mapstructure:"BYOK_ALLOW_PRIVATE_URL"`
+
 	UserLLMEncryptionKey string `mapstructure:"USER_LLM_ENCRYPTION_KEY"`
 
 	// LLM failover. LLM_FALLBACK_* is the secondary slot consumed by
@@ -360,6 +362,7 @@ func setDefaults() {
 	viper.SetDefault("LLM_MAX_MESSAGE_CHARS", 32768)
 	viper.SetDefault("LLM_MAX_STREAM_DURATION", "10m")
 	viper.SetDefault("LLM_ALLOW_PRIVATE_URL", false)
+	viper.SetDefault("BYOK_ALLOW_PRIVATE_URL", false)
 	// LLM_FALLBACK_* default to empty → no fallback configured →
 	// Router is skipped entirely (single-provider passthrough).
 	// LLM_PROBE_TIMEOUT caps the per-request /v1/models probe the
@@ -436,6 +439,7 @@ func bindEnvVars() {
 		"LLM_TIMEOUT", "LLM_MAX_TOKENS", "LLM_SYSTEM_PROMPT",
 		"LLM_MAX_HISTORY_MESSAGES", "LLM_MAX_MESSAGE_CHARS",
 		"LLM_MAX_STREAM_DURATION", "LLM_ALLOW_PRIVATE_URL",
+		"BYOK_ALLOW_PRIVATE_URL",
 		"LLM_FALLBACK_BASE_URL", "LLM_FALLBACK_API_KEY", "LLM_FALLBACK_MODEL",
 		"LLM_PROBE_TIMEOUT",
 		"LLM_EMBEDDING_MODEL", "LLM_EMBEDDING_PROVIDER", "LLM_EMBEDDING_BASE_URL",

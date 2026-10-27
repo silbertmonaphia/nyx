@@ -35,6 +35,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/url"
 
 	openai "github.com/sashabaranov/go-openai"
 
@@ -43,6 +44,7 @@ import (
 	"go.opentelemetry.io/otel/trace"
 
 	"nyx/internal/llm"
+	"nyx/internal/llm/ssrf"
 	"nyx/internal/platform/config"
 )
 
@@ -72,6 +74,21 @@ func NewClient(cfg *config.Config, tracer trace.Tracer) (*Client, error) {
 	// OpenAI's hosted endpoint today and a self-hosted vLLM endpoint
 	// tomorrow. The SDK adds the /chat/completions suffix internally.
 	oc.BaseURL = cfg.LLMBaseURL
+
+	if !cfg.LLMAllowPrivateURL {
+		parsed, err := url.Parse(cfg.LLMBaseURL)
+		if err != nil {
+			return nil, fmt.Errorf("openai.NewClient: invalid LLM_BASE_URL: %w", err)
+		}
+		httpClient, err := ssrf.NewHTTPClient(parsed, 0, false, "LLM_BASE_URL")
+		if err != nil {
+			if errors.Is(err, ssrf.ErrPrivateAddress) {
+				return nil, fmt.Errorf("openai.NewClient: %w; set LLM_ALLOW_PRIVATE_URL=true to override", err)
+			}
+			return nil, fmt.Errorf("openai.NewClient: %w", err)
+		}
+		oc.HTTPClient = httpClient
+	}
 
 	return &Client{
 		http:   openai.NewClientWithConfig(oc),

@@ -1,0 +1,12 @@
+{
+  "description": "Shared BYOK SSRF denial fixture: every URL here must be refused by BOTH the Go save-time validator (internal/llmsettings validateUserURL) and the Python agent search guard (agent/web_tools search_web). IP literals on default ports only, so no test performs live DNS and the Python guard rejects on the address class rather than the port rule.",
+  "cases": [
+    { "url": "http://127.0.0.1/v1", "field": "llm_base_url" },
+    { "url": "http://10.1.2.3/v1", "field": "llm_base_url" },
+    { "url": "http://172.16.5.4/v1", "field": "embedding_base_url" },
+    { "url": "http://192.168.1.10/v1", "field": "fallback_base_url" },
+    { "url": "http://169.254.169.254/latest", "field": "tavily_base_url" },
+    { "url": "http://[::1]/v1", "field": "llm_base_url" },
+    { "url": "http://0.0.0.0/v1", "field": "embedding_base_url" }
+  ]
+}

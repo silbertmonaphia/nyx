@@ -154,10 +154,11 @@ func captureFrames(t *testing.T, providerName string, frames []string) []llm.Del
 	switch providerName {
 	case "openai":
 		c, err := openai.NewClient(&config.Config{
-			LLMEnabled: true,
-			LLMBaseURL: server.URL,
-			LLMAPIKey:  "sk-test-not-a-real-key",
-			LLMModel:   "test-model",
+			LLMEnabled:         true,
+			LLMBaseURL:         server.URL,
+			LLMAPIKey:          "sk-test-not-a-real-key",
+			LLMModel:           "test-model",
+			LLMAllowPrivateURL: true,
 		}, tracer)
 		require.NoError(t, err)
 		_, _ = c.ChatDelta(context.Background(), parityRequest(), func(d llm.Delta) error {

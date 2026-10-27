@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"sync"
@@ -16,6 +17,7 @@ import (
 	"go.opentelemetry.io/otel/trace/noop"
 
 	"nyx/internal/llm"
+	"nyx/internal/llm/ssrf"
 	"nyx/internal/platform/config"
 )
 
@@ -88,8 +90,18 @@ func newChatServer(t *testing.T, content string, hits *atomic.Int64) *httptest.S
 	return srv
 }
 
+func stubPublicResolve(t *testing.T) {
+	t.Helper()
+	orig := ssrf.ResolveHost
+	ssrf.ResolveHost = func(host string) ([]net.IP, error) {
+		return []net.IP{net.ParseIP("93.184.216.34")}, nil
+	}
+	t.Cleanup(func() { ssrf.ResolveHost = orig })
+}
+
 func newResolverFixture(t *testing.T) (*Resolver, *Service) {
 	t.Helper()
+	stubPublicResolve(t)
 	svc, _, _ := newTestService(t)
 	base := &config.Config{LLMProbeTimeout: "500ms"}
 	return NewResolver(svc, base, noop.NewTracerProvider()), svc
@@ -278,4 +290,94 @@ func TestResolver_NoEmbeddingConfigReturnsNilEmbed(t *testing.T) {
 	assert.NotNil(t, stack.Chat)
 	assert.Nil(t, stack.Embed)
 	assert.Empty(t, stack.EmbedModel)
+}
+
+func TestResolver_ProbeTransportIsGuarded(t *testing.T) {
+	r, svc := newResolverFixture(t)
+	var primaryHits, fallbackHits atomic.Int64
+	primarySrv := newChatServer(t, "primary-delta", &primaryHits)
+
+	fallbackHandler := http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		fallbackHits.Add(1)
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = fmt.Fprintf(w, "data: {\"choices\":[{\"delta\":{\"content\":\"fallback-delta\"}}]}\n\n")
+		_, _ = fmt.Fprintf(w, "data: [DONE]\n\n")
+	})
+	fallbackSrv := httptest.NewUnstartedServer(fallbackHandler)
+	fallbackSrv.Listener, _ = net.Listen("tcp6", "[::1]:0")
+	fallbackSrv.Start()
+	t.Cleanup(fallbackSrv.Close)
+
+	embedSrv, _ := newEmbedServer(t, []float32{1})
+
+	in := inputFor(primarySrv.URL, embedSrv.URL)
+	in.FallbackBaseURL = fallbackSrv.URL + "/v1"
+	in.FallbackAPIKey = "sk-user-fallback-key-4444"
+	in.FallbackModel = testFallbackModel
+	require.NoError(t, svc.Save(context.Background(), 11, in))
+
+	ctx := context.Background()
+	stack, err := r.Resolve(ctx, 11)
+	require.NoError(t, err)
+	router, ok := stack.Chat.(*llm.Router)
+	require.True(t, ok, "a configured fallback wraps the chat slot in a router")
+
+	orig := ssrf.ResolveHost
+	ssrf.ResolveHost = func(host string) ([]net.IP, error) {
+		if host == "127.0.0.1" {
+			return []net.IP{net.ParseIP("127.0.0.1")}, nil
+		}
+		return []net.IP{net.ParseIP("93.184.216.34")}, nil
+	}
+	t.Cleanup(func() { ssrf.ResolveHost = orig })
+
+	var deltas []string
+	_, err = router.Chat(ctx, llm.ChatRequest{
+		Messages: []llm.Message{{Role: "user", Content: "hello"}},
+	}, func(delta string, _ *llm.ChatUsage) error {
+		if delta != "" {
+			deltas = append(deltas, delta)
+		}
+		return nil
+	})
+	require.NoError(t, err)
+	assert.Equal(t, []string{"fallback-delta"}, deltas,
+		"a primary whose resolved IP turned private must be probed out, not dialed")
+	assert.Zero(t, primaryHits.Load())
+	assert.GreaterOrEqual(t, fallbackHits.Load(), int64(1))
+}
+
+func TestResolver_FlagOnPermitsPrivateBYOKTargets(t *testing.T) {
+	r, svc := newResolverFixture(t)
+	r.base.BYOKAllowPrivateURL = true
+
+	srv := newChatServer(t, "local-delta", nil)
+	in := inputFor(srv.URL, srv.URL)
+	require.NoError(t, svc.Save(context.Background(), 12, in))
+
+	stack, err := r.Resolve(context.Background(), 12)
+	require.NoError(t, err)
+	assert.NotNil(t, stack.Chat)
+	assert.NotNil(t, stack.Embed)
+}
+
+func TestResolver_FlagOffRefusesPrivateBYOKTargets(t *testing.T) {
+	r, svc := newResolverFixture(t)
+	r.base.BYOKAllowPrivateURL = false
+
+	srv := newChatServer(t, "local-delta", nil)
+	in := inputFor(srv.URL, srv.URL)
+	require.NoError(t, svc.Save(context.Background(), 13, in))
+
+	orig := ssrf.ResolveHost
+	ssrf.ResolveHost = func(host string) ([]net.IP, error) {
+		if ip := net.ParseIP(host); ip != nil {
+			return []net.IP{ip}, nil
+		}
+		return net.LookupIP(host)
+	}
+	t.Cleanup(func() { ssrf.ResolveHost = orig })
+
+	_, err := r.Resolve(context.Background(), 13)
+	require.Error(t, err)
 }

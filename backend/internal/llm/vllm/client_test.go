@@ -19,6 +19,7 @@ import (
 	"go.opentelemetry.io/otel/trace/noop"
 
 	"nyx/internal/llm"
+	"nyx/internal/llm/ssrf"
 	"nyx/internal/platform/config"
 )
 
@@ -790,21 +791,21 @@ func TestBuildRequest_RejectsUnknownRoles(t *testing.T) {
 // TestCheckHost_RejectsLoopbackByDefault pins the SSRF guard at the
 // DNS level.
 func TestCheckHost_RejectsLoopbackByDefault(t *testing.T) {
-	err := checkHost("127.0.0.1")
+	err := ssrf.CheckHost("127.0.0.1", "LLM_BASE_URL")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "loopback")
 }
 
 // TestCheckHost_RejectsRFC1918ByDefault pins the RFC1918 branch.
 func TestCheckHost_RejectsRFC1918ByDefault(t *testing.T) {
-	err := checkHost("10.0.0.1")
+	err := ssrf.CheckHost("10.0.0.1", "LLM_BASE_URL")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "private")
 }
 
 // TestCheckHost_RejectsLinkLocalByDefault pins the link-local branch.
 func TestCheckHost_RejectsLinkLocalByDefault(t *testing.T) {
-	err := checkHost("169.254.169.254") // AWS metadata service
+	err := ssrf.CheckHost("169.254.169.254", "LLM_BASE_URL") // AWS metadata service
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "link-local")
 }
@@ -812,7 +813,7 @@ func TestCheckHost_RejectsLinkLocalByDefault(t *testing.T) {
 // TestCheckHost_RejectsIPv6LoopbackByDefault pins the IPv6 loopback
 // branch (::1).
 func TestCheckHost_RejectsIPv6LoopbackByDefault(t *testing.T) {
-	err := checkHost("::1")
+	err := ssrf.CheckHost("::1", "LLM_BASE_URL")
 	require.Error(t, err)
 }
 

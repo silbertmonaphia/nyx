@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"fmt"
+	"net/http"
 	"strings"
 	"sync"
 	"time"
@@ -12,6 +13,7 @@ import (
 
 	"nyx/internal/llm"
 	"nyx/internal/llm/openai"
+	"nyx/internal/llm/ssrf"
 	"nyx/internal/platform/config"
 )
 
@@ -131,6 +133,10 @@ func (r *Resolver) chatSlot(s *Settings) (llm.Provider, error) {
 			},
 			r.tp.Tracer("nyx.llm.router"),
 			r.probeTimeout(),
+			llm.WithProbeHTTP(&http.Client{
+				Transport: ssrf.NewTransport(r.base.BYOKAllowPrivateURL, "llm_base_url or fallback_base_url"),
+				Timeout:   r.probeTimeout(),
+			}),
 		), nil
 	})
 }
@@ -154,6 +160,7 @@ func (r *Resolver) buildClient(baseURL, apiKey, model string) (llm.Provider, err
 	cfg.LLMBaseURL = baseURL
 	cfg.LLMAPIKey = apiKey
 	cfg.LLMModel = model
+	cfg.LLMAllowPrivateURL = cfg.BYOKAllowPrivateURL
 	return openai.NewClient(&cfg, r.tp.Tracer("nyx.llm.user"))
 }
 

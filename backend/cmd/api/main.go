@@ -14,6 +14,7 @@ import (
 	"nyx/internal/feed"
 	"nyx/internal/llm"
 	"nyx/internal/llm/openai"
+	"nyx/internal/llm/ssrf"
 	"nyx/internal/llm/vllm"
 	"nyx/internal/llmsettings"
 	"nyx/internal/mcp"
@@ -77,6 +78,7 @@ func mountLLMSettingsOps(humaAPI huma.API, cfg *config.Config, db *pgxpool.Pool,
 	}
 	service := llmsettings.NewService(llmsettings.NewRepository(db), settingsCipher)
 	service.SetEmbeddingProbe(newEmbeddingProbe(cfg, tracerProvider))
+	service.SetBYOKAllowPrivate(cfg.BYOKAllowPrivateURL)
 	handler := llmsettings.NewHandler(service)
 	llmsettings.RegisterLLMConfigOps(humaAPI, handler, tokens)
 	return llmsettings.NewResolver(service, cfg, tracerProvider), handler
@@ -90,6 +92,7 @@ func newEmbeddingProbe(cfg *config.Config, tracerProvider trace.TracerProvider) 
 		probeCfg.LLMEnabled = true
 		probeCfg.LLMBaseURL = baseURL
 		probeCfg.LLMAPIKey = apiKey
+		probeCfg.LLMAllowPrivateURL = cfg.BYOKAllowPrivateURL
 		if probeCfg.LLMAPIKey == "" {
 			probeCfg.LLMAPIKey = "nyx-user-keyless-endpoint"
 		}
@@ -478,6 +481,10 @@ func mountChatRoute(router chi.Router, cfg *config.Config, db *pgxpool.Pool, fee
 			secondary,
 			tracerProvider.Tracer("nyx.llm.router"),
 			probeTimeout,
+			llm.WithProbeHTTP(&http.Client{
+				Transport: ssrf.NewTransport(cfg.LLMAllowPrivateURL, "LLM_BASE_URL"),
+				Timeout:   probeTimeout,
+			}),
 		)
 		log.Info().
 			Str("primary", primary.Name).
