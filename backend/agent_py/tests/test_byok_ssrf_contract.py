@@ -1,9 +1,9 @@
 """Cross-runtime BYOK SSRF contract: the shared fixture at
 tests/fixtures/ssrf_denied_urls.json lists URLs that BOTH the Go
 save-time validator (backend/internal/llmsettings) and this agent's
-search guard must refuse. This module is the Python consumer; it runs
-bare (no TEST_ASYNC_PG_DSN) and performs no live DNS — every fixture
-entry is an IP literal the net_guard classifies locally."""
+guards must refuse. This module is the Python consumer for the search
+guard and the chat-LLM guard; it runs bare (no TEST_ASYNC_PG_DSN) and
+performs no live DNS — every fixture entry is an IP literal."""
 
 import json
 from pathlib import Path
@@ -11,6 +11,7 @@ from pathlib import Path
 import httpx
 import pytest
 
+from agent.net_guard import WebUrlError, ensure_public_address
 from agent.tools_client import ToolError
 from agent.types import TavilyOverride
 from agent.web_tools import search_web
@@ -38,3 +39,10 @@ async def test_search_refuses_shared_denied_urls(monkeypatch, case):
     message = str(excinfo.value)
     assert "non-public address" in message, message
     assert "ports 80/443" not in message, message
+
+
+@pytest.mark.parametrize("case", fixture_cases(), ids=lambda c: c["url"])
+async def test_llm_guard_refuses_shared_denied_urls(case):
+    with pytest.raises(WebUrlError) as excinfo:
+        await ensure_public_address(case["url"])
+    assert "non-public address" in str(excinfo.value)

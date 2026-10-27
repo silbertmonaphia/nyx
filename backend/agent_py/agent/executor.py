@@ -34,6 +34,7 @@ from .approvals import (
 from .arg_refs import ArgReference, iter_references, scan_args
 from .budget import BudgetGuard
 from .config import Settings
+from .llm_client import build_chat_model
 from .llm_effective import (
     OverrideSecrets,
     llm_holder_handle,
@@ -331,10 +332,13 @@ async def _run_llm(
         api_key_from_holder=llm_holder_key(secrets),
         holder_handle=llm_holder_handle(secrets),
     )
-    client = ChatOpenAI(
+    client = build_chat_model(
+        ChatOpenAI,
         base_url=effective.base_url,
         api_key=effective.api_key,
         model=effective.model,
+        user_supplied=effective.user_supplied,
+        settings=settings,
         temperature=0.0,
     )
 
@@ -376,10 +380,13 @@ async def _run_react(
         api_key_from_holder=llm_holder_key(secrets),
         holder_handle=llm_holder_handle(secrets),
     )
-    base_client = ChatOpenAI(
+    base_client = build_chat_model(
+        ChatOpenAI,
         base_url=effective.base_url,
         api_key=effective.api_key,
         model=effective.model,
+        user_supplied=effective.user_supplied,
+        settings=settings,
         temperature=0.0,
     )
 
@@ -1139,10 +1146,13 @@ async def _reprompt_for_corrected_call(
         api_key_from_holder=llm_holder_key(secrets),
         holder_handle=llm_holder_handle(secrets),
     )
-    base_client = ChatOpenAI(
+    base_client = build_chat_model(
+        ChatOpenAI,
         base_url=effective.base_url,
         api_key=SecretStr(effective.api_key),
         model=effective.model,
+        user_supplied=effective.user_supplied,
+        settings=settings,
         temperature=0.0,
     )
     try:

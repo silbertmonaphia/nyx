@@ -1,4 +1,8 @@
-"""SSRF guard for agent-native web tools (openspec/changes/agent-web-tools).
+"""SSRF guard for the agent's outbound dials.
+
+`validate_target` backs the fetch/search web tools (openspec/changes/
+agent-web-tools); `ensure_public_address` backs the BYOK chat-LLM dial,
+where the endpoint may use any port and must stay proxy-friendly.
 
 Mirrors the Go backend's two-layer pattern (`checkHostNotPrivate` in
 `internal/platform/config` + the per-`DialContext` re-check in the vLLM
@@ -200,3 +204,59 @@ async def validate_target(
         pinned_ip=_pick_pin(parsed),
         path_query=path_query,
     )
+
+
+async def ensure_public_address(
+    url: str,
+    *,
+    allow_private: bool = False,
+    resolver: Resolver | None = None,
+) -> None:
+    """Refuse a URL whose host resolves to a denied address class.
+
+    Unlike `validate_target` this is the LLM-endpoint policy: no 80/443
+    port rule (compatible endpoints routinely listen on other ports) and
+    no address pinning (the caller dials the hostname so proxy egress
+    keeps working).
+    """
+    try:
+        parts = urlsplit(url)
+    except ValueError as exc:
+        raise WebUrlError(f"malformed URL: {exc}") from exc
+    if parts.scheme not in ALLOWED_SCHEMES:
+        raise WebUrlError(
+            f"only http/https URLs are allowed; got scheme {parts.scheme or '(none)'!r}"
+        )
+    if parts.username is not None or parts.password is not None:
+        raise WebUrlError("URLs carrying credentials (user:pass@host) are not allowed")
+    host = parts.hostname
+    if not host:
+        raise WebUrlError("URL has no host")
+    try:
+        port = parts.port
+    except ValueError:
+        raise WebUrlError("URL has an invalid port") from None
+    if port is None:
+        port = DEFAULT_PORTS[parts.scheme]
+
+    resolve = resolver or _default_resolver
+    try:
+        raw_addresses = await resolve(host, port)
+    except (socket.gaierror, OSError, UnicodeError) as exc:
+        raise WebResolveError(f"could not resolve host {host!r}") from exc
+
+    parsed: list[ipaddress.IPv4Address | ipaddress.IPv6Address] = []
+    for raw in raw_addresses:
+        try:
+            parsed.append(ipaddress.ip_address(raw))
+        except ValueError:
+            continue
+    if not parsed:
+        raise WebResolveError(f"could not resolve host {host!r}")
+    if allow_private:
+        return
+    for ip in parsed:
+        if is_denied_address(ip):
+            raise WebUrlError(
+                f"LLM endpoint {host!r} resolves to a non-public address; refusing"
+            )

@@ -44,6 +44,7 @@ from pydantic import SecretStr, ValidationError
 
 from .arg_refs import has_reference_to
 from .config import Settings
+from .llm_client import build_chat_model
 from .llm_effective import (
     OverrideSecrets,
     llm_holder_handle,
@@ -348,10 +349,13 @@ def _build_structured_client(
         api_key_from_holder=llm_holder_key(secrets),
         holder_handle=llm_holder_handle(secrets),
     )
-    base = ChatOpenAI(
+    base = build_chat_model(
+        ChatOpenAI,
         base_url=effective.base_url,
         api_key=SecretStr(effective.api_key),
         model=effective.model,
+        user_supplied=effective.user_supplied,
+        settings=settings,
         temperature=0.0,
         # Transport field stays `max_tokens` (vLLM-compatible wire);
         # langchain-openai 1.7 types only the renamed field, so mypy
@@ -674,10 +678,13 @@ async def _emit_legacy_plan(
         api_key_from_holder=llm_holder_key(secrets),
         holder_handle=llm_holder_handle(secrets),
     )
-    client = ChatOpenAI(
+    client = build_chat_model(
+        ChatOpenAI,
         base_url=effective.base_url,
         api_key=SecretStr(effective.api_key),
         model=effective.model,
+        user_supplied=effective.user_supplied,
+        settings=settings,
         temperature=0.0,
         # Transport field stays `max_tokens` (vLLM-compatible wire);
         # langchain-openai 1.7 types only the renamed field, so mypy

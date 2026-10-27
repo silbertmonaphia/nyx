@@ -45,6 +45,7 @@ from langchain_openai import ChatOpenAI
 from pydantic import BaseModel, SecretStr
 
 from .config import Settings
+from .llm_client import build_chat_model
 from .llm_effective import (
     OverrideSecrets,
     llm_holder_handle,
@@ -557,10 +558,13 @@ async def extract_preferences(
             api_key_from_holder=llm_holder_key(secrets),
             holder_handle=llm_holder_handle(secrets),
         )
-        client = ChatOpenAI(
+        client = build_chat_model(
+            ChatOpenAI,
             model=effective.model,
             base_url=effective.base_url,
             api_key=SecretStr(effective.api_key),
+            user_supplied=effective.user_supplied,
+            settings=settings,
             temperature=0,
             max_tokens=_EXTRACTION_MAX_TOKENS,
             timeout=_EXTRACTION_TIMEOUT_SECONDS,

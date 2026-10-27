@@ -16,6 +16,7 @@ from __future__ import annotations
 import json
 from typing import Any, ClassVar
 
+import httpx
 from langchain_core.messages import AIMessage
 from opentelemetry import trace
 
@@ -146,6 +147,14 @@ def _assert_credentials(
     assert kwargs["base_url"] == base_url
     assert kwargs["model"] == model
     assert _secret_value(kwargs["api_key"]) == api_key
+    if base_url == _OVERRIDE.base_url:
+        assert isinstance(kwargs.get("http_async_client"), httpx.AsyncClient), (
+            "a user-supplied endpoint must carry the SSRF-guarded client"
+        )
+    else:
+        assert "http_async_client" not in kwargs, (
+            "a deployment endpoint must not carry the guard"
+        )
 
 
 def _assert_state_has_no_key(state: dict) -> None:

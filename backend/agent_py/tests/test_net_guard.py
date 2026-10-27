@@ -19,6 +19,7 @@ from agent.net_guard import (
     Target,
     WebResolveError,
     WebUrlError,
+    ensure_public_address,
     is_denied_address,
     validate_target,
 )
@@ -236,6 +237,54 @@ async def test_private_refusal_omits_resolved_address():
     with pytest.raises(WebUrlError) as excinfo:
         await validate_target(
             "http://internal.test/", resolver=resolver_for("10.11.12.13")
+        )
+    assert "non-public" in str(excinfo.value)
+    assert "10.11.12.13" not in str(excinfo.value)
+
+
+async def test_ensure_public_address_refuses_denied_classes():
+    for address in ("127.0.0.1", "10.1.2.3", "169.254.169.254", "::1", "0.0.0.0"):
+        with pytest.raises(WebUrlError):
+            await ensure_public_address(
+                "http://llm.test/v1", resolver=resolver_for(address)
+            )
+
+
+async def test_ensure_public_address_allows_public_hosts():
+    await ensure_public_address(
+        "http://llm.test/v1", resolver=resolver_for("93.184.216.34")
+    )
+
+
+async def test_ensure_public_address_allow_private_permits_denied_classes():
+    await ensure_public_address(
+        "http://127.0.0.1:8000/v1",
+        allow_private=True,
+        resolver=resolver_for("127.0.0.1"),
+    )
+
+
+async def test_ensure_public_address_dns_failure_is_transient():
+    def failing(host: str, port: int):
+        async def _resolve(host: str, port: int) -> list[str]:
+            raise socket.gaierror(-2, "Name or service not known")
+
+        return _resolve(host, port)
+
+    with pytest.raises(WebResolveError):
+        await ensure_public_address("http://missing.test/v1", resolver=failing)
+
+
+async def test_ensure_public_address_has_no_port_restriction():
+    await ensure_public_address(
+        "http://llm.test:8080/v1", resolver=resolver_for("93.184.216.34")
+    )
+
+
+async def test_ensure_public_address_refusal_omits_the_resolved_ip():
+    with pytest.raises(WebUrlError) as excinfo:
+        await ensure_public_address(
+            "http://internal.test/v1", resolver=resolver_for("10.11.12.13")
         )
     assert "non-public" in str(excinfo.value)
     assert "10.11.12.13" not in str(excinfo.value)

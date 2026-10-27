@@ -51,6 +51,7 @@ from .budget import BudgetGuard
 from .chat_store import ChatStore, ChatStoreUnavailable
 from .config import Settings, get_settings
 from .graph import build_graph, run_agent_stream
+from .llm_client import build_chat_model
 from .llm_effective import (
     LLMOverrideView,
     OverrideSecrets,
@@ -245,10 +246,13 @@ async def _refine_session_title(
             api_key_from_holder=llm_holder_key(secrets),
             holder_handle=llm_holder_handle(secrets),
         )
-        client = ChatOpenAI(
+        client = build_chat_model(
+            ChatOpenAI,
             model=effective.model,
             base_url=effective.base_url,
             api_key=SecretStr(effective.api_key),
+            user_supplied=effective.user_supplied,
+            settings=settings,
             temperature=0,
             max_tokens=_TITLE_REFINEMENT_MAX_TOKENS,
             timeout=_TITLE_REFINEMENT_TIMEOUT_SECONDS,
@@ -378,10 +382,11 @@ async def lifespan(app: FastAPI):
         )
     if settings.byok_allow_private:
         log.warning(
-            "PYTHON_AGENT_BYOK_ALLOW_PRIVATE=true — the web_search SSRF guard "
-            "is RELAXED for BYOK-supplied Tavily endpoints (private addresses "
-            "and non-80/443 ports are reachable). Single-operator instances "
-            "only; never enable in a deployed multi-tenant environment."
+            "PYTHON_AGENT_BYOK_ALLOW_PRIVATE=true — the BYOK SSRF guard is "
+            "RELAXED: user-supplied Tavily and chat-LLM endpoints may resolve "
+            "to private addresses (and non-80/443 ports for search). "
+            "Single-operator instances only; never enable in a deployed "
+            "multi-tenant environment."
         )
 
     # Run-state persistence: only initialise when `database_url` is set

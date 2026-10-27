@@ -206,6 +206,7 @@ def test_planner_override_wins_endpoint_model_and_holder_key():
     assert effective.base_url == "http://user-llm.test/v1"
     assert effective.model == "user-model"
     assert effective.api_key == _HOLDER_KEY
+    assert effective.user_supplied is True
 
 
 def test_planner_without_override_is_settings_exactly():
@@ -219,6 +220,7 @@ def test_planner_without_override_is_settings_exactly():
     assert effective.base_url == "http://deployment-llm.test/v1"
     assert effective.model == "planner-model"
     assert effective.api_key == _DEPLOYMENT_KEY
+    assert effective.user_supplied is False
 
 
 def test_stale_checkpoint_handle_fails_closed():

@@ -88,11 +88,15 @@ class EffectiveLLM:
 
     `api_key` is only ever the deployment key (no override) or the value
     handed in as `api_key_from_holder` — this module has no other source.
+    `user_supplied` marks an endpoint handed in by the user (BYOK): the
+    SSRF guard keys on it, so deployment-configured endpoints stay
+    unguarded.
     """
 
     base_url: str
     api_key: str
     model: str
+    user_supplied: bool
 
 
 def run_overrides_from_request(
@@ -189,11 +193,14 @@ def resolve_llm(
             base_url=base_url,
             api_key=settings.llm_api_key or NO_KEY_PLACEHOLDER,
             model=model,
+            user_supplied=False,
         )
     api_key = api_key_from_holder or NO_KEY_PLACEHOLDER
     if holder_handle is not None and getattr(view, "handle", None) != holder_handle:
         api_key = NO_KEY_PLACEHOLDER
-    return EffectiveLLM(base_url=base_url, api_key=api_key, model=model)
+    return EffectiveLLM(
+        base_url=base_url, api_key=api_key, model=model, user_supplied=True
+    )
 
 
 def structured_supported(base_url: str | None, settings: Settings) -> bool:
