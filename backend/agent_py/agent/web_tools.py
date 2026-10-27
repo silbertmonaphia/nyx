@@ -323,6 +323,7 @@ async def search_web(
     settings: Settings,
     *,
     tavily_override: TavilyOverride | None = None,
+    resolver: Resolver | None = None,
 ) -> dict[str, Any]:
     """Query the Tavily Search API; return compact ranked results.
 
@@ -352,9 +353,17 @@ async def search_web(
     if tavily_override is not None:
         base_url = tavily_override.base_url
         api_key = tavily_override.api_key
+        allow_private = settings.byok_allow_private
     else:
         base_url = settings.tavily_base_url
         api_key = settings.tavily_api_key.get_secret_value()
+        allow_private = settings.web_search_allow_private
+    try:
+        await validate_target(base_url, allow_private=allow_private, resolver=resolver)
+    except WebUrlError as exc:
+        raise ToolError(f"web_search: {exc}") from exc
+    except WebResolveError as exc:
+        raise ToolUnavailableError(f"web_search: {exc}") from exc
     if api_key:
         headers["Authorization"] = f"Bearer {api_key}"
     else:
@@ -453,11 +462,16 @@ def _fetch_dispatch(settings: Settings) -> Callable[[dict], Awaitable[dict]]:
 
 
 def _search_dispatch(
-    settings: Settings, tavily_override: TavilyOverride | None = None
+    settings: Settings,
+    tavily_override: TavilyOverride | None = None,
+    resolver: Resolver | None = None,
 ) -> Callable[[dict], Awaitable[dict]]:
     async def _dispatch(args: dict) -> dict:
         return await search_web(
-            args.get("query", ""), settings, tavily_override=tavily_override
+            args.get("query", ""),
+            settings,
+            tavily_override=tavily_override,
+            resolver=resolver,
         )
 
     return _dispatch
@@ -515,6 +529,7 @@ def build_local_tools(
     *,
     tavily_override: TavilyOverride | None = None,
     allow_settings_search: bool = True,
+    resolver: Resolver | None = None,
 ) -> list[LocalTool]:
     """The enabled web tools as `LocalTool` entries ([] when both flags off).
 
@@ -537,7 +552,7 @@ def build_local_tools(
             LocalTool(
                 name="web_search",
                 schema=WEB_SEARCH_SCHEMA,
-                dispatch=_search_dispatch(settings, tavily_override),
+                dispatch=_search_dispatch(settings, tavily_override, resolver),
             )
         )
     return tools

@@ -268,6 +268,8 @@ class Settings(BaseSettings):
     # (same posture as the Go backend's LLM_ALLOW_PRIVATE_URL). Logged
     # loudly at startup. NEVER enable in a deployed environment.
     web_fetch_allow_private: bool = False
+    web_search_allow_private: bool = False
+    byok_allow_private: bool = False
 
     # NOTE: there is intentionally NO JWT verification config here. The Go
     # backend verifies the user JWT at the SPA edge and forwards the

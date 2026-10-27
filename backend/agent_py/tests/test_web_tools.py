@@ -43,6 +43,10 @@ def resolver_for(mapping: dict[str, list[str]]):
     return _resolve
 
 
+def public_resolver(*hosts: str):
+    return resolver_for({host: [PUBLIC_IP] for host in hosts})
+
+
 def patched_async_client(monkeypatch, handler, captured=None):
     original = httpx.AsyncClient
 
@@ -378,7 +382,7 @@ async def test_search_request_shape_and_parsing(monkeypatch):
     settings = make_settings(
         web_search_enabled=True, tavily_api_key="tvly-key", web_search_max_results=2
     )
-    result = await search_web("nyx agent", settings)
+    result = await search_web("nyx agent", settings, resolver=public_resolver("api.tavily.com"))
 
     assert captured["method"] == "POST"
     assert captured["url"] == "https://api.tavily.com/search"
@@ -404,7 +408,7 @@ async def test_search_keyless_sends_access_mode_header(monkeypatch):
 
     patched_async_client(monkeypatch, handler)
     settings = make_settings(web_search_enabled=True)
-    result = await search_web("q", settings)
+    result = await search_web("q", settings, resolver=public_resolver("api.tavily.com"))
 
     assert captured["auth"] is None
     assert captured["keyless"] == "keyless"
@@ -430,7 +434,7 @@ async def test_search_results_clamped_to_hard_cap(monkeypatch):
     settings = make_settings(
         web_search_enabled=True, tavily_api_key="k", web_search_max_results=50
     )
-    result = await search_web("q", settings)
+    result = await search_web("q", settings, resolver=public_resolver("api.tavily.com"))
     assert captured["body"]["max_results"] == 10
     assert len(result["results"]) == 10
 
@@ -443,7 +447,7 @@ async def test_search_throttle_and_5xx_are_transient(monkeypatch, status):
     patched_async_client(monkeypatch, handler)
     settings = make_settings(web_search_enabled=True, tavily_api_key="k")
     with pytest.raises(ToolUnavailableError):
-        await search_web("q", settings)
+        await search_web("q", settings, resolver=public_resolver("api.tavily.com"))
 
 
 async def test_search_401_is_non_retryable(monkeypatch):
@@ -453,7 +457,7 @@ async def test_search_401_is_non_retryable(monkeypatch):
     patched_async_client(monkeypatch, handler)
     settings = make_settings(web_search_enabled=True, tavily_api_key="k")
     with pytest.raises(ToolRejectedError):
-        await search_web("q", settings)
+        await search_web("q", settings, resolver=public_resolver("api.tavily.com"))
 
 
 async def test_search_timeout_is_transient(monkeypatch):
@@ -463,7 +467,7 @@ async def test_search_timeout_is_transient(monkeypatch):
     patched_async_client(monkeypatch, handler)
     settings = make_settings(web_search_enabled=True, tavily_api_key="k")
     with pytest.raises(ToolUnavailableError):
-        await search_web("q", settings)
+        await search_web("q", settings, resolver=public_resolver("api.tavily.com"))
 
 
 async def test_search_bad_json_is_transient(monkeypatch):
@@ -473,7 +477,7 @@ async def test_search_bad_json_is_transient(monkeypatch):
     patched_async_client(monkeypatch, handler)
     settings = make_settings(web_search_enabled=True, tavily_api_key="k")
     with pytest.raises(ToolUnavailableError):
-        await search_web("q", settings)
+        await search_web("q", settings, resolver=public_resolver("api.tavily.com"))
 
 
 @pytest.mark.parametrize("query", ["", "   ", "x" * 401, None, 123])
@@ -502,7 +506,7 @@ async def test_search_uses_the_run_override_endpoint_and_key(monkeypatch):
         base_url="https://user-tavily.test/search", api_key="user-key"
     )
 
-    await search_web("q", settings, tavily_override=override)
+    await search_web("q", settings, tavily_override=override, resolver=public_resolver("user-tavily.test"))
 
     assert captured["url"] == "https://user-tavily.test/search"
     assert captured["auth"] == "Bearer user-key"
@@ -527,7 +531,7 @@ async def test_search_override_without_key_keeps_the_keyless_tier(monkeypatch):
         base_url="https://user-tavily.test/search", api_key=""
     )
 
-    await search_web("q", settings, tavily_override=override)
+    await search_web("q", settings, tavily_override=override, resolver=public_resolver("user-tavily.test"))
 
     assert captured["auth"] is None
     assert captured["keyless"] == "keyless"
@@ -551,7 +555,7 @@ async def test_build_local_tools_threads_the_override_into_dispatch(monkeypatch)
         base_url="https://user-tavily.test/search", api_key="user-key"
     )
 
-    tools = build_local_tools(settings, tavily_override=override)
+    tools = build_local_tools(settings, tavily_override=override, resolver=public_resolver("user-tavily.test"))
     search = next(tool for tool in tools if tool.name == "web_search")
     await search.dispatch({"query": "q"})
 
@@ -587,12 +591,14 @@ async def test_local_registry_for_leaves_the_shared_registry_on_deployment_setti
         tavily_api_key="deployment-key",
         tavily_base_url="https://deployment-tavily.test/search",
     )
-    shared = LocalToolRegistry(build_local_tools(settings))
+    shared = LocalToolRegistry(build_local_tools(settings, resolver=public_resolver("deployment-tavily.test", "user-tavily.test")))
     override = TavilyOverride(
         base_url="https://user-tavily.test/search", api_key="user-key"
     )
 
-    per_run = _local_registry_for(settings, override, shared)
+    per_run = _local_registry_for(
+        settings, override, shared, resolver=public_resolver("user-tavily.test")
+    )
 
     assert per_run is not shared
     assert len(shared) == 1
@@ -773,7 +779,7 @@ async def test_search_odd_payload_shapes_yield_empty_results(monkeypatch, payloa
 
     patched_async_client(monkeypatch, handler)
     settings = make_settings(web_search_enabled=True, tavily_api_key="k")
-    result = await search_web("q", settings)
+    result = await search_web("q", settings, resolver=public_resolver("api.tavily.com"))
     assert result == {"query": "q", "results": []}
 
 
@@ -790,7 +796,7 @@ async def test_search_fields_are_capped(monkeypatch):
 
     patched_async_client(monkeypatch, handler)
     settings = make_settings(web_search_enabled=True, tavily_api_key="k")
-    result = await search_web("q", settings)
+    result = await search_web("q", settings, resolver=public_resolver("api.tavily.com"))
     item = result["results"][0]
     assert len(item["title"]) < 5000 and "truncated" in item["title"]
     assert len(item["description"]) < 9000 and "truncated" in item["description"]
@@ -805,7 +811,7 @@ async def test_search_oversized_body_is_capped(monkeypatch):
     patched_async_client(monkeypatch, handler)
     settings = make_settings(web_search_enabled=True, tavily_api_key="k")
     with pytest.raises(ToolUnavailableError):  # capped body is truncated mid-JSON
-        await search_web("q", settings)
+        await search_web("q", settings, resolver=public_resolver("api.tavily.com"))
 
 
 def test_build_local_tools_byok_run_without_tavily_skips_search():
@@ -822,7 +828,7 @@ def test_local_registry_for_byok_run_without_tavily_has_no_search():
     from agent.tool_dispatch import LocalToolRegistry
 
     settings = make_settings(web_search_enabled=True)
-    shared = LocalToolRegistry(build_local_tools(settings))
+    shared = LocalToolRegistry(build_local_tools(settings, resolver=public_resolver("deployment-tavily.test", "user-tavily.test")))
 
     per_run = _local_registry_for(settings, None, shared, per_user_run=True)
 
@@ -842,3 +848,105 @@ def test_local_registry_for_byok_run_with_tavily_uses_the_override():
     per_run = _local_registry_for(settings, override, None, per_user_run=True)
 
     assert "web_search" in per_run
+
+
+async def test_search_byok_override_private_target_is_correctable(monkeypatch):
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise AssertionError("must not dial a private BYOK target")
+
+    patched_async_client(monkeypatch, handler)
+    settings = make_settings(web_search_enabled=True)
+    override = TavilyOverride(
+        base_url="http://169.254.169.254/search", api_key="user-key"
+    )
+
+    with pytest.raises(ToolError) as excinfo:
+        await search_web("q", settings, tavily_override=override)
+    assert "non-public address" in str(excinfo.value)
+
+
+async def test_search_byok_override_flag_on_permits_private(monkeypatch):
+    captured = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["url"] = str(request.url)
+        return httpx.Response(200, json={"results": []})
+
+    patched_async_client(monkeypatch, handler)
+    settings = make_settings(
+        web_search_enabled=True,
+        byok_allow_private=True,
+    )
+    override = TavilyOverride(base_url="http://127.0.0.1:8890/search", api_key="k")
+
+    await search_web(
+        "q",
+        settings,
+        tavily_override=override,
+        resolver=public_resolver("127.0.0.1"),
+    )
+    assert captured["url"] == "http://127.0.0.1:8890/search"
+
+
+async def test_search_byok_override_nonstandard_port_refused(monkeypatch):
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise AssertionError("non-80/443 BYOK ports must not be dialed")
+
+    patched_async_client(monkeypatch, handler)
+    settings = make_settings(web_search_enabled=True)
+    override = TavilyOverride(
+        base_url="https://user-tavily.test:8890/search", api_key="user-key"
+    )
+
+    with pytest.raises(ToolError):
+        await search_web(
+            "q",
+            settings,
+            tavily_override=override,
+            resolver=public_resolver("user-tavily.test"),
+        )
+
+
+async def test_search_operator_private_default_refused_when_flag_false(monkeypatch):
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise AssertionError("private deployment endpoint must not be dialed")
+
+    patched_async_client(monkeypatch, handler)
+    settings = make_settings(
+        web_search_enabled=True,
+        tavily_base_url="http://127.0.0.1:8890/search",
+    )
+
+    with pytest.raises(ToolError):
+        await search_web(
+            "q", settings, resolver=public_resolver("127.0.0.1")
+        )
+
+
+async def test_search_operator_loopback_default_allowed_when_flag_true(monkeypatch):
+    captured = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["url"] = str(request.url)
+        return httpx.Response(200, json={"results": []})
+
+    patched_async_client(monkeypatch, handler)
+    settings = make_settings(
+        web_search_enabled=True,
+        tavily_base_url="http://127.0.0.1:8890/search",
+        web_search_allow_private=True,
+    )
+
+    await search_web("q", settings, resolver=public_resolver("127.0.0.1"))
+    assert captured["url"] == "http://127.0.0.1:8890/search"
+
+
+async def test_search_dns_failure_is_transient(monkeypatch):
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise AssertionError("unresolvable host must not be dialed")
+
+    patched_async_client(monkeypatch, handler)
+    settings = make_settings(web_search_enabled=True)
+
+    with pytest.raises(ToolUnavailableError):
+        await search_web("q", settings, resolver=public_resolver("other.host"))

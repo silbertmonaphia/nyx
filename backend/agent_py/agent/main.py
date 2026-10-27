@@ -60,6 +60,7 @@ from .llm_effective import (
     resolve_llm,
     run_overrides_from_request,
 )
+from .net_guard import Resolver
 from .observability import (
     get_langfuse_handler,
     setup_langfuse,
@@ -367,6 +368,20 @@ async def lifespan(app: FastAPI):
             "PYTHON_AGENT_WEB_FETCH_ALLOW_PRIVATE=true — the web_fetch SSRF "
             "guard is RELAXED (private addresses and non-80/443 ports are "
             "reachable). Dev/e2e only; never enable in a deployed environment."
+        )
+    if settings.web_search_allow_private:
+        log.warning(
+            "PYTHON_AGENT_WEB_SEARCH_ALLOW_PRIVATE=true — the web_search SSRF "
+            "guard is RELAXED for the deployment-configured Tavily endpoint "
+            "(private addresses and non-80/443 ports are reachable). Dev/e2e "
+            "only; never enable in a deployed environment."
+        )
+    if settings.byok_allow_private:
+        log.warning(
+            "PYTHON_AGENT_BYOK_ALLOW_PRIVATE=true — the web_search SSRF guard "
+            "is RELAXED for BYOK-supplied Tavily endpoints (private addresses "
+            "and non-80/443 ports are reachable). Single-operator instances "
+            "only; never enable in a deployed multi-tenant environment."
         )
 
     # Run-state persistence: only initialise when `database_url` is set
@@ -769,6 +784,7 @@ def _local_registry_for(
     shared: LocalToolRegistry | None,
     *,
     per_user_run: bool = False,
+    resolver: Resolver | None = None,
 ) -> LocalToolRegistry:
     """The local tool registry for one run (add-user-llm-byok D10).
 
@@ -783,11 +799,14 @@ def _local_registry_for(
                 settings,
                 tavily_override=tavily_override,
                 allow_settings_search=False,
+                resolver=resolver,
             )
         )
     if tavily_override is not None:
         return LocalToolRegistry(
-            build_local_tools(settings, tavily_override=tavily_override)
+            build_local_tools(
+                settings, tavily_override=tavily_override, resolver=resolver
+            )
         )
     return shared or LocalToolRegistry()
 

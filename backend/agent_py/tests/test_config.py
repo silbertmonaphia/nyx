@@ -283,6 +283,8 @@ _WEB_ENV_KEYS = (
     "WEB_FETCH_MAX_CHARS",
     "WEB_FETCH_MAX_REDIRECTS",
     "WEB_FETCH_ALLOW_PRIVATE",
+    "WEB_SEARCH_ALLOW_PRIVATE",
+    "BYOK_ALLOW_PRIVATE",
 )
 
 
@@ -301,6 +303,8 @@ def test_web_tools_default_off(monkeypatch):
     assert s.web_fetch_max_chars == 20000
     assert s.web_fetch_max_redirects == 5
     assert s.web_fetch_allow_private is False
+    assert s.web_search_allow_private is False
+    assert s.byok_allow_private is False
     assert s.tavily_base_url == "https://api.tavily.com/search"
     # SecretStr must not leak the raw value via repr/logging.
     assert s.tavily_api_key.get_secret_value() == ""

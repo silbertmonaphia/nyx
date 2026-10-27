@@ -4,6 +4,7 @@ Start it next to the dev stack and point the agent's search client at it:
 
     /home/smona/nyx/backend/agent_py/.venv/bin/python evals/stubs/tavily_stub.py --port 8890
     PYTHON_AGENT_TAVILY_BASE_URL=http://127.0.0.1:8890/search
+    PYTHON_AGENT_WEB_SEARCH_ALLOW_PRIVATE=true
 
 `PYTHON_AGENT_TAVILY_BASE_URL` must include the `/search` path: the agent POSTs
 to that URL verbatim. Responses match the field names `agent.web_tools.search_web`
@@ -19,6 +20,7 @@ Wiring env for an eval run:
 
     PYTHON_AGENT_WEB_SEARCH_ENABLED=true
     PYTHON_AGENT_TAVILY_BASE_URL=http://127.0.0.1:8890/search
+    PYTHON_AGENT_WEB_SEARCH_ALLOW_PRIVATE=true
     EVAL_WEB_SEARCH=on
 """
 

@@ -155,6 +155,7 @@ def test_search_web_parses_the_stub(stub_server, monkeypatch):
         tavily_base_url=f"http://127.0.0.1:{port}/search",
         llm_base_url="http://127.0.0.1:9/v1",
         web_search_max_results=5,
+        web_search_allow_private=True,
         service_token="eval-test-service-token-0123456789",
     )
 
@@ -189,6 +190,7 @@ def test_search_web_honors_the_result_cap(stub_server, monkeypatch):
         tavily_base_url=f"http://127.0.0.1:{port}/search",
         llm_base_url="http://127.0.0.1:9/v1",
         web_search_max_results=1,
+        web_search_allow_private=True,
         service_token="eval-test-service-token-0123456789",
     )
 

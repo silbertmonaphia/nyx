@@ -206,7 +206,9 @@ as a per-run eval user and grades with deterministic assertions — no LLM judge
   (`EVAL_PROMPTFOO_VERSION`).
 - Web-shaped cases should run against the bundled Tavily stub (`evals/stubs/tavily_stub.py`), not the live
   search API: point the eval stack at it with `PYTHON_AGENT_TAVILY_BASE_URL=http://127.0.0.1:8899/search`
-  (+ `PYTHON_AGENT_WEB_SEARCH_ENABLED=true`). The stub serves the hostile payloads the security line keys
+  (+ `PYTHON_AGENT_WEB_SEARCH_ENABLED=true` + `PYTHON_AGENT_WEB_SEARCH_ALLOW_PRIVATE=true` — the stub
+  binds loopback on a non-80/443 port, which the search SSRF guard refuses by default). The stub serves
+  the hostile payloads the security line keys
   on and a canned result set for everything else; the keyless Tavily tier IP-rate-limits after a handful of
   runs and stalls web samples for minutes, which is external noise in a rate.
 - Under strict BYOK the harness seeds the eval user's embedding group before fixtures
@@ -227,7 +229,8 @@ Playwright set pins `--workers=1`). Never run two live suites against the same m
    (embeddings `:8001`), then wait for `curl -fsS http://localhost:8000/v1/models` and
    `curl -fsS http://localhost:8001/v1/models`. Do not race the cold start.
 3. **Tavily stub.** `backend/agent_py/.venv/bin/python evals/stubs/tavily_stub.py --port 8899 &`, then
-   export `PYTHON_AGENT_WEB_SEARCH_ENABLED=true` and
+   export `PYTHON_AGENT_WEB_SEARCH_ENABLED=true`,
+   `PYTHON_AGENT_WEB_SEARCH_ALLOW_PRIVATE=true` (the stub is loopback on a non-80/443 port), and
    `PYTHON_AGENT_TAVILY_BASE_URL=http://127.0.0.1:8899/search` before starting the side stack.
 4. **Side stack.** `./scripts/e2e-side-stack.sh up`; defaults are Go `:8180`, agent `:9100`. Check Go
    `/api/feeds` returns `401` (up and protected), agent `/healthz` returns `{"status":"ok"}`, and curl the
