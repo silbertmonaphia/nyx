@@ -223,6 +223,53 @@ test.describe('Chat / RAG flow (browser-level)', { tag: '@live' }, () => {
     ).toBe(1);
   });
 
+  test('a full-length Chinese feed is retrievable through RAG', async ({
+    page,
+  }) => {
+    test.setTimeout(180_000);
+
+    const marker = '紫象四四七一';
+    const sentence =
+      '这一段文字用于验证向量检索在处理中文长文本时的分块与索引行为，' +
+      '内容涉及检索增强生成系统的索引构建方式、召回策略的取舍、' +
+      '以及重排序模型在候选集上的作用与代价。';
+    const longDescription = `${sentence.repeat(12)}本文的校验口令是${marker}。`;
+
+    await closeChat(page);
+    await page.getByRole('button', { name: /Add Feed/i }).click();
+    await page.getByPlaceholder(/Feed title/i).fill('长文本检索验证笔记');
+    await page.getByPlaceholder(/Description/i).fill(longDescription);
+    const createSettled = page.waitForResponse(
+      (r) =>
+        r.url().includes('/api/feeds?') &&
+        r.request().method() === 'GET' &&
+        r.ok(),
+    );
+    await page.getByRole('button', { name: /Save Feed/i }).click();
+    await createSettled;
+    await expect(page.getByText('长文本检索验证笔记')).toBeVisible();
+
+    await page.getByRole('button', { name: 'Open AI Agent' }).click();
+    await expect(page.getByTestId('chat-form')).toBeVisible();
+
+    await sendMessage(
+      page,
+      '我的笔记里提到的校验口令是什么？只回答那个口令本身。',
+    );
+    await waitForStreamEnd(page, { timeout: 120_000 });
+
+    const assistant = page.getByTestId('chat-message-assistant').last();
+    await expect(assistant).toContainText(marker, { timeout: 30_000 });
+    await expect(page.getByTestId('chat-error')).toHaveCount(0);
+
+    const ragStep = page.locator(
+      '[data-testid="chat-agent-step"][data-step-kind="rag"]',
+    );
+    await expect(ragStep.first()).toHaveAttribute('data-step-status', 'ok', {
+      timeout: 10_000,
+    });
+  });
+
   test('chat button is hidden when unauthenticated', async ({ page }) => {
     // Logout via the nav button to flip auth store.
     await closeChat(page);

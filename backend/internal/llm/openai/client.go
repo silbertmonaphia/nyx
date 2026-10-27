@@ -35,6 +35,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/http"
 	"net/url"
 
 	openai "github.com/sashabaranov/go-openai"
@@ -423,6 +424,18 @@ func (c *Client) mapError(err error) error {
 	return fmt.Errorf("llm chat failed: %w", llm.ErrProviderUnavailable)
 }
 
+func (c *Client) mapEmbedError(err error) error {
+	var apiErr *openai.APIError
+	if errors.As(err, &apiErr) && apiErr.HTTPStatusCode == http.StatusBadRequest {
+		return fmt.Errorf("upstream 400: %w", llm.ErrInvalidInput)
+	}
+	var reqErr *openai.RequestError
+	if errors.As(err, &reqErr) && reqErr.HTTPStatusCode == http.StatusBadRequest {
+		return fmt.Errorf("upstream 400: %w", llm.ErrInvalidInput)
+	}
+	return c.mapError(err)
+}
+
 // Embed batches len(req.Inputs) strings into a single
 // /v1/embeddings call and returns one []float32 per input, in the
 // same order. The OpenAI SDK and any OpenAI-compatible server
@@ -459,7 +472,7 @@ func (c *Client) Embed(ctx context.Context, req llm.EmbedRequest) ([][]float32, 
 	})
 	if err != nil {
 		span.RecordError(err)
-		return nil, c.mapError(err)
+		return nil, c.mapEmbedError(err)
 	}
 
 	out := make([][]float32, len(req.Inputs))

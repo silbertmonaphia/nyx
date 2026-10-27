@@ -16,10 +16,10 @@ vllm serve Qwen/Qwen3-8B-FP8 --host 0.0.0.0 --port 8000 --tensor-parallel-size 1
 
 vllm serve Qwen/Qwen3-4B-Instruct-2507-FP8 --host 0.0.0.0 --port 8000 --tensor-parallel-size 1 --gpu-memory-utilization 0.9 --max-model-len 4096 --enable-auto-tool-choice --tool-call-parser hermes #  6970MiB vram
 
-vllm serve Qwen/Qwen3-Embedding-0.6B --port 8001 --enforce-eager --gpu-memory-utilization 0.1 --max-model-len 256 # 3224MiB vram
+vllm serve Qwen/Qwen3-Embedding-0.6B --port 8001 --enforce-eager --gpu-memory-utilization 0.1 --max-model-len 2048 # 3224MiB vram
 
 # Suggested second vllm (different shell / different port):
-# vllm serve Qwen/Qwen3-Embedding-0.6B --host 0.0.0.0 --port 8001 --tensor-parallel-size 1 --gpu-memory-utilization 0.15 --max-model-len 512 --enforce-eager
+# vllm serve Qwen/Qwen3-Embedding-0.6B --host 0.0.0.0 --port 8001 --tensor-parallel-size 1 --gpu-memory-utilization 0.15 --max-model-len 2048 --enforce-eager
 
 # test with simple question
 curl -v --noproxy '*' http://127.0.0.1:8000/v1/chat/completions -H "Content-Type: application/json" -d '{"model": "Qwen/Qwen3-8B-FP8","messages": [{"role": "user", "content": "测试？"}]}'

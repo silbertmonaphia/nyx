@@ -832,10 +832,8 @@ services:
       # (~3 GB) should bump this to ~0.25.
       - "--gpu-memory-utilization"
       - "0.15"
-      # Embed model context — feed chunk_text is Title + "\n\n" +
-      # Description, well under 512 tokens.
       - "--max-model-len"
-      - "512"
+      - "2048"
     environment:
       - HUGGING_FACE_HUB_TOKEN=${HUGGING_FACE_HUB_TOKEN:-}
       - HF_ENDPOINT=${HF_ENDPOINT:-https://hf-mirror.com}

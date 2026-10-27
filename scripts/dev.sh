@@ -289,7 +289,7 @@ if $detach; then
     echo ">> vllm-embed → $VLLM_EMBED_LOG  (first run downloads the model)"
     started_pid_files+=("$VLLM_EMBED_PID")
     ( echo $BASHPID > "$VLLM_EMBED_PID" && exec "$vllm_bin" serve Qwen/Qwen3-Embedding-0.6B \
-        --port 8001 --enforce-eager --gpu-memory-utilization 0.1 --max-model-len 256 ) \
+        --port 8001 --enforce-eager --gpu-memory-utilization 0.1 --max-model-len 2048 ) \
       2>&1 | tee "$VLLM_EMBED_LOG" &
   fi
 
@@ -375,6 +375,6 @@ else
   if needs_vllm_embed; then
     echo ">> vllm-embed starting in foreground (Ctrl+C to stop; first run downloads the model)"
     exec "$vllm_bin" serve Qwen/Qwen3-Embedding-0.6B \
-      --port 8001 --enforce-eager --gpu-memory-utilization 0.1 --max-model-len 256
+      --port 8001 --enforce-eager --gpu-memory-utilization 0.1 --max-model-len 2048
   fi
 fi

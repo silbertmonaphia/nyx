@@ -632,6 +632,19 @@ func TestEmbed_UpstreamErrorReturnsSentinel(t *testing.T) {
 	assert.True(t, errors.Is(err, llm.ErrProviderUnavailable))
 }
 
+func TestEmbed_Upstream400ReturnsInvalidInput(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusBadRequest)
+	}))
+	defer server.Close()
+
+	c := newTestClient(t, server.URL)
+	_, err := c.Embed(context.Background(), llm.EmbedRequest{Model: "m", Inputs: []string{"x"}})
+	require.Error(t, err)
+	assert.True(t, errors.Is(err, llm.ErrInvalidInput))
+	assert.False(t, errors.Is(err, llm.ErrProviderUnavailable))
+}
+
 func TestNewClient_RefusesPrivateBaseURLByDefault(t *testing.T) {
 	cfg := &config.Config{
 		LLMEnabled: true,

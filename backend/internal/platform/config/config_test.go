@@ -132,6 +132,32 @@ func TestLoadRejectsNonPositiveFeedIndexTimeout(t *testing.T) {
 	}
 }
 
+func TestLoadRejectsOutOfRangeRAGMaxBackfillPerRequest(t *testing.T) {
+	for _, value := range []string{"0", "-1", "100000"} {
+		t.Setenv("DB_URL", "postgres://x")
+		t.Setenv("JWT_SECRET", auth.TestSecret)
+		t.Setenv("RAG_MAX_BACKFILL_PER_REQUEST", value)
+
+		if _, err := Load(); err == nil {
+			t.Fatalf("Load() error = nil for RAG_MAX_BACKFILL_PER_REQUEST=%s, want range error", value)
+		}
+	}
+}
+
+func TestLoadAcceptsInRangeRAGMaxBackfillPerRequest(t *testing.T) {
+	t.Setenv("DB_URL", "postgres://x")
+	t.Setenv("JWT_SECRET", auth.TestSecret)
+	t.Setenv("RAG_MAX_BACKFILL_PER_REQUEST", "50")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg.RAGMaxBackfillPerRequest != 50 {
+		t.Fatalf("RAGMaxBackfillPerRequest = %d, want 50", cfg.RAGMaxBackfillPerRequest)
+	}
+}
+
 // Sanity check on the duration string-to-time.Duration conversion that Load
 // uses internally, so a typo in a default surfaces a clear test failure
 // instead of a runtime DB connection tuning surprise.

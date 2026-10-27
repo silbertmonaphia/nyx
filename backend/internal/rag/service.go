@@ -2,6 +2,7 @@ package rag
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"sync"
 	"time"
@@ -13,6 +14,7 @@ import (
 	"go.opentelemetry.io/otel/trace"
 
 	"nyx/internal/feed"
+	"nyx/internal/llm"
 	ragdb "nyx/internal/rag/db"
 )
 
@@ -285,26 +287,26 @@ func (s *Service) runBackfill(ctx context.Context, userID int, embedder *Embedde
 			}
 		}
 
-		vecs, hashes, err := embedder.EmbedBatch(ctx, feeds)
-		if err != nil {
-			span.RecordError(err)
-			return
-		}
-		for i, f := range feeds {
-			if err := q.UpsertFeedEmbedding(ctx, ragdb.UpsertFeedEmbeddingParams{
+		embeddings, embedErr := s.embedBackfillBatch(ctx, embedder, feeds, span)
+		for _, emb := range embeddings {
+			if upsertErr := q.UpsertFeedEmbedding(ctx, ragdb.UpsertFeedEmbeddingParams{
 				//nolint:gosec // G115: feed_id is a SERIAL PK; handler-side caps keep this well below math.MaxInt32.
-				FeedID:      int32(f.ID),
+				FeedID:      int32(emb.feed.ID),
 				UserID:      int64(userID),
-				Embedding:   pgvector.NewVector(vecs[i]),
-				ChunkText:   ChunkText(f),
-				ContentHash: hashes[i],
-			}); err != nil {
+				Embedding:   pgvector.NewVector(emb.vec),
+				ChunkText:   ChunkText(emb.feed),
+				ContentHash: emb.hash,
+			}); upsertErr != nil {
 				// Best-effort: a single bad row doesn't abort the rest.
 				// The next BackfillOnce (or a future chat request) will
 				// retry; the row is still in ListFeedsWithoutEmbeddings.
-				span.RecordError(err)
+				span.RecordError(upsertErr)
 				continue
 			}
+		}
+		if embedErr != nil {
+			span.RecordError(embedErr)
+			return
 		}
 		// Loop again only if we filled the batch — if we got fewer
 		// rows than maxBackfill we're done.
@@ -312,6 +314,56 @@ func (s *Service) runBackfill(ctx context.Context, userID int, embedder *Embedde
 			return
 		}
 	}
+}
+
+type backfillEmbedding struct {
+	feed *feed.Feed
+	vec  []float32
+	hash []byte
+}
+
+func (s *Service) embedBackfillBatch(ctx context.Context, embedder *Embedder, feeds []*feed.Feed, span trace.Span) ([]backfillEmbedding, error) {
+	vecs, hashes, err := embedder.EmbedBatch(ctx, feeds)
+	if err == nil {
+		out := make([]backfillEmbedding, 0, len(feeds))
+		for i, f := range feeds {
+			out = append(out, backfillEmbedding{feed: f, vec: vecs[i], hash: hashes[i]})
+		}
+		return out, nil
+	}
+	if !errors.Is(err, llm.ErrInvalidInput) {
+		return nil, err
+	}
+	span.RecordError(err)
+	span.SetAttributes(attribute.Int("rag.backfill_isolated", len(feeds)))
+
+	out := make([]backfillEmbedding, 0, len(feeds))
+	dropped := 0
+	var transientErr error
+	var firstErr error
+	for _, f := range feeds {
+		vec, hash, ierr := embedder.Embed(ctx, f)
+		if ierr != nil {
+			span.RecordError(ierr)
+			dropped++
+			if firstErr == nil {
+				firstErr = ierr
+			}
+			if !errors.Is(ierr, llm.ErrInvalidInput) && transientErr == nil {
+				transientErr = ierr
+			}
+			continue
+		}
+		out = append(out, backfillEmbedding{feed: f, vec: vec, hash: hash})
+	}
+	span.SetAttributes(attribute.Int("rag.backfill_dropped", dropped))
+	if transientErr != nil {
+		return out, transientErr
+	}
+	if len(out) == 0 {
+		return nil, firstErr
+	}
+	return out, nil
 }
 
 // nullableTime converts a pgtype.Timestamptz to a *time.Time,

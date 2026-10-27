@@ -23,6 +23,8 @@ const (
 	LLMProviderVLLM   = "vllm"
 )
 
+const maxRAGBackfillPerRequest = 200
+
 type Config struct {
 	DBURL         string `mapstructure:"DB_URL"`
 	JWTSecret     string `mapstructure:"JWT_SECRET"`
@@ -511,6 +513,16 @@ func validateDurations(cfg *Config) error {
 	}
 	if feedIndexTimeout <= 0 {
 		return fmt.Errorf("FEED_INDEX_TIMEOUT must be positive, got %v", feedIndexTimeout)
+	}
+	return validateRAGBackfillSize(cfg)
+}
+
+func validateRAGBackfillSize(cfg *Config) error {
+	if cfg.RAGMaxBackfillPerRequest < 1 || cfg.RAGMaxBackfillPerRequest > maxRAGBackfillPerRequest {
+		return fmt.Errorf(
+			"RAG_MAX_BACKFILL_PER_REQUEST must be between 1 and %d, got %d",
+			maxRAGBackfillPerRequest, cfg.RAGMaxBackfillPerRequest,
+		)
 	}
 	return nil
 }

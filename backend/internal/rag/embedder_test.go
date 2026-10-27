@@ -2,6 +2,8 @@ package rag
 
 import (
 	"context"
+	"crypto/sha256"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -16,10 +18,14 @@ import (
 // rag package sent the right model + inputs, and lets each test
 // seed a canned response or error.
 type stubProvider struct {
-	embedCalls int
-	lastReq    llm.EmbedRequest
-	vecs       [][]float32
-	err        error
+	embedCalls    int
+	lastReq       llm.EmbedRequest
+	vecs          [][]float32
+	err           error
+	errMulti      error
+	failContains  string
+	transientText string
+	vecFromInput  bool
 }
 
 func (s *stubProvider) Chat(_ context.Context, _ llm.ChatRequest, _ func(string, *llm.ChatUsage) error) (*llm.ChatUsage, error) {
@@ -29,10 +35,39 @@ func (s *stubProvider) Chat(_ context.Context, _ llm.ChatRequest, _ func(string,
 func (s *stubProvider) Embed(_ context.Context, req llm.EmbedRequest) ([][]float32, error) {
 	s.embedCalls++
 	s.lastReq = req
+	if len(req.Inputs) > 1 && s.errMulti != nil {
+		return nil, s.errMulti
+	}
+	if s.transientText != "" {
+		for _, in := range req.Inputs {
+			if strings.Contains(in, s.transientText) {
+				return nil, llm.ErrProviderUnavailable
+			}
+		}
+	}
+	if s.failContains != "" {
+		for _, in := range req.Inputs {
+			if strings.Contains(in, s.failContains) {
+				return nil, llm.ErrInvalidInput
+			}
+		}
+	}
 	if s.err != nil {
 		return nil, s.err
 	}
+	if s.vecFromInput {
+		out := make([][]float32, len(req.Inputs))
+		for i, in := range req.Inputs {
+			out[i] = vecForInput(in)
+		}
+		return out, nil
+	}
 	return s.vecs, nil
+}
+
+func vecForInput(in string) []float32 {
+	sum := sha256.Sum256([]byte(in))
+	return []float32{float32(sum[0]), float32(sum[1]), float32(sum[2])}
 }
 
 // TestChunkText pins the canonical embedding string.

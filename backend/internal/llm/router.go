@@ -452,9 +452,9 @@ func recordUsage(span trace.Span, u *ChatUsage) {
 // rag package, with failover for free. Single-provider deployments
 // skip the failover branch entirely; dual-provider deployments try
 // the primary first and fall over to the secondary on
-// ErrProviderUnavailable only — same selectivity rule as the chat
-// path's shouldFailover, because rate-limit / context-cancel errors
-// are not upstream-specific.
+// ErrProviderUnavailable — same selectivity rule as the chat path's
+// shouldFailover, because rate-limit / context-cancel errors are
+// not upstream-specific. ErrInvalidInput fails over too.
 //
 // NO /v1/models probe for embeddings. The chat probe exists
 // because streaming pre-empts the upstream before any byte reaches
@@ -480,11 +480,10 @@ func (r *Router) Embed(ctx context.Context, req EmbedRequest) ([][]float32, erro
 		span.SetStatus(codes.Ok, "")
 		return vecs, nil
 	}
-	// Only ErrProviderUnavailable triggers failover — the same
-	// rule as shouldFailover for chat. We check the chain with
-	// errors.Is so a wrapped error (fmt.Errorf("...: %w", ...))
-	// still routes correctly.
-	if !errors.Is(err, ErrProviderUnavailable) {
+	// Only ErrProviderUnavailable and ErrInvalidInput trigger
+	// failover. We check the chain with errors.Is so a wrapped
+	// error still routes correctly.
+	if !errors.Is(err, ErrProviderUnavailable) && !errors.Is(err, ErrInvalidInput) {
 		span.RecordError(err)
 		return vecs, err
 	}
@@ -497,6 +496,9 @@ func (r *Router) Embed(ctx context.Context, req EmbedRequest) ([][]float32, erro
 		// ErrAllProvidersFailed with the primary's error so a
 		// caller that walks the chain with errors.Is still sees
 		// ErrProviderUnavailable.
+		if errors.Is(err2, ErrInvalidInput) {
+			return vecs2, errors.Join(ErrAllProvidersFailed, ErrProviderUnavailable, ErrInvalidInput)
+		}
 		return vecs2, errors.Join(ErrAllProvidersFailed, ErrProviderUnavailable)
 	}
 	span.SetStatus(codes.Ok, "")

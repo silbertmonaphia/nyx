@@ -505,6 +505,14 @@ func (c *Client) mapError(err error) error {
 	return fmt.Errorf("llm chat failed: %w", llm.ErrProviderUnavailable)
 }
 
+func (c *Client) mapEmbedError(err error) error {
+	var statusErr *upstreamStatusError
+	if errors.As(err, &statusErr) && statusErr.status == http.StatusBadRequest {
+		return fmt.Errorf("upstream 400: %w", llm.ErrInvalidInput)
+	}
+	return c.mapError(err)
+}
+
 // upstreamStatusError is a typed marker so mapError can route HTTP
 // status codes without string-matching err.Error(). Built once per
 // non-2xx response in Chat.
@@ -587,7 +595,7 @@ func (c *Client) Embed(ctx context.Context, req llm.EmbedRequest) ([][]float32, 
 		_, _ = io.Copy(io.Discard, resp.Body)
 		statusErr := &upstreamStatusError{status: resp.StatusCode}
 		span.RecordError(statusErr)
-		return nil, c.mapError(statusErr)
+		return nil, c.mapEmbedError(statusErr)
 	}
 
 	// vLLM follows the OpenAI EmbeddingResponse layout. We only need

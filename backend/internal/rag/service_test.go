@@ -2,9 +2,11 @@ package rag
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/pashagolub/pgxmock/v3"
 	"github.com/stretchr/testify/assert"
@@ -250,6 +252,214 @@ func TestService_BackfillOnce_ConcurrentRunsExactlyOnce(t *testing.T) {
 		return true
 	})
 	assert.Equal(t, 3, cnt, "different userIDs get separate Once entries")
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+type countingFeedID struct {
+	calls *int
+	want  int32
+}
+
+func (c countingFeedID) Match(v interface{}) bool {
+	switch id := v.(type) {
+	case int32:
+		if id == c.want {
+			*c.calls++
+			return true
+		}
+	case int64:
+		if id == int64(c.want) {
+			*c.calls++
+			return true
+		}
+	}
+	return false
+}
+
+func TestService_EmbedBackfillBatch_RejectedBatchIsolatesPerFeed(t *testing.T) {
+	p := &stubProvider{
+		errMulti:     llm.ErrInvalidInput,
+		failContains: "TOO_LONG",
+		vecFromInput: true,
+	}
+	e := NewEmbedder(p, "m", noop.NewTracerProvider().Tracer("test"))
+	svc := NewService(e, nil, nil, stubFeedRepo{}, 5, 4000, 20, noop.NewTracerProvider().Tracer("test"))
+
+	feeds := []*feed.Feed{
+		{ID: 1, Title: "good", Description: "ok"},
+		{ID: 2, Title: "bad", Description: "TOO_LONG"},
+	}
+	ctx := context.Background()
+	_, span := noop.NewTracerProvider().Tracer("test").Start(ctx, "test")
+
+	out, err := svc.embedBackfillBatch(ctx, e, feeds, span)
+	require.NoError(t, err)
+	require.Len(t, out, 1)
+	assert.Equal(t, 1, out[0].feed.ID)
+	assert.Equal(t, vecForInput(ChunkText(feeds[0])), out[0].vec)
+	assert.Equal(t, HashChunk(feeds[0]), out[0].hash)
+	assert.Equal(t, 3, p.embedCalls, "one batch call plus one call per feed")
+}
+
+func TestService_EmbedBackfillBatch_AllFeedsRejectedReturnsError(t *testing.T) {
+	p := &stubProvider{
+		errMulti:     llm.ErrInvalidInput,
+		failContains: "TOO_LONG",
+		vecFromInput: true,
+	}
+	e := NewEmbedder(p, "m", noop.NewTracerProvider().Tracer("test"))
+	svc := NewService(e, nil, nil, stubFeedRepo{}, 5, 4000, 20, noop.NewTracerProvider().Tracer("test"))
+
+	feeds := []*feed.Feed{
+		{ID: 1, Title: "bad", Description: "TOO_LONG"},
+		{ID: 2, Title: "worse", Description: "TOO_LONG_TOO"},
+	}
+	ctx := context.Background()
+	_, span := noop.NewTracerProvider().Tracer("test").Start(ctx, "test")
+
+	out, err := svc.embedBackfillBatch(ctx, e, feeds, span)
+	require.Error(t, err)
+	assert.ErrorIs(t, err, llm.ErrInvalidInput)
+	assert.Empty(t, out)
+}
+
+func TestService_EmbedBackfillBatch_TransientErrorDuringIsolationSurfaces(t *testing.T) {
+	p := &stubProvider{
+		errMulti:      llm.ErrInvalidInput,
+		failContains:  "TOO_LONG",
+		transientText: "FLAKY",
+		vecFromInput:  true,
+	}
+	e := NewEmbedder(p, "m", noop.NewTracerProvider().Tracer("test"))
+	svc := NewService(e, nil, nil, stubFeedRepo{}, 5, 4000, 20, noop.NewTracerProvider().Tracer("test"))
+
+	feeds := []*feed.Feed{
+		{ID: 1, Title: "good", Description: "ok"},
+		{ID: 2, Title: "poison", Description: "TOO_LONG"},
+		{ID: 3, Title: "flaky", Description: "FLAKY"},
+	}
+	ctx := context.Background()
+	_, span := noop.NewTracerProvider().Tracer("test").Start(ctx, "test")
+
+	out, err := svc.embedBackfillBatch(ctx, e, feeds, span)
+	require.Error(t, err)
+	assert.ErrorIs(t, err, llm.ErrProviderUnavailable)
+	require.Len(t, out, 1, "the successful feed is still returned so it can be persisted")
+	assert.Equal(t, 1, out[0].feed.ID)
+}
+
+func TestService_EmbedBackfillBatch_TransientErrorIsNotIsolated(t *testing.T) {
+	p := &stubProvider{errMulti: llm.ErrProviderUnavailable}
+	e := NewEmbedder(p, "m", noop.NewTracerProvider().Tracer("test"))
+	svc := NewService(e, nil, nil, stubFeedRepo{}, 5, 4000, 20, noop.NewTracerProvider().Tracer("test"))
+
+	feeds := []*feed.Feed{{ID: 1, Title: "a"}, {ID: 2, Title: "b"}}
+	ctx := context.Background()
+	_, span := noop.NewTracerProvider().Tracer("test").Start(ctx, "test")
+
+	out, err := svc.embedBackfillBatch(ctx, e, feeds, span)
+	require.Error(t, err)
+	assert.ErrorIs(t, err, llm.ErrProviderUnavailable)
+	assert.Empty(t, out)
+	assert.Equal(t, 1, p.embedCalls, "a transient failure must not fan out into per-feed calls")
+}
+
+func TestService_EmbedBackfillBatch_BatchSuccessReturnsEveryFeed(t *testing.T) {
+	p := &stubProvider{vecs: [][]float32{{0.1}, {0.2}}}
+	e := NewEmbedder(p, "m", noop.NewTracerProvider().Tracer("test"))
+	svc := NewService(e, nil, nil, stubFeedRepo{}, 5, 4000, 20, noop.NewTracerProvider().Tracer("test"))
+
+	feeds := []*feed.Feed{{ID: 1, Title: "a"}, {ID: 2, Title: "b"}}
+	ctx := context.Background()
+	_, span := noop.NewTracerProvider().Tracer("test").Start(ctx, "test")
+
+	out, err := svc.embedBackfillBatch(ctx, e, feeds, span)
+	require.NoError(t, err)
+	require.Len(t, out, 2)
+	assert.Equal(t, 1, out[0].feed.ID)
+	assert.Equal(t, 2, out[1].feed.ID)
+	assert.Equal(t, 1, p.embedCalls)
+}
+
+func TestService_BackfillOnce_RejectedFeedDoesNotStrandBatch(t *testing.T) {
+	p := &stubProvider{
+		errMulti:     llm.ErrInvalidInput,
+		failContains: "TOO_LONG",
+		vecFromInput: true,
+	}
+	e := NewEmbedder(p, "m", noop.NewTracerProvider().Tracer("test"))
+
+	mock, err := pgxmock.NewPool()
+	require.NoError(t, err)
+	defer mock.Close()
+
+	mock.ExpectQuery(`SELECT`).
+		WithArgs(pgxmock.AnyArg(), pgxmock.AnyArg()).
+		WillReturnRows(pgxmock.NewRows([]string{"id", "user_id", "title", "description", "created_at", "updated_at", "deleted_at"}).
+			AddRow(int32(1), int64(42), "good", "ok", time.Now(), time.Now(), nil).
+			AddRow(int32(2), int64(42), "bad", "TOO_LONG", time.Now(), time.Now(), nil))
+
+	poisonWrites := 0
+	mock.ExpectExec(`INSERT INTO feed_embeddings`).
+		WithArgs(countingFeedID{calls: &poisonWrites, want: 2}, pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg()).
+		WillReturnResult(pgxmock.NewResult("INSERT", 1)).
+		Maybe()
+	mock.ExpectExec(`INSERT INTO feed_embeddings`).
+		WithArgs(int32(1), int64(42), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg()).
+		WillReturnResult(pgxmock.NewResult("INSERT", 1))
+
+	svc := NewService(e, nil, mock, stubFeedRepo{}, 5, 4000, 20, noop.NewTracerProvider().Tracer("test"))
+	svc.BackfillOnce(context.Background(), 42)
+
+	require.NoError(t, mock.ExpectationsWereMet())
+	assert.Equal(t, 0, poisonWrites, "the rejected feed must not be indexed")
+}
+
+func TestService_BackfillOnce_PoisonFeedMakesProgressAcrossBatches(t *testing.T) {
+	p := &stubProvider{
+		errMulti:     llm.ErrInvalidInput,
+		failContains: "TOO_LONG",
+		vecFromInput: true,
+	}
+	e := NewEmbedder(p, "m", noop.NewTracerProvider().Tracer("test"))
+
+	mock, err := pgxmock.NewPool()
+	require.NoError(t, err)
+	defer mock.Close()
+
+	rows := func(ids ...int32) *pgxmock.Rows {
+		r := pgxmock.NewRows([]string{"id", "user_id", "title", "description", "created_at", "updated_at", "deleted_at"})
+		for _, id := range ids {
+			desc := "ok"
+			if id == 1 {
+				desc = "TOO_LONG"
+			}
+			r.AddRow(id, int64(42), fmt.Sprintf("feed-%d", id), desc, time.Now(), time.Now(), nil)
+		}
+		return r
+	}
+
+	mock.ExpectQuery(`SELECT`).WithArgs(pgxmock.AnyArg(), pgxmock.AnyArg()).WillReturnRows(rows(1, 2))
+	mock.ExpectExec(`INSERT INTO feed_embeddings`).
+		WithArgs(int32(2), int64(42), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg()).
+		WillReturnResult(pgxmock.NewResult("INSERT", 1))
+	mock.ExpectQuery(`SELECT`).WithArgs(pgxmock.AnyArg(), pgxmock.AnyArg()).WillReturnRows(rows(1, 3))
+	mock.ExpectExec(`INSERT INTO feed_embeddings`).
+		WithArgs(int32(3), int64(42), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg()).
+		WillReturnResult(pgxmock.NewResult("INSERT", 1))
+	mock.ExpectQuery(`SELECT`).WithArgs(pgxmock.AnyArg(), pgxmock.AnyArg()).WillReturnRows(rows(1, 4))
+	mock.ExpectExec(`INSERT INTO feed_embeddings`).
+		WithArgs(int32(4), int64(42), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg()).
+		WillReturnResult(pgxmock.NewResult("INSERT", 1))
+	mock.ExpectQuery(`SELECT`).WithArgs(pgxmock.AnyArg(), pgxmock.AnyArg()).WillReturnRows(rows(1, 5))
+	mock.ExpectExec(`INSERT INTO feed_embeddings`).
+		WithArgs(int32(5), int64(42), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg()).
+		WillReturnResult(pgxmock.NewResult("INSERT", 1))
+	mock.ExpectQuery(`SELECT`).WithArgs(pgxmock.AnyArg(), pgxmock.AnyArg()).WillReturnRows(rows(1))
+
+	svc := NewService(e, nil, mock, stubFeedRepo{}, 5, 4000, 2, noop.NewTracerProvider().Tracer("test"))
+	svc.BackfillOnce(context.Background(), 42)
+
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 

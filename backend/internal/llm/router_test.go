@@ -587,6 +587,57 @@ func TestRouter_Embed_FailoverOnProviderUnavailable(t *testing.T) {
 	assert.Equal(t, []float32{0.5, 0.6}, got[0])
 }
 
+func TestRouter_Embed_FailoverOnInvalidInput(t *testing.T) {
+	primaryCalls := atomic.Int64{}
+	secondaryCalls := atomic.Int64{}
+	primary := &stubProvider{
+		embedFn: func(_ context.Context, _ EmbedRequest) ([][]float32, error) {
+			primaryCalls.Add(1)
+			return nil, ErrInvalidInput
+		},
+	}
+	secondary := &stubProvider{
+		embedFn: func(_ context.Context, _ EmbedRequest) ([][]float32, error) {
+			secondaryCalls.Add(1)
+			return [][]float32{{0.5, 0.6}}, nil
+		},
+	}
+	r := NewRouter(
+		ProviderSlot{Name: "openai", Provider: primary, BaseURL: "http://primary"},
+		&ProviderSlot{Name: "vllm", Provider: secondary, BaseURL: "http://secondary"},
+		noop.NewTracerProvider().Tracer("test"),
+		100*time.Millisecond,
+	)
+	got, err := r.Embed(context.Background(), EmbedRequest{Model: "m", Inputs: []string{"x"}})
+	require.NoError(t, err)
+	assert.Equal(t, int64(1), primaryCalls.Load())
+	assert.Equal(t, int64(1), secondaryCalls.Load())
+	assert.Equal(t, []float32{0.5, 0.6}, got[0])
+}
+
+func TestRouter_Embed_BothRejectInvalidInputKeepsSentinel(t *testing.T) {
+	primary := &stubProvider{
+		embedFn: func(_ context.Context, _ EmbedRequest) ([][]float32, error) {
+			return nil, ErrInvalidInput
+		},
+	}
+	secondary := &stubProvider{
+		embedFn: func(_ context.Context, _ EmbedRequest) ([][]float32, error) {
+			return nil, ErrInvalidInput
+		},
+	}
+	r := NewRouter(
+		ProviderSlot{Name: "openai", Provider: primary, BaseURL: "http://primary"},
+		&ProviderSlot{Name: "vllm", Provider: secondary, BaseURL: "http://secondary"},
+		noop.NewTracerProvider().Tracer("test"),
+		100*time.Millisecond,
+	)
+	_, err := r.Embed(context.Background(), EmbedRequest{Model: "m", Inputs: []string{"x"}})
+	require.Error(t, err)
+	assert.True(t, errors.Is(err, ErrInvalidInput))
+	assert.True(t, errors.Is(err, ErrAllProvidersFailed))
+}
+
 // TestRouter_Embed_NonFailoverErrorsDoNotFailover pins that
 // rate-limit and ctx-cancel do NOT trigger a secondary retry.
 // Same rule as shouldFailover for chat.

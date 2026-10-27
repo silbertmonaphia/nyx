@@ -69,6 +69,7 @@ const StepRow: React.FC<{ step: ChatStep }> = ({ step }) => {
       className="text-xs space-y-1"
       data-testid="chat-agent-step"
       data-step-id={step.id}
+      data-step-kind={step.kind}
       data-step-status={step.status}
     >
       <div className="flex items-center gap-2">

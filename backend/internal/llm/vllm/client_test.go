@@ -236,6 +236,25 @@ func TestChat_ModelNotFound_ReturnsProviderUnavailable(t *testing.T) {
 	assert.Nil(t, usage)
 }
 
+func TestChat_BadRequest_StaysProviderUnavailable(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		_, _ = io.WriteString(w, `{"error":{"message":"bad request","type":"invalid_request_error","code":"invalid"}}`)
+	}))
+	defer server.Close()
+
+	c := newTestClient(t, server.URL)
+	usage, err := c.Chat(context.Background(), llm.ChatRequest{
+		Messages: []llm.Message{{Role: "user", Content: "hi"}},
+	}, func(string, *llm.ChatUsage) error { return nil })
+
+	require.Error(t, err)
+	assert.True(t, errors.Is(err, llm.ErrProviderUnavailable), "expected ErrProviderUnavailable, got %v", err)
+	assert.False(t, errors.Is(err, llm.ErrInvalidInput))
+	assert.Nil(t, usage)
+}
+
 // TestChat_NetworkError_ReturnsSentinel asserts an unreachable
 // upstream routes through *url.Error and becomes
 // ErrProviderUnavailable. Bind to localhost:0 and close so the
@@ -913,6 +932,19 @@ func TestEmbed_UpstreamErrorReturnsSentinel(t *testing.T) {
 	_, err := c.Embed(context.Background(), llm.EmbedRequest{Model: "m", Inputs: []string{"x"}})
 	require.Error(t, err)
 	assert.True(t, errors.Is(err, llm.ErrProviderUnavailable))
+}
+
+func TestEmbed_Upstream400ReturnsInvalidInput(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusBadRequest)
+	}))
+	defer server.Close()
+
+	c := newTestClient(t, server.URL)
+	_, err := c.Embed(context.Background(), llm.EmbedRequest{Model: "m", Inputs: []string{"x"}})
+	require.Error(t, err)
+	assert.True(t, errors.Is(err, llm.ErrInvalidInput))
+	assert.False(t, errors.Is(err, llm.ErrProviderUnavailable))
 }
 
 // TestEmbed_EmptyInputsIsNoop pins the contract that an empty
