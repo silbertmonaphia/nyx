@@ -344,4 +344,49 @@ test.describe('LLM configuration gate (browser-level)', () => {
       expect(body).not.toContain('llm-a.example.test');
     }
   });
+
+  test('a routed 400 refusal from the save keeps the modal open and surfaces the server message', async ({
+    page,
+  }) => {
+    const user = makeTestUser('e2e_llmcfg_ssrf');
+    await registerViaUi(page, user);
+    await expect(
+      page.getByRole('dialog', { name: GATE_TITLE }),
+    ).toBeVisible();
+
+    await page.route('**/api/me/llm-config', (route) => {
+      if (route.request().method() !== 'PUT') {
+        return route.continue();
+      }
+      return route.fulfill({
+        status: 400,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          error: 'Invalid LLM configuration',
+          code: 400,
+          request_id: 'e2e-ssrf-refusal',
+          details: 'llm_base_url',
+        }),
+      });
+    });
+
+    await page.locator('#llm-base-url').fill('http://127.0.0.1:8000/v1');
+    await page.locator('#llm-model').fill('e2e-private-model');
+    await page.locator('#llm-api-key').fill('sk-e2e-private-abcd');
+
+    const saveResponse = page.waitForResponse(
+      (r) =>
+        r.request().method() === 'PUT' &&
+        r.url().includes('/me/llm-config'),
+      { timeout: SAVE_RESPONSE_TIMEOUT },
+    );
+    await page.getByTestId('llm-config-save').click();
+    expect((await saveResponse).status()).toBe(400);
+
+    await expect(
+      page.getByTestId('toast').filter({ hasText: 'Invalid LLM configuration' }),
+    ).toBeVisible({ timeout: SAVE_RESPONSE_TIMEOUT });
+    await expect(page.getByTestId('llm-config-save')).toBeVisible();
+    await expect(page.getByTestId('chat-form')).not.toBeVisible();
+  });
 });
