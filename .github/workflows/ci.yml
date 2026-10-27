@@ -318,6 +318,8 @@ jobs:
       LLM_BASE_URL: "http://localhost:8000/v1"
       LLM_MODEL: "ci-e2e-model"
       LLM_ALLOW_PRIVATE_URL: "true"
+      BYOK_ALLOW_PRIVATE_URL: "true"
+      E2E_BYOK_PRIVATE_DENIED: "false"
       USER_LLM_ENCRYPTION_KEY: "ci-user-llm-encryption-key-0123456789"
     steps:
     - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -443,6 +445,8 @@ jobs:
       LLM_BASE_URL: "http://localhost:8000/v1"
       LLM_MODEL: "ci-e2e-model"
       LLM_ALLOW_PRIVATE_URL: "true"
+      BYOK_ALLOW_PRIVATE_URL: "true"
+      E2E_BYOK_PRIVATE_DENIED: "false"
       USER_LLM_ENCRYPTION_KEY: "ci-user-llm-encryption-key-0123456789"
     steps:
     - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

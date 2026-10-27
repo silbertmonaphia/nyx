@@ -36,6 +36,11 @@ AGENT_METRICS_PORT="${E2E_AGENT_METRICS_PORT:-9101}"
 VITE_PORT="${E2E_VITE_PORT:-5273}"
 SUFFIX="${E2E_STACK_SUFFIX:-}"
 
+# The side stack runs with BYOK_ALLOW_PRIVATE_URL=true so the specs can seed
+# their loopback endpoints. Run the LLM-config SSRF spec with
+# E2E_BYOK_PRIVATE_DENIED=false against this stack; the default (deny) posture
+# is exercised by any stack started without that flag.
+
 pidfile() { echo "/tmp/nyx-e2e-${1}${SUFFIX}.pid"; }
 logfile() { echo "/tmp/nyx-e2e-${1}${SUFFIX}.log"; }
 
@@ -61,6 +66,8 @@ start_agent() {
     PYTHON_AGENT_MCP_URL="http://localhost:${GO_PORT}/mcp" \
     PYTHON_AGENT_RAG_BRIDGE_URL="http://localhost:${GO_PORT}/internal/rag/retrieve" \
     PYTHON_AGENT_OTEL_ENDPOINT='http://localhost:4318' \
+    PYTHON_AGENT_BYOK_ALLOW_PRIVATE='true' \
+    PYTHON_AGENT_WEB_SEARCH_ALLOW_PRIVATE='true' \
     AGENT_SERVICE_TOKEN="$AGENT_SERVICE_TOKEN" \
       ./.venv/bin/python -m agent.main > "$(logfile agent)" 2>&1 &
     echo $! > "$(pidfile agent)"
@@ -83,6 +90,7 @@ start_backend() {
     PYTHON_AGENT_URL="http://127.0.0.1:${AGENT_PORT}" \
     AGENT_SERVICE_TOKEN="$AGENT_SERVICE_TOKEN" \
     CORS_ALLOWED_ORIGINS="http://localhost:${VITE_PORT},http://127.0.0.1:${VITE_PORT}" \
+    BYOK_ALLOW_PRIVATE_URL='true' \
       go run ./cmd/api > "$(logfile backend)" 2>&1 &
     echo $! > "$(pidfile backend)"
   )
