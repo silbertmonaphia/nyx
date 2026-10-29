@@ -70,12 +70,17 @@ The source list SHALL report, per source, the time of its last completed scan, t
 
 ### Requirement: An uploaded document is stored inline and owned by the uploader
 
-An upload SHALL be accepted only after its bytes are confirmed to be text or Markdown content; the client's file extension and declared content type SHALL NOT be sufficient to accept it. The accepted body SHALL be stored as the authoritative content of an inline document owned by the uploading user, in that user's inline source. The upload SHALL NOT be written to the filesystem as a managed directory, and no upload sink path SHALL be configured. The document SHALL be indexed through the same pipeline that indexes directory documents. Uploading content whose hash already matches an inline document the user owns SHALL leave that document's chunks in place and SHALL NOT create a second copy.
+An upload SHALL be accepted only after its bytes are confirmed to be text or Markdown content; the client's file extension and declared content type SHALL NOT be sufficient to accept it. The accepted body SHALL be stored as the authoritative content of an inline document owned by the uploading user, in that user's inline source. The upload SHALL NOT be written to the filesystem as a managed directory, and no upload sink path SHALL be configured. The document SHALL be indexed through the same pipeline that indexes directory documents. Uploading content whose hash already matches an inline document the user owns SHALL leave that document's chunks in place and SHALL NOT create a second copy. A document MAY also be created directly with a body typed into the application, with the same ownership, storage and indexing behaviour as an upload.
 
 #### Scenario: Upload registers and indexes an inline document
 
 - **WHEN** a user uploads a Markdown file
 - **THEN** a document owned by that user is registered with the uploaded body as its authoritative content, and its chunks become retrievable
+
+#### Scenario: A document created in the application is stored the same way
+
+- **WHEN** a user creates a document with a body typed into the application
+- **THEN** it is registered as an inline document owned by that user with that body as its authoritative content, and its chunks become retrievable
 
 #### Scenario: Non-text upload is refused
 
@@ -91,3 +96,22 @@ An upload SHALL be accepted only after its bytes are confirmed to be text or Mar
 
 - **WHEN** user A uploads a document and user B retrieves knowledge
 - **THEN** user B's retrieval contains no chunk from user A's uploaded document
+
+### Requirement: A caller can remove a source they own
+
+A caller SHALL be able to remove one of their own sources. Removing a source SHALL remove every document indexed from it and every chunk of those documents, and the source SHALL stop appearing in the caller's source list. A caller SHALL NOT be able to remove a shared source through the caller-facing API; the shared source is operator-managed and is removed only through the operator's own tooling.
+
+#### Scenario: Removing a private source removes its documents
+
+- **WHEN** a caller removes their private source
+- **THEN** the source, its documents and their chunks are gone, and a retrieval returns nothing from them
+
+#### Scenario: Removing an inline source removes its documents
+
+- **WHEN** a caller removes their inline source
+- **THEN** the source, its inline documents and their chunks are gone
+
+#### Scenario: The shared source is not removable by a caller
+
+- **WHEN** a caller attempts to remove the shared source
+- **THEN** the request is refused with a static message and the shared source and its documents remain

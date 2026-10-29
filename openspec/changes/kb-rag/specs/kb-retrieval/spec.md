@@ -77,6 +77,25 @@ Each returned knowledge passage SHALL carry the document it came from, the sourc
 - **WHEN** a knowledge passage is rendered for a model or a user
 - **THEN** the rendered excerpt is the chunk body alone and does not contain the embedded path-and-heading prefix
 
+### Requirement: A chunk is only retrievable by a caller in the same embedding space
+
+Every indexed chunk SHALL record the identity of the embedding model that produced its vector. A retrieval SHALL return only chunks whose recorded embedding identity matches the identity of the embedding model that produced the caller's query vector. A chunk indexed under a different identity SHALL be excluded even when it belongs to a source the caller can see. This SHALL hold for shared sources as well as private ones: a shared corpus is indexed once under the deployment's embedding identity, and a caller whose own embedding identity differs from it SHALL not receive its passages.
+
+#### Scenario: A caller in a different embedding space receives nothing from the shared corpus
+
+- **WHEN** the shared corpus was indexed under embedding model A and the caller queries with a vector produced by embedding model B
+- **THEN** no shared passage is returned, and no shared passage's score is computed against the caller's vector
+
+#### Scenario: A caller's own passages are unaffected
+
+- **WHEN** a user's private corpus was indexed under the same embedding model the caller queries with
+- **THEN** those passages remain retrievable
+
+#### Scenario: The filter is on the recorded identity, not the source
+
+- **WHEN** a chunk's recorded embedding identity differs from the caller's
+- **THEN** it is excluded regardless of which source it came from
+
 ### Requirement: A knowledge outline describes the corpus to the caller
 
 The system SHALL expose a read model describing the visible knowledge corpus: for each visible source, its identifier, display name, scope, document count, chunk count, and the set of its top-level directory names. The outline SHALL contain no document content and no path outside the source's own relative naming.

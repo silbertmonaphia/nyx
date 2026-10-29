@@ -15,6 +15,9 @@ So the retrieval surface needs a second corpus: documents that are chunked, inde
 - **Heading-aware chunking instead of one-vector-per-item.** Markdown is parsed into a heading tree; chunks never span two heading paths; tables and fenced code blocks are never split; every chunk embeds with a context header (relative path + heading path) so its vector carries its provenance, and stores its body separately for citation.
 - **Index-before-embed, so a failed embed never re-parses and never empties the corpus.** Chunks land with a null embedding and are filled by a resumable claim pass; unchanged files cost zero embedding calls (content-hash skip, mirroring the feed indexer's no-op guard). A document carries a *generation*, and it advances to its new content only once the new chunks are fully embedded — so a document whose re-embed fails stays retrievable at its previous content instead of vanishing from search.
 - **Manual index trigger plus a bounded lazy catch-up.** An explicit index action over the caller's sources; a background catch-up at chat time that completes pending documents on a detached context — the same shape as the existing feed lazy backfill.
+- **One-shot import of a corpus that already exists**, as an operator command (`cmd/kb index --root <dir> --shared`) rather than a per-user request: it writes into the shared scope under the deployment's embedding identity, and creating a shared source is an explicit, typed trust decision.
+- **Deletion.** A caller can remove their own sources (cascading to their documents and chunks) and their inline documents. A file-backed document is refused for both editing and deletion — the file on disk is the truth. The shared source is operator-managed and cannot be removed through the caller-facing API.
+- **One embedding identity per corpus.** A chunk records the identity of the model that produced its vector, and is only returned to a caller whose query vector comes from that same model. A user whose own embedding configuration differs from the deployment's still gets their private corpus, and simply does not see the shared one.
 - **Explicit corpus selection on the bridge.** `GET /internal/rag/retrieve` gains `corpus=feeds|kb|both`, plus optional `source` and `path` filters. `corpus=feeds` is byte-identical to today. `corpus=both` fuses the two result lists by rank (Reciprocal Rank Fusion), not by score — the two corpora are not on a comparable cosine scale.
 - **Citations become a tagged union.** KB passages cite their source name, relative path, heading path and locator alongside the existing feed citations; the envelope keeps `context_block` and `citations`.
 - **The agent gets a `kb` step kind**, not a corpus parameter on `rag`: `rag` stays "the user's feeds", `kb` searches the knowledge base with optional source / path scoping, and the planner is given a KB outline so it can narrow a query to a directory instead of guessing.
@@ -26,9 +29,9 @@ Not changing: the feed corpus, the feed write path, the feed indexer's semantics
 
 ### New Capabilities
 
-- `kb-sources`: the registry of where knowledge content comes from and who may see it — shared operator directories, per-user private directories confined to an operator-configured base, the per-user inline store, source enable/disable, and per-source freshness and content counts.
-- `kb-ingestion`: the document → chunk → embedding pipeline — Markdown normalization into a heading-aware block sequence, heading-aware chunking with a context header, content-hash change detection, index-before-embed with a resumable fill pass and an atomic generation swap, the origin-driven edit model, manual trigger plus bounded lazy catch-up, and observable per-document status.
-- `kb-retrieval`: retrieval over the knowledge corpus — visibility scoping (shared plus the caller's own private sources), source and path-prefix filters, explicit corpus selection with rank-based fusion, KB citation provenance, and the KB outline read model.
+- `kb-sources`: the registry of where knowledge content comes from and who may see it — shared operator directories, per-user private directories confined to an operator-configured base, the per-user inline store, source enable/disable and removal, and per-source freshness and content counts.
+- `kb-ingestion`: the document → chunk → embedding pipeline — Markdown normalization into a heading-aware block sequence, heading-aware chunking with a context header, content-hash change detection, index-before-embed with a resumable fill pass and an atomic generation swap, the origin-driven edit and delete model, manual trigger plus bounded lazy catch-up, and observable per-document status.
+- `kb-retrieval`: retrieval over the knowledge corpus — visibility scoping (shared plus the caller's own private sources), source and path-prefix filters, the embedding-identity filter, explicit corpus selection with rank-based fusion, KB citation provenance, and the KB outline read model.
 
 ### Modified Capabilities
 
@@ -40,6 +43,7 @@ Not changing: the feed corpus, the feed write path, the feed indexer's semantics
 - `backend/migrations/`: new `000018_create_kb_sources_documents_chunks` (three tables, one HNSW index) — golang-migrate owns the DDL, alembic stays the owner of the `agent.*` schema, one owner per table.
 - `backend/queries/kb.sql` + `backend/internal/kb/db/` (sqlc output, regenerated with `make sqlc`).
 - `backend/internal/kb/`: new package — source registry, normalizer, chunker, connector, indexer, retriever, outline.
+- `backend/cmd/kb/`: new operator binary — `kb index --root <dir> --shared` (one-shot import of an existing corpus into the shared scope) and `kb status` (print the corpus shape).
 - `backend/internal/rag/`: the service gains corpus selection and rank fusion; the bridge handler gains the new query parameters and the extended citation envelope. The feed facade is unchanged.
 - `backend/internal/chat/`: the request body gains `kb`; the service injects KB context alongside (or instead of) feed context.
 - `backend/internal/platform/config/`: new `KB_*` keys, default-off.

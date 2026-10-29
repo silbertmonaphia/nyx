@@ -151,6 +151,20 @@ Each document SHALL carry a status of `pending`, `indexed`, or `failed`, togethe
 - **WHEN** a retrieval runs over a corpus containing pending and failed documents
 - **THEN** no chunk from those documents is returned
 
+### Requirement: A document's origin decides whether it can be deleted in place
+
+Deleting an inline document SHALL remove the document and every chunk of it, and it SHALL stop being retrievable. Deleting a document whose origin is `file` SHALL be refused with a static message that names no path, and SHALL leave the document and its chunks untouched — the file on disk is the truth, so the file is what has to change. A refused deletion SHALL NOT be a silent no-op: the caller SHALL be told the document is managed by a file.
+
+#### Scenario: Deleting an inline document removes it
+
+- **WHEN** a caller deletes an inline document
+- **THEN** the document and its chunks are gone and a retrieval returns nothing from it
+
+#### Scenario: Deleting a file-backed document is refused
+
+- **WHEN** a caller attempts to delete a document whose origin is `file`
+- **THEN** the deletion is refused with a static message that names no path, and the document's content and chunks are unchanged
+
 ### Requirement: Only Markdown content is ingested
 
 The ingestion pipeline SHALL ingest Markdown documents. A file of any other type SHALL be skipped with a recorded reason rather than causing the scan to fail, and SHALL contribute no document and no chunk.

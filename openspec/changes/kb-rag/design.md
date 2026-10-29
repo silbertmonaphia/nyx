@@ -18,6 +18,7 @@ See proposal.md for motivation; behavior contract in specs/{kb-sources,kb-ingest
 - Structure-preserving chunking that keeps a passage attributable to a file and a section.
 - A source model that separates an operator-managed shared directory from per-user private directories, with private paths operator-confined.
 - **Two editing models that do not fight each other**: a document the user manages on disk stays file-backed (the application refuses to edit it), and a document the application owns is stored inline and is editable in place — with the retrievable content flipping only once the new version is fully indexed.
+- **One-shot import of a corpus that already exists**, as an operator command rather than a per-user request.
 - Reuse of the existing embedder, BYOK resolution, pgvector pool, bridge and SSE frames.
 - An agent that can search the knowledge corpus deliberately — scoped to a source or a directory — and cite what it found.
 
@@ -97,6 +98,17 @@ The refusal for a `file` document is not a limitation dressed up as a rule — i
 The consequence is that "upload" and "create a document in the application" are the same operation: both produce an inline document under the same edit model (D12), and both are editable afterwards. A document created empty and typed into is not a second feature — it is the same row with a different first write.
 Object storage is deferred deliberately: the corpus is small, the storage boundary is a seam, and the inline body column needs no bucket, no credentials and no signed-URL story. When binary formats arrive (Phase 2), a blob column or an object store becomes necessary and the inline model is where it lands.
 
+**D14 — Bulk import of a historical corpus is an operator command, not a caller request.**
+The motivating case is a corpus that already exists on disk and has to be ingested once — 42 Markdown files, ~350KB, a few hundred chunks, a couple of hundred seconds of embedding. That is an operator action: it writes into the shared scope, it makes a directory readable by every user, and it needs no caller identity. So it gets its own binary, `cmd/kb`, with an `index` subcommand that takes a root directory and a `--shared` flag, plus a `status` subcommand that prints the corpus shape.
+The flag is not default: creating a shared source is a trust decision — it makes a directory of the operator's choosing visible to every user of the deployment — so it must be typed explicitly, and the command prints what it is about to expose before it does.
+The per-user API trigger stays for the other case: a user pointing the application at their own directory wants a re-index of *their* corpus under *their* embedding identity, with no shared-scope side effect. The two operations share the same ingest pipeline and differ only in scope and embedding identity.
+*Alternative considered*: doing the bulk import through the per-user API trigger — rejected. It would either need an operator to act as a user, or it would make the shared source's identity depend on whichever user happened to trigger it.
+
+**D15 — The shared corpus carries one embedding identity, and a caller in a different space sees none of it.**
+A private corpus is indexed with its owner's embedding model, so it lives in that owner's space and is queried in the same space — the feed corpus already works this way. The shared corpus is different: it is indexed once, under the deployment's embedding identity, and every user queries it with their own. When a user's stored embedding configuration differs from the deployment's, their query vector is in a different latent space and the shared corpus's vectors are meaningless against it — the same failure `rag.Retriever`'s contract already warns about ("calling Retrieve with a vector from a different embedding model returns garbage rankings"), except the feed corpus never hits it because a feed is always indexed by its own owner.
+So the chunk's recorded embedding identity becomes a retrieval predicate, not just an observability field: a chunk is returned only when its recorded identity matches the identity that produced the caller's query vector. A user with a different BYOK model still gets their own private corpus and their feeds; they simply do not see the shared corpus.
+This also fixes a subtler variant of the same bug: two different 1024-dimension models pass the width check and fail only on semantics.
+
 ## Risks / Trade-offs
 
 - [A private root is a TOCTOU window between save and scan] → validated at save time AND re-validated at scan time; the scan resolves the real path again and refuses anything outside the base, so a root replaced by a symlink after saving is caught at the moment it is used. The cost is that a legitimate reorganisation of the private base breaks the source until the path is re-saved — which surfaces as a recorded reason on the source, not a silent empty result.
@@ -108,11 +120,14 @@ Object storage is deferred deliberately: the corpus is small, the storage bounda
 - [The embedding model identity has to be tracked per chunk] → `kb_chunks.embedding_model` exists for exactly the reason `mem0_prep.md` §6 records for preferences: a silent model swap desyncs a vector store, and the desynced rows must be findable, not discoverable by accident.
 - [Chinese exact-term recall may be weaker in a long-form corpus than in a snippet corpus] → not asserted either way without a measurement. The change ships a KB recall baseline with hand-labelled queries so the question can be answered with data; if it turns out a lexical leg is needed, `pg_trgm` is already available and the retrieval path has a filter seam for it.
 - [A second vector store doubles the operational surface] → accepted. The alternative (one table for both corpora) puts a migration on the live feed vector table, which is the larger operational risk.
+- [The shared corpus is invisible to a user whose embedding identity differs (D15)] → by design, and it fails safe (no garbage passages, just an empty shared source). The knowledge-base page must say *why* the shared source shows no passages rather than leaving the user to guess.
+- [Deleting a source removes everything indexed from it] → the blast radius is the caller's own corpus, and the shared source cannot be removed through the caller-facing API. The operator's `kb` command is the only path that removes shared content.
+- [The operator import command is a second entry point into the ingest pipeline] → it calls the same pipeline function as the API trigger; the difference is scope and embedding identity, not a parallel implementation. The pipeline is exercised by the same tests either way.
 
 ## Migration Plan
 
 Default-off: `KB_ENABLED` unset means no KB tables are written, no source is scanned, and no knowledge retrieval is offered — behaviour is identical to today. Enabling requires the operator to set `KB_ROOT` (the shared directory) and `KB_PRIVATE_BASE` (the per-user confinement root) and to make those paths readable by the backend process; the migration itself adds three tables and one HNSW index and does not modify `feed_embeddings`. Rollback is to unset `KB_ENABLED` and restart — the tables can be left in place, and dropping them is a separate, explicit operation.
-Changing the user's embedding identity invalidates their stored vectors; the KB follows the same rule as feeds (`feed-embed-indexing`, "Changing the embedding identity invalidates stored vectors"), so the KB's invalidation hook runs alongside the feed one when the embedding configuration is replaced.
+Changing the user's embedding identity invalidates their stored vectors; the KB follows the same rule as feeds (`feed-embed-indexing`, "Changing the embedding identity invalidates stored vectors"), so the KB's invalidation hook runs alongside the feed one when the embedding configuration is replaced. The shared corpus is indexed under the deployment's embedding identity (D14, D15); changing the deployment's embedding identity invalidates the shared corpus's vectors and it must be re-imported by the operator.
 
 ## Open Questions
 
