@@ -56,7 +56,7 @@ A chunk SHALL belong to exactly one heading path and SHALL NOT span two heading 
 
 ### Requirement: Indexing is change-driven and idempotent
 
-Each document SHALL carry a hash of its raw bytes. When a scan finds a document whose hash equals the stored hash, the document SHALL be skipped entirely and no embedding call SHALL be made for it. When the hash differs, the document's existing chunks SHALL be removed and the document SHALL be re-chunked and re-embedded. When a document that was previously indexed is no longer present in its source, its chunks SHALL be removed and it SHALL no longer be retrievable.
+Each document SHALL carry a hash of the content it was indexed from — the raw file bytes for a directory document, the stored body for an inline document. When a scan finds a document whose hash equals the stored hash, the document SHALL be skipped entirely and no embedding call SHALL be made for it. When the hash differs, the document's existing chunks SHALL be removed and the document SHALL be re-chunked and re-embedded. When a directory document that was previously indexed is no longer present in its source, its chunks SHALL be removed and it SHALL no longer be retrievable.
 
 #### Scenario: Unchanged document costs no embedding call
 
@@ -65,7 +65,7 @@ Each document SHALL carry a hash of its raw bytes. When a scan finds a document 
 
 #### Scenario: Changed document is re-indexed
 
-- **WHEN** the bytes of an indexed document change
+- **WHEN** the bytes of an indexed directory document change
 - **THEN** its previous chunks are removed and new chunks are produced for the new content
 
 #### Scenario: Removed document stops being retrievable
@@ -73,19 +73,45 @@ Each document SHALL carry a hash of its raw bytes. When a scan finds a document 
 - **WHEN** a document that was indexed is deleted from its source directory
 - **THEN** a later scan removes its chunks and a retrieval no longer returns it
 
+### Requirement: A document's origin decides where its truth lives and whether it can be edited in place
+
+Every document SHALL carry an origin: `file` for a document whose authoritative content is a file on disk, and `inline` for a document whose authoritative content is stored with the document itself. A document's origin SHALL NOT change once the document exists. Editing a `file` document through the application SHALL be refused with a static message that names no path, and SHALL leave the document and its chunks untouched. Editing an `inline` document through the application SHALL replace its authoritative content, re-chunk and re-embed it, and SHALL keep the document's identity — the same document identifier, the same source, the same relative name — so that references to it remain valid.
+
+#### Scenario: Editing a directory document in place is refused
+
+- **WHEN** a caller attempts to edit the content of a document whose origin is `file`
+- **THEN** the edit is refused with a static message that names no path, and the document's content and chunks are unchanged
+
+#### Scenario: Editing an inline document re-indexes it in place
+
+- **WHEN** a caller edits the content of a document whose origin is `inline`
+- **THEN** the document keeps its identifier, its stored content becomes the new body, its chunks are replaced by chunks of the new body, and the new chunks are retrievable
+
+#### Scenario: An inline document that fails to re-index keeps its previous chunks
+
+- **WHEN** an inline document is edited and the embedding call fails
+- **THEN** the document's stored content is the new body, the document is pending, and the retrieval still returns its previous chunks rather than none
+
 ### Requirement: Parsing is separated from embedding, and the embedding pass is resumable
 
 Chunks SHALL be written with an empty embedding before any embedding call is made. A later fill pass SHALL claim unembedded chunks and store their vectors. A failed embedding call SHALL leave the affected document in a pending state with its chunks already parsed and stored, and a subsequent fill pass SHALL complete it without re-parsing the source file. Chunks that carry no embedding SHALL never be returned by a retrieval.
 
+A document SHALL advance to its newly indexed content only when the new chunks are fully embedded. Until then the document's previously indexed content SHALL remain the retrievable one, so a failed embedding call never removes a document from the corpus.
+
 #### Scenario: Embedding failure leaves parsed chunks in place
 
 - **WHEN** the embedding endpoint fails during the indexing of a document
-- **THEN** the document's chunks are stored with no embedding, the document is pending, and the source file is not parsed again by a later catch-up
+- **THEN** the new chunks are stored with no embedding, the document is pending, and the source file is not parsed again by a later catch-up
 
 #### Scenario: Fill pass completes the pending document
 
 - **WHEN** a fill pass runs while the embedding endpoint is healthy
-- **THEN** the pending document's chunks receive embeddings and the document becomes indexed
+- **THEN** the pending document's new chunks receive embeddings, the document becomes indexed, and the new chunks replace the previous ones as the retrievable content
+
+#### Scenario: A document stays retrievable while its replacement is pending
+
+- **WHEN** a document's content changed and the replacement chunks have not been embedded yet
+- **THEN** a retrieval returns the document's previously indexed chunks, not none
 
 #### Scenario: Unembedded chunks are never retrieved
 

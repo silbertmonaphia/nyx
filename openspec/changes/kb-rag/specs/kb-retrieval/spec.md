@@ -91,6 +91,11 @@ The system SHALL expose a read model describing the visible knowledge corpus: fo
 - **WHEN** a source's documents live under `B-Cook/`, `B-Sport/` and `W-Invest/`
 - **THEN** the outline lists those three names for that source
 
+#### Scenario: Inline documents contribute no directory names
+
+- **WHEN** an inline source holds only application-created documents
+- **THEN** the outline lists that source with its counts and no directory names
+
 #### Scenario: Outline carries no content
 
 - **WHEN** the outline is requested

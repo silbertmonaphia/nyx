@@ -2,13 +2,13 @@
 
 ## Purpose
 
-The registry of where knowledge content comes from and who may see it. A source is one place content is read from — an operator-managed shared directory, a per-user private directory, or the upload sink for a user — together with the visibility rule that governs everything indexed from it. The registry is the trust boundary for path handling: a user's private root is operator-confined, and no document from one user's private source is ever visible to another.
+The registry of where knowledge content comes from and who may see it. A source is one place content is read from — an operator-managed shared directory, a per-user private directory, or a per-user inline store of application-created documents — together with the visibility rule that governs everything indexed from it. The registry is the trust boundary for path handling: a user's private root is operator-confined, and no document from one user's private source is ever visible to another.
 
 ## ADDED Requirements
 
 ### Requirement: A source declares its origin, its owner, and its visibility
 
-Every knowledge source SHALL record a scope, an owner, a display name, a root path, a kind, and an enabled flag. A source's scope SHALL be either `shared` — readable by every user of the deployment — or `user`, in which case an owner is recorded and the source's content is readable only by that owner. A source's kind SHALL be either `dir` (a directory tree that is scanned) or `upload` (a managed directory that receives uploaded files). A disabled source SHALL contribute no documents to retrieval and SHALL be skipped by scans.
+Every knowledge source SHALL record a scope, an owner, a display name, a kind, and an enabled flag. A source's scope SHALL be either `shared` — readable by every user of the deployment — or `user`, in which case an owner is recorded and the source's content is readable only by that owner. A source's kind SHALL be either `dir` — a directory tree that is scanned, carrying a root path — or `inline` — a store of application-created documents that carries no root path. A disabled source SHALL contribute no documents to retrieval and SHALL be skipped by scans.
 
 #### Scenario: Shared source is readable by every user
 
@@ -24,6 +24,11 @@ Every knowledge source SHALL record a scope, an owner, a display name, a root pa
 
 - **WHEN** a source is disabled
 - **THEN** a scan skips it and a retrieval returns no document that was indexed from it
+
+#### Scenario: An inline source has no root path
+
+- **WHEN** a user's inline source is listed
+- **THEN** it carries no root path and no directory scan is scheduled for it
 
 ### Requirement: A private root is confined to an operator-configured base
 
@@ -63,23 +68,23 @@ The source list SHALL report, per source, the time of its last completed scan, t
 - **WHEN** a source has never been scanned
 - **THEN** it reports zero documents, zero chunks, zero pending, and no scan time
 
-### Requirement: An uploaded file becomes a document in the uploader's own managed root
+### Requirement: An uploaded document is stored inline and owned by the uploader
 
-An upload SHALL be accepted only after its bytes are confirmed to be text or Markdown content; the client's file extension and declared content type SHALL NOT be sufficient to accept it. The accepted file SHALL be written inside the uploading user's own managed directory, SHALL be registered as a document owned by that user, and SHALL be indexed through the same pipeline that scans directories. Because an uploaded file lives in a directory the scanner also walks, the content hash SHALL prevent the same content from being indexed twice.
+An upload SHALL be accepted only after its bytes are confirmed to be text or Markdown content; the client's file extension and declared content type SHALL NOT be sufficient to accept it. The accepted body SHALL be stored as the authoritative content of an inline document owned by the uploading user, in that user's inline source. The upload SHALL NOT be written to the filesystem as a managed directory, and no upload sink path SHALL be configured. The document SHALL be indexed through the same pipeline that indexes directory documents. Uploading content whose hash already matches an inline document the user owns SHALL leave that document's chunks in place and SHALL NOT create a second copy.
 
-#### Scenario: Upload registers and indexes a document
+#### Scenario: Upload registers and indexes an inline document
 
 - **WHEN** a user uploads a Markdown file
-- **THEN** a document owned by that user is registered from the uploaded file and its chunks become retrievable
+- **THEN** a document owned by that user is registered with the uploaded body as its authoritative content, and its chunks become retrievable
 
 #### Scenario: Non-text upload is refused
 
 - **WHEN** a user uploads a file whose bytes are not text or Markdown
-- **THEN** the upload is refused, no document is registered, and no file is retained
+- **THEN** the upload is refused, no document is registered, and the body is not retained
 
 #### Scenario: Re-upload of identical content is not double-indexed
 
-- **WHEN** a user uploads content whose hash matches a document already indexed from that user's source
+- **WHEN** a user uploads content whose hash matches an inline document that user already owns
 - **THEN** the existing document's chunks are left in place and no second copy of its chunks is created
 
 #### Scenario: Uploaded content is not visible to another user
