@@ -122,7 +122,7 @@ describe('App', () => {
     await i18n.changeLanguage('zh');
     render(<App />);
 
-    expect(screen.getByPlaceholderText('搜索私人动态…')).toBeInTheDocument();
+    expect(screen.getByPlaceholderText('搜索知识碎片…')).toBeInTheDocument();
     expect(
       screen.getByRole('heading', { name: '登录或注册' }),
     ).toBeInTheDocument();

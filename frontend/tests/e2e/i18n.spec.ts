@@ -106,7 +106,7 @@ test('defaults to Chinese for a browser whose language is English', async ({
   await page.goto('/');
 
   expect(await page.evaluate(() => navigator.language)).toBe('en-US');
-  await expect(page.getByPlaceholder('搜索私人动态…')).toBeVisible();
+  await expect(page.getByPlaceholder('搜索知识碎片…')).toBeVisible();
   await expect(
     page.getByRole('heading', { name: '登录或注册' }),
   ).toBeVisible();
@@ -136,7 +136,7 @@ test('applies a locale switch immediately', async ({ page }) => {
   ).toBe('en');
 
   await page.getByTestId('locale-zh').click();
-  await expect(page.getByPlaceholder('搜索私人动态…')).toBeVisible();
+  await expect(page.getByPlaceholder('搜索知识碎片…')).toBeVisible();
   await expect(page.locator('html')).toHaveAttribute('lang', 'zh');
 });
 
@@ -184,7 +184,7 @@ test('renders the login, feed, sidebar, and composer surfaces in Chinese', async
 
   await closeChatIfOpen(page);
   await expect(page.getByRole('button', { name: '退出登录' })).toBeVisible();
-  await expect(page.getByTestId('feed-list-empty')).toHaveText('暂无私人动态');
+  await expect(page.getByTestId('feed-list-empty')).toHaveText('暂无知识碎片');
   await expect(page.getByTestId('toggle-sort-order')).toHaveAttribute(
     'title',
     '最新优先',
@@ -193,5 +193,5 @@ test('renders the login, feed, sidebar, and composer surfaces in Chinese', async
     'aria-label',
     '当前为最新优先；点击切换为最早优先',
   );
-  await expect(page.getByRole('button', { name: '添加私人动态' })).toBeVisible();
+  await expect(page.getByRole('button', { name: '添加知识碎片' })).toBeVisible();
 });
