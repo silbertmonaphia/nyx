@@ -677,7 +677,10 @@ jobs:
 
   deploy-mvp:
     needs: [release]
-    if: github.event_name == 'push' && github.ref == 'refs/heads/mvp'
+    if: >-
+      github.event_name == 'push' &&
+      github.ref == 'refs/heads/mvp' &&
+      vars.NYX_DEPLOY_ENABLED == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 45
     concurrency:

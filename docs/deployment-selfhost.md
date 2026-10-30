@@ -188,7 +188,10 @@ message (exercises Go proxy → Python agent → external LLM), swagger at
 ## Part 2 — continuous deployment
 
 `ci.yml` gains a `deploy-mvp` job: `needs: [release]` on pushes to
-`mvp` only. CI green + release done → rsync → `scripts/deploy.sh` on
+`mvp` only, and gated on the repo variable `NYX_DEPLOY_ENABLED` —
+unset or anything but `true` skips the job, so the pipeline deploys
+nothing until you opt in. CI green + release done → rsync →
+`scripts/deploy.sh` on
 the server (`docker compose --profile app up --build -d --wait`) →
 public smoke check. The rollout gate is the backend image's own
 `HEALTHCHECK` (`wget /api/livez`, shallow by design); `--wait` blocks
@@ -218,8 +221,13 @@ gh secret set NYX_DEPLOY_KNOWN_HOSTS < nyx_known_hosts
 gh variable set NYX_DEPLOY_HOST --body <SERVER_IP>
 gh variable set NYX_DEPLOY_USER --body <user>
 gh variable set NYX_DEPLOY_API_URL --body https://api.<domain>
-gh variable set NYX_DEPLOY_PATH --body /opt/nyx      # optional, this is the default
+gh variable set NYX_DEPLOY_PATH --body /opt/nyx
+gh variable set NYX_DEPLOY_ENABLED --body true
 ```
+
+`NYX_DEPLOY_PATH` defaults to `/opt/nyx`. `NYX_DEPLOY_ENABLED` is the
+kill switch from §2 — while it is unset or false, every push to `mvp`
+runs CI and release but never touches the server.
 
 Delete `nyx_deploy_key` locally after `gh secret set`. The runner
 IP pool is Azure-wide — the Tencent 安全组 must allow 22 from
