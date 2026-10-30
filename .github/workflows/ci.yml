@@ -674,3 +674,57 @@ jobs:
           GIT_COMMITTER_NAME: 'github-actions[bot]'
           GIT_COMMITTER_EMAIL: 'github-actions[bot]@users.noreply.github.com'
         run: npx semantic-release
+
+  deploy-mvp:
+    needs: [release]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/mvp'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    concurrency:
+      group: deploy-mvp
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - name: Set up SSH
+        env:
+          NYX_DEPLOY_SSH_KEY: ${{ secrets.NYX_DEPLOY_SSH_KEY }}
+          NYX_DEPLOY_KNOWN_HOSTS: ${{ secrets.NYX_DEPLOY_KNOWN_HOSTS }}
+        run: |
+          mkdir -p ~/.ssh
+          printf '%s\n' "$NYX_DEPLOY_SSH_KEY" > ~/.ssh/id_ed25519
+          printf '%s\n' "$NYX_DEPLOY_KNOWN_HOSTS" > ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/id_ed25519 ~/.ssh/known_hosts
+      - name: Rsync source tree
+        env:
+          NYX_DEPLOY_HOST: ${{ vars.NYX_DEPLOY_HOST }}
+          NYX_DEPLOY_USER: ${{ vars.NYX_DEPLOY_USER }}
+          NYX_DEPLOY_PATH: ${{ vars.NYX_DEPLOY_PATH || '/opt/nyx' }}
+        run: |
+          rsync -az --delete \
+            -e "ssh -o BatchMode=yes" \
+            --exclude=.git \
+            --exclude=.claude \
+            --exclude=.env \
+            --exclude=backend/.env \
+            --exclude=frontend/.env \
+            --exclude=backend/agent_py/.env \
+            --exclude=docker-compose.override.yml \
+            --exclude=Caddyfile \
+            --exclude=node_modules \
+            --exclude=.venv \
+            ./ "$NYX_DEPLOY_USER@$NYX_DEPLOY_HOST:$NYX_DEPLOY_PATH/"
+      - name: Build and roll out
+        env:
+          NYX_DEPLOY_HOST: ${{ vars.NYX_DEPLOY_HOST }}
+          NYX_DEPLOY_USER: ${{ vars.NYX_DEPLOY_USER }}
+        run: ssh -o BatchMode=yes "$NYX_DEPLOY_USER@$NYX_DEPLOY_HOST" 'bash -s' -- < scripts/deploy.sh
+      - name: Smoke check
+        if: vars.NYX_DEPLOY_API_URL != ''
+        run: |
+          for i in $(seq 1 12); do
+            if curl -fsS --max-time 10 "${{ vars.NYX_DEPLOY_API_URL }}/api/livez"; then
+              exit 0
+            fi
+            sleep 10
+          done
+          exit 1
