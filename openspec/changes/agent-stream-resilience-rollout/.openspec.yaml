@@ -1,0 +1,5 @@
+schema: spec-driven
+created: 2026-10-31
+goal: Track the production rollout gates for agent stream resilience; let the
+  implementation change archive independently
+skip_specs: true
