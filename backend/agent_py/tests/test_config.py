@@ -469,3 +469,59 @@ def test_service_token_accepts_field_name(monkeypatch):
         _env_file=None, llm_base_url="http://vllm:8000/v1", service_token=token
     )
     assert s.service_token.get_secret_value() == token
+
+
+def test_stream_resilience_defaults(monkeypatch):
+    """Spec scenario "Defaults applied when unset": keepalive 15s, detach
+    on, cap 600s — an unconfigured deployment boots with today's
+    keepalive cadence and a bounded detach window
+    (agent-stream-resilience)."""
+    for key in (
+        "KEEPALIVE_SECONDS",
+        "STREAM_DETACH_ENABLED",
+        "DETACHED_RUN_CAP_SECONDS",
+    ):
+        monkeypatch.delenv(f"PYTHON_AGENT_{key}", raising=False)
+    s = Settings(_env_file=None, llm_base_url="http://vllm:8000/v1")
+    assert s.keepalive_seconds == 15
+    assert s.stream_detach_enabled is True
+    assert s.detached_run_cap_seconds == 600
+
+
+def test_keepalive_zero_is_a_valid_disable(monkeypatch):
+    """Spec scenario "Keepalive zero is a valid disable": 0 turns the
+    idle keep-alive off without refusing startup."""
+    monkeypatch.setenv("PYTHON_AGENT_KEEPALIVE_SECONDS", "0")
+    s = Settings(_env_file=None, llm_base_url="http://vllm:8000/v1")
+    assert s.keepalive_seconds == 0
+
+
+@pytest.mark.parametrize(
+    "kwargs",
+    [
+        {"keepalive_seconds": -1},
+        {"detached_run_cap_seconds": 0},
+        {"detached_run_cap_seconds": -5},
+    ],
+)
+def test_invalid_stream_resilience_values_refused(kwargs):
+    """Spec scenario "Invalid cap refuses startup" (and the negative
+    keepalive sibling): bad values refuse startup naming the offending
+    env var."""
+    with pytest.raises(ValueError) as excinfo:
+        Settings(_env_file=None, llm_base_url="http://vllm:8000/v1", **kwargs)
+    key = next(iter(kwargs)).upper()
+    assert f"PYTHON_AGENT_{key}" in str(excinfo.value)
+
+
+def test_detach_opted_out_boots_without_cap(monkeypatch):
+    """Detach off is a supported posture: the cap key is unused and an
+    operator who never set it still boots."""
+    monkeypatch.delenv("PYTHON_AGENT_DETACHED_RUN_CAP_SECONDS", raising=False)
+    s = Settings(
+        _env_file=None,
+        llm_base_url="http://vllm:8000/v1",
+        stream_detach_enabled=False,
+    )
+    assert s.stream_detach_enabled is False
+    assert s.detached_run_cap_seconds == 600

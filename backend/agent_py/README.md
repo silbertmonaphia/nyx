@@ -75,6 +75,11 @@ flowchart TB
   `X-Nyx-User-Id`.
 - `GET|POST|DELETE /agent/sessions*` — history sidebar API (list / replay / create / resume /
   delete), owner-scoped via `X-Nyx-User-Id`.
+- `GET /agent/runs/{run_id}/stream` — re-attach to a live run: `note{reattached}`, the persisted
+  step events replayed, then the live frames (owner-scoped via `X-Nyx-User-Id`; 409 `run_not_live`
+  for a terminal/unknown run, 501 when the persistence layer is off).
+- `POST /agent/runs/{run_id}/cancel` — deliberate stop of a live run (`user_cancelled`; no
+  assistant row for the partial answer), owner-scoped via `X-Nyx-User-Id`.
 - `GET /agent/me/export` · `DELETE /agent/me` — GDPR subject export + right-to-erasure
   (idempotent, physical delete incl. langGraph threads, counts-only audit trail);
   `PYTHON_AGENT_GDPR_ENABLED=false` → 503 on both.
@@ -149,6 +154,9 @@ Common flags:
 | `PYTHON_AGENT_CHAT_RETENTION_DAYS` / `…_GRACE_DAYS` | `365` / `7` | Chat-history retention (floor 365 days) + soft-delete grace |
 | `PYTHON_AGENT_PREFS_ENABLED` | `true` | Preference extraction + planner-injection kill switch |
 | `PYTHON_AGENT_GDPR_ENABLED` | `true` | GDPR export/erase kill switch (503, touches nothing) |
+| `PYTHON_AGENT_STREAM_DETACH_ENABLED` | `true` | A run outlives its SSE connection; `false` restores "a disconnect cancels the run" |
+| `PYTHON_AGENT_DETACHED_RUN_CAP_SECONDS` | `600` | Wall-clock cap on a detached run (kills it and marks it failed) |
+| `PYTHON_AGENT_KEEPALIVE_SECONDS` | `15` | Idle cadence of the SSE keep-alive comment frame; `0` disables |
 | `LANGFUSE_DEBUG` | unset | Langfuse SDK verbose mode — read from the **process environment** (see below) |
 
 Langfuse tracing is diagnosable from the default logs: with `PYTHON_AGENT_LANGFUSE_ENABLED=true`

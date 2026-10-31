@@ -97,6 +97,7 @@ export const ChatSidebar: React.FC<ChatSidebarProps> = ({
   const loadMore = useChat((s) => s.loadMore);
   const setCurrentSession = useChat((s) => s.setCurrentSession);
   const deleteSession = useChat((s) => s.deleteSession);
+  const stopDetachedRun = useChat((s) => s.stopDetachedRun);
 
   const sentinelRef = useRef<HTMLDivElement | null>(null);
   const scrollRef = useRef<HTMLDivElement | null>(null);
@@ -230,6 +231,20 @@ export const ChatSidebar: React.FC<ChatSidebarProps> = ({
                           className="h-1.5 w-1.5 rounded-full bg-emerald-500 animate-pulse"
                           aria-hidden="true"
                         />
+                        <button
+                          type="button"
+                          className="ml-1 rounded px-1 text-[10px] text-muted-foreground hover:text-foreground"
+                          data-testid="chat-session-stop"
+                          data-session-id={session.id}
+                          aria-label={t("chat.recovery.stopRun")}
+                          title={t("chat.recovery.stopRun")}
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            void stopDetachedRun(session.id);
+                          }}
+                        >
+                          {t("chat.recovery.stopRun")}
+                        </button>
                       </span>
                     )}
                   </span>

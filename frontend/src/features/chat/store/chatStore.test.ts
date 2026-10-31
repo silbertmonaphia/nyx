@@ -14,6 +14,8 @@ vi.mock('../services/chatService');
 
 const mockedService = chatService as unknown as {
   streamMessage: ReturnType<typeof vi.fn>;
+  reattachRun: ReturnType<typeof vi.fn>;
+  cancelRun: ReturnType<typeof vi.fn>;
   submitApproval: ReturnType<typeof vi.fn>;
   listSessions: ReturnType<typeof vi.fn>;
   getMessages: ReturnType<typeof vi.fn>;
@@ -55,6 +57,8 @@ function resetStore() {
  */
 function resetService() {
   mockedService.streamMessage.mockReset();
+  mockedService.reattachRun.mockReset();
+  mockedService.cancelRun.mockReset().mockResolvedValue(undefined);
   mockedService.submitApproval.mockReset().mockResolvedValue(undefined);
   mockedService.listSessions
     .mockReset()
@@ -2130,6 +2134,12 @@ describe('useChatStore', () => {
           notify = null;
         },
         close() {
+          queue.push({ kind: 'terminator' });
+          closed = true;
+          notify?.();
+          notify = null;
+        },
+        cut() {
           closed = true;
           notify?.();
           notify = null;
@@ -2571,11 +2581,37 @@ describe('useChatStore', () => {
         await Promise.resolve();
       });
       await waitFor(() => {
-        expect(useChatStore.getState().runningSessionIds).toEqual([]);
+        expect(useChatStore.getState().runningSessionIds).toEqual(['sess-a']);
       });
       expect(useChatStore.getState().error).toBeNull();
       expect(useChatStore.getState().messages).toEqual([]);
       warn.mockRestore();
+    });
+
+    it('a detached stream cut without a terminal keeps the marker (the run may still be alive)', async () => {
+      useChatStore.setState({ currentSessionId: 'sess-a' });
+      const stream = makePushStream();
+      mockedService.streamMessage.mockImplementationOnce(stream.impl);
+
+      act(() => {
+        void useChatStore.getState().send('hi');
+      });
+      await waitFor(() => {
+        expect(useChatStore.getState().isStreaming).toBe(true);
+      });
+
+      await act(async () => {
+        await useChatStore.getState().startNewSession();
+      });
+
+      await act(async () => {
+        stream.cut();
+        await Promise.resolve();
+      });
+      await waitFor(() => {
+        expect(useChatStore.getState().runningSessionIds).toEqual(['sess-a']);
+      });
+      expect(useChatStore.getState().isStreaming).toBe(false);
     });
 
     it('keeps the rail marker (composer lock) up until the completion replay lands', async () => {
@@ -2608,6 +2644,7 @@ describe('useChatStore', () => {
           }),
       );
       await act(async () => {
+        stream.push({ kind: 'terminator' });
         stream.close();
         await Promise.resolve();
       });
@@ -3055,6 +3092,477 @@ describe('useChatStore', () => {
       });
       useChatStore.getState().resetForUser(2);
       expect(useChatStore.getState().llmGateOpen).toBe(false);
+    });
+  });
+
+  describe('recovery ladder (interrupted stream ends)', () => {
+    function streamOf(events: ChatEvent[], runId?: string) {
+      return (
+        _messages: unknown,
+        signal: AbortSignal,
+        opts?: { onRunId?: (id: string) => void },
+      ): AsyncGenerator<ChatEvent> => {
+        async function* impl(): AsyncGenerator<ChatEvent> {
+          if (runId) opts?.onRunId?.(runId);
+          for (const e of events) {
+            if (signal.aborted) return;
+            yield e;
+          }
+        }
+        return impl();
+      };
+    }
+
+    function heldRung(signal: AbortSignal): AsyncGenerator<ChatEvent> {
+      return (async function* () {
+        await new Promise<void>((resolve) => {
+          if (signal.aborted) {
+            resolve();
+            return;
+          }
+          signal.addEventListener('abort', () => resolve(), { once: true });
+        });
+        yield { kind: 'terminator' } as ChatEvent;
+      })();
+    }
+
+    const NOT_LIVE = new ChatStreamError({
+      kind: 'http',
+      status: 409,
+      message: 'run not live',
+      code: 409,
+    });
+
+    it('re-attach appends deltas into the same partial assistant row and finishes the turn', async () => {
+      mockedService.streamMessage.mockImplementationOnce(
+        streamOf(
+          [
+            { kind: 'delta', delta: 'Hel' },
+            { kind: 'stream_incomplete' },
+          ],
+          'run-1',
+        ),
+      );
+      mockedService.reattachRun.mockImplementationOnce(
+        streamOf([
+          { kind: 'delta', delta: 'lo' },
+          {
+            kind: 'done',
+            usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
+          },
+          { kind: 'terminator' },
+        ]),
+      );
+
+      await act(async () => {
+        await useChatStore.getState().send('hi');
+      });
+
+      expect(mockedService.reattachRun).toHaveBeenCalledTimes(1);
+      expect(mockedService.reattachRun.mock.calls[0][0]).toBe('run-1');
+      const state = useChatStore.getState();
+      expect(state.messages).toHaveLength(2);
+      expect(state.messages[1]).toEqual({
+        role: 'assistant',
+        content: 'Hello',
+        usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
+      });
+      expect(state.isStreaming).toBe(false);
+      expect(state.isRecovering).toBe(false);
+      expect(state.error).toBeNull();
+    });
+
+    it('a 409 re-attach falls through to the transcript replay and splices the stored row', async () => {
+      mockedService.streamMessage.mockImplementationOnce(
+        streamOf(
+          [
+            { kind: 'delta', delta: 'partial' },
+            { kind: 'stream_incomplete' },
+          ],
+          'run-1',
+        ),
+      );
+      mockedService.reattachRun.mockRejectedValueOnce(NOT_LIVE);
+      mockedService.getMessages.mockResolvedValueOnce([
+        makeMessageRow({ id: 1, role: 'user', content: 'hi' }),
+        makeMessageRow({
+          id: 2,
+          role: 'assistant',
+          content: 'stored answer',
+          tokens: 7,
+          prompt_tokens: 4,
+          completion_tokens: 3,
+        }),
+      ]);
+
+      await act(async () => {
+        await useChatStore.getState().send('hi');
+      });
+
+      expect(mockedService.getMessages).toHaveBeenCalledWith(
+        'run-1',
+        expect.objectContaining({ signal: expect.any(AbortSignal) }),
+      );
+      expect(mockedService.streamMessage).toHaveBeenCalledTimes(1);
+      const state = useChatStore.getState();
+      expect(state.messages).toHaveLength(2);
+      expect(state.messages[1]).toEqual({
+        role: 'assistant',
+        content: 'stored answer',
+        usage: { prompt_tokens: 4, completion_tokens: 3, total_tokens: 7 },
+      });
+      expect(state.isStreaming).toBe(false);
+      expect(state.error).toBeNull();
+    });
+
+    it('a missing transcript row falls through to the resume re-POST which replaces the partial content', async () => {
+      mockedService.streamMessage
+        .mockImplementationOnce(
+          streamOf(
+            [
+              { kind: 'delta', delta: 'stale ' },
+              { kind: 'stream_incomplete' },
+            ],
+            'run-1',
+          ),
+        )
+        .mockImplementationOnce(
+          streamOf([
+            { kind: 'delta', delta: 'fresh' },
+            { kind: 'terminator' },
+          ]),
+        );
+      mockedService.reattachRun.mockRejectedValueOnce(NOT_LIVE);
+      mockedService.getMessages.mockResolvedValueOnce([
+        makeMessageRow({ id: 1, role: 'user', content: 'hi' }),
+      ]);
+
+      await act(async () => {
+        await useChatStore.getState().send('hi');
+      });
+
+      expect(mockedService.streamMessage).toHaveBeenCalledTimes(2);
+      const resumeOpts = mockedService.streamMessage.mock.calls[1][2] as {
+        runId?: string | null;
+      };
+      expect(resumeOpts.runId).toBe('run-1');
+      const state = useChatStore.getState();
+      expect(state.messages).toHaveLength(2);
+      expect(state.messages[1]?.content).toBe('fresh');
+      expect(state.messages[1]?.content).not.toContain('stale');
+      expect(state.isStreaming).toBe(false);
+      expect(state.error).toBeNull();
+    });
+
+    it('an interrupted re-attach re-enters the ladder and finishes on a later attempt', async () => {
+      vi.useFakeTimers();
+      try {
+        mockedService.streamMessage.mockImplementationOnce(
+          streamOf([{ kind: 'stream_incomplete' }], 'run-1'),
+        );
+        mockedService.reattachRun
+          .mockImplementationOnce(
+            streamOf([
+              { kind: 'delta', delta: 'again ' },
+              { kind: 'stream_incomplete' },
+            ]),
+          )
+          .mockImplementationOnce(streamOf([{ kind: 'terminator' }]));
+
+        let sendDone = false;
+        act(() => {
+          void useChatStore.getState().send('hi').then(() => {
+            sendDone = true;
+          });
+        });
+
+        await vi.advanceTimersByTimeAsync(50);
+        expect(mockedService.reattachRun).toHaveBeenCalledTimes(1);
+        expect(useChatStore.getState().isRecovering).toBe(true);
+        expect(useChatStore.getState().messages[1]?.content).toBe('again ');
+
+        await vi.advanceTimersByTimeAsync(1250);
+        expect(mockedService.reattachRun).toHaveBeenCalledTimes(2);
+
+        await vi.advanceTimersByTimeAsync(50);
+        expect(sendDone).toBe(true);
+        const state = useChatStore.getState();
+        expect(state.isStreaming).toBe(false);
+        expect(state.isRecovering).toBe(false);
+        expect(state.error).toBeNull();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('exhausting the ladder surfaces a visible error, keeps the partial row, and stops requesting', async () => {
+      vi.useFakeTimers();
+      try {
+        mockedService.streamMessage.mockImplementation(
+          streamOf(
+            [
+              { kind: 'delta', delta: 'kept' },
+              { kind: 'stream_incomplete' },
+            ],
+            'run-1',
+          ),
+        );
+        mockedService.reattachRun.mockRejectedValue(
+          new ChatStreamError({
+            kind: 'http',
+            status: 502,
+            message: 'bad gateway',
+            code: 502,
+          }),
+        );
+        mockedService.getMessages.mockResolvedValue([
+          makeMessageRow({ id: 1, role: 'user', content: 'hi' }),
+        ]);
+
+        act(() => {
+          void useChatStore.getState().send('hi');
+        });
+        await vi.runAllTimersAsync();
+
+        const state = useChatStore.getState();
+        expect(state.error).toBe(
+          'Connection to the agent was lost — recovery failed.',
+        );
+        expect(state.messages).toHaveLength(2);
+        expect(state.messages[1]?.content).toBe('kept');
+        expect(state.isStreaming).toBe(false);
+        expect(state.isRecovering).toBe(false);
+        expect(mockedService.reattachRun).toHaveBeenCalledTimes(3);
+        expect(mockedService.getMessages).toHaveBeenCalledTimes(3);
+        expect(mockedService.streamMessage).toHaveBeenCalledTimes(4);
+
+        await vi.advanceTimersByTimeAsync(30_000);
+        expect(mockedService.reattachRun).toHaveBeenCalledTimes(3);
+        expect(mockedService.getMessages).toHaveBeenCalledTimes(3);
+        expect(mockedService.streamMessage).toHaveBeenCalledTimes(4);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('cancel during recovery fires the cancel endpoint before aborting the ladder', async () => {
+      mockedService.streamMessage.mockImplementationOnce(
+        streamOf(
+          [
+            { kind: 'delta', delta: 'partial' },
+            { kind: 'stream_incomplete' },
+          ],
+          'run-1',
+        ),
+      );
+      let reattachSignal: AbortSignal | undefined;
+      let cancelSawAbort: boolean | undefined;
+      mockedService.reattachRun.mockImplementationOnce(
+        (_runId: unknown, signal: AbortSignal) => {
+          reattachSignal = signal;
+          return heldRung(signal);
+        },
+      );
+      mockedService.cancelRun.mockImplementationOnce(async () => {
+        cancelSawAbort = reattachSignal?.aborted;
+      });
+
+      act(() => {
+        void useChatStore.getState().send('hi');
+      });
+      await act(async () => {
+        await Promise.resolve();
+      });
+      expect(useChatStore.getState().isRecovering).toBe(true);
+
+      await act(async () => {
+        useChatStore.getState().cancel();
+      });
+
+      expect(mockedService.cancelRun).toHaveBeenCalledWith('run-1');
+      expect(cancelSawAbort).toBe(false);
+      expect(reattachSignal?.aborted).toBe(true);
+      const state = useChatStore.getState();
+      expect(state.isStreaming).toBe(false);
+      expect(state.isRecovering).toBe(false);
+      expect(state.messages).toHaveLength(1);
+    });
+
+    it('a new send during recovery is refused: the live run owns the session', async () => {
+      mockedService.streamMessage.mockImplementationOnce(
+        streamOf([{ kind: 'stream_incomplete' }], 'run-1'),
+      );
+      let reattachSignal: AbortSignal | undefined;
+      mockedService.reattachRun.mockImplementationOnce(
+        (_runId: unknown, signal: AbortSignal) => {
+          reattachSignal = signal;
+          return heldRung(signal);
+        },
+      );
+
+      act(() => {
+        void useChatStore.getState().send('first');
+      });
+      await act(async () => {
+        await Promise.resolve();
+      });
+      expect(useChatStore.getState().isRecovering).toBe(true);
+
+      await act(async () => {
+        await useChatStore.getState().send('second');
+      });
+
+      expect(mockedService.streamMessage).toHaveBeenCalledTimes(1);
+      const state = useChatStore.getState();
+      expect(
+        state.messages.every((m) => m.content !== 'second'),
+      ).toBe(true);
+      expect(state.runningSessionIds).toEqual(['run-1']);
+      expect(reattachSignal?.aborted).toBe(false);
+      expect(state.isRecovering).toBe(true);
+    });
+
+    it('navigation during recovery cancels the ladder and clears the recovering state', async () => {
+      mockedService.streamMessage.mockImplementationOnce(
+        streamOf([{ kind: 'stream_incomplete' }], 'run-1'),
+      );
+      let reattachSignal: AbortSignal | undefined;
+      mockedService.reattachRun.mockImplementationOnce(
+        (_runId: unknown, signal: AbortSignal) => {
+          reattachSignal = signal;
+          return heldRung(signal);
+        },
+      );
+
+      act(() => {
+        void useChatStore.getState().send('hi');
+      });
+      await act(async () => {
+        await Promise.resolve();
+      });
+      expect(useChatStore.getState().isRecovering).toBe(true);
+
+      await act(async () => {
+        await useChatStore.getState().setCurrentSession('sess-b');
+      });
+
+      expect(reattachSignal?.aborted).toBe(true);
+      const state = useChatStore.getState();
+      expect(state.isRecovering).toBe(false);
+      expect(state.runningSessionIds).toEqual(['run-1']);
+    });
+
+    it('a user_cancelled error frame renders as stopped-by-user instead of an error', async () => {
+      mockedService.streamMessage.mockImplementationOnce(
+        streamOf([
+          { kind: 'delta', delta: 'partial answer' },
+          {
+            kind: 'error',
+            error: 'run cancelled',
+            request_id: 'r1',
+            code: 'user_cancelled',
+          },
+        ]),
+      );
+
+      await act(async () => {
+        await useChatStore.getState().send('hi');
+      });
+
+      const state = useChatStore.getState();
+      expect(state.stoppedReason).toBe('user_cancelled');
+      expect(state.error).toBeNull();
+      expect(state.isStreaming).toBe(false);
+      expect(state.messages).toHaveLength(2);
+      expect(state.messages[1]?.content).toBe('partial answer');
+    });
+
+    it('a user_cancelled error frame before any delta drops the empty assistant row', async () => {
+      mockedService.streamMessage.mockImplementationOnce(
+        streamOf([
+          {
+            kind: 'error',
+            error: 'run cancelled',
+            request_id: 'r1',
+            code: 'user_cancelled',
+          },
+        ]),
+      );
+
+      await act(async () => {
+        await useChatStore.getState().send('hi');
+      });
+
+      const state = useChatStore.getState();
+      expect(state.stoppedReason).toBe('user_cancelled');
+      expect(state.error).toBeNull();
+      expect(state.messages).toHaveLength(1);
+    });
+
+    it('stopDetachedRun clears the marker, reloads the session, and refreshes the list on success', async () => {
+      useChatStore.setState({
+        currentSessionId: 'sess-a',
+        runningSessionIds: ['sess-a'],
+      });
+
+      await act(async () => {
+        await useChatStore.getState().stopDetachedRun('sess-a');
+      });
+
+      expect(mockedService.cancelRun).toHaveBeenCalledWith('sess-a');
+      expect(useChatStore.getState().runningSessionIds).toEqual([]);
+      expect(mockedService.getMessages).toHaveBeenCalledWith('sess-a');
+      expect(mockedService.listSessions).toHaveBeenCalled();
+    });
+
+    it('stopDetachedRun keeps the marker when the cancel endpoint fails', async () => {
+      useChatStore.setState({
+        currentSessionId: 'sess-a',
+        runningSessionIds: ['sess-a', 'sess-b'],
+      });
+      mockedService.cancelRun.mockRejectedValueOnce(new Error('network down'));
+
+      await act(async () => {
+        await useChatStore.getState().stopDetachedRun('sess-a');
+      });
+
+      expect(useChatStore.getState().runningSessionIds).toEqual([
+        'sess-a',
+        'sess-b',
+      ]);
+      expect(mockedService.getMessages).not.toHaveBeenCalled();
+    });
+
+    it('stopDetachedRun treats a 409 as "nothing left to stop" and clears the marker', async () => {
+      useChatStore.setState({
+        currentSessionId: 'sess-a',
+        runningSessionIds: ['sess-a', 'sess-b'],
+      });
+      const notLive = Object.assign(new Error('run not live'), {
+        response: { status: 409 },
+      });
+      mockedService.cancelRun.mockRejectedValueOnce(notLive);
+
+      await act(async () => {
+        await useChatStore.getState().stopDetachedRun('sess-a');
+      });
+
+      expect(useChatStore.getState().runningSessionIds).toEqual(['sess-b']);
+      expect(mockedService.getMessages).toHaveBeenCalledWith('sess-a');
+    });
+
+    it('resetForUser clears the recovering and stopped state', () => {
+      useChatStore.setState({
+        isRecovering: true,
+        stoppedReason: 'user_cancelled',
+      });
+
+      useChatStore.getState().resetForUser(1);
+      useChatStore.getState().resetForUser(2);
+
+      const state = useChatStore.getState();
+      expect(state.isRecovering).toBe(false);
+      expect(state.stoppedReason).toBeNull();
     });
   });
 });

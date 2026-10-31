@@ -1,0 +1,28 @@
+event: note
+data: {"text":"reattached","provider":null,"kind":"reattached","last_step_id":null,"run_id":"6b1f0c2e-7d3a-4e5f-8a9b-0c1d2e3f4a5b","failed_steps":[]}
+
+event: plan
+data: {"steps":[{"id":"step_1","kind":"tool","tool":"list_feeds","args":{}}]}
+
+event: step_start
+data: {"step_id":"step_1","kind":"tool"}
+
+event: tool_call
+data: {"step_id":"step_1","call_id":"step_1:replay","name":"list_feeds","args":{}}
+
+event: tool_result
+data: {"step_id":"step_1","call_id":"step_1:replay","ok":true,"result":{"items":[]},"retry_count":0}
+
+event: step_end
+data: {"step_id":"step_1","status":"ok","reason":""}
+
+: keep-alive
+
+event: delta
+data: {"delta":"re-attached answer"}
+
+event: done
+data: {"usage":{"prompt_tokens":12,"completion_tokens":7,"total_tokens":19}}
+
+data: [DONE]
+

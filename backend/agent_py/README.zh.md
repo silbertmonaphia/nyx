@@ -48,6 +48,8 @@ flowchart TB
 
 - `POST /agent/run` —— 入参 `{messages, agent?, model?, run_id?}`，出参 SSE（`plan`、`step_start`、`tool_call`、`tool_result`、`step_end`、`delta`、`done`、`note`、`error`、`terminator`）。
 - `GET|POST|DELETE /agent/sessions*` —— 历史侧边栏 API（列表 / 回放 / 新建 / 恢复 / 删除），经 `X-Nyx-User-Id` 按 owner 限定。
+- `GET /agent/runs/{run_id}/stream` —— 重新挂上活着的 run：`note{reattached}` → 回放已持久化的步骤事件 → 实时帧；经 `X-Nyx-User-Id` 按 owner 限定（终态/未知 run 返回 409 `run_not_live`，未开持久化返回 501）。
+- `POST /agent/runs/{run_id}/cancel` —— 主动停止活着的 run（`user_cancelled`，半截回答不落库），经 `X-Nyx-User-Id` 按 owner 限定。
 - `GET /agent/me/export` · `DELETE /agent/me` —— GDPR 主体导出 + 物理擦除（幂等，含 langGraph 线程，审计仅记计数）；`PYTHON_AGENT_GDPR_ENABLED=false` 时两者均返回 503。
 - `GET /healthz` —— Redis 可达时 `200 {"status":"ok"}`；否则 503。
 - `GET /metrics` —— Prometheus 指标，端口 :9001。
@@ -103,6 +105,9 @@ cd backend/agent_py && pytest tests/ -v
 | `PYTHON_AGENT_CHAT_RETENTION_DAYS` / `…_GRACE_DAYS` | `365` / `7` | 聊天历史保留期（下限 365 天）+ 软删除宽限期 |
 | `PYTHON_AGENT_PREFS_ENABLED` | `true` | 偏好抽取 + planner 注入的 kill switch |
 | `PYTHON_AGENT_GDPR_ENABLED` | `true` | GDPR 导出/擦除 kill switch（503，不碰任何数据） |
+| `PYTHON_AGENT_STREAM_DETACH_ENABLED` | `true` | run 的生命不再系于 SSE 连接；`false` 恢复“断连即取消 run” |
+| `PYTHON_AGENT_DETACHED_RUN_CAP_SECONDS` | `600` | detached run 的墙钟上限（超时标记失败） |
+| `PYTHON_AGENT_KEEPALIVE_SECONDS` | `15` | SSE 心跳注释帧的空闲间隔；`0` 关闭 |
 | `LANGFUSE_DEBUG` | 未设置 | Langfuse SDK 详细日志 —— 从**进程环境**读取（见下） |
 
 Langfuse 追踪可以直接从默认日志诊断：`PYTHON_AGENT_LANGFUSE_ENABLED=true` 时启动日志会给出所配置的 host，导出失败会打印 OTel exporter 的重试/丢弃诊断（尽力投递 —— 不影响运行本身）。需要 SDK 级详细输出时，在**进程环境**（shell、compose 的 `environment:`、systemd unit）里设 `LANGFUSE_DEBUG=true`：Langfuse SDK 直接读 `os.environ`，而本服务的 `.env` 由 pydantic-settings 加载、不会同步进 `os.environ` —— 只写 `.env` 没有效果。

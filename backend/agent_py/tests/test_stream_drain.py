@@ -1,10 +1,12 @@
-"""SSE drain + keep-alive — the main.py half of agent-feed-tools 4.3.
+"""SSE drain + keep-alive — the main.py half of agent-feed-tools 4.3,
+extended by agent-stream-resilience (configurable idle cadence).
 
 Pins the drain contract the paused-run UX depends on: event/comment items
-pass through in order, the channel's `None` closes the drain, and an idle
-run gets a protocol-legal keep-alive comment WITHOUT losing an item that
+pass through in order, the channel's `None` closes the drain, an idle run
+gets a protocol-legal keep-alive comment WITHOUT losing an item that
 lands at the timeout boundary (the pending get is carried across ticks,
-never cancelled mid-wait).
+never cancelled mid-wait), the cadence follows the Settings value, and 0
+disables the keep-alive entirely.
 """
 
 from __future__ import annotations
@@ -24,17 +26,16 @@ async def test_drain_forwards_items_in_order_and_ends_on_none():
     await queue.put(("comment", "from-run"))
     await queue.put(None)
 
-    drained = [item async for item in main_module._drain_run_queue(queue)]
+    drained = [
+        item async for item in main_module._drain_run_queue(queue, idle_seconds=5.0)
+    ]
     assert drained == [("event", event), ("comment", "from-run"), None]
 
 
-async def test_drain_emits_keepalive_after_idle_without_losing_boundary_item(
-    monkeypatch,
-):
-    monkeypatch.setattr(main_module, "_STREAM_KEEPALIVE_SECONDS", 0.05)
+async def test_drain_emits_keepalive_after_idle_without_losing_boundary_item():
     queue: asyncio.Queue = asyncio.Queue()
 
-    agen = main_module._drain_run_queue(queue)
+    agen = main_module._drain_run_queue(queue, idle_seconds=0.05)
     first = await asyncio.wait_for(agen.__anext__(), timeout=2)
     assert first == ("comment", "keep-alive")
 
@@ -53,16 +54,67 @@ async def test_drain_emits_keepalive_after_idle_without_losing_boundary_item(
     await agen.aclose()
 
 
-async def test_drain_closes_cleanly_when_cancelled_mid_wait(monkeypatch):
+async def test_drain_closes_cleanly_when_cancelled_mid_wait():
     """A client disconnect cancels the drain while its get is pending — the
     generator must finalize without wedging (the pending getter is an
     independent task; the drain cancels it in its finally)."""
-    monkeypatch.setattr(main_module, "_STREAM_KEEPALIVE_SECONDS", 5.0)
     queue: asyncio.Queue = asyncio.Queue()
-    agen = main_module._drain_run_queue(queue)
+    agen = main_module._drain_run_queue(queue, idle_seconds=5.0)
     task = asyncio.create_task(agen.__anext__())
     await asyncio.sleep(0.05)
     task.cancel()
     with pytest.raises(asyncio.CancelledError):
         await task
     await agen.aclose()
+
+
+async def test_drain_keepalive_resets_on_activity():
+    """agent-stream-resilience: the idle clock restarts on every delivered
+    item — the next keep-alive fires idle_seconds after the LAST item, not
+    since the drain started."""
+    queue: asyncio.Queue = asyncio.Queue()
+    agen = main_module._drain_run_queue(queue, idle_seconds=0.2)
+
+    event = Event(kind="delta", payload={"delta": "first"})
+    await queue.put(("event", event))
+    assert await asyncio.wait_for(agen.__anext__(), timeout=2) == (
+        "event",
+        event,
+    )
+
+    await asyncio.sleep(0.1)
+    await queue.put(("comment", "not-a-timeout"))
+    assert await asyncio.wait_for(agen.__anext__(), timeout=2) == (
+        "comment",
+        "not-a-timeout",
+    )
+
+    await queue.put(None)
+    await agen.aclose()
+
+
+async def test_drain_keepalive_disabled_at_zero():
+    """Spec scenario "Keepalive disabled by config": idle_seconds <= 0
+    yields no comment frames — an item arriving after a long idle comes
+    through directly."""
+    queue: asyncio.Queue = asyncio.Queue()
+    agen = main_module._drain_run_queue(queue, idle_seconds=0)
+    task = asyncio.create_task(agen.__anext__())
+    await asyncio.sleep(0.15)
+
+    event = Event(kind="delta", payload={"delta": "after-idle"})
+    await queue.put(("event", event))
+    assert await asyncio.wait_for(task, timeout=2) == ("event", event)
+
+    await queue.put(None)
+    assert await asyncio.wait_for(agen.__anext__(), timeout=2) is None
+    await agen.aclose()
+
+
+def test_drain_default_idle_matches_settings_default():
+    """The default cadence is today's hardcoded 15 s — an unconfigured
+    deployment keeps the pre-change wire cadence."""
+    import inspect
+
+    signature = inspect.signature(main_module._drain_run_queue)
+    assert signature.parameters["idle_seconds"].default == 15.0

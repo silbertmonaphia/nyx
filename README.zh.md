@@ -55,6 +55,7 @@ flowchart TB
 - **Plan-and-Execute 循环** —— planner 把你的请求拆解成带类型的步骤，executor 逐步执行，聊天 UI 通过 SSE 实时渲染每一步（`plan` → `step_start` → `tool_call` → `tool_result` → …）。
 - **工具** —— 你的 feed 条目（通过 MCP 工具面做 list / get / create / update / delete）、对自己条目的语义检索（RAG，pgvector）、web 搜索，以及带 SSRF 防护、按不可信内容封装的 web fetch。
 - **按生产标准打造** —— 运行状态持久化在 Postgres（配有 stale-run sweeper 与 retention GC）、每用户 token 预算、限流、有界重试并在 UI 中显示部分失败横幅、结构化 planner 输出配合有界 re-prompt。
+- **断线可自愈** —— 一次 run 的生命不再系于那条 SSE 连接：客户端断开不再杀死正在执行的工作，浏览器会自动重新挂上活着的 run；而“用户主动停止”是一个明确的动作，而不是靠摔断连接。
 - **可观测** —— 端到端 OpenTelemetry span、Prometheus 指标、可选的 Langfuse LLM tracing。
 - **任意 OpenAI 兼容模型** —— 开发默认是自托管 vLLM（Qwen3-4B-Instruct）；换成 OpenAI 只需要改配置。
 

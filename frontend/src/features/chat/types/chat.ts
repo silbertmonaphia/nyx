@@ -57,6 +57,7 @@ export type ChatError = {
 };
 export type ChatNote = { kind: "note"; text: string; provider: string };
 export type ChatTerminator = { kind: "terminator" };
+export type ChatStreamIncomplete = { kind: "stream_incomplete" };
 
 // New in the agent-tool-dispatch-retry slice: the orchestrator emits
 // `note{kind: "partial_failure", failed_steps: [...]}` SSE frames
@@ -164,6 +165,7 @@ export type ChatEvent =
   | ChatError
   | ChatNote
   | ChatTerminator
+  | ChatStreamIncomplete
   | ChatPlan
   | ChatStepStart
   | ChatToolCall
@@ -257,7 +259,12 @@ export class ChatStreamError extends Error {
   constructor(
     public readonly event:
       | ChatError
-      | { kind: "http"; status: number; message: string },
+      | {
+          kind: "http";
+          status: number;
+          message: string;
+          code?: string | number;
+        },
   ) {
     super(event.kind === "http" ? `HTTP ${event.status}: ${event.message}` : event.error);
     this.name = "ChatStreamError";

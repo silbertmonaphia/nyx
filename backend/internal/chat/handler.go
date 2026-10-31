@@ -94,6 +94,7 @@ func RegisterChatRoute(router chi.Router, h *Handler, tokens auth.TokenService, 
 			streamRoute = r.With(userLimiter.Middleware)
 		}
 		streamRoute.Post("/", h.stream)
+		streamRoute.Get("/runs/{run_id}/stream", h.runStream)
 
 		// Session REST surface (plain JSON, no SSE). Authenticated by
 		// the group's NewAuth; forwarded to PYTHON_AGENT_URL under
@@ -103,6 +104,8 @@ func RegisterChatRoute(router chi.Router, h *Handler, tokens auth.TokenService, 
 		r.Get("/sessions/{session_id}/messages", h.sessionsMessages)
 		r.Post("/sessions/{session_id}/resume", h.sessionsResume)
 		r.Delete("/sessions/{session_id}", h.sessionsDelete)
+
+		r.Post("/runs/{run_id}/cancel", h.runCancel)
 	})
 }
 

@@ -163,6 +163,11 @@ export const en: Translation = {
         expiredBody:
           'This request expired before a decision — the call was not executed.',
       },
+      recovery: {
+        reconnecting: 'Reconnecting…',
+        stopped: 'Generation stopped',
+        stopRun: 'Stop',
+      },
       errors: {
         decision: 'Could not send your decision. Please try again.',
         generic: 'Chat request failed',
@@ -171,6 +176,8 @@ export const en: Translation = {
         noBody: 'Chat response had no body',
         streamError: 'Chat stream error',
         sessionNoId: 'Chat session creation returned no id',
+        streamInterrupted:
+          'Connection to the agent was lost — recovery failed.',
       },
     },
     llmConfig: {

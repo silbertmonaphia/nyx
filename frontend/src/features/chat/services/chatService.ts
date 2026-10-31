@@ -35,6 +35,391 @@ const SESSIONS_URL = `${API_BASE}/chat/sessions`;
 // ever switches.
 const SSE_FRAME_DELIMITERS = ["\n\n", "\r\n\r\n"];
 
+const RUN_STREAM_URL_BASE = `${API_BASE}/chat/runs`;
+
+const SSE_KEEPALIVE_INTERVAL_MS = 15_000;
+
+export const READ_IDLE_TIMEOUT_MS = SSE_KEEPALIVE_INTERVAL_MS * 3;
+
+class ReadIdleError extends Error {
+  constructor() {
+    super("chat read idle timeout");
+    this.name = "ReadIdleError";
+  }
+}
+
+async function readChunkWithWatchdog(
+  reader: ReadableStreamDefaultReader<Uint8Array>,
+): Promise<ReadableStreamReadResult<Uint8Array>> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const idle = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new ReadIdleError()), READ_IDLE_TIMEOUT_MS);
+  });
+  idle.catch(() => {});
+  try {
+    return await Promise.race([reader.read(), idle]);
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
+  }
+}
+
+async function* consumeEventStream(
+  response: Response,
+  chained: AbortController,
+  signal: AbortSignal,
+  onRunId: ((id: string) => void) | undefined,
+): AsyncGenerator<ChatEvent> {
+  if (!response.body) {
+    throw new ChatStreamError({
+      kind: "http",
+      status: 500,
+      message: t("chat.errors.noBody"),
+    });
+  }
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder("utf-8");
+  let buffer = "";
+  let sawTerminal = false;
+  try {
+    while (true) {
+      let read: ReadableStreamReadResult<Uint8Array>;
+      try {
+        read = await readChunkWithWatchdog(reader);
+      } catch (err) {
+        if (err instanceof ReadIdleError) {
+          chained.abort();
+          yield { kind: "stream_incomplete" };
+          return;
+        }
+        if (signal.aborted) throw err;
+        yield { kind: "stream_incomplete" };
+        return;
+      }
+      if (read.done) break;
+      buffer += decoder.decode(read.value, { stream: true });
+
+      let consumed = 0;
+      while (true) {
+        let idx = -1;
+        let delimiterLen = 0;
+        for (const d of SSE_FRAME_DELIMITERS) {
+          const i = buffer.indexOf(d, consumed);
+          if (i !== -1 && (idx === -1 || i < idx)) {
+            idx = i;
+            delimiterLen = d.length;
+          }
+        }
+        if (idx === -1) break;
+
+        const frame = buffer.slice(consumed, idx);
+        consumed = idx + delimiterLen;
+
+        let currentEvent: string | null = null;
+        const currentData: string[] = [];
+        for (const rawLine of frame.split(/\r?\n/)) {
+          if (rawLine === "" || rawLine.startsWith(":")) continue;
+          const colon = rawLine.indexOf(":");
+          const field = colon === -1 ? rawLine : rawLine.slice(0, colon);
+          let value = colon === -1 ? "" : rawLine.slice(colon + 1);
+          if (value.startsWith(" ")) value = value.slice(1);
+          if (field === "event") {
+            currentEvent = value;
+          } else if (field === "data") {
+            currentData.push(value);
+          }
+        }
+
+        const dataStr = currentData.join("\n");
+        if (dataStr === "[DONE]") {
+          sawTerminal = true;
+          yield { kind: "terminator" };
+          return;
+        }
+        if (!dataStr) continue;
+        if (currentEvent === "run_id") {
+          try {
+            const parsed = JSON.parse(dataStr) as { run_id?: unknown };
+            if (typeof parsed.run_id === "string" && parsed.run_id !== "") {
+              onRunId?.(parsed.run_id);
+            }
+          } catch {}
+        } else if (currentEvent === "delta") {
+          try {
+            const parsed = JSON.parse(dataStr) as { delta?: unknown };
+            if (typeof parsed.delta === "string") {
+              yield { kind: "delta", delta: parsed.delta };
+            }
+          } catch {}
+        } else if (currentEvent === "done") {
+          try {
+            const parsed = JSON.parse(dataStr) as {
+              usage?: {
+                prompt_tokens?: unknown;
+                completion_tokens?: unknown;
+                total_tokens?: unknown;
+              };
+            };
+            const u = parsed.usage;
+            if (
+              u &&
+              typeof u.prompt_tokens === "number" &&
+              typeof u.completion_tokens === "number" &&
+              typeof u.total_tokens === "number"
+            ) {
+              yield {
+                kind: "done",
+                usage: {
+                  prompt_tokens: u.prompt_tokens,
+                  completion_tokens: u.completion_tokens,
+                  total_tokens: u.total_tokens,
+                },
+              };
+            }
+          } catch {}
+          sawTerminal = true;
+          yield { kind: "terminator" };
+          return;
+        } else if (currentEvent === "note") {
+          try {
+            const parsed = JSON.parse(dataStr) as {
+              text?: unknown;
+              provider?: unknown;
+              kind?: unknown;
+              failed_steps?: unknown;
+            };
+            if (
+              parsed.kind === "partial_failure" &&
+              Array.isArray(parsed.failed_steps) &&
+              parsed.failed_steps.every((s) => typeof s === "string")
+            ) {
+              yield {
+                kind: "partial_failure",
+                failedSteps: parsed.failed_steps as string[],
+              };
+            } else if (
+              typeof parsed.text === "string" &&
+              typeof parsed.provider === "string"
+            ) {
+              yield { kind: "note", text: parsed.text, provider: parsed.provider };
+            }
+          } catch {}
+        } else if (currentEvent === "error") {
+          try {
+            const parsed = JSON.parse(dataStr) as {
+              error?: unknown;
+              request_id?: unknown;
+              code?: unknown;
+            };
+            yield {
+              kind: "error",
+              error:
+                typeof parsed.error === "string"
+                  ? parsed.error
+                  : t("chat.errors.streamError"),
+              request_id:
+                typeof parsed.request_id === "string"
+                  ? parsed.request_id
+                  : "",
+              code: typeof parsed.code === "string" ? parsed.code : undefined,
+            };
+          } catch {
+            yield {
+              kind: "error",
+              error: t("chat.errors.streamError"),
+              request_id: "",
+            };
+          }
+          sawTerminal = true;
+          yield { kind: "terminator" };
+          return;
+        } else if (currentEvent === "plan") {
+          try {
+            const parsed = JSON.parse(dataStr) as {
+              steps?: unknown;
+            };
+            if (Array.isArray(parsed.steps)) {
+              const steps: import("../types/chat").ChatPlanStep[] = [];
+              for (const s of parsed.steps) {
+                if (!s || typeof s !== "object") continue;
+                const obj = s as Record<string, unknown>;
+                if (typeof obj.id !== "string") continue;
+                if (
+                  obj.kind !== "rag" &&
+                  obj.kind !== "tool" &&
+                  obj.kind !== "llm" &&
+                  obj.kind !== "react"
+                ) {
+                  continue;
+                }
+                steps.push({
+                  id: obj.id,
+                  kind: obj.kind,
+                  tool: typeof obj.tool === "string" ? obj.tool : undefined,
+                  args: obj.args,
+                  prompt:
+                    typeof obj.prompt === "string" ? obj.prompt : undefined,
+                  query:
+                    typeof obj.query === "string" ? obj.query : undefined,
+                  max_iterations:
+                    typeof obj.max_iterations === "number"
+                      ? obj.max_iterations
+                      : undefined,
+                });
+              }
+              yield { kind: "plan", steps };
+            }
+          } catch {}
+        } else if (currentEvent === "step_start") {
+          try {
+            const parsed = JSON.parse(dataStr) as {
+              step_id?: unknown;
+              kind?: unknown;
+            };
+            const id =
+              typeof parsed.step_id === "string" ? parsed.step_id : null;
+            const kind = parsed.kind;
+            if (
+              id !== null &&
+              (kind === "rag" ||
+                kind === "tool" ||
+                kind === "llm" ||
+                kind === "react")
+            ) {
+              yield {
+                kind: "step_start",
+                step_id: id,
+                step_kind: kind,
+              };
+            }
+          } catch {}
+        } else if (currentEvent === "confirm_request") {
+          try {
+            const parsed = JSON.parse(dataStr) as {
+              run_id?: unknown;
+              step_id?: unknown;
+              tool?: unknown;
+              args?: unknown;
+              approval_id?: unknown;
+              expires_at?: unknown;
+            };
+            if (
+              typeof parsed.run_id === "string" &&
+              parsed.run_id !== "" &&
+              typeof parsed.step_id === "string" &&
+              parsed.step_id !== "" &&
+              typeof parsed.tool === "string" &&
+              parsed.tool !== "" &&
+              typeof parsed.approval_id === "string" &&
+              parsed.approval_id !== "" &&
+              typeof parsed.expires_at === "number"
+            ) {
+              yield {
+                kind: "confirm_request",
+                run_id: parsed.run_id,
+                step_id: parsed.step_id,
+                tool: parsed.tool,
+                args: parsed.args,
+                approval_id: parsed.approval_id,
+                expires_at: parsed.expires_at,
+              };
+            } else {
+              console.warn(
+                "chat: confirm_request frame missing required fields",
+                parsed,
+              );
+            }
+          } catch {
+            console.warn("chat: malformed confirm_request frame", dataStr);
+          }
+        } else if (currentEvent === "tool_call") {
+          try {
+            const parsed = JSON.parse(dataStr) as {
+              step_id?: unknown;
+              call_id?: unknown;
+              name?: unknown;
+              args?: unknown;
+            };
+            if (
+              typeof parsed.step_id === "string" &&
+              typeof parsed.call_id === "string" &&
+              typeof parsed.name === "string"
+            ) {
+              yield {
+                kind: "tool_call",
+                step_id: parsed.step_id,
+                call_id: parsed.call_id,
+                name: parsed.name,
+                args: parsed.args,
+              };
+            }
+          } catch {}
+        } else if (currentEvent === "tool_result") {
+          try {
+            const parsed = JSON.parse(dataStr) as {
+              step_id?: unknown;
+              call_id?: unknown;
+              ok?: unknown;
+              result?: unknown;
+              error?: unknown;
+              retry_count?: unknown;
+            };
+            if (
+              typeof parsed.step_id === "string" &&
+              typeof parsed.call_id === "string"
+            ) {
+              yield {
+                kind: "tool_result",
+                step_id: parsed.step_id,
+                call_id: parsed.call_id,
+                ok: parsed.ok === true,
+                result: parsed.ok === true ? parsed.result : undefined,
+                error:
+                  typeof parsed.error === "string"
+                    ? parsed.error
+                    : undefined,
+                retryCount:
+                  typeof parsed.retry_count === "number"
+                    ? parsed.retry_count
+                    : undefined,
+              };
+            }
+          } catch {}
+        } else if (currentEvent === "step_end") {
+          try {
+            const parsed = JSON.parse(dataStr) as {
+              step_id?: unknown;
+              status?: unknown;
+              reason?: unknown;
+            };
+            if (
+              typeof parsed.step_id === "string" &&
+              (parsed.status === "ok" || parsed.status === "failed")
+            ) {
+              yield {
+                kind: "step_end",
+                step_id: parsed.step_id,
+                status: parsed.status,
+                reason:
+                  typeof parsed.reason === "string" ? parsed.reason : "",
+              };
+            }
+          } catch {}
+        }
+      }
+      if (consumed > 0) {
+        buffer = buffer.slice(consumed);
+      }
+    }
+    if (!sawTerminal) {
+      yield { kind: "stream_incomplete" };
+    }
+  } finally {
+    try {
+      reader.releaseLock();
+    } catch {}
+  }
+}
+
 /**
  * Build the request headers for a chat call. Bearer stamping mirrors
  * the axios request interceptor (services/api.ts:165-179); traceparent
@@ -232,452 +617,103 @@ export const chatService = {
     }
     // `model` is intentionally omitted — the backend ignores it for
     // v1 and the brief explicitly forbids a model picker in the UI.
-    let response = await fetch(CHAT_URL, {
-      method: "POST",
-      headers: buildHeaders(),
-      body: JSON.stringify(body),
-      signal,
-    });
+    const chained = new AbortController();
+    const onCallerAbort = () => chained.abort();
+    if (signal.aborted) onCallerAbort();
+    else signal.addEventListener("abort", onCallerAbort);
+    try {
+      let response = await fetch(CHAT_URL, {
+        method: "POST",
+        headers: buildHeaders(),
+        body: JSON.stringify(body),
+        signal: chained.signal,
+      });
 
-    if (response.status === 401 && tokenStore.getAccessToken() !== null) {
-      // Mirror the axios interceptor's refresh-on-401 contract.
-      // `refreshTokensAndReplay` is single-flight, so concurrent
-      // 401s (e.g. one from this fetch + one from a parallel axios
-      // call) collapse onto the same refresh.
-      const ok = await refreshTokensAndReplay();
-      if (ok) {
-        response = await fetch(CHAT_URL, {
-          method: "POST",
-          headers: buildHeaders(),
-          body: JSON.stringify(body),
-          signal,
+      if (response.status === 401 && tokenStore.getAccessToken() !== null) {
+        // Mirror the axios interceptor's refresh-on-401 contract.
+        // `refreshTokensAndReplay` is single-flight, so concurrent
+        // 401s (e.g. one from this fetch + one from a parallel axios
+        // call) collapse onto the same refresh.
+        const ok = await refreshTokensAndReplay();
+        if (ok) {
+          response = await fetch(CHAT_URL, {
+            method: "POST",
+            headers: buildHeaders(),
+            body: JSON.stringify(body),
+            signal: chained.signal,
+          });
+        }
+      }
+
+      if (!response.ok) {
+        // Pull the standard envelope so callers see the same shape as
+        // axios errors. Don't trust `err.Error()` to be safe to ship
+        // (SECURITY.md H7) — only the server-provided `error` field
+        // reaches the wire.
+        let envelope: ApiError | null = null;
+        try {
+          envelope = (await response.json()) as ApiError;
+        } catch {
+          // Body wasn't JSON — fall back to a generic message.
+        }
+        const message =
+          envelope?.error ?? t('chat.errors.requestFailed', { status: response.status });
+        throw new ChatStreamError({
+          kind: "http",
+          status: response.status,
+          message,
         });
       }
-    }
 
-    if (!response.ok) {
-      // Pull the standard envelope so callers see the same shape as
-      // axios errors. Don't trust `err.Error()` to be safe to ship
-      // (SECURITY.md H7) — only the server-provided `error` field
-      // reaches the wire.
-      let envelope: ApiError | null = null;
-      try {
-        envelope = (await response.json()) as ApiError;
-      } catch {
-        // Body wasn't JSON — fall back to a generic message.
-      }
-      const message =
-        envelope?.error ?? t('chat.errors.requestFailed', { status: response.status });
-      throw new ChatStreamError({
-        kind: "http",
-        status: response.status,
-        message,
-      });
-    }
-
-    if (!response.body) {
-      throw new ChatStreamError({
-        kind: "http",
-        status: 500,
-        message: t("chat.errors.noBody"),
-      });
-    }
-
-    const reader = response.body.getReader();
-    const decoder = new TextDecoder("utf-8");
-    let buffer = "";
-    let currentEvent: string | null = null;
-    let currentData: string[] = [];
-
-    try {
-      while (true) {
-        const { value, done } = await reader.read();
-        if (done) break;
-        buffer += decoder.decode(value, { stream: true });
-
-        // A frame may be split across chunks — split on every known
-        // delimiter and keep any trailing partial in `buffer`.
-        let consumed = 0;
-        while (true) {
-          let idx = -1;
-          let delimiterLen = 0;
-          for (const d of SSE_FRAME_DELIMITERS) {
-            const i = buffer.indexOf(d, consumed);
-            if (i !== -1 && (idx === -1 || i < idx)) {
-              idx = i;
-              delimiterLen = d.length;
-            }
-          }
-          if (idx === -1) break;
-
-          const frame = buffer.slice(consumed, idx);
-          consumed = idx + delimiterLen;
-
-          // Reset per-frame state and walk the frame's lines. SSE
-          // comments start with `:`; fields are `name: value`.
-          currentEvent = null;
-          currentData = [];
-          for (const rawLine of frame.split(/\r?\n/)) {
-            if (rawLine === "" || rawLine.startsWith(":")) continue;
-            const colon = rawLine.indexOf(":");
-            const field = colon === -1 ? rawLine : rawLine.slice(0, colon);
-            let value = colon === -1 ? "" : rawLine.slice(colon + 1);
-            if (value.startsWith(" ")) value = value.slice(1);
-            if (field === "event") {
-              currentEvent = value;
-            } else if (field === "data") {
-              currentData.push(value);
-            }
-            // `id` / `retry` are ignored — the brief defers
-            // EventSource-parser until we need them.
-          }
-
-          const dataStr = currentData.join("\n");
-          if (dataStr === "[DONE]") {
-            yield { kind: "terminator" };
-            return;
-          }
-          if (!dataStr) continue;
-          if (currentEvent === "run_id") {
-            // First frame of every run. Surfaced through the callback
-            // rather than the event union so the existing consumers
-            // (whose for-await loops exhaustively match on `kind`) are
-            // untouched — this slice adds no new ChatEvent variant.
-            try {
-              const parsed = JSON.parse(dataStr) as { run_id?: unknown };
-              if (typeof parsed.run_id === "string" && parsed.run_id !== "") {
-                opts.onRunId?.(parsed.run_id);
-              }
-            } catch {
-              // Drop a malformed run_id frame — the stream continues
-              // and the tab simply doesn't adopt the session.
-            }
-          } else if (currentEvent === "delta") {
-            try {
-              const parsed = JSON.parse(dataStr) as { delta?: unknown };
-              if (typeof parsed.delta === "string") {
-                yield { kind: "delta", delta: parsed.delta };
-              }
-            } catch {
-              // Malformed JSON — skip rather than tear the stream down.
-              // The server's framing is the source of truth; a single
-              // bad frame shouldn't kill the whole response.
-            }
-          } else if (currentEvent === "done") {
-            try {
-              const parsed = JSON.parse(dataStr) as {
-                usage?: {
-                  prompt_tokens?: unknown;
-                  completion_tokens?: unknown;
-                  total_tokens?: unknown;
-                };
-              };
-              const u = parsed.usage;
-              if (
-                u &&
-                typeof u.prompt_tokens === "number" &&
-                typeof u.completion_tokens === "number" &&
-                typeof u.total_tokens === "number"
-              ) {
-                yield {
-                  kind: "done",
-                  usage: {
-                    prompt_tokens: u.prompt_tokens,
-                    completion_tokens: u.completion_tokens,
-                    total_tokens: u.total_tokens,
-                  },
-                };
-              }
-            } catch {
-              // Treat malformed done as terminal — the server chose to
-              // end the stream; the UI just won't show usage.
-            }
-            yield { kind: "terminator" };
-            return;
-          } else if (currentEvent === "note") {
-            try {
-              const parsed = JSON.parse(dataStr) as {
-                text?: unknown;
-                provider?: unknown;
-                kind?: unknown;
-                failed_steps?: unknown;
-              };
-              if (
-                parsed.kind === "partial_failure" &&
-                Array.isArray(parsed.failed_steps) &&
-                parsed.failed_steps.every((s) => typeof s === "string")
-              ) {
-                // agent-tool-dispatch-retry: the run diverged from the
-                // plan; the UI renders a banner above the final answer.
-                // This variant carries `provider: null`, so it must be
-                // matched before the legacy text/provider check below.
-                yield {
-                  kind: "partial_failure",
-                  failedSteps: parsed.failed_steps as string[],
-                };
-              } else if (
-                typeof parsed.text === "string" &&
-                typeof parsed.provider === "string"
-              ) {
-                yield { kind: "note", text: parsed.text, provider: parsed.provider };
-              }
-            } catch {
-              // Malformed note frame — drop it; mirrors the error-frame
-              // precedent so a bad frame can't tear down the stream.
-            }
-          } else if (currentEvent === "error") {
-            try {
-              const parsed = JSON.parse(dataStr) as {
-                error?: unknown;
-                request_id?: unknown;
-                code?: unknown;
-              };
-              yield {
-                kind: "error",
-                error:
-                  typeof parsed.error === "string"
-                    ? parsed.error
-                    : t("chat.errors.streamError"),
-                request_id:
-                  typeof parsed.request_id === "string"
-                    ? parsed.request_id
-                    : "",
-                code: typeof parsed.code === "string" ? parsed.code : undefined,
-              };
-            } catch {
-              yield {
-                kind: "error",
-                error: t("chat.errors.streamError"),
-                request_id: "",
-              };
-            }
-            yield { kind: "terminator" };
-            return;
-          } else if (currentEvent === "plan") {
-            // Agent-loop `plan` event — once per run, before any
-            // step. Steps are seeded with whatever the planner
-            // emitted (id + kind + kind-specific optionals). The
-            // store mirrors the array verbatim so each step has a
-            // row to update as `step_start` / `tool_call` / etc.
-            // stream. Malformed frames drop silently — a bad plan
-            // shouldn't tear the whole stream down.
-            try {
-              const parsed = JSON.parse(dataStr) as {
-                steps?: unknown;
-              };
-              if (Array.isArray(parsed.steps)) {
-                const steps: import("../types/chat").ChatPlanStep[] = [];
-                for (const s of parsed.steps) {
-                  if (!s || typeof s !== "object") continue;
-                  const obj = s as Record<string, unknown>;
-                  if (typeof obj.id !== "string") continue;
-                  if (
-                    obj.kind !== "rag" &&
-                    obj.kind !== "tool" &&
-                    obj.kind !== "llm" &&
-                    obj.kind !== "react"
-                  ) {
-                    continue;
-                  }
-                  steps.push({
-                    id: obj.id,
-                    kind: obj.kind,
-                    tool: typeof obj.tool === "string" ? obj.tool : undefined,
-                    args: obj.args,
-                    prompt:
-                      typeof obj.prompt === "string" ? obj.prompt : undefined,
-                    query:
-                      typeof obj.query === "string" ? obj.query : undefined,
-                    max_iterations:
-                      typeof obj.max_iterations === "number"
-                        ? obj.max_iterations
-                        : undefined,
-                  });
-                }
-                yield { kind: "plan", steps };
-              }
-            } catch {
-              // Drop malformed plan frame; the run trace will be
-              // partial but the stream stays alive.
-            }
-          } else if (currentEvent === "step_start") {
-            try {
-              const parsed = JSON.parse(dataStr) as {
-                step_id?: unknown;
-                kind?: unknown;
-              };
-              const id =
-                typeof parsed.step_id === "string" ? parsed.step_id : null;
-              const kind = parsed.kind;
-              if (
-                id !== null &&
-                (kind === "rag" ||
-                  kind === "tool" ||
-                  kind === "llm" ||
-                  kind === "react")
-              ) {
-                yield {
-                  kind: "step_start",
-                  step_id: id,
-                  step_kind: kind,
-                };
-              }
-            } catch {
-              // Drop malformed step_start frame.
-            }
-          } else if (currentEvent === "confirm_request") {
-            // Mutating-call confirmation (agent-feed-tools §6.1): the
-            // run is paused inside the same stream until the decision
-            // POST lands. Additive kind — the parser skips unknown
-            // kinds anyway, so pre-change consumers are unaffected.
-            // Required fields per the spec: run id, step id, tool,
-            // args (masked like `tool_call`), approval id, expiry.
-            // `expires_at` is epoch seconds — a JSON number matching
-            // the producer's `float` field, not an ISO string. A frame
-            // missing any required field is dropped; a bad frame must
-            // not tear the stream down.
-            try {
-              const parsed = JSON.parse(dataStr) as {
-                run_id?: unknown;
-                step_id?: unknown;
-                tool?: unknown;
-                args?: unknown;
-                approval_id?: unknown;
-                expires_at?: unknown;
-              };
-              if (
-                typeof parsed.run_id === "string" &&
-                parsed.run_id !== "" &&
-                typeof parsed.step_id === "string" &&
-                parsed.step_id !== "" &&
-                typeof parsed.tool === "string" &&
-                parsed.tool !== "" &&
-                typeof parsed.approval_id === "string" &&
-                parsed.approval_id !== "" &&
-                typeof parsed.expires_at === "number"
-              ) {
-                yield {
-                  kind: "confirm_request",
-                  run_id: parsed.run_id,
-                  step_id: parsed.step_id,
-                  tool: parsed.tool,
-                  args: parsed.args,
-                  approval_id: parsed.approval_id,
-                  expires_at: parsed.expires_at,
-                };
-              } else {
-                // A producer-side wire drift (renamed field, changed
-                // type) would otherwise silently present "no card" for
-                // the whole approval TTL — make it diagnosable
-                // (review round 1).
-                console.warn(
-                  "chat: confirm_request frame missing required fields",
-                  parsed,
-                );
-              }
-            } catch {
-              // Drop malformed confirm_request frame — warn so wire
-              // drift is diagnosable instead of silently hiding the
-              // card (review round 1).
-              console.warn("chat: malformed confirm_request frame", dataStr);
-            }
-          } else if (currentEvent === "tool_call") {
-            try {
-              const parsed = JSON.parse(dataStr) as {
-                step_id?: unknown;
-                call_id?: unknown;
-                name?: unknown;
-                args?: unknown;
-              };
-              if (
-                typeof parsed.step_id === "string" &&
-                typeof parsed.call_id === "string" &&
-                typeof parsed.name === "string"
-              ) {
-                yield {
-                  kind: "tool_call",
-                  step_id: parsed.step_id,
-                  call_id: parsed.call_id,
-                  name: parsed.name,
-                  args: parsed.args,
-                };
-              }
-            } catch {
-              // Drop malformed tool_call frame.
-            }
-          } else if (currentEvent === "tool_result") {
-            try {
-              const parsed = JSON.parse(dataStr) as {
-                step_id?: unknown;
-                call_id?: unknown;
-                ok?: unknown;
-                result?: unknown;
-                error?: unknown;
-                retry_count?: unknown;
-              };
-              if (
-                typeof parsed.step_id === "string" &&
-                typeof parsed.call_id === "string"
-              ) {
-                yield {
-                  kind: "tool_result",
-                  step_id: parsed.step_id,
-                  call_id: parsed.call_id,
-                  ok: parsed.ok === true,
-                  result: parsed.ok === true ? parsed.result : undefined,
-                  error:
-                    typeof parsed.error === "string" ? parsed.error : undefined,
-                  // Additive (agent-tool-dispatch-retry §3.2): absent on
-                  // frames from older servers, in which case the step row
-                  // simply shows no retry badge.
-                  retryCount:
-                    typeof parsed.retry_count === "number"
-                      ? parsed.retry_count
-                      : undefined,
-                };
-              }
-            } catch {
-              // Drop malformed tool_result frame.
-            }
-          } else if (currentEvent === "step_end") {
-            try {
-              const parsed = JSON.parse(dataStr) as {
-                step_id?: unknown;
-                status?: unknown;
-                reason?: unknown;
-              };
-              if (
-                typeof parsed.step_id === "string" &&
-                (parsed.status === "ok" || parsed.status === "failed")
-              ) {
-                yield {
-                  kind: "step_end",
-                  step_id: parsed.step_id,
-                  status: parsed.status,
-                  reason:
-                    typeof parsed.reason === "string" ? parsed.reason : "",
-                };
-              }
-            } catch {
-              // Drop malformed step_end frame.
-            }
-          }
-          // Unrecognised event types are ignored — the brief defers
-          // new event types until we need them.
-        }
-        if (consumed > 0) {
-          buffer = buffer.slice(consumed);
-        }
-      }
+      yield* consumeEventStream(response, chained, signal, opts.onRunId);
     } finally {
-      // The generator's `finally` runs on early return, throw, and
-      // caller-driven `break`. Release the reader so the socket can
-      // close — otherwise a cancelled stream leaks a pending fetch.
-      try {
-        reader.releaseLock();
-      } catch {
-        // already released — ignore
+      signal.removeEventListener("abort", onCallerAbort);
+    }
+  },
+
+  async *reattachRun(
+    runId: string,
+    signal: AbortSignal,
+    opts: { onRunId?: (id: string) => void } = {},
+  ): AsyncGenerator<ChatEvent> {
+    const url = `${RUN_STREAM_URL_BASE}/${encodeURIComponent(runId)}/stream`;
+    const chained = new AbortController();
+    const onCallerAbort = () => chained.abort();
+    if (signal.aborted) onCallerAbort();
+    else signal.addEventListener("abort", onCallerAbort);
+    try {
+      let response = await fetch(url, {
+        method: "GET",
+        headers: buildHeaders(),
+        signal: chained.signal,
+      });
+      if (response.status === 401 && tokenStore.getAccessToken() !== null) {
+        const ok = await refreshTokensAndReplay();
+        if (ok) {
+          response = await fetch(url, {
+            method: "GET",
+            headers: buildHeaders(),
+            signal: chained.signal,
+          });
+        }
       }
+      if (!response.ok) {
+        let envelope: ApiError | null = null;
+        try {
+          envelope = (await response.json()) as ApiError;
+        } catch {}
+        throw new ChatStreamError({
+          kind: "http",
+          status: response.status,
+          message:
+            envelope?.error ??
+            t('chat.errors.requestFailed', { status: response.status }),
+          code: envelope?.code,
+        });
+      }
+      yield* consumeEventStream(response, chained, signal, opts.onRunId);
+    } finally {
+      signal.removeEventListener("abort", onCallerAbort);
     }
   },
 
@@ -698,6 +734,13 @@ export const chatService = {
    */
   async submitApproval(body: ApprovalRequest): Promise<void> {
     await api.post("/chat/approvals", body);
+  },
+
+  async cancelRun(runId: string): Promise<void> {
+    await api.post(`/chat/runs/${encodeURIComponent(runId)}/cancel`, null, {
+      skipErrorToast: true,
+      skipSentry: true,
+    });
   },
 
   /**
@@ -740,9 +783,13 @@ export const chatService = {
    * chronological order. 404 (deleted / reaped / another user's
    * session) throws `ChatApiError` with `status: 404`.
    */
-  async getMessages(sessionId: string): Promise<SessionMessage[]> {
+  async getMessages(
+    sessionId: string,
+    opts: { signal?: AbortSignal } = {},
+  ): Promise<SessionMessage[]> {
     const data = await requestJson<{ messages?: unknown }>(
       `${SESSIONS_URL}/${encodeURIComponent(sessionId)}/messages`,
+      { signal: opts.signal },
     );
     const rows = Array.isArray(data?.messages) ? data.messages : [];
     return rows

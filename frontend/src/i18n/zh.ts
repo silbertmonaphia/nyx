@@ -148,6 +148,11 @@ export const zh = {
         deniedBody: '已拒绝 — 已告知助手该调用被拒绝。',
         expiredBody: '该请求在做出决定前已过期 — 该调用未被执行。',
       },
+      recovery: {
+        reconnecting: '正在重新连接…',
+        stopped: '生成已停止',
+        stopRun: '停止',
+      },
       errors: {
         decision: '无法发送你的决定，请重试。',
         generic: '聊天请求失败',
@@ -156,6 +161,7 @@ export const zh = {
         noBody: '聊天响应没有响应体',
         streamError: '聊天流错误',
         sessionNoId: '聊天会话创建未返回 id',
+        streamInterrupted: '与助手的连接已断开 — 恢复失败。',
       },
     },
     llmConfig: {

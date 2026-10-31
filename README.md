@@ -66,6 +66,9 @@ off by default. Full production topology → [`README_FULL.md` § Architecture](
 - **Built for production** — runs persisted in Postgres (with a stale-run sweeper and retention
   GC), per-user token budget, rate limiting, bounded retries with a partial-failure banner in
   the UI, structured planner output with re-prompts.
+- **Survives a broken connection** — a run outlives its SSE connection: a client disconnect no
+  longer kills the work, the browser re-attaches to the live run on its own, and a deliberate
+  stop is an explicit action rather than a dropped connection.
 - **Observable** — OpenTelemetry spans end-to-end, Prometheus counters, optional Langfuse LLM
   tracing.
 - **Any OpenAI-compatible model** — the dev default is a self-hosted vLLM (Qwen3-4B-Instruct);

@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { chatService } from './chatService';
+import { chatService, READ_IDLE_TIMEOUT_MS } from './chatService';
 import { ChatApiError, ChatStreamError } from '../types/chat';
 import api, { tokenStore, refreshTokensAndReplay } from '~/services/api';
 import * as telemetry from '~/services/telemetry';
@@ -23,6 +23,7 @@ import * as telemetry from '~/services/telemetry';
 // `import.meta.url` is not an option (jsdom rewrites it to an `http://`
 // URL, which `fileURLToPath` rejects).
 import CONFIRM_FRAME from './__fixtures__/confirm_request.sse?raw';
+import REATTACH_STREAM from './__fixtures__/reattach_stream.sse?raw';
 import STEP_TRACE_WIRE from './__fixtures__/step_trace.json';
 
 // The chatService uses raw `fetch` for SSE (axios can't stream), and
@@ -352,7 +353,8 @@ describe('chatService.streamMessage', () => {
 
     // The fetch was issued with the consumer's signal.
     const init = fetchMock.mock.calls[0][1] as RequestInit;
-    expect(init.signal).toBe(ctrl.signal);
+    expect((init.signal as AbortSignal).aborted).toBe(false);
+    expect(init.signal).not.toBe(ctrl.signal);
 
     // Aborting the controller must abort the fetch — DOMException
     // is what fetch throws when its signal fires.
@@ -928,6 +930,119 @@ describe('chatService.streamMessage', () => {
       { kind: 'delta', delta: 'hi' },
       { kind: 'terminator' },
     ]);
+  });
+});
+
+describe('chatService re-attach wire contract', () => {
+  beforeEach(() => {
+    fetchMock.mockReset();
+    mockedRefresh.mockReset();
+    tokenStore.clear();
+  });
+
+  it('parses the producer-pinned re-attach stream through the real parser', async () => {
+    fetchMock.mockResolvedValueOnce(sseResponse([REATTACH_STREAM]));
+
+    const events: unknown[] = [];
+    for await (const e of chatService.reattachRun(
+      '6b1f0c2e-7d3a-4e5f-8a9b-0c1d2e3f4a5b',
+      new AbortController().signal,
+    )) {
+      events.push(e);
+    }
+
+    expect(events).toEqual([
+      { kind: 'plan', steps: [{ id: 'step_1', kind: 'tool', tool: 'list_feeds', args: {} }] },
+      { kind: 'step_start', step_id: 'step_1', step_kind: 'tool' },
+      { kind: 'tool_call', step_id: 'step_1', call_id: 'step_1:replay', name: 'list_feeds', args: {} },
+      { kind: 'tool_result', step_id: 'step_1', call_id: 'step_1:replay', ok: true, result: { items: [] }, retryCount: 0 },
+      { kind: 'step_end', step_id: 'step_1', status: 'ok', reason: '' },
+      { kind: 'delta', delta: 're-attached answer' },
+      { kind: 'done', usage: { prompt_tokens: 12, completion_tokens: 7, total_tokens: 19 } },
+      { kind: 'terminator' },
+    ]);
+  });
+
+  it('skips the keep-alive comment frame without disturbing its neighbours', async () => {
+    fetchMock.mockResolvedValueOnce(sseResponse([REATTACH_STREAM]));
+
+    const kinds: string[] = [];
+    for await (const e of chatService.reattachRun(
+      'run-1',
+      new AbortController().signal,
+    )) {
+      kinds.push(e.kind);
+    }
+
+    expect(kinds).not.toContain('keep-alive');
+    expect(kinds).toContain('delta');
+  });
+
+  it('signals an incomplete stream when the body ends without a terminal', async () => {
+    const sse =
+      'event: delta\ndata: {"delta":"half an answer"}\n\n' +
+      ': keep-alive\n\n' +
+      'event: delta\ndata: {"delta":" and more"}\n\n';
+    fetchMock.mockResolvedValueOnce(sseResponse([sse]));
+
+    const events: unknown[] = [];
+    for await (const e of chatService.streamMessage(
+      [{ role: 'user', content: 'hi' }],
+      new AbortController().signal,
+    )) {
+      events.push(e);
+    }
+
+    expect(events).toEqual([
+      { kind: 'delta', delta: 'half an answer' },
+      { kind: 'delta', delta: ' and more' },
+      { kind: 'stream_incomplete' },
+    ]);
+  });
+
+  it('signals an incomplete stream when the body is cut mid-frame', async () => {
+    fetchMock.mockResolvedValueOnce(
+      sseResponse(['event: delta\ndata: {"delta":"cut off here"']),
+    );
+
+    const events: unknown[] = [];
+    for await (const e of chatService.streamMessage(
+      [{ role: 'user', content: 'hi' }],
+      new AbortController().signal,
+    )) {
+      events.push(e);
+    }
+
+    expect(events).toEqual([{ kind: 'stream_incomplete' }]);
+  });
+
+  it('the read-idle watchdog aborts a silently dead stream', async () => {
+    vi.useFakeTimers();
+    try {
+      const hanging = new ReadableStream<Uint8Array>({ start() {} });
+      fetchMock.mockResolvedValueOnce(
+        new Response(hanging, {
+          status: 200,
+          headers: { 'content-type': 'text/event-stream' },
+        }),
+      );
+
+      const gen = chatService.streamMessage(
+        [{ role: 'user', content: 'hi' }],
+        new AbortController().signal,
+      );
+      const pending = gen.next();
+      await vi.advanceTimersByTimeAsync(READ_IDLE_TIMEOUT_MS + 1_000);
+
+      const result = await pending;
+      expect(result.value).toEqual({ kind: 'stream_incomplete' });
+      const requestSignal = fetchMock.mock.calls[0][1]?.signal as AbortSignal;
+      expect(requestSignal.aborted).toBe(true);
+
+      await gen.return(undefined);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 

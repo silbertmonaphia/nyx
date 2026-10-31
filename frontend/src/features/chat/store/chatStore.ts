@@ -7,6 +7,7 @@ import {
   ChatApiError,
   ChatStreamError,
   type ApprovalDecision,
+  type ChatEvent,
   type ChatStep,
   type ChatStepConfirm,
   type Message,
@@ -47,6 +48,8 @@ export interface ChatMessage {
 interface ChatState {
   messages: ChatMessage[];
   isStreaming: boolean;
+  isRecovering: boolean;
+  stoppedReason: "user_cancelled" | null;
   error: string | null;
   llmGateOpen: boolean;
   setLlmGateOpen: (open: boolean) => void;
@@ -163,6 +166,7 @@ interface ChatState {
    * active session also clears the panel.
    */
   deleteSession: (id: string) => Promise<void>;
+  stopDetachedRun: (sessionId: string) => Promise<void>;
 }
 
 // Module-level singleton so the abort controller survives across
@@ -186,6 +190,14 @@ let attachedToken: number | null = null;
 // parser, so no store event fires. Set and cleared by the stream that
 // owns it.
 let detachHook: (() => void) | null = null;
+let activeRunId: string | null = null;
+let recoveryController: AbortController | null = null;
+
+function cancelRecoveryLadder(): void {
+  if (recoveryController === null) return;
+  recoveryController.abort();
+  recoveryController = null;
+}
 
 // sessionStorage key for the active session id. Per-tab: closing
 // the tab forgets the conversation, a reload does not (design.md D4 —
@@ -271,6 +283,12 @@ function isApprovalExpired(err: unknown): boolean {
   const status = (err as { response?: { status?: number } } | null)?.response
     ?.status;
   return status === 404;
+}
+
+function isRunNotLive(err: unknown): boolean {
+  const status = (err as { response?: { status?: number } } | null)?.response
+    ?.status;
+  return status === 409;
 }
 
 /**
@@ -437,6 +455,412 @@ async function loadSessionInto(
   }
 }
 
+const LADDER_MAX_ATTEMPTS = 3;
+const RECOVERY_BACKOFF_BASE_MS = 1_000;
+
+type RungOutcome =
+  | "finished"
+  | "incomplete"
+  | "failed"
+  | "cancelled"
+  | "stopped";
+
+type LadderOutcome = "finished" | "cancelled" | "exhausted" | "stopped";
+
+interface LadderContext {
+  set: ChatSet;
+  runId: string | null;
+  sessionId: string | null;
+  messages: Message[];
+  userText: string;
+  assistantIndex: number;
+  signal: AbortSignal;
+  controller: AbortController;
+  isLive: () => boolean;
+  onRunId: (id: string) => void;
+}
+
+function isAbortError(err: unknown): boolean {
+  return (err as { name?: string } | null)?.name === "AbortError";
+}
+
+function isRecoveryCancelled(err: unknown, live: () => boolean): boolean {
+  return !live() || isAbortError(err);
+}
+
+function backoffDelay(signal: AbortSignal, ms: number): Promise<boolean> {
+  return new Promise((resolve) => {
+    if (signal.aborted) {
+      resolve(false);
+      return;
+    }
+    const timer = setTimeout(() => {
+      cleanup();
+      resolve(true);
+    }, ms);
+    const onAbort = () => {
+      cleanup();
+      resolve(false);
+    };
+    const cleanup = () => {
+      clearTimeout(timer);
+      signal.removeEventListener("abort", onAbort);
+    };
+    signal.addEventListener("abort", onAbort);
+  });
+}
+
+function backoffForAttempt(
+  signal: AbortSignal,
+  attempt: number,
+): Promise<boolean> {
+  const base = RECOVERY_BACKOFF_BASE_MS * 2 ** (attempt - 1);
+  const jittered = base * (0.8 + Math.random() * 0.4);
+  return backoffDelay(signal, jittered);
+}
+
+function applyStoppedTurn(set: ChatSet, assistantIndex: number): void {
+  set((state) => {
+    const assistant = state.messages[assistantIndex];
+    const hasContent =
+      assistant?.role === "assistant" && assistant.content.length > 0;
+    return {
+      stoppedReason: "user_cancelled",
+      messages: hasContent
+        ? state.messages.slice(0, assistantIndex + 1)
+        : state.messages.slice(0, assistantIndex),
+    };
+  });
+}
+
+function applyChatEvent(
+  set: ChatSet,
+  assistantIndex: number,
+  event: ChatEvent,
+  replaceDelta = false,
+): void {
+  if (event.kind === "delta") {
+    set((state) => {
+      const next = state.messages.slice();
+      const target = next[assistantIndex];
+      if (!target || target.role !== "assistant") return state;
+      next[assistantIndex] = {
+        ...target,
+        content: replaceDelta ? event.delta : target.content + event.delta,
+      };
+      return { messages: next };
+    });
+    return;
+  }
+  if (event.kind === "done") {
+    set((state) => {
+      const next = state.messages.slice();
+      const target = next[assistantIndex];
+      if (!target || target.role !== "assistant") return state;
+      next[assistantIndex] = {
+        ...target,
+        usage: event.usage,
+      };
+      return { messages: next };
+    });
+    return;
+  }
+  if (event.kind === "note") {
+    set((state) => {
+      const next = state.messages.slice();
+      const target = next[assistantIndex];
+      if (!target || target.role !== "assistant") return state;
+      next[assistantIndex] = {
+        ...target,
+        notes: [...(target.notes ?? []), event.text],
+      };
+      return { messages: next };
+    });
+    return;
+  }
+  if (event.kind === "plan") {
+    set((state) => {
+      const next = state.messages.slice();
+      const target = next[assistantIndex];
+      if (!target || target.role !== "assistant") return state;
+      const steps: ChatStep[] = event.steps.map((s) => ({
+        id: s.id,
+        kind: s.kind,
+        status: "running",
+        toolName: s.tool,
+        toolArgs: s.args,
+      }));
+      next[assistantIndex] = { ...target, steps };
+      return { messages: next };
+    });
+    return;
+  }
+  if (event.kind === "step_start") {
+    set((state) => {
+      const next = state.messages.slice();
+      const target = next[assistantIndex];
+      if (!target || target.role !== "assistant") return state;
+      const steps = (target.steps ?? []).slice();
+      const idx = steps.findIndex((s) => s.id === event.step_id);
+      if (idx >= 0) {
+        steps[idx] = {
+          ...steps[idx],
+          kind: event.step_kind,
+          status: "running",
+        };
+      } else {
+        steps.push({
+          id: event.step_id,
+          kind: event.step_kind,
+          status: "running",
+        });
+      }
+      next[assistantIndex] = { ...target, steps };
+      return { messages: next };
+    });
+    return;
+  }
+  if (event.kind === "confirm_request") {
+    set((state) => {
+      const next = state.messages.slice();
+      const target = next[assistantIndex];
+      if (!target || target.role !== "assistant") return state;
+      const steps = (target.steps ?? []).slice();
+      const confirm: ChatStepConfirm = {
+        runId: event.run_id,
+        approvalId: event.approval_id,
+        tool: event.tool,
+        args: event.args,
+        expiresAt: event.expires_at,
+        decision: "pending",
+      };
+      const idx = steps.findIndex((s) => s.id === event.step_id);
+      if (idx >= 0) {
+        steps[idx] = {
+          ...steps[idx],
+          toolName: event.tool,
+          toolArgs: event.args,
+          confirm,
+        };
+      } else {
+        steps.push({
+          id: event.step_id,
+          kind: "tool",
+          status: "running",
+          toolName: event.tool,
+          toolArgs: event.args,
+          confirm,
+        });
+      }
+      next[assistantIndex] = { ...target, steps };
+      return { messages: next };
+    });
+    return;
+  }
+  if (event.kind === "tool_call") {
+    set((state) => {
+      const next = state.messages.slice();
+      const target = next[assistantIndex];
+      if (!target || target.role !== "assistant") return state;
+      const steps = (target.steps ?? []).slice();
+      const idx = steps.findIndex((s) => s.id === event.step_id);
+      if (idx >= 0) {
+        steps[idx] = {
+          ...steps[idx],
+          toolName: event.name,
+          toolArgs: event.args,
+        };
+        next[assistantIndex] = { ...target, steps };
+      }
+      return { messages: next };
+    });
+    return;
+  }
+  if (event.kind === "tool_result") {
+    set((state) => {
+      const next = state.messages.slice();
+      const target = next[assistantIndex];
+      if (!target || target.role !== "assistant") return state;
+      const steps = (target.steps ?? []).slice();
+      const idx = steps.findIndex((s) => s.id === event.step_id);
+      if (idx >= 0) {
+        steps[idx] = {
+          ...steps[idx],
+          toolResult: event.ok ? event.result : event.error,
+          retryCount: event.retryCount,
+        };
+        next[assistantIndex] = { ...target, steps };
+      }
+      return { messages: next };
+    });
+    return;
+  }
+  if (event.kind === "partial_failure") {
+    set((state) => {
+      const next = state.messages.slice();
+      const target = next[assistantIndex];
+      if (!target || target.role !== "assistant") return state;
+      next[assistantIndex] = {
+        ...target,
+        partialFailure: { failedSteps: event.failedSteps },
+      };
+      return { messages: next };
+    });
+    return;
+  }
+  if (event.kind === "step_end") {
+    set((state) => {
+      const next = state.messages.slice();
+      const target = next[assistantIndex];
+      if (!target || target.role !== "assistant") return state;
+      const steps = (target.steps ?? []).slice();
+      const idx = steps.findIndex((s) => s.id === event.step_id);
+      if (idx >= 0) {
+        steps[idx] = {
+          ...steps[idx],
+          status: event.status === "ok" ? "ok" : "failed",
+          reason: event.reason || undefined,
+        };
+        next[assistantIndex] = { ...target, steps };
+      }
+      return { messages: next };
+    });
+    return;
+  }
+}
+
+async function consumeRecoveryStream(
+  ctx: LadderContext,
+  stream: AsyncGenerator<ChatEvent>,
+  replaceFirstDelta: boolean,
+): Promise<RungOutcome> {
+  let replace = replaceFirstDelta;
+  try {
+    for await (const event of stream) {
+      if (!ctx.isLive()) return "cancelled";
+      if (event.kind === "terminator") return "finished";
+      if (event.kind === "stream_incomplete") return "incomplete";
+      if (event.kind === "error") {
+        if (event.code === "user_cancelled") {
+          applyStoppedTurn(ctx.set, ctx.assistantIndex);
+          return "stopped";
+        }
+        return "failed";
+      }
+      if (event.kind === "delta") {
+        applyChatEvent(ctx.set, ctx.assistantIndex, event, replace);
+        replace = false;
+        continue;
+      }
+      applyChatEvent(ctx.set, ctx.assistantIndex, event);
+    }
+    return "incomplete";
+  } catch (err) {
+    if (isRecoveryCancelled(err, ctx.isLive)) return "cancelled";
+    return "failed";
+  }
+}
+
+async function replayTranscriptFromSession(
+  ctx: LadderContext,
+): Promise<RungOutcome> {
+  if (ctx.sessionId === null) return "incomplete";
+  let rows: SessionMessage[];
+  try {
+    rows = await chatService.getMessages(ctx.sessionId, {
+      signal: ctx.signal,
+    });
+  } catch (err) {
+    if (isRecoveryCancelled(err, ctx.isLive)) return "cancelled";
+    return "incomplete";
+  }
+  if (!ctx.isLive()) return "cancelled";
+  let turnIndex = -1;
+  for (let i = rows.length - 1; i >= 0; i--) {
+    if (rows[i].role === "user" && rows[i].content === ctx.userText) {
+      turnIndex = i;
+      break;
+    }
+  }
+  const recovered =
+    turnIndex >= 0 && rows[turnIndex + 1]?.role === "assistant"
+      ? rows[turnIndex + 1]
+      : null;
+  if (recovered === null) return "incomplete";
+  setAssistantRow(ctx.set, ctx.assistantIndex, toReplayMessage(recovered));
+  return "finished";
+}
+
+function setAssistantRow(
+  set: ChatSet,
+  assistantIndex: number,
+  row: ChatMessage,
+): void {
+  set((state) => {
+    const next = state.messages.slice();
+    const target = next[assistantIndex];
+    if (!target || target.role !== "assistant") return state;
+    next[assistantIndex] = row;
+    return { messages: next };
+  });
+}
+
+async function runRecoveryLadder(ctx: LadderContext): Promise<LadderOutcome> {
+  ctx.set({ isRecovering: true, isStreaming: false });
+  try {
+    for (let attempt = 1; attempt <= LADDER_MAX_ATTEMPTS; attempt++) {
+      if (!ctx.isLive()) return "cancelled";
+      let outcome: RungOutcome = "incomplete";
+      if (ctx.runId !== null) {
+        try {
+          outcome = await consumeRecoveryStream(
+            ctx,
+            chatService.reattachRun(ctx.runId, ctx.signal, {
+              onRunId: ctx.onRunId,
+            }),
+            false,
+          );
+        } catch (err) {
+          if (isRecoveryCancelled(err, ctx.isLive)) return "cancelled";
+          outcome = "failed";
+        }
+        if (outcome === "finished") return "finished";
+        if (outcome === "stopped") return "stopped";
+        if (outcome === "cancelled") return "cancelled";
+      }
+      outcome = await replayTranscriptFromSession(ctx);
+      if (outcome === "finished") return "finished";
+      if (outcome === "cancelled") return "cancelled";
+      try {
+        outcome = await consumeRecoveryStream(
+          ctx,
+          chatService.streamMessage(ctx.messages, ctx.signal, {
+            runId: ctx.runId,
+            onRunId: ctx.onRunId,
+          }),
+          true,
+        );
+      } catch (err) {
+        if (isRecoveryCancelled(err, ctx.isLive)) return "cancelled";
+        outcome = "failed";
+      }
+      if (outcome === "finished") return "finished";
+      if (outcome === "stopped") return "stopped";
+      if (outcome === "cancelled") return "cancelled";
+      if (attempt < LADDER_MAX_ATTEMPTS) {
+        const completed = await backoffForAttempt(ctx.signal, attempt);
+        if (!completed) return "cancelled";
+      }
+    }
+    return "exhausted";
+  } finally {
+    if (recoveryController === ctx.controller) {
+      recoveryController = null;
+      ctx.set({ isRecovering: false });
+    }
+  }
+}
+
 /**
  * Ephemeral chat history. Deliberately NOT persisted to localStorage:
  *  - The brief calls it out as out-of-scope (FUTURE_FRONTEND.md
@@ -448,6 +872,8 @@ async function loadSessionInto(
 export const useChatStore = create<ChatState>((set, get) => ({
   messages: [],
   isStreaming: false,
+  isRecovering: false,
+  stoppedReason: null,
   error: null,
   llmGateOpen: false,
   setLlmGateOpen: (open) => {
@@ -477,6 +903,8 @@ export const useChatStore = create<ChatState>((set, get) => ({
       return;
     }
 
+    cancelRecoveryLadder();
+
     const userMessage: ChatMessage = { role: "user", content: trimmed };
     // Push the user message + open a placeholder assistant row that
     // deltas will append to. Index `assistantIndex` is computed AFTER
@@ -485,6 +913,8 @@ export const useChatStore = create<ChatState>((set, get) => ({
     set({
       messages: baseMessages,
       isStreaming: true,
+      isRecovering: false,
+      stoppedReason: null,
       error: null,
     });
 
@@ -513,6 +943,8 @@ export const useChatStore = create<ChatState>((set, get) => ({
     // it — but never adopted into `currentSessionId` after a detach
     // (the panel already moved on).
     let runSessionId: string | null = sentSessionId;
+    let turnEndedClean = false;
+    let keepRailAfterTeardown = false;
     // Only the stream whose token is attached may write into the store.
     const isAttached = () => attachedToken === token;
     // This stream's rail marker ("still working" on the run's session
@@ -533,7 +965,39 @@ export const useChatStore = create<ChatState>((set, get) => ({
     // `detachLiveStream` pokes this the moment this stream is detached
     // so the rail marker appears immediately — waiting for the next SSE
     // frame can lag a run sitting in a silent tool call.
-    const onStreamDetached = () => railMark(runSessionId);
+    activeRunId = sentSessionId;
+    const recovery = new AbortController();
+    recoveryController = recovery;
+    localController.signal.addEventListener(
+      "abort",
+      () => recovery.abort(),
+      { once: true },
+    );
+    const isLive = () =>
+      isAttached() &&
+      !localController.signal.aborted &&
+      !recovery.signal.aborted;
+    const handleRunId = (id: string) => {
+      runSessionId = id;
+      if (isAttached()) {
+        activeRunId = id;
+      }
+      if (!isAttached()) {
+        if (sendEpoch !== identityEpoch) return;
+        railMark(id);
+        void get().refreshSessionList();
+        return;
+      }
+      if (id === sentSessionId) return; // request landed where sent
+      if (get().currentSessionId !== sentSessionId) return; // user moved on
+      set({ currentSessionId: id });
+      persistSessionId(id);
+      void get().refreshSessionList();
+    };
+    const onStreamDetached = () => {
+      recovery.abort();
+      railMark(runSessionId);
+    };
     detachHook = onStreamDetached;
     try {
       const stream = chatService.streamMessage(
@@ -543,36 +1007,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
           // Echo the active session so the agent continues it instead
           // of minting a new one. Null on the tab's first message.
           runId: sentSessionId,
-          // The server is the authority on which session it actually
-          // wrote to: adopt the frame id whenever it differs from the
-          // one this request carried — a first message (null → id), or
-          // a fresh mint when the echoed id was unknown / soft-deleted /
-          // hit a chat-store hiccup. If the user switched sessions while
-          // this stream was in flight, their pick wins (the switch
-          // detaches this stream; this is the belt to that suspenders).
-          // A detached stream never adopts — it just re-keys its rail
-          // marker to the id the run actually landed on.
-          onRunId: (id) => {
-            runSessionId = id;
-            if (!isAttached()) {
-              if (sendEpoch !== identityEpoch) return;
-              railMark(id);
-              // The rail may not carry this id yet — a run detached
-              // before its first frame (navigation within ms of send)
-              // mints its session after the tab's last list fetch. Pull
-              // page 1 so the pulse has a row to sit on.
-              void get().refreshSessionList();
-              return;
-            }
-            if (id === sentSessionId) return; // request landed where sent
-            if (get().currentSessionId !== sentSessionId) return; // user moved on
-            set({ currentSessionId: id });
-            persistSessionId(id);
-            // The adopted id exists server-side (the frame follows the
-            // row insert), so pull page 1 and surface the new
-            // conversation in the rail without waiting for a reload.
-            void get().refreshSessionList();
-          },
+          onRunId: handleRunId,
         },
       );
       while (true) {
@@ -606,220 +1041,56 @@ export const useChatStore = create<ChatState>((set, get) => ({
         // Detached (navigation moved the panel on): keep draining so
         // the run stays alive server-side, but drop the frame — it
         // belongs to a conversation the panel is no longer showing.
-        if (!isAttached()) continue;
-        if (event.kind === "delta") {
-          set((state) => {
-            const next = state.messages.slice();
-            const target = next[assistantIndex];
-            if (!target || target.role !== "assistant") return state;
-            next[assistantIndex] = {
-              ...target,
-              content: target.content + event.delta,
-            };
-            return { messages: next };
+        if (!isAttached()) {
+          if (event.kind === "terminator" || event.kind === "error") {
+            turnEndedClean = true;
+          }
+          continue;
+        }
+        if (event.kind === "stream_incomplete") {
+          if (!isAttached()) continue;
+          railMark(runSessionId);
+          const outcome = await runRecoveryLadder({
+            set,
+            runId: runSessionId,
+            sessionId: runSessionId,
+            messages: [...baseMessages].map((m) => ({
+              role: m.role,
+              content: m.content,
+            })),
+            userText: trimmed,
+            assistantIndex,
+            signal: recovery.signal,
+            controller: recovery,
+            isLive,
+            onRunId: handleRunId,
           });
-        } else if (event.kind === "done") {
-          set((state) => {
-            const next = state.messages.slice();
-            const target = next[assistantIndex];
-            if (!target || target.role !== "assistant") return state;
-            next[assistantIndex] = {
-              ...target,
-              usage: event.usage,
-            };
-            return { messages: next };
-          });
-        } else if (event.kind === "note") {
-          // Mid-stream failover note from the router: append to the
-          // partial assistant reply's notes array. Do NOT truncate
-          // messages — unlike the error branch, the partial assistant
-          // content survives and the secondary's deltas will continue
-          // appending into the same row.
-          set((state) => {
-            const next = state.messages.slice();
-            const target = next[assistantIndex];
-            if (!target || target.role !== "assistant") return state;
-            next[assistantIndex] = {
-              ...target,
-              notes: [...(target.notes ?? []), event.text],
-            };
-            return { messages: next };
-          });
-        } else if (event.kind === "plan") {
-          // Agent-loop plan event: seed the per-step trace so the
-          // UI can render planned steps before `step_start` fires.
-          // The planner's id+kind pairs are the canonical IDs the
-          // subsequent step-scoped frames reference; storing them
-          // up-front means a step_start / tool_call / step_end
-          // arriving before we've rendered anything still finds a
-          // row to update.
-          set((state) => {
-            const next = state.messages.slice();
-            const target = next[assistantIndex];
-            if (!target || target.role !== "assistant") return state;
-            const steps: ChatStep[] = event.steps.map((s) => ({
-              id: s.id,
-              kind: s.kind,
-              status: "running",
-              toolName: s.tool,
-              toolArgs: s.args,
-            }));
-            next[assistantIndex] = { ...target, steps };
-            return { messages: next };
-          });
-        } else if (event.kind === "step_start") {
-          // Open a step's row. If the `plan` event already seeded
-          // it, mark it running and update kind (the plan's kind
-          // and step_start's kind are identical today but we keep
-          // them decoupled for the case where a planner revision
-          // ever diverges). If no plan preceded this event (legacy
-          // fallback), append a fresh step row.
-          set((state) => {
-            const next = state.messages.slice();
-            const target = next[assistantIndex];
-            if (!target || target.role !== "assistant") return state;
-            const steps = (target.steps ?? []).slice();
-            const idx = steps.findIndex((s) => s.id === event.step_id);
-            if (idx >= 0) {
-              steps[idx] = {
-                ...steps[idx],
-                kind: event.step_kind,
-                status: "running",
+          if (outcome === "finished") {
+            turnEndedClean = true;
+            continue;
+          }
+          if (outcome === "exhausted") {
+            keepRailAfterTeardown = true;
+            set((state) => {
+              const assistant = state.messages[assistantIndex];
+              const hasContent =
+                assistant?.role === "assistant" &&
+                assistant.content.length > 0;
+              return {
+                error: t("chat.errors.streamInterrupted"),
+                messages: hasContent
+                  ? state.messages
+                  : state.messages.slice(0, assistantIndex),
               };
-            } else {
-              steps.push({
-                id: event.step_id,
-                kind: event.step_kind,
-                status: "running",
-              });
-            }
-            next[assistantIndex] = { ...target, steps };
-            return { messages: next };
-          });
-        } else if (event.kind === "confirm_request") {
-          // The run is paused on a mutating call: attach the approval
-          // card to the step the frame names. A step row may not exist
-          // yet (no plan / step_start seen), so one is appended — the
-          // card must render even on a partial trace. The confirm's
-          // tool + args mirror the frames a `tool_call` would carry,
-          // so they seed the step the same way (latest wins).
-          set((state) => {
-            const next = state.messages.slice();
-            const target = next[assistantIndex];
-            if (!target || target.role !== "assistant") return state;
-            const steps = (target.steps ?? []).slice();
-            const confirm: ChatStepConfirm = {
-              runId: event.run_id,
-              approvalId: event.approval_id,
-              tool: event.tool,
-              args: event.args,
-              expiresAt: event.expires_at,
-              decision: "pending",
-            };
-            const idx = steps.findIndex((s) => s.id === event.step_id);
-            if (idx >= 0) {
-              steps[idx] = {
-                ...steps[idx],
-                toolName: event.tool,
-                toolArgs: event.args,
-                confirm,
-              };
-            } else {
-              steps.push({
-                id: event.step_id,
-                kind: "tool",
-                status: "running",
-                toolName: event.tool,
-                toolArgs: event.args,
-                confirm,
-              });
-            }
-            next[assistantIndex] = { ...target, steps };
-            return { messages: next };
-          });
-        } else if (event.kind === "tool_call") {
-          // Annotate the step with the dispatched tool's name + args.
-          // Multiple tool calls per step (react sub-loop) overwrite
-          // the previous — the UI shows the latest, matching the
-          // ChatStep type's singular fields.
-          set((state) => {
-            const next = state.messages.slice();
-            const target = next[assistantIndex];
-            if (!target || target.role !== "assistant") return state;
-            const steps = (target.steps ?? []).slice();
-            const idx = steps.findIndex((s) => s.id === event.step_id);
-            if (idx >= 0) {
-              steps[idx] = {
-                ...steps[idx],
-                toolName: event.name,
-                toolArgs: event.args,
-              };
-              next[assistantIndex] = { ...target, steps };
-            }
-            return { messages: next };
-          });
-        } else if (event.kind === "tool_result") {
-          // Record the dispatch outcome on the step. Failed calls
-          // carry a static safe marker (matches the wire's
-          // "tool_call_failed" literal) and never the underlying
-          // err.Error(); we store it verbatim so the UI can show
-          // the same marker.
-          set((state) => {
-            const next = state.messages.slice();
-            const target = next[assistantIndex];
-            if (!target || target.role !== "assistant") return state;
-            const steps = (target.steps ?? []).slice();
-            const idx = steps.findIndex((s) => s.id === event.step_id);
-            if (idx >= 0) {
-              steps[idx] = {
-                ...steps[idx],
-                toolResult: event.ok ? event.result : event.error,
-                retryCount: event.retryCount,
-              };
-              next[assistantIndex] = { ...target, steps };
-            }
-            return { messages: next };
-          });
-        } else if (event.kind === "partial_failure") {
-          // The orchestrator's "run diverged from the plan" signal.
-          // Attach it to the streaming assistant row so the final
-          // answer renders with a warning banner above it. Deliberately
-          // does NOT touch content — the answer itself still renders.
-          set((state) => {
-            const next = state.messages.slice();
-            const target = next[assistantIndex];
-            if (!target || target.role !== "assistant") return state;
-            next[assistantIndex] = {
-              ...target,
-              partialFailure: { failedSteps: event.failedSteps },
-            };
-            return { messages: next };
-          });
-        } else if (event.kind === "step_end") {
-          // Close the step's row with its final status + reason.
-          set((state) => {
-            const next = state.messages.slice();
-            const target = next[assistantIndex];
-            if (!target || target.role !== "assistant") return state;
-            const steps = (target.steps ?? []).slice();
-            const idx = steps.findIndex((s) => s.id === event.step_id);
-            if (idx >= 0) {
-              steps[idx] = {
-                ...steps[idx],
-                status: event.status === "ok" ? "ok" : "failed",
-                reason: event.reason || undefined,
-              };
-              next[assistantIndex] = { ...target, steps };
-            }
-            return { messages: next };
-          });
+            });
+          }
+          break;
         } else if (event.kind === "error") {
-          // Mid-stream error: surface the safe static error text.
-          // Don't leave a stranded empty bubble in the conversation
-          // history. If no deltas landed yet, drop the assistant row
-          // entirely; if any content was already streamed, keep it
-          // (the user saw it) and let the error toast explain the
-          // truncation. Mirrors the cancel-path intent.
+          turnEndedClean = true;
+          if (event.code === "user_cancelled") {
+            applyStoppedTurn(set, assistantIndex);
+            break;
+          }
           set((state) => {
             const assistant = state.messages[assistantIndex];
             const hasContent =
@@ -832,8 +1103,10 @@ export const useChatStore = create<ChatState>((set, get) => ({
             };
           });
           break;
+        } else if (event.kind === "terminator") {
+          turnEndedClean = true;
         } else {
-          // `terminator` — clean end of stream, nothing to do.
+          applyChatEvent(set, assistantIndex, event);
         }
       }
     } catch (err) {
@@ -888,15 +1161,16 @@ export const useChatStore = create<ChatState>((set, get) => ({
       // a newer send may have replaced it while this one drained.
       if (controller === localController) controller = null;
       if (detachHook === onStreamDetached) detachHook = null;
+      if (recoveryController === recovery) recoveryController = null;
       if (attachedToken === token) {
         // Ended (or was cancelled) while it was still the panel's
         // stream. Drop the half-built assistant row after a Cancel so
         // the UI doesn't show a stranded empty bubble; skipped for a
         // clean end. `signal.aborted` covers both the race-based break
-        // above and a fetch that rejected with AbortError. This
-        // stream's rail marker (never set while attached) retires too.
-        railMark(null);
+        // above and a fetch that rejected with AbortError.
+        if (!keepRailAfterTeardown) railMark(null);
         attachedToken = null;
+        activeRunId = null;
         if (localController.signal.aborted) {
           set((state) => ({
             messages: state.messages.slice(0, assistantIndex),
@@ -925,13 +1199,14 @@ export const useChatStore = create<ChatState>((set, get) => ({
         void (async () => {
           try {
             if (
+              turnEndedClean &&
               runSessionId !== null &&
               get().currentSessionId === runSessionId
             ) {
               await loadSessionInto(get, set, runSessionId);
             }
           } finally {
-            railMark(null);
+            if (turnEndedClean) railMark(null);
           }
           void get().refreshSessionList();
         })();
@@ -947,7 +1222,13 @@ export const useChatStore = create<ChatState>((set, get) => ({
     // through the rail.
     detachLiveStream();
     invalidateFeedQueries();
-    set({ messages: [], isStreaming: false, error: null });
+    set({
+      messages: [],
+      isStreaming: false,
+      isRecovering: false,
+      stoppedReason: null,
+      error: null,
+    });
   },
 
   cancel: () => {
@@ -960,10 +1241,43 @@ export const useChatStore = create<ChatState>((set, get) => ({
     // the row — unreachable from the UI, where the composer disables
     // synchronously and the next click is a later task.
     if (controller) {
+      if (activeRunId !== null) {
+        void chatService.cancelRun(activeRunId).catch(() => {});
+      }
       controller.abort();
       controller = null;
     }
     set({ isStreaming: false });
+  },
+
+  stopDetachedRun: async (sessionId) => {
+    try {
+      await chatService.cancelRun(sessionId);
+    } catch (err) {
+      if (isRunNotLive(err)) {
+        set((state) => ({
+          runningSessionIds: state.runningSessionIds.filter(
+            (r) => r !== sessionId,
+          ),
+        }));
+        if (get().currentSessionId === sessionId) {
+          await loadSessionInto(get, set, sessionId);
+        }
+        void get().refreshSessionList();
+        return;
+      }
+      logger.warn("chat.run.cancel_failed", { error: String(err) });
+      return;
+    }
+    set((state) => ({
+      runningSessionIds: state.runningSessionIds.filter(
+        (r) => r !== sessionId,
+      ),
+    }));
+    if (get().currentSessionId === sessionId) {
+      await loadSessionInto(get, set, sessionId);
+    }
+    void get().refreshSessionList();
   },
 
   submitApproval: async (runId, approvalId, decision) => {
@@ -1081,7 +1395,14 @@ export const useChatStore = create<ChatState>((set, get) => ({
     // continues in the background and surfaces through the rail (see
     // `detachLiveStream`).
     detachLiveStream();
-    set({ currentSessionId: id, messages: [], isStreaming: false, error: null });
+    set({
+      currentSessionId: id,
+      messages: [],
+      isStreaming: false,
+      isRecovering: false,
+      stoppedReason: null,
+      error: null,
+    });
     persistSessionId(id);
     await loadSessionInto(get, set, id);
   },
@@ -1093,6 +1414,8 @@ export const useChatStore = create<ChatState>((set, get) => ({
       currentSessionId: null,
       messages: [],
       isStreaming: false,
+      isRecovering: false,
+      stoppedReason: null,
       error: null,
     });
   },
@@ -1105,7 +1428,14 @@ export const useChatStore = create<ChatState>((set, get) => ({
     // surfaces through the rail (see `detachLiveStream`).
     detachLiveStream();
     persistSessionId(null);
-    set({ currentSessionId: null, messages: [], isStreaming: false, error: null });
+    set({
+      currentSessionId: null,
+      messages: [],
+      isStreaming: false,
+      isRecovering: false,
+      stoppedReason: null,
+      error: null,
+    });
     const epoch = identityEpoch;
     try {
       const { session_id } = await chatService.createSession();
@@ -1159,12 +1489,16 @@ export const useChatStore = create<ChatState>((set, get) => ({
     if (owner === userId) return;
     set({ ownerUserId: userId });
     abortLiveStream();
+    cancelRecoveryLadder();
+    activeRunId = null;
     replaySeq++;
     identityEpoch++;
     persistSessionId(null);
     set({
       messages: [],
       isStreaming: false,
+      isRecovering: false,
+      stoppedReason: null,
       error: null,
       llmGateOpen: false,
       currentSessionId: null,

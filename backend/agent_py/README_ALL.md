@@ -220,6 +220,9 @@ terminal-row path (fresh run + `note{kind:"fresh_run"}`).
 | `PYTHON_AGENT_STALE_RUN_TIMEOUT_SECONDS` | `900`   | Heartbeat silence past this marks the row dead. MUST be >= 2x heartbeat (startup refuses otherwise). |
 | `PYTHON_AGENT_SWEEP_INTERVAL_SECONDS`    | `300`   | Sweeper cron cadence. Worst-case reap latency = timeout + interval.     |
 | `PYTHON_AGENT_SWEEP_ENABLED`             | `true`  | Rollback switch: `false` stops reaping (heartbeats keep writing).       |
+| `PYTHON_AGENT_STREAM_DETACH_ENABLED`     | `true`  | A run outlives its SSE connection; `false` restores "a disconnect cancels the run". |
+| `PYTHON_AGENT_DETACHED_RUN_CAP_SECONDS`  | `600`   | Wall-clock cap on a detached run; expiry marks it failed.               |
+| `PYTHON_AGENT_KEEPALIVE_SECONDS`         | `15`    | Idle cadence of the SSE keep-alive comment frame; `0` disables it.      |
 
 Reaping does **not** delete langGraph checkpoint data — a reaped run's
 checkpoint thread is collected by the retention cron when it later

@@ -35,7 +35,7 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException, Request, Response
-from fastapi.responses import StreamingResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_openai import ChatOpenAI
 from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
@@ -754,6 +754,91 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             },
         )
 
+    @app.get("/agent/runs/{run_id}/stream")
+    async def agent_run_stream(request: Request) -> Response:
+        user_id = _user_id_from_header(request)
+        if getattr(app.state, "run_metadata", None) is None:
+            return JSONResponse(
+                status_code=501,
+                content={
+                    "error": "Re-attach unavailable",
+                    "code": "reattach_unavailable",
+                },
+            )
+        run_id = request.path_params["run_id"]
+        session = _detached_registry(app).get(run_id)
+        if session is None or session.user_id != user_id:
+            return JSONResponse(
+                status_code=409,
+                content={"error": "Run is not live", "code": "run_not_live"},
+            )
+        sub = session.subscribe()
+        if session.closed or (
+            session.collector_task is not None and session.collector_task.done()
+        ):
+            sub.put_nowait(None)
+
+        async def stream() -> AsyncIterator[bytes]:
+            try:
+                yield _sse_encode(
+                    Event(
+                        kind="note",
+                        payload=NoteEvent(
+                            text="reattached",
+                            kind="reattached",
+                            run_id=run_id,
+                        ).model_dump(),
+                    )
+                )
+                for frame in session.replay_frames():
+                    yield _sse_encode(frame)
+                if session.pending_confirm is not None:
+                    yield _sse_encode(
+                        Event(
+                            kind="confirm_request",
+                            payload=dict(session.pending_confirm),
+                        )
+                    )
+                async for item in _drain_run_queue(
+                    sub, idle_seconds=float(settings.keepalive_seconds)
+                ):
+                    if item is None:
+                        break
+                    kind, payload = item
+                    if kind == "comment":
+                        yield f": {payload}\n\n".encode()
+                        continue
+                    yield _sse_encode(payload)
+                yield b"data: [DONE]\n\n"
+            finally:
+                session.unsubscribe(sub)
+
+        return StreamingResponse(
+            stream(),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "Connection": "keep-alive",
+                "X-Accel-Buffering": "no",
+            },
+        )
+
+    @app.post("/agent/runs/{run_id}/cancel")
+    async def agent_run_cancel(request: Request) -> JSONResponse:
+        user_id = _user_id_from_header(request)
+        run_id = request.path_params["run_id"]
+        session = _detached_registry(app).get(run_id)
+        if session is None or session.user_id != user_id:
+            return JSONResponse(
+                status_code=409,
+                content={"error": "Run is not live", "code": "run_not_live"},
+            )
+        session.cancel()
+        return JSONResponse(
+            status_code=200,
+            content={"run_id": run_id, "code": "user_cancelled"},
+        )
+
     # Chat-session REST surface (openspec/changes/agent-chat-history-ui):
     # GET/POST/DELETE under /agent/sessions. Handlers read the ChatStore
     # the lifespan put on `app.state.chat_store` (503 when unset — no DB
@@ -835,21 +920,24 @@ async def _pump_events(state: AgentState, *, sink: RunSink, **kwargs) -> None:
 
 async def _drain_run_queue(
     queue: asyncio.Queue,
+    idle_seconds: float = _STREAM_KEEPALIVE_SECONDS,
 ) -> AsyncIterator[tuple[str, object] | None]:
     """Yield the run's sink items in order, with an idle keep-alive.
 
     Items are `("event", Event)`, `("comment", str)`, or `None` (the run's
-    channel closed). After `_STREAM_KEEPALIVE_SECONDS` without an item, a
+    channel closed). After `idle_seconds` without an item, a
     `("comment", "keep-alive")` is yielded so the connection stays warm
     while a run awaits an approval decision. The pending `queue.get()` is
     carried across keep-alive ticks (never cancelled mid-wait), so no item
-    can be lost at a timeout boundary.
+    can be lost at a timeout boundary. An `idle_seconds` of 0 or less
+    disables the keep-alive entirely (PYTHON_AGENT_KEEPALIVE_SECONDS=0).
     """
     getter: asyncio.Task | None = None
+    timeout = idle_seconds if idle_seconds > 0 else None
     try:
         while True:
             getter = getter or asyncio.create_task(queue.get())
-            done, _ = await asyncio.wait({getter}, timeout=_STREAM_KEEPALIVE_SECONDS)
+            done, _ = await asyncio.wait({getter}, timeout=timeout)
             if not done:
                 yield ("comment", "keep-alive")
                 continue
@@ -862,6 +950,513 @@ async def _drain_run_queue(
     finally:
         if getter is not None and not getter.done():
             getter.cancel()
+
+
+def _user_id_from_header(request: Request) -> int:
+    """The Go-verified user id, or an HTTP 400 — same contract as
+    `/agent/run`: a missing or non-integer header must fail loudly rather
+    than run with user_id=0 (the budget guard keys on it)."""
+    raw = request.headers.get("x-nyx-user-id", "").strip()
+    if not raw:
+        raise HTTPException(
+            status_code=400,
+            detail="missing X-Nyx-User-Id header (set by the Go chat handler)",
+        )
+    try:
+        return int(raw)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=400,
+            detail=f"X-Nyx-User-Id must be an integer, got {raw!r}",
+        ) from exc
+
+
+def _detached_registry(app: FastAPI) -> dict[str, _RunSession]:
+    """Process-local registry of detached, still-executing runs.
+
+    Keyed by run_id; entries are removed when the run reaches a terminal
+    state (or is cancelled). Single-instance by design: a re-attach must
+    land on the process that holds the run's supervisor — the compose
+    topology is one agent container (openspec/changes/agent-stream-
+    resilience design.md, multi-instance non-goal).
+    """
+    registry = getattr(app.state, "detached_runs", None)
+    if registry is None:
+        registry = {}
+        app.state.detached_runs = registry
+    return registry
+
+
+class _RunSession:
+    """One run's execution state, owned independently of the SSE wire.
+
+    The pump (graph execution), the DB heartbeat, the event fold that
+    feeds terminal persistence, and the terminal writes themselves all
+    hang off this object instead of off the streaming generator's local
+    variables. The generator is then just one possible *subscriber*: when
+    its client disconnects mid-run with detach enabled, the session hands
+    itself to a background collector task (`hand_off_detached`) that
+    keeps draining, folding, and finalizing without a wire. The re-attach
+    and cancel endpoints find the session through the registry.
+
+    Attached mode (client present, or detach opted out) behaves exactly
+    like the pre-detach code: the generator drains, the finally cancels
+    pump + heartbeat, and the shielded terminal persistence runs inline —
+    byte-for-byte the same wire.
+    """
+
+    def __init__(
+        self,
+        *,
+        run_id: str,
+        user_id: int,
+        request_id: str | None,
+        chat_req: ChatRequest,
+        settings: Settings,
+        app: FastAPI,
+        run_metadata: RunMetadata | None,
+        chat_store: ChatStore | None,
+        prefs_store: PrefsStore | None,
+        sink: RunSink,
+        queue: asyncio.Queue,
+        state: AgentState,
+        resumed: bool,
+        secrets: OverrideSecrets | None,
+        llm_view: LLMOverrideView | None,
+        title_written: bool,
+        persist_run_state: bool,
+    ) -> None:
+        self.run_id = run_id
+        self.user_id = user_id
+        self.request_id = request_id
+        self.chat_req = chat_req
+        self.settings = settings
+        self.app = app
+        self.run_metadata = run_metadata
+        self.chat_store = chat_store
+        self.prefs_store = prefs_store
+        self.sink = sink
+        self.queue = queue
+        self.state = state
+        self.resumed = resumed
+        self.secrets = secrets
+        self.llm_view = llm_view
+        self.title_written = title_written
+        self.persist_run_state = persist_run_state
+
+        self.total_tokens = 0
+        self.prompt_tokens: int | None = None
+        self.completion_tokens: int | None = None
+        self.error_code: str | None = None
+        self.saw_done = False
+        self.assistant_text_parts: list[str] = []
+        self.assistant_tool_calls: list[dict] = []
+        self.assistant_steps = StepTrace()
+        self.pump_task: asyncio.Task[None] | None = None
+        self.heartbeat_task: asyncio.Task[None] | None = None
+        self.collector_task: asyncio.Task[None] | None = None
+        self.drain_finished = False
+        self.closed = False
+        self.pending_confirm: dict | None = None
+        self._subscribers: list[asyncio.Queue] = []
+
+    def start_heartbeat(self) -> None:
+        if self.run_metadata is not None and self.persist_run_state:
+            self.heartbeat_task = asyncio.create_task(
+                _heartbeat_loop(
+                    self.run_metadata,
+                    self.run_id,
+                    self.settings.heartbeat_interval_seconds,
+                ),
+                name=f"agent-heartbeat-{self.run_id}",
+            )
+
+    def start_pump(self, graph, graph_config, rag, tools, budget, tracer) -> None:
+        self.pump_task = asyncio.create_task(
+            _pump_events(
+                self.state,
+                sink=self.sink,
+                settings=self.settings,
+                tracer=tracer,
+                budget=budget,
+                rag=rag,
+                tools=tools,
+                graph=graph,
+                graph_config=graph_config,
+                resumed=self.resumed,
+                secrets=self.secrets,
+            ),
+            name=f"agent-pump-{self.run_id}",
+        )
+
+    def collect(self, event: Event) -> None:
+        """Fold one event into the terminal-persistence inputs."""
+        self.assistant_steps.fold(event.kind, event.payload)
+        if event.kind == "done":
+            usage = event.payload.get("usage") or {}
+            self.total_tokens = int(usage.get("total_tokens", 0))
+            prompt_raw = usage.get("prompt_tokens")
+            completion_raw = usage.get("completion_tokens")
+            self.prompt_tokens = (
+                int(prompt_raw) if prompt_raw is not None else None
+            )
+            self.completion_tokens = (
+                int(completion_raw) if completion_raw is not None else None
+            )
+            self.saw_done = True
+        elif event.kind == "error":
+            self.error_code = event.payload.get("code")
+        elif event.kind == "delta":
+            text = event.payload.get("delta")
+            if isinstance(text, str):
+                self.assistant_text_parts.append(text)
+        elif event.kind == "tool_call":
+            self.assistant_tool_calls.append(
+                {
+                    "step_id": event.payload.get("step_id"),
+                    "call_id": event.payload.get("call_id"),
+                    "name": event.payload.get("name"),
+                    "args": event.payload.get("args"),
+                }
+            )
+        elif event.kind == "confirm_request":
+            self.pending_confirm = dict(event.payload)
+        elif event.kind == "tool_result":
+            pending = self.pending_confirm
+            if pending is not None and pending.get("step_id") == event.payload.get(
+                "step_id"
+            ):
+                self.pending_confirm = None
+
+    async def drain(self) -> AsyncIterator[tuple[str, object]]:
+        """Yield sink items in order, folding events as they pass.
+
+        Shared by the attached wire loop and the detached collector, so
+        both see identical fold order. Raises the pump's exception when
+        the channel closed on a pump failure (pre-detach semantics: the
+        terminal persistence then leaves the row resumable).
+        """
+        async for item in _drain_run_queue(
+            self.queue, idle_seconds=float(self.settings.keepalive_seconds)
+        ):
+            if item is None:
+                break
+            kind, payload = item
+            if kind == "comment":
+                yield item
+                continue
+            self.collect(payload)
+            yield item
+        self.drain_finished = True
+        if (
+            self.pump_task is not None
+            and self.pump_task.done()
+            and not self.pump_task.cancelled()
+            and self.pump_task.exception() is not None
+        ):
+            raise self.pump_task.exception()
+
+    async def _broadcast(self, item: tuple[str, object] | None) -> None:
+        for sub in list(self._subscribers):
+            sub.put_nowait(item)
+
+    def subscribe(self) -> asyncio.Queue:
+        sub: asyncio.Queue = asyncio.Queue()
+        self._subscribers.append(sub)
+        return sub
+
+    def unsubscribe(self, sub: asyncio.Queue) -> None:
+        if sub in self._subscribers:
+            self._subscribers.remove(sub)
+
+    def replay_frames(self) -> list[Event]:
+        """Wire-shaped step frames reconstructing the run's step state.
+
+        Built from the in-memory folded trace (the same fold the finalize
+        persists on the assistant row), so a re-attaching client sees the
+        steps that already happened before the live frames resume. The
+        SPA folds these idempotently by step id — a re-attach after it
+        already saw some of them lands on the same rows.
+        """
+        frames: list[Event] = []
+        entries = self.assistant_steps.to_list() or []
+        if not entries:
+            return frames
+        plan_steps = []
+        for entry in entries:
+            step: dict = {"id": entry["id"], "kind": entry["kind"]}
+            if entry.get("tool_name") is not None:
+                step["tool"] = entry["tool_name"]
+                step["args"] = entry.get("tool_args")
+            plan_steps.append(step)
+        frames.append(Event(kind="plan", payload={"steps": plan_steps}))
+        for entry in entries:
+            frames.append(
+                Event(
+                    kind="step_start",
+                    payload={"step_id": entry["id"], "kind": entry["kind"]},
+                )
+            )
+            if entry.get("tool_name") is not None:
+                frames.append(
+                    Event(
+                        kind="tool_call",
+                        payload={
+                            "step_id": entry["id"],
+                            "call_id": f"{entry['id']}:replay",
+                            "name": entry["tool_name"],
+                            "args": entry.get("tool_args"),
+                        },
+                    )
+                )
+            if entry.get("tool_result") is not None:
+                frames.append(
+                    Event(
+                        kind="tool_result",
+                        payload={
+                            "step_id": entry["id"],
+                            "call_id": f"{entry['id']}:replay",
+                            "ok": True,
+                            "result": entry["tool_result"],
+                            "retry_count": entry.get("retry_count", 0),
+                        },
+                    )
+                )
+            elif entry["status"] == "failed":
+                frames.append(
+                    Event(
+                        kind="tool_result",
+                        payload={
+                            "step_id": entry["id"],
+                            "call_id": f"{entry['id']}:replay",
+                            "ok": False,
+                            "error": entry.get("reason") or "step failed",
+                        },
+                    )
+                )
+            if entry["status"] in ("ok", "failed"):
+                frames.append(
+                    Event(
+                        kind="step_end",
+                        payload={
+                            "step_id": entry["id"],
+                            "status": entry["status"],
+                            "reason": entry.get("reason") or "",
+                        },
+                    )
+                )
+        return frames
+
+    async def stop_background(self) -> None:
+        if self.pump_task is not None and not self.pump_task.done():
+            self.pump_task.cancel()
+            try:
+                await self.pump_task
+            except asyncio.CancelledError:
+                pass
+        if self.heartbeat_task is not None:
+            self.heartbeat_task.cancel()
+            try:
+                await self.heartbeat_task
+            except asyncio.CancelledError:
+                pass
+
+    def hand_off_detached(self) -> asyncio.Task[None]:
+        """Keep executing without a wire: spawn the background collector.
+
+        Called from the streaming generator's finally on a mid-run client
+        disconnect when detach is enabled. The collector drains the sink,
+        broadcasts to any re-attach subscriber, folds events, and runs
+        the same terminal persistence an attached run would; it is
+        bounded by PYTHON_AGENT_DETACHED_RUN_CAP_SECONDS.
+        """
+        registry = _detached_registry(self.app)
+        registry[self.run_id] = self
+        self.collector_task = asyncio.create_task(
+            self._run_detached(self.settings.detached_run_cap_seconds),
+            name=f"agent-detached-{self.run_id}",
+        )
+        return self.collector_task
+
+    async def _run_detached(self, cap_seconds: float) -> None:
+        registry = _detached_registry(self.app)
+        try:
+            async with asyncio.timeout(cap_seconds):
+                async for item in self.drain():
+                    await self._broadcast(item)
+        except TimeoutError:
+            self.error_code = "detached_run_cap"
+            await self._broadcast(
+                (
+                    "event",
+                    Event(
+                        kind="error",
+                        payload={
+                            "error": "Run exceeded the time limit",
+                            "code": "detached_run_cap",
+                            "request_id": self.request_id,
+                        },
+                    ),
+                )
+            )
+        except Exception:
+            log.exception(
+                "detached run collector failed; the run row stays "
+                "resumable (run_id=%s)",
+                self.run_id,
+            )
+            await self._broadcast(
+                (
+                    "event",
+                    Event(
+                        kind="error",
+                        payload={
+                            "error": "Run failed",
+                            "code": "detached_run_error",
+                            "request_id": self.request_id,
+                        },
+                    ),
+                )
+            )
+        finally:
+            registry.pop(self.run_id, None)
+            self.closed = True
+            await self._broadcast(None)
+            await self.stop_background()
+            await self.finalize()
+
+    def cancel(self) -> None:
+        """Deliberate stop (POST /agent/runs/{run_id}/cancel).
+
+        Marks the outcome first so the collector's finalize writes
+        `failed{user_cancelled}`, then closes the channel — the pump is
+        cancelled after the sentinel so an in-flight node unwinds without
+        emitting further frames past the wire's terminal trio.
+        """
+        self.error_code = "user_cancelled"
+        self.saw_done = False
+        error_item = (
+            "event",
+            Event(
+                kind="error",
+                payload={
+                    "error": "Generation stopped by user",
+                    "code": "user_cancelled",
+                    "request_id": self.request_id,
+                },
+            ),
+        )
+        self.queue.put_nowait(error_item)
+        self.queue.put_nowait(None)
+        for sub in list(self._subscribers):
+            sub.put_nowait(error_item)
+            sub.put_nowait(None)
+        if self.pump_task is not None and not self.pump_task.done():
+            self.pump_task.cancel()
+
+    async def finalize(self) -> None:
+        """Terminal persistence, identical for attached and detached runs."""
+        if self.run_metadata is not None and self.persist_run_state:
+            try:
+                if (
+                    self.error_code is not None
+                    and self.error_code != "agent_unavailable"
+                ):
+                    await self.run_metadata.mark_failed(
+                        self.run_id, self.error_code
+                    )
+                elif self.error_code is None and self.saw_done:
+                    await self.run_metadata.mark_completed(
+                        self.run_id, self.total_tokens
+                    )
+            except RunMetadataUnavailable as exc:
+                log.warning(
+                    "metadata terminal write failed (non-fatal): "
+                    "run_id=%s err=%r",
+                    self.run_id,
+                    exc,
+                )
+
+        if (
+            self.chat_store is not None
+            and self.saw_done
+            and (self.assistant_text_parts or self.assistant_tool_calls)
+        ):
+            try:
+                await self.chat_store.record_message(
+                    self.run_id,
+                    self.user_id,
+                    role="assistant",
+                    content="".join(self.assistant_text_parts),
+                    tool_calls=self.assistant_tool_calls or None,
+                    steps=self.assistant_steps.to_list(),
+                    tokens=self.total_tokens,
+                    prompt_tokens=self.prompt_tokens,
+                    completion_tokens=self.completion_tokens,
+                )
+                await self.chat_store.end_session(self.run_id, self.user_id)
+            except ChatStoreUnavailable as exc:
+                log.warning(
+                    "chat_store assistant record failed (non-fatal): "
+                    "run_id=%s err=%r",
+                    self.run_id,
+                    exc,
+                )
+
+        if (
+            self.settings.prefs_enabled
+            and self.saw_done
+            and self.prefs_store is not None
+        ):
+            last_user_text = next(
+                (
+                    (m.content or "")
+                    for m in reversed(self.chat_req.messages)
+                    if m.role == "user"
+                ),
+                "",
+            )
+            if last_user_text and looks_like_preference(last_user_text):
+                prefs_task = asyncio.create_task(
+                    _extract_and_store_prefs(
+                        self.prefs_store,
+                        self.user_id,
+                        self.run_id,
+                        last_user_text,
+                        self.settings,
+                        llm_override=self.llm_view,
+                        secrets=self.secrets,
+                    ),
+                    name=f"agent-prefs-{self.run_id}",
+                )
+                _PREFS_TASKS.add(prefs_task)
+                prefs_task.add_done_callback(_PREFS_TASKS.discard)
+
+        if (
+            _should_refine_title(
+                saw_done=self.saw_done,
+                title_written=self.title_written,
+                chat_store=self.chat_store,
+            )
+            and self.chat_store is not None
+        ):
+            _spawn_title_refinement(
+                self.chat_store,
+                user_id=self.user_id,
+                run_id=self.run_id,
+                user_text=next(
+                    (
+                        (m.content or "")
+                        for m in self.chat_req.messages
+                        if m.role == "user"
+                    ),
+                    "",
+                ),
+                assistant_text="".join(self.assistant_text_parts),
+                settings=self.settings,
+                llm_override=self.llm_view,
+                secrets=self.secrets,
+            )
 
 
 async def _stream_agent_run(
@@ -922,7 +1517,12 @@ async def _stream_agent_run(
     resumed = False
     session_continuation = False
     persist_run_state = True
-    if run_metadata is not None and run_id is not None:
+    attach_session: _RunSession | None = None
+    if run_id is not None:
+        candidate = _detached_registry(app).get(run_id)
+        if candidate is not None and candidate.user_id == user_id:
+            attach_session = candidate
+    if attach_session is None and run_metadata is not None and run_id is not None:
         existing = await run_metadata.get_run(run_id, user_id)
         if existing is not None and existing.status not in ("completed", "failed"):
             resumed = True
@@ -980,7 +1580,7 @@ async def _stream_agent_run(
             #   - fresh session: every user message (the panel is empty, so
             #     in practice this is the one new message; a curl client
             #     importing a transcript still gets them all).
-            if not resumed:
+            if not resumed and attach_session is None:
                 user_msgs = [m for m in chat_req.messages if m.role == "user"]
                 if session_continuation:
                     user_msgs = user_msgs[-1:]
@@ -1019,6 +1619,48 @@ async def _stream_agent_run(
             payload=RunIDEvent(run_id=run_id).model_dump(),
         )
     )
+
+    if attach_session is not None:
+        yield _sse_encode(
+            Event(
+                kind="note",
+                payload=NoteEvent(
+                    text="reattached",
+                    kind="reattached",
+                    run_id=run_id,
+                ).model_dump(),
+            )
+        )
+        for frame in attach_session.replay_frames():
+            yield _sse_encode(frame)
+        if attach_session.pending_confirm is not None:
+            yield _sse_encode(
+                Event(
+                    kind="confirm_request",
+                    payload=dict(attach_session.pending_confirm),
+                )
+            )
+        sub = attach_session.subscribe()
+        if attach_session.closed or (
+            attach_session.collector_task is not None
+            and attach_session.collector_task.done()
+        ):
+            sub.put_nowait(None)
+        try:
+            async for item in _drain_run_queue(
+                sub, idle_seconds=float(settings.keepalive_seconds)
+            ):
+                if item is None:
+                    break
+                kind, payload = item
+                if kind == "comment":
+                    yield f": {payload}\n\n".encode()
+                    continue
+                yield _sse_encode(payload)
+            yield b"data: [DONE]\n\n"
+        finally:
+            attach_session.unsubscribe(sub)
+        return
 
     # Resume note (before plan frame).
     if resumed:
@@ -1161,269 +1803,64 @@ async def _stream_agent_run(
         trace_metadata["langfuse_session_id"] = str(run_id)
         trace_metadata["langfuse_user_id"] = str(user_id)
 
-    # Liveness heartbeat: while this stream owns the run, refresh
-    # `last_heartbeat_at` so the stale-run sweeper can tell a live run
-    # from a crash (openspec/changes/agent-stale-run-sweeper). Started
-    # immediately before the try so the task can never leak: the only
-    # awaits before this point are the two client-visible opening frames,
-    # and a disconnect there exits the generator before the task exists.
-    heartbeat_task: asyncio.Task[None] | None = None
-    if run_metadata is not None and persist_run_state:
-        # Session continuations skip the heartbeat: `agent.runs` has no
-        # live row for this execution (terminal or absent), so touches
-        # would be no-ops against a completed row or phantoms for a
-        # session-only id (openspec/changes/agent-chat-history-ui).
-        heartbeat_task = asyncio.create_task(
-            _heartbeat_loop(
-                run_metadata, run_id, settings.heartbeat_interval_seconds
-            ),
-            name=f"agent-heartbeat-{run_id}",
-        )
-
-    total_tokens = 0
-    prompt_tokens: int | None = None
-    completion_tokens: int | None = None
-    error_code: str | None = None
-    saw_done = False
-    # Chat-history accumulation (openspec/changes/agent-chat-history-storage):
-    # collect the assistant's text via every `delta` frame and every tool
-    # invocation via `tool_call` frames. The final assistant message is
-    # recorded after the run completes (best-effort; failures degrade to
-    # warn-log and the stream is unaffected).
-    assistant_text_parts: list[str] = []
-    assistant_tool_calls: list[dict] = []
-    assistant_steps = StepTrace()
-    pump_task: asyncio.Task[None] | None = None
+    session = _RunSession(
+        run_id=run_id,
+        user_id=user_id,
+        request_id=request_id,
+        chat_req=chat_req,
+        settings=settings,
+        app=app,
+        run_metadata=run_metadata,
+        chat_store=chat_store,
+        prefs_store=prefs_store,
+        sink=sink,
+        queue=run_queue,
+        state=state,
+        resumed=resumed,
+        secrets=secrets,
+        llm_view=llm_view,
+        title_written=title_written,
+        persist_run_state=persist_run_state,
+    )
+    session.start_heartbeat()
+    session.start_pump(
+        graph,
+        graph_config,
+        rag,
+        tools,
+        app.state.budget,
+        app.state.tracer,
+    )
+    disconnected = False
     try:
-        # Live drain (agent-feed-tools D2): the pump drives the graph while
-        # the drain forwards frames from the sink queue — the gate's
-        # confirm prompt arrives mid-node, and an idle run gets SSE
-        # keep-alive comments instead of a stalled connection.
-        pump_task = asyncio.create_task(
-            _pump_events(
-                state,
-                sink=sink,
-                settings=settings,
-                tracer=app.state.tracer,
-                budget=app.state.budget,
-                rag=rag,
-                tools=tools,
-                graph=graph,
-                graph_config=graph_config,
-                resumed=resumed,
-                secrets=secrets,
-            ),
-            name=f"agent-pump-{run_id}",
-        )
-        async for item in _drain_run_queue(run_queue):
-            if item is None:
-                break
+        async for item in session.drain():
             kind, payload = item
             if kind == "comment":
-                # SSE comment frame — protocol-legal, skipped by the
-                # existing frontend parser.
                 yield f": {payload}\n\n".encode()
                 continue
-            event = payload  # an ("event", Event) pair
-            assistant_steps.fold(event.kind, event.payload)
-            yield _sse_encode(event)
-            # Track terminal totals for metadata persistence.
-            if event.kind == "done":
-                usage = event.payload.get("usage") or {}
-                total_tokens = int(usage.get("total_tokens", 0))
-                prompt_raw = usage.get("prompt_tokens")
-                completion_raw = usage.get("completion_tokens")
-                prompt_tokens = (
-                    int(prompt_raw) if prompt_raw is not None else None
-                )
-                completion_tokens = (
-                    int(completion_raw) if completion_raw is not None else None
-                )
-                saw_done = True
-            elif event.kind == "error":
-                error_code = event.payload.get("code")
-            elif event.kind == "delta":
-                text = event.payload.get("delta")
-                if isinstance(text, str):
-                    assistant_text_parts.append(text)
-            elif event.kind == "tool_call":
-                # Capture verbatim from the wire envelope so future replay
-                # is byte-faithful (design.md D3).
-                assistant_tool_calls.append(
-                    {
-                        "step_id": event.payload.get("step_id"),
-                        "call_id": event.payload.get("call_id"),
-                        "name": event.payload.get("name"),
-                        "args": event.payload.get("args"),
-                    }
-                )
-
-        # Drain ended (the pump closed the channel). Surface any pump
-        # failure with the same semantics the pre-sink direct iteration
-        # had — the exception propagates through the finally below.
-        if pump_task.done() and pump_task.exception() is not None:
-            raise pump_task.exception()
+            yield _sse_encode(payload)
+    except (GeneratorExit, asyncio.CancelledError):
+        disconnected = True
+        raise
     finally:
-        if pump_task is not None and not pump_task.done():
-            pump_task.cancel()
-            try:
-                await pump_task
-            except asyncio.CancelledError:
-                pass
-        # Stop the heartbeat before the terminal write so a late touch
-        # cannot interleave with (or outlive) the terminal transition.
-        if heartbeat_task is not None:
-            heartbeat_task.cancel()
-            try:
-                await heartbeat_task
-            except asyncio.CancelledError:
-                pass
-
-        # Terminal persistence must SURVIVE a client disconnect. The SPA
-        # parser closes the stream on the `terminator` frame, Go tears the
-        # upstream request down, and this generator gets cancelled at its
-        # next await — which lands in here. Before this shield, a
-        # fully-streamed answer could lose BOTH its assistant row and its
-        # terminal run transition (observed live 2026-10-14: chat_messages
-        # kept only the user row and agent.runs stayed 'running' for a
-        # completed reply). Run the writes in a detached task and await it
-        # through `asyncio.shield`: cancellation here leaves the task
-        # running to completion in the background.
-        async def _persist_terminal() -> None:
-            # Session continuations skip the metadata block: agent.runs
-            # owns per-RUN rows, and this execution has none to transition
-            # (a terminal row must not be mutated back, and a phantom row
-            # must not be minted for a session-only id —
-            # openspec/changes/agent-chat-history-ui).
-            if run_metadata is not None and persist_run_state:
-                try:
-                    if error_code is not None and error_code != "agent_unavailable":
-                        await run_metadata.mark_failed(run_id, error_code)
-                    elif error_code is None and saw_done:
-                        await run_metadata.mark_completed(run_id, total_tokens)
-                    # error_code == "agent_unavailable", or a stream closed
-                    # before `done` (client disconnect mid-run) → leave the
-                    # row `running`: the run is still resumable inside the
-                    # window, and the stale-run sweeper reaps it if nobody
-                    # comes back (test-review C1, 2026-10-14).
-                except RunMetadataUnavailable as exc:
-                    log.warning(
-                        "metadata terminal write failed (non-fatal): "
-                        "run_id=%s err=%r",
-                        run_id,
-                        exc,
-                    )
-
-            # Chat-history: record the assistant message once the run
-            # reaches a terminal state (design.md D6/D7). Only when the run
-            # reached `done`; partial-failure runs leave no assistant row —
-            # replay should show the failure, not a half-answer.
-            if (
-                chat_store is not None
-                and saw_done
-                and (assistant_text_parts or assistant_tool_calls)
-            ):
-                try:
-                    await chat_store.record_message(
-                        run_id,
-                        user_id,
-                        role="assistant",
-                        content="".join(assistant_text_parts),
-                        tool_calls=assistant_tool_calls or None,
-                        steps=assistant_steps.to_list(),
-                        tokens=total_tokens,
-                        prompt_tokens=prompt_tokens,
-                        completion_tokens=completion_tokens,
-                    )
-                    # Stamp the session's ended_at so the sidebar can
-                    # render a "finished" state instead of "live".
-                    await chat_store.end_session(run_id, user_id)
-                except ChatStoreUnavailable as exc:
-                    log.warning(
-                        "chat_store assistant record failed (non-fatal): "
-                        "run_id=%s err=%r",
-                        run_id,
-                        exc,
-                    )
-
-        finalize_task = asyncio.create_task(
-            _persist_terminal(), name=f"agent-finalize-{run_id}"
-        )
-        # Module-level strong ref so the task is never GC'd before it
-        # finishes (asyncio only holds weak refs).
-        _FINALIZE_TASKS.add(finalize_task)
-        finalize_task.add_done_callback(_FINALIZE_TASKS.discard)
-        try:
-            await asyncio.shield(finalize_task)
-        except asyncio.CancelledError:
-            log.info(
-                "client disconnected during terminal persistence; the "
-                "shielded write continues in the background (run_id=%s)",
-                run_id,
+        if disconnected and settings.stream_detach_enabled and not session.drain_finished:
+            session.hand_off_detached()
+        else:
+            await session.stop_background()
+            finalize_task = asyncio.create_task(
+                session.finalize(), name=f"agent-finalize-{run_id}"
             )
-            raise
-
-        # Preference extraction (openspec/changes/agent-user-preferences,
-        # design D2/D4): fire-and-forget AFTER the reply is finalized — it
-        # never delays, blocks, or alters the SSE stream. Spawned only on a
-        # completed run (`saw_done`) past the cheap gate; the tracked task
-        # holds no reference to this generator, so a later disconnect
-        # cannot cancel it (and a disconnect during the shield above skips
-        # the spawn entirely — acceptable per D2: the next
-        # preference-bearing turn re-extracts; keys are stable).
-        if settings.prefs_enabled and saw_done and prefs_store is not None:
-            last_user_text = next(
-                (
-                    (m.content or "")
-                    for m in reversed(chat_req.messages)
-                    if m.role == "user"
-                ),
-                "",
-            )
-            if last_user_text and looks_like_preference(last_user_text):
-                prefs_task = asyncio.create_task(
-                    _extract_and_store_prefs(
-                        prefs_store,
-                        user_id,
-                        run_id,
-                        last_user_text,
-                        settings,
-                        llm_override=llm_view,
-                        secrets=secrets,
-                    ),
-                    name=f"agent-prefs-{run_id}",
+            _FINALIZE_TASKS.add(finalize_task)
+            finalize_task.add_done_callback(_FINALIZE_TASKS.discard)
+            try:
+                await asyncio.shield(finalize_task)
+            except asyncio.CancelledError:
+                log.info(
+                    "client disconnected during terminal persistence; the "
+                    "shielded write continues in the background (run_id=%s)",
+                    run_id,
                 )
-                # Module-level strong ref (mirrors `_FINALIZE_TASKS`):
-                # asyncio holds only weak refs, so without this the task
-                # could be GC'd mid-write after a disconnect teardown.
-                _PREFS_TASKS.add(prefs_task)
-                prefs_task.add_done_callback(_PREFS_TASKS.discard)
-
-        if (
-            _should_refine_title(
-                saw_done=saw_done,
-                title_written=title_written,
-                chat_store=chat_store,
-            )
-            and chat_store is not None
-        ):
-            _spawn_title_refinement(
-                chat_store,
-                user_id=user_id,
-                run_id=run_id,
-                user_text=next(
-                    (
-                        (m.content or "")
-                        for m in chat_req.messages
-                        if m.role == "user"
-                    ),
-                    "",
-                ),
-                assistant_text="".join(assistant_text_parts),
-                settings=settings,
-                llm_override=llm_view,
-                secrets=secrets,
-            )
+                raise
 
     # Frontend parser triggers its own terminator on `data: [DONE]`. Old clients
     # that listen on `event: terminator` still work because we emit that event too.

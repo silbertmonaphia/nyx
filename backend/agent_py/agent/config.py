@@ -226,6 +226,10 @@ class Settings(BaseSettings):
     # Heartbeats keep writing (inert liveness metadata).
     sweep_enabled: bool = True
 
+    keepalive_seconds: int = 15
+    stream_detach_enabled: bool = True
+    detached_run_cap_seconds: int = 600
+
     # --- Langfuse LLM tracing (openspec/changes/agent-langfuse-tracing) ---
     # Opt-in export of LLM-level traces (prompts, replies, usage, tool
     # calls) to a self-hosted Langfuse instance. Default OFF: when
@@ -415,6 +419,27 @@ class Settings(BaseSettings):
                 "PYTHON_AGENT_HEARTBEAT_INTERVAL_SECONDS "
                 f"({self.heartbeat_interval_seconds}s); got "
                 f"{self.stale_run_timeout_seconds}s"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _validate_stream_resilience(self) -> Settings:
+        """Refuse to start on a stream-resilience misconfiguration.
+
+        Per `openspec/changes/agent-stream-resilience` (New env keys for
+        stream resilience): the keepalive interval may be 0 (disable) but
+        not negative, and the detached-run cap must be >= 1 — a zero cap
+        would cancel every detached run before its first step.
+        """
+        if self.keepalive_seconds < 0:
+            raise ValueError(
+                "PYTHON_AGENT_KEEPALIVE_SECONDS must be >= 0; "
+                f"got {self.keepalive_seconds}"
+            )
+        if self.detached_run_cap_seconds < 1:
+            raise ValueError(
+                "PYTHON_AGENT_DETACHED_RUN_CAP_SECONDS must be >= 1; "
+                f"got {self.detached_run_cap_seconds}"
             )
         return self
 

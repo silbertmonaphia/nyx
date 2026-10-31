@@ -166,6 +166,8 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ open, onOpenChange }) => {
   const { t } = useTranslation();
   const messages = useChat((s) => s.messages);
   const isStreaming = useChat((s) => s.isStreaming);
+  const isRecovering = useChat((s) => s.isRecovering);
+  const stoppedReason = useChat((s) => s.stoppedReason);
   const error = useChat((s) => s.error);
   const send = useChat((s) => s.send);
   const cancel = useChat((s) => s.cancel);
@@ -435,6 +437,15 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ open, onOpenChange }) => {
                   {error}
                 </div>
               )}
+              {stoppedReason === "user_cancelled" && (
+                <div
+                  className="text-xs text-muted-foreground text-center"
+                  data-testid="chat-stopped"
+                  role="status"
+                >
+                  {t("chat.recovery.stopped")}
+                </div>
+              )}
             </div>
 
             <form
@@ -449,6 +460,15 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ open, onOpenChange }) => {
                   role="status"
                 >
                   {t("chat.busyHint")}
+                </p>
+              )}
+              {isRecovering && (
+                <p
+                  className="text-[10px] text-muted-foreground"
+                  data-testid="chat-recovering-hint"
+                  role="status"
+                >
+                  {t("chat.recovery.reconnecting")}
                 </p>
               )}
               <Textarea
