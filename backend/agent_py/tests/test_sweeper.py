@@ -179,16 +179,19 @@ async def _count_thread_rows(thread_id: str) -> dict[str, int]:
 
 
 @pytest.fixture
-async def app_ctx(monkeypatch):
+async def app_ctx(request, monkeypatch):
     """Live app: real lifespan, real DB, migrations applied, checkpointer up.
 
     Crons are disabled in settings — tests drive `_run_once` explicitly so
-    timing never depends on a background loop.
+    timing never depends on a background loop. Indirect parametrization
+    with `False` opts out of stream detach for tests that pin the legacy
+    disconnect-cancels-run semantics.
     """
     await _drop_schemas()
 
     import agent.config as config_module
 
+    detach = getattr(request, "param", True)
     settings = config_module.Settings(
         _env_file=None,  # hermetic: never read the developer's .env
         database_url=_DSN,
@@ -196,6 +199,7 @@ async def app_ctx(monkeypatch):
         metrics_port=0,
         retention_enabled=False,
         sweep_enabled=False,
+        stream_detach_enabled=detach,
     )
     monkeypatch.setattr(config_module, "_settings", settings)
     monkeypatch.setattr(config_module, "get_settings", lambda: settings)
@@ -696,6 +700,7 @@ async def test_resume_with_no_checkpoint_falls_back_to_fresh_state(
     assert row["status"] == "completed"
 
 
+@pytest.mark.parametrize("app_ctx", [False], indirect=True)
 async def test_disconnect_before_done_leaves_row_running(app_ctx, monkeypatch):
     """Pins the disconnect gate (test-review round 2, 2026-10-14): a stream
     closed before `done` must NOT mark the row `completed` — it stays

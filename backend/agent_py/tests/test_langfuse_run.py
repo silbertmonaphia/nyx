@@ -127,7 +127,9 @@ class _RaisingExporter(SpanExporter):
         pass
 
 
-def _make_settings(mode: str, database_url: str = "") -> Settings:
+def _make_settings(
+    mode: str, database_url: str = "", detach: bool = True
+) -> Settings:
     suffix = uuid.uuid4().hex[:8]
     return Settings(
         port=9000,
@@ -150,6 +152,7 @@ def _make_settings(mode: str, database_url: str = "") -> Settings:
         langfuse_public_key=f"pk-lf-run-{suffix}",
         langfuse_secret_key=f"sk-lf-run-{suffix}",
         langfuse_host="http://127.0.0.1:9",
+        stream_detach_enabled=detach,
     )
 
 
@@ -160,6 +163,7 @@ async def _app_ctx(
     fail_tools: bool | str = False,
     chat_model: type[BaseChatModel] | None = None,
     database_url: str = "",
+    detach: bool = True,
 ):
     """Build the app wired for tracing per `mode`:
     enabled | disabled | raising (every span export fails).
@@ -172,7 +176,7 @@ async def _app_ctx(
     exporter = _RaisingExporter() if mode == "raising" else InMemorySpanExporter()
 
     redis = fakeaioredis.FakeRedis(decode_responses=True)
-    settings = _make_settings(mode, database_url=database_url)
+    settings = _make_settings(mode, database_url=database_url, detach=detach)
 
     from agent import config as config_module
 
@@ -625,7 +629,9 @@ async def test_resumed_run_keeps_langfuse_session(monkeypatch):
     dsn = _PG_DSN
     assert dsn is not None
 
-    async with _app_ctx(monkeypatch, mode="enabled", database_url=dsn) as app:
+    async with _app_ctx(
+        monkeypatch, mode="enabled", database_url=dsn, detach=False
+    ) as app:
         body = _chat_body()
         run_id = None
         # Phase 1: drive the SSE generator directly (the httpx ASGITransport

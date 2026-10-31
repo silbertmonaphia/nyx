@@ -1323,7 +1323,14 @@ class _RunSession:
             self.closed = True
             await self._broadcast(None)
             await self.stop_background()
-            await self.finalize()
+            try:
+                await self.finalize()
+            except Exception:
+                log.exception(
+                    "detached run terminal persistence failed; the run row "
+                    "stays resumable (run_id=%s)",
+                    self.run_id,
+                )
 
     def cancel(self) -> None:
         """Deliberate stop (POST /agent/runs/{run_id}/cancel).

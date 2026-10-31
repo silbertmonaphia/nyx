@@ -36,7 +36,7 @@ async function stubResumeRoutes(
     await route.fulfill({
       status: 200,
       contentType: 'application/json',
-      body: JSON.stringify(opts.transcript ?? []),
+      body: JSON.stringify({ messages: opts.transcript ?? [] }),
     });
   });
 

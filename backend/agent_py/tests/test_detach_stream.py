@@ -138,6 +138,14 @@ async def _wait_registry_empty(app, run_id, timeout=15.0):
 
     await asyncio.wait_for(_poll_until(_gone), timeout=timeout)
 
+    async def _collector_finished():
+        return not any(
+            t.get_name() == f"agent-detached-{run_id}" and not t.done()
+            for t in asyncio.all_tasks()
+        )
+
+    await asyncio.wait_for(_poll_until(_collector_finished), timeout=timeout)
+
 
 async def _poll_until(check, interval=0.05):
     while not await check():
