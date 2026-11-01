@@ -33,12 +33,20 @@ func runStreamPath(runID string) string {
 	return runsBasePath + "/" + url.PathEscape(runID) + "/stream"
 }
 
+func lastEventIDQueryParam(lastEventID string) string {
+	if lastEventID == "" {
+		return ""
+	}
+	return "?last_event_id=" + url.QueryEscape(lastEventID)
+}
+
 func runCancelPath(runID string) string {
 	return runsBasePath + "/" + url.PathEscape(runID) + "/cancel"
 }
 
-func (p *AgentProxy) RunStream(ctx context.Context, runID string, userID int, bearerToken string) (*http.Response, error) {
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodGet, p.baseURL+runStreamPath(runID), nil)
+func (p *AgentProxy) RunStream(ctx context.Context, runID string, userID int, bearerToken, lastEventID, lastEventIDQuery string) (*http.Response, error) {
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodGet,
+		p.baseURL+runStreamPath(runID)+lastEventIDQueryParam(lastEventIDQuery), nil)
 	if err != nil {
 		return nil, ErrAgentUnavailable
 	}
@@ -46,6 +54,9 @@ func (p *AgentProxy) RunStream(ctx context.Context, runID string, userID int, be
 	httpReq.Header.Set(ServiceTokenHeader, p.serviceToken)
 	if bearerToken != "" {
 		httpReq.Header.Set("Authorization", bearerToken)
+	}
+	if lastEventID != "" {
+		httpReq.Header.Set("Last-Event-ID", lastEventID)
 	}
 	httpReq.Header.Set("Accept", "text/event-stream")
 
@@ -75,7 +86,8 @@ func (h *Handler) runStream(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), h.service.MaxStreamDuration())
 	defer cancel()
 
-	resp, err := h.service.Proxy().RunStream(ctx, chi.URLParam(r, "run_id"), userID, bearer)
+	resp, err := h.service.Proxy().RunStream(ctx, chi.URLParam(r, "run_id"), userID, bearer,
+		r.Header.Get("Last-Event-ID"), r.URL.Query().Get("last_event_id"))
 	if err != nil {
 		h.writeRunUnavailable502(w, r, err, runStreamUnreachableMessage, runStreamUnreachableDetail)
 		return

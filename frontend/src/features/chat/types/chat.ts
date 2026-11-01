@@ -159,7 +159,9 @@ export type ChatConfirmRequest = {
   expires_at: number;
 };
 
-export type ChatEvent =
+export type ChatReplayTruncated = { kind: "replay_truncated" };
+
+type ChatEventBody =
   | ChatDelta
   | ChatDone
   | ChatError
@@ -172,7 +174,10 @@ export type ChatEvent =
   | ChatToolResult
   | ChatStepEnd
   | ChatPartialFailure
-  | ChatConfirmRequest;
+  | ChatConfirmRequest
+  | ChatReplayTruncated;
+
+export type ChatEvent = ChatEventBody & { frameId?: number };
 
 /**
  * Decision a user can record for a paused `confirm_request`.

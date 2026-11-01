@@ -167,6 +167,8 @@ export const en: Translation = {
         reconnecting: 'Reconnecting…',
         stopped: 'Generation stopped',
         stopRun: 'Stop',
+        possiblyIncomplete:
+          'Answer may be missing a span — the connection was interrupted during generation.',
       },
       errors: {
         decision: 'Could not send your decision. Please try again.',

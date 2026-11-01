@@ -50,6 +50,7 @@ interface ChatState {
   isStreaming: boolean;
   isRecovering: boolean;
   stoppedReason: "user_cancelled" | null;
+  possiblyIncomplete: boolean;
   error: string | null;
   llmGateOpen: boolean;
   setLlmGateOpen: (open: boolean) => void;
@@ -192,6 +193,16 @@ let attachedToken: number | null = null;
 let detachHook: (() => void) | null = null;
 let activeRunId: string | null = null;
 let recoveryController: AbortController | null = null;
+
+const frameCursors = new Map<string, number>();
+
+function acceptFrame(runId: string | null, event: ChatEvent): boolean {
+  if (event.frameId === undefined || runId === null) return true;
+  const cursor = frameCursors.get(runId);
+  if (cursor !== undefined && event.frameId <= cursor) return false;
+  frameCursors.set(runId, event.frameId);
+  return true;
+}
 
 function cancelRecoveryLadder(): void {
   if (recoveryController === null) return;
@@ -747,6 +758,11 @@ async function consumeRecoveryStream(
         }
         return "failed";
       }
+      if (event.kind === "replay_truncated") {
+        ctx.set({ possiblyIncomplete: true });
+        continue;
+      }
+      if (!acceptFrame(ctx.runId, event)) continue;
       if (event.kind === "delta") {
         applyChatEvent(ctx.set, ctx.assistantIndex, event, replace);
         replace = false;
@@ -817,6 +833,7 @@ async function runRecoveryLadder(ctx: LadderContext): Promise<LadderOutcome> {
             ctx,
             chatService.reattachRun(ctx.runId, ctx.signal, {
               onRunId: ctx.onRunId,
+              lastEventId: frameCursors.get(ctx.runId),
             }),
             false,
           );
@@ -831,6 +848,9 @@ async function runRecoveryLadder(ctx: LadderContext): Promise<LadderOutcome> {
       outcome = await replayTranscriptFromSession(ctx);
       if (outcome === "finished") return "finished";
       if (outcome === "cancelled") return "cancelled";
+      if (ctx.runId !== null) {
+        frameCursors.delete(ctx.runId);
+      }
       try {
         outcome = await consumeRecoveryStream(
           ctx,
@@ -874,6 +894,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
   isStreaming: false,
   isRecovering: false,
   stoppedReason: null,
+  possiblyIncomplete: false,
   error: null,
   llmGateOpen: false,
   setLlmGateOpen: (open) => {
@@ -904,6 +925,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
     }
 
     cancelRecoveryLadder();
+    frameCursors.clear();
 
     const userMessage: ChatMessage = { role: "user", content: trimmed };
     // Push the user message + open a placeholder assistant row that
@@ -915,6 +937,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
       isStreaming: true,
       isRecovering: false,
       stoppedReason: null,
+      possiblyIncomplete: false,
       error: null,
     });
 
@@ -1047,6 +1070,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
           }
           continue;
         }
+        if (!acceptFrame(activeRunId, event)) continue;
         if (event.kind === "stream_incomplete") {
           if (!isAttached()) continue;
           railMark(runSessionId);
@@ -1227,6 +1251,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
       isStreaming: false,
       isRecovering: false,
       stoppedReason: null,
+      possiblyIncomplete: false,
       error: null,
     });
   },
@@ -1401,6 +1426,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
       isStreaming: false,
       isRecovering: false,
       stoppedReason: null,
+      possiblyIncomplete: false,
       error: null,
     });
     persistSessionId(id);
@@ -1416,6 +1442,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
       isStreaming: false,
       isRecovering: false,
       stoppedReason: null,
+      possiblyIncomplete: false,
       error: null,
     });
   },
@@ -1434,6 +1461,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
       isStreaming: false,
       isRecovering: false,
       stoppedReason: null,
+      possiblyIncomplete: false,
       error: null,
     });
     const epoch = identityEpoch;
@@ -1493,12 +1521,14 @@ export const useChatStore = create<ChatState>((set, get) => ({
     activeRunId = null;
     replaySeq++;
     identityEpoch++;
+    frameCursors.clear();
     persistSessionId(null);
     set({
       messages: [],
       isStreaming: false,
       isRecovering: false,
       stoppedReason: null,
+      possiblyIncomplete: false,
       error: null,
       llmGateOpen: false,
       currentSessionId: null,

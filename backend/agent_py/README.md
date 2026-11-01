@@ -75,9 +75,10 @@ flowchart TB
   `X-Nyx-User-Id`.
 - `GET|POST|DELETE /agent/sessions*` — history sidebar API (list / replay / create / resume /
   delete), owner-scoped via `X-Nyx-User-Id`.
-- `GET /agent/runs/{run_id}/stream` — re-attach to a live run: `note{reattached}`, the persisted
-  step events replayed, then the live frames (owner-scoped via `X-Nyx-User-Id`; 409 `run_not_live`
-  for a terminal/unknown run, 501 when the persistence layer is off).
+- `GET /agent/runs/{run_id}/stream` — re-attach to a live run: `note{reattached}`, then either the
+  frames the client missed (when it presents `Last-Event-ID`) or the persisted step events, then the
+  live frames (owner-scoped via `X-Nyx-User-Id`; 409 `run_not_live` for a terminal/unknown run, 501
+  when the persistence layer is off).
 - `POST /agent/runs/{run_id}/cancel` — deliberate stop of a live run (`user_cancelled`; no
   assistant row for the partial answer), owner-scoped via `X-Nyx-User-Id`.
 - `GET /agent/me/export` · `DELETE /agent/me` — GDPR subject export + right-to-erasure
@@ -157,6 +158,8 @@ Common flags:
 | `PYTHON_AGENT_STREAM_DETACH_ENABLED` | `true` | A run outlives its SSE connection; `false` restores "a disconnect cancels the run" |
 | `PYTHON_AGENT_DETACHED_RUN_CAP_SECONDS` | `600` | Wall-clock cap on a detached run (kills it and marks it failed) |
 | `PYTHON_AGENT_KEEPALIVE_SECONDS` | `15` | Idle cadence of the SSE keep-alive comment frame; `0` disables |
+| `PYTHON_AGENT_FRAME_REPLAY_ENABLED` | `true` | Frames carry an SSE `id:` and are buffered in-process so a reconnect resumes from its last id; `false` restores the id-less wire |
+| `PYTHON_AGENT_FRAME_BUFFER_MAX` | `5000` | Frames retained per run for replay (oldest dropped first); the buffer dies with the run |
 | `LANGFUSE_DEBUG` | unset | Langfuse SDK verbose mode — read from the **process environment** (see below) |
 
 Langfuse tracing is diagnosable from the default logs: with `PYTHON_AGENT_LANGFUSE_ENABLED=true`

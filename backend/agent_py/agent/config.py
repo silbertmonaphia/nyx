@@ -229,6 +229,8 @@ class Settings(BaseSettings):
     keepalive_seconds: int = 15
     stream_detach_enabled: bool = True
     detached_run_cap_seconds: int = 600
+    frame_replay_enabled: bool = True
+    frame_buffer_max: int = 5000
 
     # --- Langfuse LLM tracing (openspec/changes/agent-langfuse-tracing) ---
     # Opt-in export of LLM-level traces (prompts, replies, usage, tool
@@ -440,6 +442,11 @@ class Settings(BaseSettings):
             raise ValueError(
                 "PYTHON_AGENT_DETACHED_RUN_CAP_SECONDS must be >= 1; "
                 f"got {self.detached_run_cap_seconds}"
+            )
+        if self.frame_buffer_max < 1:
+            raise ValueError(
+                "PYTHON_AGENT_FRAME_BUFFER_MAX must be >= 1; "
+                f"got {self.frame_buffer_max}"
             )
         return self
 

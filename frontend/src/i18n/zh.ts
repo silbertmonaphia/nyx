@@ -152,6 +152,7 @@ export const zh = {
         reconnecting: '正在重新连接…',
         stopped: '生成已停止',
         stopRun: '停止',
+        possiblyIncomplete: '回答可能缺失一段——生成过程中连接曾中断。',
       },
       errors: {
         decision: '无法发送你的决定，请重试。',

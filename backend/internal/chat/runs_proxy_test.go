@@ -27,17 +27,24 @@ const reattachFixture = "event: note\n" +
 	"event: delta\n" +
 	`data: {"delta":"hi"}` + "\n\n"
 
+const idFrameFixture = "id: 7\n" +
+	"event: delta\n" +
+	`data: {"delta":"x"}` + "\n\n" +
+	": keep-alive\n\n"
+
 type capturedRunsRequest struct {
-	method        string
-	requestURI    string
-	path          string
-	rawQuery      string
-	authorization string
-	userID        string
-	serviceToken  string
-	contentType   string
-	accept        string
-	body          string
+	method           string
+	requestURI       string
+	path             string
+	rawQuery         string
+	authorization    string
+	userID           string
+	serviceToken     string
+	contentType      string
+	accept           string
+	lastEventID      string
+	lastEventIDQuery string
+	body             string
 }
 
 type runsUpstream struct {
@@ -60,16 +67,18 @@ func newRunsUpstreamFunc(t *testing.T, respond func(http.ResponseWriter, *http.R
 		up.mu.Lock()
 		up.calls++
 		up.last = capturedRunsRequest{
-			method:        r.Method,
-			requestURI:    r.RequestURI,
-			path:          r.URL.Path,
-			rawQuery:      r.URL.RawQuery,
-			authorization: r.Header.Get("Authorization"),
-			userID:        r.Header.Get("X-Nyx-User-Id"),
-			serviceToken:  r.Header.Get(ServiceTokenHeader),
-			contentType:   r.Header.Get("Content-Type"),
-			accept:        r.Header.Get("Accept"),
-			body:          string(buf),
+			method:           r.Method,
+			requestURI:       r.RequestURI,
+			path:             r.URL.Path,
+			rawQuery:         r.URL.RawQuery,
+			authorization:    r.Header.Get("Authorization"),
+			userID:           r.Header.Get("X-Nyx-User-Id"),
+			serviceToken:     r.Header.Get(ServiceTokenHeader),
+			contentType:      r.Header.Get("Content-Type"),
+			accept:           r.Header.Get("Accept"),
+			lastEventID:      r.Header.Get("Last-Event-ID"),
+			lastEventIDQuery: r.URL.Query().Get("last_event_id"),
+			body:             string(buf),
 		}
 		up.mu.Unlock()
 		respond(w, r)
@@ -110,6 +119,19 @@ func doRunRequest(t *testing.T, server *httptest.Server, method, path, bearer st
 	require.NoError(t, err)
 	if bearer != "" {
 		req.Header.Set("Authorization", bearer)
+	}
+	resp, err := server.Client().Do(req)
+	require.NoError(t, err)
+	return resp
+}
+
+func doRunCursorRequest(t *testing.T, server *httptest.Server, path, bearer, lastEventIDHeader string) *http.Response {
+	t.Helper()
+	req, err := http.NewRequest(http.MethodGet, server.URL+path, nil)
+	require.NoError(t, err)
+	req.Header.Set("Authorization", bearer)
+	if lastEventIDHeader != "" {
+		req.Header.Set("Last-Event-ID", lastEventIDHeader)
 	}
 	resp, err := server.Client().Do(req)
 	require.NoError(t, err)
@@ -159,6 +181,11 @@ func TestRunsStream_Reattach_ForwardsBytesAndHeaders(t *testing.T) {
 	assert.Equal(t, "text/event-stream", last.accept)
 	assert.Empty(t, last.contentType, "a body-less GET carries no content type")
 	assert.Empty(t, last.body, "the re-attach GET carries no body")
+	assert.Empty(t, last.lastEventID,
+		"no inbound Last-Event-ID header means the agent sees no cursor header")
+	assert.Empty(t, last.lastEventIDQuery,
+		"no inbound last_event_id query means the agent sees no cursor query key")
+	assert.Empty(t, last.rawQuery, "a cursor-less re-attach carries no outbound query at all")
 }
 
 func TestRunsStream_CapCutMidStream_SynthesizesTerminalTrio(t *testing.T) {
@@ -623,4 +650,125 @@ func TestRunRoutes_RunIDSpecialChars_StaySingleEscapedSegment(t *testing.T) {
 		"the crafted id must not introduce a traversal segment")
 	assert.NotContains(t, last.requestURI, "?",
 		"an encoded query separator inside the id must not become a real query")
+}
+
+func TestRunsStream_LastEventIDHeader_ForwardedVerbatim(t *testing.T) {
+	srv, up := newRunsUpstream(t, http.StatusOK, reattachFixture, "text/event-stream; charset=utf-8")
+	harness, tokens := newRunsHarness(t, mustAgentProxy(t, srv.URL), 0, nil)
+	server := httptest.NewServer(harness)
+	t.Cleanup(server.Close)
+
+	resp := doRunCursorRequest(t, server, "/api/chat/runs/"+reattachRunID+"/stream",
+		"Bearer "+bearerToken(t, tokens), "42")
+	defer func() { _ = resp.Body.Close() }()
+	assert.Equal(t, http.StatusOK, resp.StatusCode)
+	_ = drainAndClose(t, resp)
+
+	last, calls := up.snapshot()
+	require.Equal(t, 1, calls)
+	assert.Equal(t, "42", last.lastEventID,
+		"the caller's replay cursor header must reach the agent unmodified")
+	assert.Empty(t, last.rawQuery,
+		"a cursor header alone must not grow an outbound query")
+}
+
+func TestRunsStream_LastEventIDQuery_PreservedVerbatim(t *testing.T) {
+	srv, up := newRunsUpstream(t, http.StatusOK, reattachFixture, "text/event-stream; charset=utf-8")
+	harness, tokens := newRunsHarness(t, mustAgentProxy(t, srv.URL), 0, nil)
+	server := httptest.NewServer(harness)
+	t.Cleanup(server.Close)
+
+	resp := doRunCursorRequest(t, server, "/api/chat/runs/"+reattachRunID+"/stream?last_event_id=42",
+		"Bearer "+bearerToken(t, tokens), "")
+	defer func() { _ = resp.Body.Close() }()
+	assert.Equal(t, http.StatusOK, resp.StatusCode)
+	_ = drainAndClose(t, resp)
+
+	last, calls := up.snapshot()
+	require.Equal(t, 1, calls)
+	assert.Equal(t, "last_event_id=42", last.rawQuery,
+		"the outbound query must carry the cursor and nothing else")
+	assert.Equal(t, "42", last.lastEventIDQuery,
+		"the agent must decode the same cursor value the caller sent")
+	assert.Empty(t, last.lastEventID,
+		"a cursor query alone must not grow an outbound Last-Event-ID header")
+}
+
+func TestRunsStream_LastEventIDQuery_ValueIsEncodedNotConcatenated(t *testing.T) {
+	srv, up := newRunsUpstream(t, http.StatusOK, reattachFixture, "text/event-stream; charset=utf-8")
+	harness, tokens := newRunsHarness(t, mustAgentProxy(t, srv.URL), 0, nil)
+	server := httptest.NewServer(harness)
+	t.Cleanup(server.Close)
+
+	resp := doRunCursorRequest(t, server,
+		"/api/chat/runs/"+reattachRunID+"/stream?last_event_id=4%201%26x%3D2",
+		"Bearer "+bearerToken(t, tokens), "")
+	defer func() { _ = resp.Body.Close() }()
+	_ = drainAndClose(t, resp)
+
+	last, _ := up.snapshot()
+	assert.Equal(t, "4 1&x=2", last.lastEventIDQuery,
+		"the cursor value must round-trip exactly, not leak as raw query syntax")
+	assert.Contains(t, last.rawQuery, "last_event_id=4+1%26x%3D2",
+		"the outbound value must be URL-encoded as a single query value")
+}
+
+func TestRunsStream_LastEventIDHeaderAndQuery_BothForwarded(t *testing.T) {
+	srv, up := newRunsUpstream(t, http.StatusOK, reattachFixture, "text/event-stream; charset=utf-8")
+	harness, tokens := newRunsHarness(t, mustAgentProxy(t, srv.URL), 0, nil)
+	server := httptest.NewServer(harness)
+	t.Cleanup(server.Close)
+
+	resp := doRunCursorRequest(t, server, "/api/chat/runs/"+reattachRunID+"/stream?last_event_id=41",
+		"Bearer "+bearerToken(t, tokens), "42")
+	defer func() { _ = resp.Body.Close() }()
+	_ = drainAndClose(t, resp)
+
+	last, _ := up.snapshot()
+	assert.Equal(t, "42", last.lastEventID,
+		"the header cursor is forwarded even when the query also carries one")
+	assert.Equal(t, "last_event_id=41", last.rawQuery,
+		"the query cursor is preserved even when the header also carries one")
+}
+
+func TestRunsStream_IdFrame_ForwardedByteForByte(t *testing.T) {
+	srv, up := newRunsUpstream(t, http.StatusOK, idFrameFixture, "text/event-stream; charset=utf-8")
+	harness, tokens := newRunsHarness(t, mustAgentProxy(t, srv.URL), 0, nil)
+	server := httptest.NewServer(harness)
+	t.Cleanup(server.Close)
+
+	resp := doRunCursorRequest(t, server, "/api/chat/runs/"+reattachRunID+"/stream",
+		"Bearer "+bearerToken(t, tokens), "")
+	defer func() { _ = resp.Body.Close() }()
+	assert.Equal(t, http.StatusOK, resp.StatusCode)
+
+	got := drainAndClose(t, resp)
+	assert.Equal(t, idFrameFixture, got,
+		"an id-bearing frame must survive copyAndFlush byte-for-byte")
+	assert.Contains(t, got, "id: 7\n",
+		"the SSE id field must not be parsed away or stripped")
+
+	last, _ := up.snapshot()
+	assert.Empty(t, last.lastEventID, "no cursor was sent on this request")
+	assert.Empty(t, last.lastEventIDQuery, "no cursor was sent on this request")
+}
+
+func TestRunsStream_IdFrame_WithCursorForwarded(t *testing.T) {
+	srv, up := newRunsUpstream(t, http.StatusOK, idFrameFixture, "text/event-stream; charset=utf-8")
+	harness, tokens := newRunsHarness(t, mustAgentProxy(t, srv.URL), 0, nil)
+	server := httptest.NewServer(harness)
+	t.Cleanup(server.Close)
+
+	resp := doRunCursorRequest(t, server, "/api/chat/runs/"+reattachRunID+"/stream?last_event_id=41",
+		"Bearer "+bearerToken(t, tokens), "42")
+	defer func() { _ = resp.Body.Close() }()
+	assert.Equal(t, http.StatusOK, resp.StatusCode)
+
+	got := drainAndClose(t, resp)
+	assert.Equal(t, idFrameFixture, got,
+		"active cursor forwarding must not perturb the byte-for-byte body contract")
+
+	last, _ := up.snapshot()
+	assert.Equal(t, "42", last.lastEventID)
+	assert.Equal(t, "41", last.lastEventIDQuery)
 }

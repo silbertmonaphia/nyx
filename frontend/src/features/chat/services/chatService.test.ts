@@ -25,6 +25,7 @@ import * as telemetry from '~/services/telemetry';
 import CONFIRM_FRAME from './__fixtures__/confirm_request.sse?raw';
 import REATTACH_STREAM from './__fixtures__/reattach_stream.sse?raw';
 import STEP_TRACE_WIRE from './__fixtures__/step_trace.json';
+import FRAME_ID_STREAM from './__fixtures__/frame_id_stream.sse?raw';
 
 // The chatService uses raw `fetch` for SSE (axios can't stream), and
 // `refreshTokensAndReplay` for the 401-retry contract. Mock both.
@@ -1043,6 +1044,235 @@ describe('chatService re-attach wire contract', () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+describe('chatService frame ids (agent-stream-frame-replay)', () => {
+  beforeEach(() => {
+    fetchMock.mockReset();
+    mockedRefresh.mockReset();
+    tokenStore.clear();
+  });
+
+  it('parses the producer-pinned id-bearing stream through the real parser', async () => {
+    fetchMock.mockResolvedValueOnce(sseResponse([FRAME_ID_STREAM]));
+
+    const events: unknown[] = [];
+    for await (const e of chatService.streamMessage(
+      [{ role: 'user', content: 'hi' }],
+      new AbortController().signal,
+    )) {
+      events.push(e);
+    }
+
+    expect(events).toEqual([
+      { kind: 'delta', delta: 'Hello', frameId: 1 },
+      {
+        kind: 'done',
+        usage: { prompt_tokens: 11, completion_tokens: 3, total_tokens: 14 },
+        frameId: 2,
+      },
+      { kind: 'terminator', frameId: 2 },
+    ]);
+  });
+
+  it('attaches the frame id to every parsed event', async () => {
+    const sse =
+      'id: 7\nevent: delta\ndata: {"delta":"Hel"}\n\n' +
+      'id: 8\nevent: done\ndata: {"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}}\n\n' +
+      'id: 9\ndata: [DONE]\n\n';
+    fetchMock.mockResolvedValueOnce(sseResponse([sse]));
+
+    const events: unknown[] = [];
+    for await (const e of chatService.streamMessage(
+      [{ role: 'user', content: 'hi' }],
+      new AbortController().signal,
+    )) {
+      events.push(e);
+    }
+
+    expect(events).toEqual([
+      { kind: 'delta', delta: 'Hel', frameId: 7 },
+      {
+        kind: 'done',
+        usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
+        frameId: 8,
+      },
+      { kind: 'terminator', frameId: 8 },
+    ]);
+  });
+
+  it('processes id-less frames without a frameId and keeps ids where present', async () => {
+    const sse =
+      'id: 1\nevent: delta\ndata: {"delta":"tagged"}\n\n' +
+      'event: delta\ndata: {"delta":" plain"}\n\n' +
+      'data: [DONE]\n\n';
+    fetchMock.mockResolvedValueOnce(sseResponse([sse]));
+
+    const events: unknown[] = [];
+    for await (const e of chatService.streamMessage(
+      [{ role: 'user', content: 'hi' }],
+      new AbortController().signal,
+    )) {
+      events.push(e);
+    }
+
+    expect(events).toEqual([
+      { kind: 'delta', delta: 'tagged', frameId: 1 },
+      { kind: 'delta', delta: ' plain' },
+      { kind: 'terminator' },
+    ]);
+  });
+
+  it('ignores malformed id fields and still processes the frame', async () => {
+    const sse =
+      'id: abc\nevent: delta\ndata: {"delta":"a"}\n\n' +
+      'id: 1.5\nevent: delta\ndata: {"delta":"b"}\n\n' +
+      'id: -2\nevent: delta\ndata: {"delta":"c"}\n\n' +
+      'id: 12x\nevent: delta\ndata: {"delta":"d"}\n\n' +
+      'id:\nevent: delta\ndata: {"delta":"e"}\n\n' +
+      'data: [DONE]\n\n';
+    fetchMock.mockResolvedValueOnce(sseResponse([sse]));
+
+    const events: unknown[] = [];
+    for await (const e of chatService.streamMessage(
+      [{ role: 'user', content: 'hi' }],
+      new AbortController().signal,
+    )) {
+      events.push(e);
+    }
+
+    expect(events).toEqual([
+      { kind: 'delta', delta: 'a' },
+      { kind: 'delta', delta: 'b' },
+      { kind: 'delta', delta: 'c' },
+      { kind: 'delta', delta: 'd' },
+      { kind: 'delta', delta: 'e' },
+      { kind: 'terminator' },
+    ]);
+  });
+
+  it('keeps the last id when a frame carries several id fields', async () => {
+    const sse = 'id: 1\nid: 5\nevent: delta\ndata: {"delta":"x"}\n\ndata: [DONE]\n\n';
+    fetchMock.mockResolvedValueOnce(sseResponse([sse]));
+
+    const events: unknown[] = [];
+    for await (const e of chatService.streamMessage(
+      [{ role: 'user', content: 'hi' }],
+      new AbortController().signal,
+    )) {
+      events.push(e);
+    }
+
+    expect(events).toEqual([
+      { kind: 'delta', delta: 'x', frameId: 5 },
+      { kind: 'terminator' },
+    ]);
+  });
+
+  it('parses note frames with kind replay_truncated into the replay_truncated variant', async () => {
+    const sse =
+      'id: 3\nevent: note\ndata: {"text":"replay truncated","provider":null,"kind":"replay_truncated","failed_steps":[]}\n\n' +
+      'event: delta\ndata: {"delta":"projection"}\n\n' +
+      'data: [DONE]\n\n';
+    fetchMock.mockResolvedValueOnce(sseResponse([sse]));
+
+    const events: unknown[] = [];
+    for await (const e of chatService.streamMessage(
+      [{ role: 'user', content: 'hi' }],
+      new AbortController().signal,
+    )) {
+      events.push(e);
+    }
+
+    expect(events).toEqual([
+      { kind: 'replay_truncated', frameId: 3 },
+      { kind: 'delta', delta: 'projection' },
+      { kind: 'terminator' },
+    ]);
+  });
+
+  it('preserves frame ids through the re-attach parse path', async () => {
+    fetchMock.mockResolvedValueOnce(
+      sseResponse([
+        'id: 3\nevent: delta\ndata: {"delta":"replayed"}\n\n' +
+          'event: delta\ndata: {"delta":" live"}\n\n' +
+          'data: [DONE]\n\n',
+      ]),
+    );
+
+    const events: unknown[] = [];
+    for await (const e of chatService.reattachRun(
+      'run-1',
+      new AbortController().signal,
+    )) {
+      events.push(e);
+    }
+
+    expect(events).toEqual([
+      { kind: 'delta', delta: 'replayed', frameId: 3 },
+      { kind: 'delta', delta: ' live' },
+      { kind: 'terminator' },
+    ]);
+  });
+
+  it('sends the Last-Event-ID header when a cursor is provided', async () => {
+    fetchMock.mockResolvedValueOnce(sseResponse(['data: [DONE]\n\n']));
+
+    for await (const e of chatService.reattachRun(
+      'run-1',
+      new AbortController().signal,
+      { lastEventId: 42 },
+    )) {
+      void e;
+    }
+
+    const headers = (fetchMock.mock.calls[0][1] as RequestInit)
+      .headers as Record<string, string>;
+    expect(headers['Last-Event-ID']).toBe('42');
+  });
+
+  it('omits the Last-Event-ID header when no cursor is provided', async () => {
+    fetchMock.mockResolvedValueOnce(sseResponse(['data: [DONE]\n\n']));
+
+    for await (const e of chatService.reattachRun(
+      'run-1',
+      new AbortController().signal,
+    )) {
+      void e;
+    }
+
+    const headers = (fetchMock.mock.calls[0][1] as RequestInit)
+      .headers as Record<string, string>;
+    expect(headers['Last-Event-ID']).toBeUndefined();
+    expect('Last-Event-ID' in headers).toBe(false);
+  });
+
+  it('resends Last-Event-ID on the post-refresh replay after a 401', async () => {
+    tokenStore.setTokens('expired.access', 'good.refresh');
+    mockedRefresh.mockResolvedValueOnce(true);
+    fetchMock
+      .mockResolvedValueOnce(jsonResponse(401, { error: 'expired', code: 401 }))
+      .mockResolvedValueOnce(sseResponse(['data: [DONE]\n\n']));
+
+    for await (const e of chatService.reattachRun(
+      'run-1',
+      new AbortController().signal,
+      { lastEventId: 9 },
+    )) {
+      void e;
+    }
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    for (const call of fetchMock.mock.calls) {
+      const headers = (call[1] as RequestInit).headers as Record<
+        string,
+        string
+      >;
+      expect(headers['Last-Event-ID']).toBe('9');
+    }
+
+    tokenStore.clear();
   });
 });
 

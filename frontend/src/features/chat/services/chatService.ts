@@ -80,6 +80,9 @@ async function* consumeEventStream(
   const decoder = new TextDecoder("utf-8");
   let buffer = "";
   let sawTerminal = false;
+  let frameId: number | undefined;
+  const withFrameId = (event: ChatEvent): ChatEvent =>
+    frameId === undefined ? event : { ...event, frameId };
   try {
     while (true) {
       let read: ReadableStreamReadResult<Uint8Array>;
@@ -116,6 +119,7 @@ async function* consumeEventStream(
 
         let currentEvent: string | null = null;
         const currentData: string[] = [];
+        frameId = undefined;
         for (const rawLine of frame.split(/\r?\n/)) {
           if (rawLine === "" || rawLine.startsWith(":")) continue;
           const colon = rawLine.indexOf(":");
@@ -126,13 +130,20 @@ async function* consumeEventStream(
             currentEvent = value;
           } else if (field === "data") {
             currentData.push(value);
+          } else if (field === "id") {
+            if (/^\d+$/.test(value)) {
+              const parsedId = Number.parseInt(value, 10);
+              if (Number.isSafeInteger(parsedId)) {
+                frameId = parsedId;
+              }
+            }
           }
         }
 
         const dataStr = currentData.join("\n");
         if (dataStr === "[DONE]") {
           sawTerminal = true;
-          yield { kind: "terminator" };
+          yield withFrameId({ kind: "terminator" });
           return;
         }
         if (!dataStr) continue;
@@ -147,7 +158,7 @@ async function* consumeEventStream(
           try {
             const parsed = JSON.parse(dataStr) as { delta?: unknown };
             if (typeof parsed.delta === "string") {
-              yield { kind: "delta", delta: parsed.delta };
+              yield withFrameId({ kind: "delta", delta: parsed.delta });
             }
           } catch {}
         } else if (currentEvent === "done") {
@@ -166,18 +177,18 @@ async function* consumeEventStream(
               typeof u.completion_tokens === "number" &&
               typeof u.total_tokens === "number"
             ) {
-              yield {
+              yield withFrameId({
                 kind: "done",
                 usage: {
                   prompt_tokens: u.prompt_tokens,
                   completion_tokens: u.completion_tokens,
                   total_tokens: u.total_tokens,
                 },
-              };
+              });
             }
           } catch {}
           sawTerminal = true;
-          yield { kind: "terminator" };
+          yield withFrameId({ kind: "terminator" });
           return;
         } else if (currentEvent === "note") {
           try {
@@ -187,20 +198,26 @@ async function* consumeEventStream(
               kind?: unknown;
               failed_steps?: unknown;
             };
-            if (
+            if (parsed.kind === "replay_truncated") {
+              yield withFrameId({ kind: "replay_truncated" });
+            } else if (
               parsed.kind === "partial_failure" &&
               Array.isArray(parsed.failed_steps) &&
               parsed.failed_steps.every((s) => typeof s === "string")
             ) {
-              yield {
+              yield withFrameId({
                 kind: "partial_failure",
                 failedSteps: parsed.failed_steps as string[],
-              };
+              });
             } else if (
               typeof parsed.text === "string" &&
               typeof parsed.provider === "string"
             ) {
-              yield { kind: "note", text: parsed.text, provider: parsed.provider };
+              yield withFrameId({
+                kind: "note",
+                text: parsed.text,
+                provider: parsed.provider,
+              });
             }
           } catch {}
         } else if (currentEvent === "error") {
@@ -210,7 +227,7 @@ async function* consumeEventStream(
               request_id?: unknown;
               code?: unknown;
             };
-            yield {
+            yield withFrameId({
               kind: "error",
               error:
                 typeof parsed.error === "string"
@@ -221,7 +238,7 @@ async function* consumeEventStream(
                   ? parsed.request_id
                   : "",
               code: typeof parsed.code === "string" ? parsed.code : undefined,
-            };
+            });
           } catch {
             yield {
               kind: "error",
@@ -230,7 +247,7 @@ async function* consumeEventStream(
             };
           }
           sawTerminal = true;
-          yield { kind: "terminator" };
+          yield withFrameId({ kind: "terminator" });
           return;
         } else if (currentEvent === "plan") {
           try {
@@ -266,7 +283,7 @@ async function* consumeEventStream(
                       : undefined,
                 });
               }
-              yield { kind: "plan", steps };
+              yield withFrameId({ kind: "plan", steps });
             }
           } catch {}
         } else if (currentEvent === "step_start") {
@@ -285,11 +302,11 @@ async function* consumeEventStream(
                 kind === "llm" ||
                 kind === "react")
             ) {
-              yield {
+              yield withFrameId({
                 kind: "step_start",
                 step_id: id,
                 step_kind: kind,
-              };
+              });
             }
           } catch {}
         } else if (currentEvent === "confirm_request") {
@@ -313,7 +330,7 @@ async function* consumeEventStream(
               parsed.approval_id !== "" &&
               typeof parsed.expires_at === "number"
             ) {
-              yield {
+              yield withFrameId({
                 kind: "confirm_request",
                 run_id: parsed.run_id,
                 step_id: parsed.step_id,
@@ -321,7 +338,7 @@ async function* consumeEventStream(
                 args: parsed.args,
                 approval_id: parsed.approval_id,
                 expires_at: parsed.expires_at,
-              };
+              });
             } else {
               console.warn(
                 "chat: confirm_request frame missing required fields",
@@ -344,13 +361,13 @@ async function* consumeEventStream(
               typeof parsed.call_id === "string" &&
               typeof parsed.name === "string"
             ) {
-              yield {
+              yield withFrameId({
                 kind: "tool_call",
                 step_id: parsed.step_id,
                 call_id: parsed.call_id,
                 name: parsed.name,
                 args: parsed.args,
-              };
+              });
             }
           } catch {}
         } else if (currentEvent === "tool_result") {
@@ -367,7 +384,7 @@ async function* consumeEventStream(
               typeof parsed.step_id === "string" &&
               typeof parsed.call_id === "string"
             ) {
-              yield {
+              yield withFrameId({
                 kind: "tool_result",
                 step_id: parsed.step_id,
                 call_id: parsed.call_id,
@@ -381,7 +398,7 @@ async function* consumeEventStream(
                   typeof parsed.retry_count === "number"
                     ? parsed.retry_count
                     : undefined,
-              };
+              });
             }
           } catch {}
         } else if (currentEvent === "step_end") {
@@ -395,13 +412,13 @@ async function* consumeEventStream(
               typeof parsed.step_id === "string" &&
               (parsed.status === "ok" || parsed.status === "failed")
             ) {
-              yield {
+              yield withFrameId({
                 kind: "step_end",
                 step_id: parsed.step_id,
                 status: parsed.status,
                 reason:
                   typeof parsed.reason === "string" ? parsed.reason : "",
-              };
+              });
             }
           } catch {}
         }
@@ -674,9 +691,16 @@ export const chatService = {
   async *reattachRun(
     runId: string,
     signal: AbortSignal,
-    opts: { onRunId?: (id: string) => void } = {},
+    opts: {
+      onRunId?: (id: string) => void;
+      lastEventId?: number;
+    } = {},
   ): AsyncGenerator<ChatEvent> {
     const url = `${RUN_STREAM_URL_BASE}/${encodeURIComponent(runId)}/stream`;
+    const headers = buildHeaders();
+    if (opts.lastEventId !== undefined) {
+      headers["Last-Event-ID"] = String(opts.lastEventId);
+    }
     const chained = new AbortController();
     const onCallerAbort = () => chained.abort();
     if (signal.aborted) onCallerAbort();
@@ -684,7 +708,7 @@ export const chatService = {
     try {
       let response = await fetch(url, {
         method: "GET",
-        headers: buildHeaders(),
+        headers,
         signal: chained.signal,
       });
       if (response.status === 401 && tokenStore.getAccessToken() !== null) {
@@ -692,7 +716,7 @@ export const chatService = {
         if (ok) {
           response = await fetch(url, {
             method: "GET",
-            headers: buildHeaders(),
+            headers,
             signal: chained.signal,
           });
         }

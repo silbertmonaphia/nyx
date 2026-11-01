@@ -480,12 +480,16 @@ def test_stream_resilience_defaults(monkeypatch):
         "KEEPALIVE_SECONDS",
         "STREAM_DETACH_ENABLED",
         "DETACHED_RUN_CAP_SECONDS",
+        "FRAME_REPLAY_ENABLED",
+        "FRAME_BUFFER_MAX",
     ):
         monkeypatch.delenv(f"PYTHON_AGENT_{key}", raising=False)
     s = Settings(_env_file=None, llm_base_url="http://vllm:8000/v1")
     assert s.keepalive_seconds == 15
     assert s.stream_detach_enabled is True
     assert s.detached_run_cap_seconds == 600
+    assert s.frame_replay_enabled is True
+    assert s.frame_buffer_max == 5000
 
 
 def test_keepalive_zero_is_a_valid_disable(monkeypatch):
@@ -502,6 +506,8 @@ def test_keepalive_zero_is_a_valid_disable(monkeypatch):
         {"keepalive_seconds": -1},
         {"detached_run_cap_seconds": 0},
         {"detached_run_cap_seconds": -5},
+        {"frame_buffer_max": 0},
+        {"frame_buffer_max": -1},
     ],
 )
 def test_invalid_stream_resilience_values_refused(kwargs):

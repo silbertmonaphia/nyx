@@ -1,0 +1,10 @@
+id: 1
+event: delta
+data: {"delta":"Hello"}
+
+id: 2
+event: done
+data: {"usage":{"prompt_tokens":11,"completion_tokens":3,"total_tokens":14}}
+
+data: [DONE]
+

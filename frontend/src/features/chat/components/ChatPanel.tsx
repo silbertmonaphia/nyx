@@ -168,6 +168,7 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ open, onOpenChange }) => {
   const isStreaming = useChat((s) => s.isStreaming);
   const isRecovering = useChat((s) => s.isRecovering);
   const stoppedReason = useChat((s) => s.stoppedReason);
+  const possiblyIncomplete = useChat((s) => s.possiblyIncomplete);
   const error = useChat((s) => s.error);
   const send = useChat((s) => s.send);
   const cancel = useChat((s) => s.cancel);
@@ -377,8 +378,10 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ open, onOpenChange }) => {
                           />
                         );
                       })}
-                    {m.content ||
-                      (isStreaming && m.role === "assistant" ? "…" : "")}
+                    <span data-testid="chat-message-content">
+                      {m.content ||
+                        (isStreaming && m.role === "assistant" ? "…" : "")}
+                    </span>
                     {m.role === "assistant" &&
                       m.notes?.map((n, ni) => (
                         <div
@@ -435,6 +438,15 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ open, onOpenChange }) => {
                   role="alert"
                 >
                   {error}
+                </div>
+              )}
+              {possiblyIncomplete && (
+                <div
+                  className="text-xs text-amber-700 dark:text-amber-400 text-center"
+                  data-testid="chat-possibly-incomplete"
+                  role="status"
+                >
+                  {t("chat.recovery.possiblyIncomplete")}
                 </div>
               )}
               {stoppedReason === "user_cancelled" && (

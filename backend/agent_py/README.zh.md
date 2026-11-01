@@ -108,6 +108,8 @@ cd backend/agent_py && pytest tests/ -v
 | `PYTHON_AGENT_STREAM_DETACH_ENABLED` | `true` | run 的生命不再系于 SSE 连接；`false` 恢复“断连即取消 run” |
 | `PYTHON_AGENT_DETACHED_RUN_CAP_SECONDS` | `600` | detached run 的墙钟上限（超时标记失败） |
 | `PYTHON_AGENT_KEEPALIVE_SECONDS` | `15` | SSE 心跳注释帧的空闲间隔；`0` 关闭 |
+| `PYTHON_AGENT_FRAME_REPLAY_ENABLED` | `true` | 帧带 SSE `id:`，并在进程内缓冲，重连可从上次 id 续上；`false` 恢复无 id 的旧线路 |
+| `PYTHON_AGENT_FRAME_BUFFER_MAX` | `5000` | 每个 run 用于回放的帧数上限（先进先出丢弃）；缓冲随 run 一起消失 |
 | `LANGFUSE_DEBUG` | 未设置 | Langfuse SDK 详细日志 —— 从**进程环境**读取（见下） |
 
 Langfuse 追踪可以直接从默认日志诊断：`PYTHON_AGENT_LANGFUSE_ENABLED=true` 时启动日志会给出所配置的 host，导出失败会打印 OTel exporter 的重试/丢弃诊断（尽力投递 —— 不影响运行本身）。需要 SDK 级详细输出时，在**进程环境**（shell、compose 的 `environment:`、systemd unit）里设 `LANGFUSE_DEBUG=true`：Langfuse SDK 直接读 `os.environ`，而本服务的 `.env` 由 pydantic-settings 加载、不会同步进 `os.environ` —— 只写 `.env` 没有效果。

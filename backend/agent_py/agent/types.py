@@ -179,7 +179,13 @@ class NoteEvent(BaseModel):
     # `partial_failure` is the agent-tool-dispatch-retry variant: emitted
     # immediately before the final answer's deltas when the run diverged
     # from the plan (see specs/agent-partial-failure/spec.md).
-    kind: Literal["resumed", "fresh_run", "partial_failure", "reattached"] | None = None
+    kind: Literal[
+        "resumed",
+        "fresh_run",
+        "partial_failure",
+        "reattached",
+        "replay_truncated",
+    ] | None = None
     last_step_id: str | None = None
     run_id: str | None = None
     # Populated only when `kind == "partial_failure"`: the step ids whose

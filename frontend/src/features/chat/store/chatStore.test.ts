@@ -39,6 +39,7 @@ function resetStore() {
     isStreaming: false,
     error: null,
     llmGateOpen: false,
+    possiblyIncomplete: false,
     currentSessionId: null,
     ownerUserId: undefined,
     sessionList: [],
@@ -3563,6 +3564,218 @@ describe('useChatStore', () => {
       const state = useChatStore.getState();
       expect(state.isRecovering).toBe(false);
       expect(state.stoppedReason).toBeNull();
+    });
+
+    it('presents the highest rendered frame id as the re-attach cursor and drops replayed duplicates', async () => {
+      mockedService.streamMessage.mockImplementationOnce(
+        streamOf(
+          [
+            { kind: 'delta', delta: 'Hel', frameId: 1 },
+            { kind: 'delta', delta: 'lo', frameId: 2 },
+            { kind: 'stream_incomplete' },
+          ],
+          'run-1',
+        ),
+      );
+      mockedService.reattachRun.mockImplementationOnce(
+        streamOf([
+          { kind: 'delta', delta: 'lo', frameId: 2 },
+          { kind: 'delta', delta: '!', frameId: 3 },
+          {
+            kind: 'done',
+            usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
+            frameId: 4,
+          },
+          { kind: 'terminator' },
+        ]),
+      );
+
+      await act(async () => {
+        await useChatStore.getState().send('hi');
+      });
+
+      expect(mockedService.reattachRun).toHaveBeenCalledTimes(1);
+      const opts = mockedService.reattachRun.mock.calls[0][2] as {
+        lastEventId?: number;
+      };
+      expect(opts.lastEventId).toBe(2);
+      const state = useChatStore.getState();
+      expect(state.messages).toHaveLength(2);
+      expect(state.messages[1]?.content).toBe('Hello!');
+      expect(state.error).toBeNull();
+    });
+
+    it('an id-less stream sends no cursor and renders normally', async () => {
+      mockedService.streamMessage.mockImplementationOnce(
+        streamOf(
+          [
+            { kind: 'delta', delta: 'Hel' },
+            { kind: 'stream_incomplete' },
+          ],
+          'run-1',
+        ),
+      );
+      mockedService.reattachRun.mockImplementationOnce(
+        streamOf([
+          { kind: 'delta', delta: 'lo' },
+          { kind: 'terminator' },
+        ]),
+      );
+
+      await act(async () => {
+        await useChatStore.getState().send('hi');
+      });
+
+      const opts = mockedService.reattachRun.mock.calls[0][2] as {
+        lastEventId?: number;
+      };
+      expect(opts.lastEventId).toBeUndefined();
+      expect(useChatStore.getState().messages[1]?.content).toBe('Hello');
+    });
+
+    it('id-less frames do not reset or advance the cursor', async () => {
+      mockedService.streamMessage.mockImplementationOnce(
+        streamOf(
+          [
+            { kind: 'delta', delta: 'a', frameId: 1 },
+            { kind: 'delta', delta: 'b' },
+            { kind: 'delta', delta: 'c', frameId: 2 },
+            { kind: 'stream_incomplete' },
+          ],
+          'run-1',
+        ),
+      );
+      mockedService.reattachRun.mockImplementationOnce(
+        streamOf([{ kind: 'terminator' }]),
+      );
+
+      await act(async () => {
+        await useChatStore.getState().send('hi');
+      });
+
+      const opts = mockedService.reattachRun.mock.calls[0][2] as {
+        lastEventId?: number;
+      };
+      expect(opts.lastEventId).toBe(2);
+      expect(useChatStore.getState().messages[1]?.content).toBe('abc');
+    });
+
+    it('a replay_truncated note keeps the partial row, flags possiblyIncomplete, and finishes the turn', async () => {
+      mockedService.streamMessage.mockImplementationOnce(
+        streamOf(
+          [
+            { kind: 'delta', delta: 'partial ', frameId: 1 },
+            { kind: 'stream_incomplete' },
+          ],
+          'run-1',
+        ),
+      );
+      mockedService.reattachRun.mockImplementationOnce(
+        streamOf([
+          { kind: 'replay_truncated', frameId: 2 },
+          { kind: 'delta', delta: 'answer', frameId: 3 },
+          { kind: 'terminator' },
+        ]),
+      );
+
+      await act(async () => {
+        await useChatStore.getState().send('hi');
+      });
+
+      const state = useChatStore.getState();
+      expect(state.messages).toHaveLength(2);
+      expect(state.messages[1]?.content).toBe('partial answer');
+      expect(state.possiblyIncomplete).toBe(true);
+      expect(state.error).toBeNull();
+      expect(state.isStreaming).toBe(false);
+      expect(state.isRecovering).toBe(false);
+      expect(state.stoppedReason).toBeNull();
+    });
+
+    it('possiblyIncomplete clears on the next send and on reset', async () => {
+      useChatStore.setState({ possiblyIncomplete: true });
+      mockedService.streamMessage.mockImplementationOnce(
+        streamOf([{ kind: 'delta', delta: 'ok' }, { kind: 'terminator' }]),
+      );
+
+      await act(async () => {
+        await useChatStore.getState().send('next');
+      });
+
+      expect(useChatStore.getState().possiblyIncomplete).toBe(false);
+
+      useChatStore.setState({ possiblyIncomplete: true });
+      await act(async () => {
+        useChatStore.getState().reset();
+      });
+      expect(useChatStore.getState().possiblyIncomplete).toBe(false);
+    });
+
+    it('the resume re-POST starts a fresh frame sequence and renders its frames', async () => {
+      mockedService.streamMessage
+        .mockImplementationOnce(
+          streamOf(
+            [
+              { kind: 'delta', delta: 'stale ', frameId: 1 },
+              { kind: 'stream_incomplete' },
+            ],
+            'run-1',
+          ),
+        )
+        .mockImplementationOnce(
+          streamOf([
+            { kind: 'delta', delta: 'fresh', frameId: 1 },
+            { kind: 'terminator' },
+          ]),
+        );
+      mockedService.reattachRun.mockRejectedValueOnce(NOT_LIVE);
+      mockedService.getMessages.mockResolvedValueOnce([
+        makeMessageRow({ id: 1, role: 'user', content: 'hi' }),
+      ]);
+
+      await act(async () => {
+        await useChatStore.getState().send('hi');
+      });
+
+      expect(mockedService.streamMessage).toHaveBeenCalledTimes(2);
+      const state = useChatStore.getState();
+      expect(state.messages).toHaveLength(2);
+      expect(state.messages[1]?.content).toBe('fresh');
+      expect(state.error).toBeNull();
+    });
+
+    it('a new turn in the same session starts a fresh frame sequence', async () => {
+      mockedService.streamMessage
+        .mockImplementationOnce(
+          streamOf(
+            [
+              { kind: 'delta', delta: 'first ', frameId: 7 },
+              { kind: 'terminator' },
+            ],
+            'run-1',
+          ),
+        )
+        .mockImplementationOnce(
+          streamOf(
+            [
+              { kind: 'delta', delta: 'second', frameId: 1 },
+              { kind: 'terminator' },
+            ],
+            'run-1',
+          ),
+        );
+
+      await act(async () => {
+        await useChatStore.getState().send('hi');
+      });
+      await act(async () => {
+        await useChatStore.getState().send('again');
+      });
+
+      const state = useChatStore.getState();
+      expect(state.messages).toHaveLength(4);
+      expect(state.messages[3]?.content).toBe('second');
+      expect(state.error).toBeNull();
     });
   });
 });

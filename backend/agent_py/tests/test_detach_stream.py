@@ -30,6 +30,7 @@ import httpx
 import pytest
 from fakeredis import aioredis as fakeaioredis
 
+from agent.frames import TRUNCATED
 from agent.main import _stream_agent_run
 from agent.types import ChatMessage, ChatRequest
 from tests.service_auth_fixtures import SERVICE_AUTH_HEADERS, TEST_SERVICE_TOKEN
@@ -126,8 +127,40 @@ async def _open_run(app, settings, monkeypatch_free=True):
                 if payload.get("kind") in ("fresh_run", "resumed"):
                     seen_note = True
 
-    await asyncio.wait_for(gen.__anext__(), timeout=10)
-    return gen, run_id
+    extra = await asyncio.wait_for(gen.__anext__(), timeout=10)
+    buffer += extra.decode()
+    last_id = 0
+    for line in buffer.splitlines():
+        if line.startswith("id: "):
+            last_id = max(last_id, int(line.removeprefix("id: ")))
+    return gen, run_id, last_id
+
+
+def _push_frame(session, kind, payload):
+    """Put one event on the run's sink queue — the channel the pump uses.
+
+    The frames then travel the real path: the collector drains the
+    queue, the drain folds the event, `encode_event` stamps it with an
+    id and appends it to the frame buffer, and the collector broadcasts
+    it. Nothing is hand-placed into the buffer.
+    """
+    from agent.types import Event
+
+    session.queue.put_nowait(("event", Event(kind=kind, payload=payload)))
+
+
+async def _wait_for_new_frames(session, last_id, timeout=10.0):
+    """Wait until the run has emitted at least one more frame.
+
+    The frames emitted while the client is disconnected are exactly the
+    ones a cursor must bring back — without this wait, "the replay
+    happened" and "the live stream simply continued" look identical.
+    """
+    async def _advanced():
+        log = session.frame_log
+        return log is not None and log.watermark() > last_id
+
+    await asyncio.wait_for(_poll_until(_advanced), timeout=timeout)
 
 
 async def _wait_registry_empty(app, run_id, timeout=15.0):
@@ -263,7 +296,7 @@ async def test_cross_user_cancel_is_the_same_409(monkeypatch):
     app = create_app()
     async with app.router.lifespan_context(app):
         app.state.budget = BudgetGuard(redis=fakeaioredis.FakeRedis(), cap=10**9)
-        gen, run_id = await _open_run(app, settings)
+        gen, run_id, _last_id = await _open_run(app, settings)
         await gen.aclose()
         assert run_id in _detached_registry(app)
 
@@ -300,7 +333,7 @@ async def test_detach_hands_off_and_registry_empties(monkeypatch):
     app = create_app()
     async with app.router.lifespan_context(app):
         app.state.budget = BudgetGuard(redis=fakeaioredis.FakeRedis(), cap=10**9)
-        gen, run_id = await _open_run(app, settings)
+        gen, run_id, _last_id = await _open_run(app, settings)
         await gen.aclose()
 
         assert run_id in _detached_registry(app)
@@ -328,7 +361,7 @@ async def test_session_cancel_broadcasts_and_marks(monkeypatch):
     app = create_app()
     async with app.router.lifespan_context(app):
         app.state.budget = BudgetGuard(redis=fakeaioredis.FakeRedis(), cap=10**9)
-        gen, run_id = await _open_run(app, settings)
+        gen, run_id, _last_id = await _open_run(app, settings)
         await gen.aclose()
 
         session = _detached_registry(app)[run_id]
@@ -337,8 +370,7 @@ async def test_session_cancel_broadcasts_and_marks(monkeypatch):
         assert session.error_code == "user_cancelled"
 
         first = await asyncio.wait_for(sub.get(), timeout=5)
-        assert first[0] == "event"
-        assert first[1].payload["code"] == "user_cancelled"
+        assert b'"code":"user_cancelled"' in first[1]
         second = await asyncio.wait_for(sub.get(), timeout=5)
         assert second is None
 
@@ -360,7 +392,7 @@ async def test_repost_echoing_a_live_detached_run_attaches(monkeypatch):
     app = create_app()
     async with app.router.lifespan_context(app):
         app.state.budget = BudgetGuard(redis=fakeaioredis.FakeRedis(), cap=10**9)
-        gen, run_id = await _open_run(app, settings)
+        gen, run_id, _last_id = await _open_run(app, settings)
         await gen.aclose()
         assert run_id in _detached_registry(app)
         llm_calls_before = _SlowLlm.call_count
@@ -451,11 +483,47 @@ async def test_replay_frames_rebuild_step_state():
     }
 
 
-async def test_reattach_subscriber_bridges_live_frames_and_done(monkeypatch):
-    """A subscriber registered on a detached session receives the live
-    frames (bridge to the run's queue) and the [DONE] sentinel — the
-    re-attach endpoint's framing (note + replay) is HTTP-level and
-    covered by the DSN-gated test below."""
+async def test_run_stream_frames_carry_monotonic_ids(monkeypatch):
+    """Spec "Frames carry a monotonic id": once the pump frames start,
+    every event frame carries `id: <decimal>` and the ids strictly
+    increase; the opening run_id/note framing frames stay id-less."""
+    from agent.budget import BudgetGuard
+    from agent.main import create_app
+
+    _patch_common(monkeypatch)
+    settings = _settings()
+    _patch_settings(monkeypatch, settings)
+    app = create_app()
+    async with app.router.lifespan_context(app):
+        app.state.budget = BudgetGuard(redis=fakeaioredis.FakeRedis(), cap=10**9)
+        chat_req = ChatRequest(messages=[ChatMessage(role="user", content="hi")])
+        gen = _stream_agent_run(
+            chat_req,
+            user_id=42,
+            bearer_token="stub-token-not-verified",
+            request_id=None,
+            app=app,
+            settings=settings,
+        )
+        ids: list[int] = []
+        head_frames = 0
+        try:
+            async for chunk in gen:
+                for line in chunk.decode().splitlines():
+                    if line.startswith("id: "):
+                        ids.append(int(line.removeprefix("id: ")))
+                    elif line.startswith(("event: run_id", "event: note")):
+                        head_frames += 1
+        finally:
+            await gen.aclose()
+    assert head_frames >= 1
+    assert ids == sorted(ids), "frame ids must be strictly increasing"
+    assert len(set(ids)) == len(ids)
+
+
+async def test_session_buffer_released_at_terminal(monkeypatch):
+    """Spec "Buffer is released with the run": finalize drops the frame
+    log, so a held session reference shows the buffer gone."""
     from agent.budget import BudgetGuard
     from agent.main import _detached_registry, create_app
 
@@ -465,37 +533,198 @@ async def test_reattach_subscriber_bridges_live_frames_and_done(monkeypatch):
     app = create_app()
     async with app.router.lifespan_context(app):
         app.state.budget = BudgetGuard(redis=fakeaioredis.FakeRedis(), cap=10**9)
-        gen, run_id = await _open_run(app, settings)
+        gen, run_id, _last_id = await _open_run(app, settings)
         await gen.aclose()
 
         session = _detached_registry(app)[run_id]
-        sub = session.subscribe()
-
-        body = b""
-        async for chunk in _drain_subscriber(sub, settings):
-            body += chunk
-
-        text = body.decode()
-        assert "event: step_start" in text
-        assert "event: delta" in text
-        assert "event: done" in text
-        assert "data: [DONE]" in text
+        assert session.frame_log is not None
+        await _wait_registry_empty(app, run_id)
+        assert session.frame_log is None
 
 
-async def _drain_subscriber(sub, settings):
-    import agent.main as main_module
+async def test_reattach_cursor_replays_missed_frames(monkeypatch):
+    """Spec "Gap-free resume": a re-attach presenting the last id the
+    client saw replays every buffered frame after it (ids included, in
+    order, no duplicates) before the live remainder — the client misses
+    nothing. Driven through the real HTTP route, so the bytes on the
+    wire are the producer's own and the endpoint's own cursor branch
+    runs (not a re-implementation of it).
 
-    async for item in main_module._drain_run_queue(
-        sub, idle_seconds=float(settings.keepalive_seconds)
-    ):
-        if item is None:
-            break
-        kind, payload = item
-        if kind == "comment":
-            yield f": {payload}\n\n".encode()
-            continue
-        yield main_module._sse_encode(payload)
-    yield b"data: [DONE]\n\n"
+    The run has TWO llm steps, so it keeps emitting after the client
+    disconnects: those are the frames the cursor has to bring back.
+    Without the cursor the endpoint answers with the step projection
+    instead, and the frames emitted while the client was away are gone
+    — which is exactly what the assertion below rules out."""
+    from agent.budget import BudgetGuard
+    from agent.main import _detached_registry, create_app
+
+    _patch_common(monkeypatch)
+    settings = _settings()
+    _patch_settings(monkeypatch, settings)
+    app = create_app()
+    async with app.router.lifespan_context(app):
+        app.state.budget = BudgetGuard(redis=fakeaioredis.FakeRedis(), cap=10**9)
+        gen, run_id, last_id = await _open_run(app, settings)
+        await gen.aclose()
+
+        session = _detached_registry(app)[run_id]
+        _push_frame(session, "delta", {"delta": "missed "})
+        _push_frame(session, "delta", {"delta": "half"})
+        await _wait_for_new_frames(session, last_id)
+        watermark = session.frame_log.watermark()
+        replayed = session.frame_log.since(last_id, upto=watermark)
+        assert replayed is not TRUNCATED
+        assert len(replayed) > 0, "the run must have emitted frames while away"
+
+        text = await _get_reattach_stream(
+            app, run_id, cursor=str(last_id)
+        )
+        await _wait_registry_empty(app, run_id)
+
+    replay_ids = [
+        int(line.removeprefix("id: "))
+        for line in text.splitlines()
+        if line.startswith("id: ")
+    ]
+    assert replay_ids, "the replay must carry id-bearing frames"
+    assert replay_ids == sorted(set(replay_ids)), (
+        "replayed ids must be in order without duplicates"
+    )
+    missed = [i for i in replay_ids if last_id < i <= watermark]
+    assert missed, (
+        f"the frames emitted while the client was away (ids "
+        f"{last_id + 1}..{watermark}) must be replayed; the stream carried "
+        f"ids {replay_ids}"
+    )
+    assert "event: done" in text
+    assert "data: [DONE]" in text
+
+
+async def test_reattach_query_cursor_replays_missed_frames(monkeypatch):
+    """Spec "A cursor resumes the stream without gaps": the cursor also
+    travels as the `last_event_id` query parameter when the header is
+    absent — the fallback for clients and proxies that drop unknown
+    headers — and replays the same frames the header would."""
+    from agent.budget import BudgetGuard
+    from agent.main import _detached_registry, create_app
+
+    _patch_common(monkeypatch)
+    settings = _settings()
+    _patch_settings(monkeypatch, settings)
+    app = create_app()
+    async with app.router.lifespan_context(app):
+        app.state.budget = BudgetGuard(redis=fakeaioredis.FakeRedis(), cap=10**9)
+        gen, run_id, last_id = await _open_run(app, settings)
+        await gen.aclose()
+
+        assert run_id in _detached_registry(app)
+        session = _detached_registry(app)[run_id]
+        _push_frame(session, "delta", {"delta": "missed "})
+        _push_frame(session, "delta", {"delta": "half"})
+        await _wait_for_new_frames(session, last_id)
+        watermark = session.frame_log.watermark()
+        text = await _get_reattach_stream(
+            app, run_id, cursor_query=str(last_id)
+        )
+        await _wait_registry_empty(app, run_id)
+
+    replay_ids = [
+        int(line.removeprefix("id: "))
+        for line in text.splitlines()
+        if line.startswith("id: ")
+    ]
+    assert replay_ids, "the replay must carry id-bearing frames"
+    missed = [i for i in replay_ids if last_id < i <= watermark]
+    assert missed, (
+        f"the frames emitted while the client was away (ids "
+        f"{last_id + 1}..{watermark}) must be replayed; the stream carried "
+        f"ids {replay_ids}"
+    )
+    assert "data: [DONE]" in text
+
+
+async def test_reattach_malformed_cursor_reports_truncation(monkeypatch):
+    """Spec "Rolled-past cursor is reported": a malformed cursor yields
+    note{kind:"replay_truncated"} followed by the step projection, and
+    the stream still completes. The note is built by the real
+    `NoteEvent` model, so a note kind the model rejects fails here
+    instead of 500-ing the route in production."""
+    from agent.budget import BudgetGuard
+    from agent.main import _detached_registry, create_app
+
+    _patch_common(monkeypatch)
+    settings = _settings()
+    _patch_settings(monkeypatch, settings)
+    app = create_app()
+    async with app.router.lifespan_context(app):
+        app.state.budget = BudgetGuard(redis=fakeaioredis.FakeRedis(), cap=10**9)
+        gen, run_id, _last_id = await _open_run(app, settings)
+        await gen.aclose()
+
+        assert run_id in _detached_registry(app)
+        text = await _get_reattach_stream(app, run_id, cursor="junk")
+        await _wait_registry_empty(app, run_id)
+
+    assert '"kind":"replay_truncated"' in text
+    assert "event: plan" in text
+    assert "data: [DONE]" in text
+
+
+async def test_reattach_replay_disabled_reports_truncation(monkeypatch):
+    """Spec "Cursor against a replay-disabled service": replay off → the
+    cursor gets the truncation note and the step projection instead of
+    an error."""
+    from agent.budget import BudgetGuard
+    from agent.main import _detached_registry, create_app
+
+    _patch_common(monkeypatch)
+    settings = _settings(frame_replay_enabled=False)
+    _patch_settings(monkeypatch, settings)
+    app = create_app()
+    async with app.router.lifespan_context(app):
+        app.state.budget = BudgetGuard(redis=fakeaioredis.FakeRedis(), cap=10**9)
+        gen, run_id, _last_id = await _open_run(app, settings)
+        await gen.aclose()
+
+        assert run_id in _detached_registry(app)
+        text = await _get_reattach_stream(app, run_id, cursor="0")
+        await _wait_registry_empty(app, run_id)
+
+    assert '"kind":"replay_truncated"' in text
+    assert "event: delta" in text
+    assert "data: [DONE]" in text
+
+
+async def _get_reattach_stream(app, run_id, cursor=None, cursor_query=None):
+    """GET the real re-attach route and return the response body.
+
+    The route answers 501 unless the persistence layer is present, so
+    the gate is opened with a sentinel AFTER the run was created — the
+    session itself was built without persistence and never touches it.
+    The cursor travels as the `Last-Event-ID` header, the way the SPA
+    sends it, or as the `last_event_id` query parameter, the fallback
+    for clients and proxies that drop the header.
+    """
+    app.state.run_metadata = object()
+    transport = httpx.ASGITransport(app=app)
+    headers = {"X-Nyx-User-Id": "42"}
+    if cursor is not None:
+        headers["Last-Event-ID"] = cursor
+    url = f"/agent/runs/{run_id}/stream"
+    if cursor_query is not None:
+        url += f"?last_event_id={cursor_query}"
+    async with httpx.AsyncClient(
+        transport=transport,
+        base_url="http://test",
+        headers=SERVICE_AUTH_HEADERS,
+    ) as client:
+        resp = await client.get(
+            url,
+            headers=headers,
+            timeout=30,
+        )
+    assert resp.status_code == 200, resp.text
+    return resp.text
 
 
 
@@ -523,7 +752,7 @@ async def test_detached_run_completes_and_persists(monkeypatch):
         redis = fakeaioredis.FakeRedis(decode_responses=True)
         app.state.budget = BudgetGuard(redis=redis, cap=10**9)
         try:
-            gen, run_id = await _open_run(app, settings)
+            gen, run_id, _last_id = await _open_run(app, settings)
             await gen.aclose()
             await _wait_registry_empty(app, run_id)
         finally:
@@ -559,7 +788,7 @@ async def test_detached_cap_marks_failed(monkeypatch):
         redis = fakeaioredis.FakeRedis(decode_responses=True)
         app.state.budget = BudgetGuard(redis=redis, cap=10**9)
         try:
-            gen, run_id = await _open_run(app, settings)
+            gen, run_id, _last_id = await _open_run(app, settings)
             await gen.aclose()
             await _wait_registry_empty(app, run_id)
         finally:
@@ -591,7 +820,7 @@ async def test_detach_off_keeps_legacy_semantics(monkeypatch):
         redis = fakeaioredis.FakeRedis(decode_responses=True)
         app.state.budget = BudgetGuard(redis=redis, cap=10**9)
         try:
-            gen, run_id = await _open_run(app, settings)
+            gen, run_id, _last_id = await _open_run(app, settings)
             await gen.aclose()
             await asyncio.sleep(0.3)
             assert run_id not in _detached_registry(app)
@@ -629,7 +858,7 @@ async def test_reattach_http_streams_note_and_completion(monkeypatch):
         redis = fakeaioredis.FakeRedis(decode_responses=True)
         app.state.budget = BudgetGuard(redis=redis, cap=10**9)
         try:
-            gen, run_id = await _open_run(app, settings)
+            gen, run_id, _last_id = await _open_run(app, settings)
             await gen.aclose()
             assert run_id in _detached_registry(app)
 
@@ -675,7 +904,7 @@ async def test_cross_user_reattach_is_the_same_409(monkeypatch):
         redis = fakeaioredis.FakeRedis(decode_responses=True)
         app.state.budget = BudgetGuard(redis=redis, cap=10**9)
         try:
-            gen, run_id = await _open_run(app, settings)
+            gen, run_id, _last_id = await _open_run(app, settings)
             await gen.aclose()
             assert run_id in _detached_registry(app)
 
@@ -695,3 +924,75 @@ async def test_cross_user_reattach_is_the_same_409(monkeypatch):
             await _wait_registry_empty(app, run_id)
         finally:
             await redis.aclose()
+
+
+@dsn_gated
+async def test_cursor_resume_delivers_every_missed_frame(monkeypatch):
+    """Task 1.6 exit condition: a client that disconnects mid-answer and
+    reconnects with its last seen id receives EVERY frame emitted in the
+    disconnect window, in order, before the live remainder — the merged
+    answer text equals the uninterrupted answer."""
+    from agent.budget import BudgetGuard
+    from agent.main import _detached_registry, create_app, lifespan
+
+    _patch_common(monkeypatch)
+    await _drop_schemas()
+    settings = _settings()
+    _patch_settings(monkeypatch, settings)
+
+    app = create_app()
+    async with lifespan(app):
+        redis = fakeaioredis.FakeRedis(decode_responses=True)
+        app.state.budget = BudgetGuard(redis=redis, cap=10**9)
+        try:
+            gen, run_id, last_id = await _open_run(app, settings)
+            await gen.aclose()
+            assert run_id in _detached_registry(app)
+
+            session = _detached_registry(app)[run_id]
+            _push_frame(session, "delta", {"delta": "missed "})
+            _push_frame(session, "delta", {"delta": "half"})
+            await _wait_for_new_frames(session, last_id)
+            watermark = session.frame_log.watermark()
+
+            transport = httpx.ASGITransport(app=app)
+            async with httpx.AsyncClient(
+                transport=transport,
+                base_url="http://test",
+                headers=SERVICE_AUTH_HEADERS,
+            ) as client:
+                resp = await client.get(
+                    f"/agent/runs/{run_id}/stream",
+                    headers={
+                        "X-Nyx-User-Id": "42",
+                        "Last-Event-ID": str(last_id),
+                    },
+                    timeout=60,
+                )
+            assert resp.status_code == 200
+            text = resp.text
+        finally:
+            await redis.aclose()
+
+    ids = [
+        int(line.removeprefix("id: "))
+        for line in text.splitlines()
+        if line.startswith("id: ")
+    ]
+    assert ids, "the re-attach stream must carry id-bearing frames"
+    assert ids == sorted(set(ids)), "no duplicate and no out-of-order frames"
+    missed = [i for i in ids if last_id < i <= watermark]
+    assert missed, (
+        f"the frames emitted while the client was away (ids "
+        f"{last_id + 1}..{watermark}) must be replayed; the stream carried "
+        f"ids {ids}"
+    )
+    deltas = [
+        json.loads(line.removeprefix("data: "))["delta"]
+        for line in text.splitlines()
+        if line.startswith('data: {"delta"')
+    ]
+    assert "slow answer" in "".join(deltas), (
+        "the merged answer must contain the full generated text"
+    )
+    assert "data: [DONE]" in text

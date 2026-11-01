@@ -69,7 +69,7 @@ On an interrupted stream the SPA SHALL attempt recovery in order: (1) re-attach 
 
 ### Requirement: The client tracks and deduplicates frame ids
 
-The chat stream parser SHALL surface each frame's `id:` field with the parsed event, and the store SHALL retain the highest id received for the active run and present it on the ladder's re-attach request. The store SHALL drop any frame whose id is less than or equal to the highest id it has already rendered for that run, so a frame delivered on both the replay and the live path is rendered once. A frame arriving without an id SHALL be processed normally and SHALL NOT reset the retained cursor.
+The chat stream parser SHALL surface each frame's `id:` field with the parsed event, and the store SHALL retain the highest id received for the active run and present it on the ladder's re-attach request. The store SHALL drop any frame whose id is less than or equal to the highest id it has already rendered for that run, so a frame delivered on both the replay and the live path is rendered once. A frame arriving without an id SHALL be processed normally and SHALL NOT reset the retained cursor. The id sequence belongs to one execution, not to the conversation: a new turn starts a fresh sequence, so the store SHALL discard the retained cursor when a turn starts rather than let the previous turn's high id suppress the new turn's frames.
 
 #### Scenario: Cursor advances as frames arrive
 
@@ -85,3 +85,8 @@ The chat stream parser SHALL surface each frame's `id:` field with the parsed ev
 
 - **WHEN** a frame without an `id:` field arrives (replay disabled, or a degraded run)
 - **THEN** it is processed normally and the retained cursor is left as it was
+
+#### Scenario: A new turn starts a fresh id sequence
+
+- **WHEN** the user sends another message in the same session and the agent's new execution numbers its frames from the start
+- **THEN** the previously retained cursor is discarded and the new turn's frames are rendered in full

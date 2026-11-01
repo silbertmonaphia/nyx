@@ -22,7 +22,7 @@ The service SHALL expose `GET /agent/runs/{run_id}/stream` under the service-tok
 
 #### Scenario: Rolled-past cursor is reported
 
-- **WHEN** the cursor is older than the buffer's oldest retained frame or malformed
+- **WHEN** the cursor names a frame whose successor has already been dropped from the buffer, or the cursor is malformed
 - **THEN** the endpoint emits `note{kind:"replay_truncated"}` and falls back to the step projection
 
 #### Scenario: Pending approval is re-emitted on re-attach

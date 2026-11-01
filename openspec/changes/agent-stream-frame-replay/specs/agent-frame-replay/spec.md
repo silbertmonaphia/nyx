@@ -8,7 +8,7 @@ Gives every frame on a run stream an addressable identity and a bounded, replaya
 
 ### Requirement: Every run-stream frame carries a replayable id
 
-When frame replay is enabled, the service SHALL append every frame it emits on a run stream (the original stream and any re-attach stream) to the run's in-memory frame buffer before the frame reaches any subscriber, and SHALL emit that frame with an SSE `id:` field whose value is a plain decimal sequence, strictly increasing across the run, compared numerically by consumers. The buffered bytes SHALL be the finished frame (`id:` line, `event:` line, `data:` line, terminating blank line) so a replayed frame is byte-identical to the original. The buffer SHALL be owned by the run's session and its lifetime SHALL be the run's lifetime: it SHALL be released when the run reaches a terminal state and SHALL never outlive the process that holds the run.
+When frame replay is enabled, the service SHALL append every frame it emits on a run stream (the original stream and any re-attach stream) to the run's in-memory frame buffer before the frame reaches any subscriber, and SHALL emit that frame with an SSE `id:` field whose value is a plain decimal sequence, strictly increasing across the run, compared numerically by consumers. The buffered bytes SHALL be the finished frame (`id:` line, `event:` line, `data:` line, terminating blank line) so a replayed frame is byte-identical to the original. Control framing is exempt: the opening `run_id` echo, resume/attach notes, and keep-alive comments carry no id and are not buffered — they are never replayed and never need to be. The buffer SHALL be owned by the run's session and its lifetime SHALL be the run's lifetime: it SHALL be released when the run reaches a terminal state and SHALL never outlive the process that holds the run.
 
 #### Scenario: Frames carry a monotonic id
 
@@ -65,7 +65,7 @@ A re-attach request carrying a `Last-Event-ID` header (or a `last_event_id` quer
 
 #### Scenario: Rolled-past cursor is treated as truncation
 
-- **WHEN** the cursor is malformed or names a frame older than the buffer's oldest retained frame
+- **WHEN** the cursor is malformed, or names a frame whose successor has already been dropped from the buffer
 - **THEN** the endpoint emits `note{kind:"replay_truncated"}` and falls back to the step projection, and does not replay a partial or out-of-order span
 
 #### Scenario: No cursor keeps today's behavior

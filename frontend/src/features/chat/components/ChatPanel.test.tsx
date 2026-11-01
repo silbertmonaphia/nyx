@@ -504,6 +504,34 @@ describe('ChatPanel partial-failure banner', () => {
   });
 });
 
+describe('ChatPanel possibly-incomplete marker', () => {
+  beforeEach(() => {
+    resetStore();
+    mockedService.streamMessage.mockReset();
+  });
+
+  it('renders the marker when the replay was truncated', () => {
+    useChatStore.setState({
+      messages: [{ role: 'assistant', content: 'Partial answer.' }],
+      possiblyIncomplete: true,
+    });
+    render(<ChatPanel open={true} onOpenChange={vi.fn()} />);
+
+    const marker = screen.getByTestId('chat-possibly-incomplete');
+    expect(marker).toHaveTextContent(/may be missing a span/i);
+  });
+
+  it('does not render the marker for a clean run', () => {
+    useChatStore.setState({
+      messages: [{ role: 'assistant', content: 'Complete answer.' }],
+      possiblyIncomplete: false,
+    });
+    render(<ChatPanel open={true} onOpenChange={vi.fn()} />);
+
+    expect(screen.queryByTestId('chat-possibly-incomplete')).toBeNull();
+  });
+});
+
 // ---- Chat history rail (openspec/changes/agent-chat-history-ui) ----
 // The panel hosts <ChatSidebar>: a static left column at `md:` and up,
 // an overlay drawer below it. Session rows replay stored messages into

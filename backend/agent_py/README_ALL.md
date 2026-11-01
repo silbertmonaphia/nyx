@@ -223,6 +223,8 @@ terminal-row path (fresh run + `note{kind:"fresh_run"}`).
 | `PYTHON_AGENT_STREAM_DETACH_ENABLED`     | `true`  | A run outlives its SSE connection; `false` restores "a disconnect cancels the run". |
 | `PYTHON_AGENT_DETACHED_RUN_CAP_SECONDS`  | `600`   | Wall-clock cap on a detached run; expiry marks it failed.               |
 | `PYTHON_AGENT_KEEPALIVE_SECONDS`         | `15`    | Idle cadence of the SSE keep-alive comment frame; `0` disables it.      |
+| `PYTHON_AGENT_FRAME_REPLAY_ENABLED`     | `true`  | Frames carry an SSE `id:` and are buffered in-process, so a reconnect resumes from its last id. `false` restores the id-less wire. |
+| `PYTHON_AGENT_FRAME_BUFFER_MAX`          | `5000`  | Frames retained per run for replay (oldest dropped first); the buffer dies with the run. |
 
 Reaping does **not** delete langGraph checkpoint data — a reaped run's
 checkpoint thread is collected by the retention cron when it later

@@ -50,6 +50,7 @@ from .audit import AuditLog
 from .budget import BudgetGuard
 from .chat_store import ChatStore, ChatStoreUnavailable
 from .config import Settings, get_settings
+from .frames import TRUNCATED, FrameLog, parse_cursor
 from .graph import build_graph, run_agent_stream
 from .llm_client import build_chat_model
 from .llm_effective import (
@@ -745,6 +746,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 request_id=req.headers.get("x-request-id"),
                 app=app,
                 settings=settings,
+                last_event_id=_cursor_from_request(req),
             ),
             media_type="text/event-stream",
             headers={
@@ -773,10 +775,15 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 content={"error": "Run is not live", "code": "run_not_live"},
             )
         sub = session.subscribe()
+        watermark = (
+            session.frame_log.watermark() if session.frame_log is not None else 0
+        )
         if session.closed or (
             session.collector_task is not None and session.collector_task.done()
         ):
             sub.put_nowait(None)
+        cursor_raw = _cursor_from_request(request)
+        cursor = parse_cursor(cursor_raw)
 
         async def stream() -> AsyncIterator[bytes]:
             try:
@@ -790,25 +797,52 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                         ).model_dump(),
                     )
                 )
-                for frame in session.replay_frames():
-                    yield _sse_encode(frame)
-                if session.pending_confirm is not None:
+                cursor_frames = (
+                    session.frame_log.since(cursor, upto=watermark)
+                    if session.frame_log is not None and cursor is not None
+                    else None
+                )
+                truncated = cursor_raw is not None and (
+                    session.frame_log is None
+                    or cursor is None
+                    or cursor_frames is TRUNCATED
+                )
+                if truncated:
                     yield _sse_encode(
                         Event(
-                            kind="confirm_request",
-                            payload=dict(session.pending_confirm),
+                            kind="note",
+                            payload=NoteEvent(
+                                text="replay_truncated",
+                                kind="replay_truncated",
+                                run_id=run_id,
+                            ).model_dump(),
                         )
                     )
+                if cursor_frames is None or cursor_frames is TRUNCATED:
+                    for frame in session.replay_frames():
+                        yield _sse_encode(frame)
+                    if session.pending_confirm is not None:
+                        yield _sse_encode(
+                            Event(
+                                kind="confirm_request",
+                                payload=dict(session.pending_confirm),
+                            )
+                        )
+                else:
+                    for frame in cursor_frames:
+                        yield frame
                 async for item in _drain_run_queue(
                     sub, idle_seconds=float(settings.keepalive_seconds)
                 ):
                     if item is None:
                         break
-                    kind, payload = item
-                    if kind == "comment":
+                    marker, payload = item
+                    if marker == "comment":
                         yield f": {payload}\n\n".encode()
                         continue
-                    yield _sse_encode(payload)
+                    if isinstance(marker, int) and marker <= watermark:
+                        continue
+                    yield payload
                 yield b"data: [DONE]\n\n"
             finally:
                 session.unsubscribe(sub)
@@ -971,6 +1005,23 @@ def _user_id_from_header(request: Request) -> int:
         ) from exc
 
 
+def _cursor_from_request(request: Request) -> str | None:
+    """The client's frame cursor: the `Last-Event-ID` header, else the
+    `last_event_id` query parameter.
+
+    The header is the protocol's own channel (the SPA and the Go proxy
+    both use it); the query parameter is the fallback for curl, native
+    clients, and any proxy that strips unknown headers. `None` means no
+    cursor was presented — a malformed value stays a string here so the
+    caller can report truncation instead of silently treating it as
+    "no cursor".
+    """
+    raw = request.headers.get("last-event-id")
+    if raw is None:
+        raw = request.query_params.get("last_event_id")
+    return raw
+
+
 def _detached_registry(app: FastAPI) -> dict[str, _RunSession]:
     """Process-local registry of detached, still-executing runs.
 
@@ -1058,6 +1109,11 @@ class _RunSession:
         self.drain_finished = False
         self.closed = False
         self.pending_confirm: dict | None = None
+        self.frame_log: FrameLog | None = (
+            FrameLog(settings.frame_buffer_max)
+            if settings.frame_replay_enabled
+            else None
+        )
         self._subscribers: list[asyncio.Queue] = []
 
     def start_heartbeat(self) -> None:
@@ -1088,6 +1144,18 @@ class _RunSession:
             ),
             name=f"agent-pump-{self.run_id}",
         )
+
+    def encode_event(self, event: Event) -> tuple[int | None, bytes]:
+        """Encode one event into finished wire bytes; buffer + stamp the id.
+
+        The append happens before the frame leaves this method, so every
+        id a subscriber or client sees is already replayable. Returns
+        `(None, frame)` when replay is disabled.
+        """
+        frame = _sse_encode(event)
+        if self.frame_log is None:
+            return None, frame
+        return self.frame_log.append(frame)
 
     def collect(self, event: Event) -> None:
         """Fold one event into the terminal-persistence inputs."""
@@ -1128,13 +1196,17 @@ class _RunSession:
             ):
                 self.pending_confirm = None
 
-    async def drain(self) -> AsyncIterator[tuple[str, object]]:
-        """Yield sink items in order, folding events as they pass.
+    async def drain(self) -> AsyncIterator[tuple[int | None, bytes]]:
+        """Yield finished wire frames in order, folding events as they pass.
 
         Shared by the attached wire loop and the detached collector, so
-        both see identical fold order. Raises the pump's exception when
-        the channel closed on a pump failure (pre-detach semantics: the
-        terminal persistence then leaves the row resumable).
+        both see identical fold order and identical frame ids. Each yield
+        is `(seq, frame_bytes)`: `seq` is the replay id assigned by the
+        frame log (None for keep-alive comments and when replay is
+        disabled), and `frame` is the exact bytes to put on the wire.
+        Raises the pump's exception when the channel closed on a pump
+        failure (pre-detach semantics: the terminal persistence then
+        leaves the row resumable).
         """
         async for item in _drain_run_queue(
             self.queue, idle_seconds=float(self.settings.keepalive_seconds)
@@ -1143,10 +1215,11 @@ class _RunSession:
                 break
             kind, payload = item
             if kind == "comment":
-                yield item
+                yield None, f": {payload}\n\n".encode()
                 continue
             self.collect(payload)
-            yield item
+            seq, frame = self.encode_event(payload)
+            yield seq, frame
         self.drain_finished = True
         if (
             self.pump_task is not None
@@ -1282,42 +1355,38 @@ class _RunSession:
         registry = _detached_registry(self.app)
         try:
             async with asyncio.timeout(cap_seconds):
-                async for item in self.drain():
-                    await self._broadcast(item)
+                async for frame_item in self.drain():
+                    await self._broadcast(frame_item)
         except TimeoutError:
             self.error_code = "detached_run_cap"
-            await self._broadcast(
-                (
-                    "event",
-                    Event(
-                        kind="error",
-                        payload={
-                            "error": "Run exceeded the time limit",
-                            "code": "detached_run_cap",
-                            "request_id": self.request_id,
-                        },
-                    ),
+            seq, error_item = self.encode_event(
+                Event(
+                    kind="error",
+                    payload={
+                        "error": "Run exceeded the time limit",
+                        "code": "detached_run_cap",
+                        "request_id": self.request_id,
+                    },
                 )
             )
+            await self._broadcast((seq, error_item))
         except Exception:
             log.exception(
                 "detached run collector failed; the run row stays "
                 "resumable (run_id=%s)",
                 self.run_id,
             )
-            await self._broadcast(
-                (
-                    "event",
-                    Event(
-                        kind="error",
-                        payload={
-                            "error": "Run failed",
-                            "code": "detached_run_error",
-                            "request_id": self.request_id,
-                        },
-                    ),
+            seq, error_item = self.encode_event(
+                Event(
+                    kind="error",
+                    payload={
+                        "error": "Run failed",
+                        "code": "detached_run_error",
+                        "request_id": self.request_id,
+                    },
                 )
             )
+            await self._broadcast((seq, error_item))
         finally:
             registry.pop(self.run_id, None)
             self.closed = True
@@ -1342,8 +1411,7 @@ class _RunSession:
         """
         self.error_code = "user_cancelled"
         self.saw_done = False
-        error_item = (
-            "event",
+        seq, error_frame = self.encode_event(
             Event(
                 kind="error",
                 payload={
@@ -1351,18 +1419,18 @@ class _RunSession:
                     "code": "user_cancelled",
                     "request_id": self.request_id,
                 },
-            ),
+            )
         )
-        self.queue.put_nowait(error_item)
         self.queue.put_nowait(None)
         for sub in list(self._subscribers):
-            sub.put_nowait(error_item)
+            sub.put_nowait((seq, error_frame))
             sub.put_nowait(None)
         if self.pump_task is not None and not self.pump_task.done():
             self.pump_task.cancel()
 
     async def finalize(self) -> None:
         """Terminal persistence, identical for attached and detached runs."""
+        self.frame_log = None
         if self.run_metadata is not None and self.persist_run_state:
             try:
                 if (
@@ -1474,6 +1542,7 @@ async def _stream_agent_run(
     request_id: str | None,
     app: FastAPI,
     settings: Settings,
+    last_event_id: str | None = None,
 ) -> AsyncIterator[bytes]:
     """Run the agent and yield SSE frames incrementally as the graph progresses.
 
@@ -1638,32 +1707,65 @@ async def _stream_agent_run(
                 ).model_dump(),
             )
         )
-        for frame in attach_session.replay_frames():
-            yield _sse_encode(frame)
-        if attach_session.pending_confirm is not None:
-            yield _sse_encode(
-                Event(
-                    kind="confirm_request",
-                    payload=dict(attach_session.pending_confirm),
-                )
-            )
         sub = attach_session.subscribe()
+        watermark = (
+            attach_session.frame_log.watermark()
+            if attach_session.frame_log is not None
+            else 0
+        )
         if attach_session.closed or (
             attach_session.collector_task is not None
             and attach_session.collector_task.done()
         ):
             sub.put_nowait(None)
+        cursor = parse_cursor(last_event_id)
+        cursor_frames = (
+            attach_session.frame_log.since(cursor, upto=watermark)
+            if attach_session.frame_log is not None and cursor is not None
+            else None
+        )
+        truncated = last_event_id is not None and (
+            attach_session.frame_log is None
+            or cursor is None
+            or cursor_frames is TRUNCATED
+        )
+        if truncated:
+            yield _sse_encode(
+                Event(
+                    kind="note",
+                    payload=NoteEvent(
+                        text="replay_truncated",
+                        kind="replay_truncated",
+                        run_id=run_id,
+                    ).model_dump(),
+                )
+            )
+        if cursor_frames is None or cursor_frames is TRUNCATED:
+            for frame in attach_session.replay_frames():
+                yield _sse_encode(frame)
+            if attach_session.pending_confirm is not None:
+                yield _sse_encode(
+                    Event(
+                        kind="confirm_request",
+                        payload=dict(attach_session.pending_confirm),
+                    )
+                )
+        else:
+            for frame in cursor_frames:
+                yield frame
         try:
             async for item in _drain_run_queue(
                 sub, idle_seconds=float(settings.keepalive_seconds)
             ):
                 if item is None:
                     break
-                kind, payload = item
-                if kind == "comment":
+                marker, payload = item
+                if marker == "comment":
                     yield f": {payload}\n\n".encode()
                     continue
-                yield _sse_encode(payload)
+                if isinstance(marker, int) and marker <= watermark:
+                    continue
+                yield payload
             yield b"data: [DONE]\n\n"
         finally:
             attach_session.unsubscribe(sub)
@@ -1840,12 +1942,8 @@ async def _stream_agent_run(
     )
     disconnected = False
     try:
-        async for item in session.drain():
-            kind, payload = item
-            if kind == "comment":
-                yield f": {payload}\n\n".encode()
-                continue
-            yield _sse_encode(payload)
+        async for _seq, frame in session.drain():
+            yield frame
     except (GeneratorExit, asyncio.CancelledError):
         disconnected = True
         raise

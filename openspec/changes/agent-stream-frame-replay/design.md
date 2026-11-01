@@ -47,7 +47,7 @@ The single emit path becomes: encode the frame → assign `seq` → append `(seq
 On subscribe, the re-attach handler reads the session's current `frame_seq` as the watermark and replays every buffered frame with `seq > cursor`, then bridges to a subscriber queue that only carries frames with `seq > watermark`. Because the emit path is single and ordered (D2), every live frame is strictly newer than the watermark, so no frame is delivered twice and none is skipped. This replaces the current "hope the queue and the replay don't overlap" posture.
 
 **D5 — Retention is bounded by size, and truncation is loud.**
-`deque(maxlen=FRAME_BUFFER_MAX)` (default 5000) drops the oldest automatically. If the cursor is older than the buffer's oldest retained seq (or malformed), the endpoint emits `note{kind:"replay_truncated"}` and falls back to the step projection. The client keeps its partial row and may still be missing a span — but it knows, and the UI can say so.
+`deque(maxlen=FRAME_BUFFER_MAX)` (default 5000) drops the oldest automatically. If the cursor names a frame whose successor the ring has already dropped (or the cursor is malformed), the endpoint emits `note{kind:"replay_truncated"}` and falls back to the step projection. The client keeps its partial row and may still be missing a span — but it knows, and the UI can say so.
 No TTL: the buffer's lifetime is the run's, and a run is bounded by the detach cap. A finished run's session is released, so nothing outlives it.
 
 **D6 — The cursor travels as the protocol says; a query param is the fallback.**
@@ -74,6 +74,12 @@ The existing fixture pair (Python emitter ↔ TypeScript parser) gains an `id:`-
 - *[buffer lost on process restart]* → the run is lost with it; recovery is checkpoint resume, exactly as before this change. No regression.
 - *[replay of a very long answer]* → capped by the watermark; the client receives what it missed, bounded by the disconnect window, not the whole answer.
 - *[old SPA builds]* → they ignore `id:`; behavior is exactly today's. Forward-compatible by construction.
+
+## Known limits
+
+- **The replay window is "while the run is live".** The buffer dies with the run (D5), and a re-attach can only reach a live one — a client that comes back after the run finished gets the 409 and falls to the ladder's transcript rung. That is the intended shape, but it bounds what the frame ids buy today: the agent flushes its frames at the LangGraph node boundary (the planner's chunk, then the executor's chunk) and at the approval gate's mid-node flush, so the frames a client can miss *while the run is still executing* are the planner's and the gate's — not a token-by-token answer stream.
+- **The payoff scales with per-token streaming.** The executor's llm step is one `ainvoke` → one `delta` frame at the node boundary. Once the executor streams (a per-chunk delta), the "client missed the middle of the answer" case becomes the common case rather than the rare one, and the frame replay is what closes it. Until then the ladder's step-projection rung covers most real interruptions.
+- **The cursor is per execution, not per conversation.** A session's later turn starts a fresh sequence, so the SPA discards the retained cursor when a turn starts (`chat-stream-resilience` spec) — otherwise the previous turn's high id would suppress the new turn's frames.
 
 ## Migration / Rollout
 
