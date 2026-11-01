@@ -1,0 +1,98 @@
+# Chat Stream Resilience Specification
+
+## Purpose
+
+Defines the SPA's broken-stream contract: a cut stream is a typed, detectable state; recovery is an automatic ladder from the cheapest to the most expensive mechanism; and the partial answer on screen is spliced, never duplicated.
+
+## Requirements
+
+### Requirement: An incomplete stream end is distinguished from a clean end
+
+The chat stream generator SHALL yield a typed stream-incomplete signal when the response body ends without the application having delivered a terminal signal (`done` event, `error` event, or the `[DONE]` sentinel). A stream that ends this way SHALL NOT be treated as a successful completion: the partial assistant row SHALL be preserved as-is, the turn SHALL be marked interrupted rather than finished, and no generic chat error SHALL be raised for the cut itself (the ladder's outcome raises, if anything). Comment frames (`:`-prefixed lines) SHALL be ignored by the parser and SHALL NOT affect the terminal-signal determination. A read-idle watchdog SHALL abort the stream when no frame of any kind arrives for three times the keepalive interval, feeding the same interrupted path.
+
+#### Scenario: Body dies mid-run is interrupted, not finished
+
+- **WHEN** the response body ends after `delta` frames but before any terminal signal
+- **THEN** the generator yields the stream-incomplete signal, the partial assistant row stays on screen with its text, and the UI state is interrupted rather than completed
+
+#### Scenario: Clean ends never trigger the interrupted path
+
+- **WHEN** the stream delivers `done` + `[DONE]`, or an `error` event, and then ends
+- **THEN** the handling is byte-identical to today and no reconnect ladder runs
+
+#### Scenario: Watchdog converts a silent cut into an interrupted stream
+
+- **WHEN** no frame — keep-alive, delta, or otherwise — arrives for three times the keepalive interval while the stream is open
+- **THEN** the read is aborted locally and the interrupted path runs
+
+### Requirement: Recovery is an ordered ladder with bounded attempts
+
+On an interrupted stream the SPA SHALL attempt recovery in order: (1) re-attach to the live run via `GET /api/chat/runs/{run_id}/stream` using the interrupted turn's `run_id`; (2) on a non-200 re-attach response (409 not-live, 501 unavailable, transport error) replay the session transcript via the existing session-messages fetch; (3) if the transcript lacks the interrupted turn's assistant row, re-POST the chat request echoing the `run_id` (checkpoint resume). The ladder SHALL be bounded (default 3 recovery attempts across all rungs); exhausting it SHALL surface a visible chat error while keeping the partial assistant row. A re-attach that itself ends interrupted SHALL re-enter the ladder, subject to the same attempt bound. Recovery SHALL be cancelled by any user action that ends the turn (Cancel, a new send, navigation, session switch), and a cancelled ladder SHALL leave no in-flight requests.
+
+#### Scenario: Live run completes via re-attach
+
+- **WHEN** the stream is interrupted mid-run, the run is still live, and the re-attach succeeds
+- **THEN** the client consumes the re-attach stream (reattach note, replayed steps, live deltas, terminal trio) and the turn completes as a normal finished turn with usage
+
+#### Scenario: Run completed while disconnected replays the transcript
+
+- **WHEN** the re-attach answers 409 `run_not_live` and the session transcript contains the interrupted turn's assistant row
+- **THEN** the panel replays the stored transcript and the turn completes without any re-execution
+
+#### Scenario: Crashed or reaped run falls through to resume re-POST
+
+- **WHEN** the transcript lacks the interrupted turn's assistant row
+- **THEN** the SPA re-POSTs with the echoed `run_id`, consuming the regenerated stream, and the turn completes from the resumed run
+
+#### Scenario: Detach disabled degrades to the resume rung
+
+- **WHEN** the agent runs with detach disabled so every re-attach answers 501 `reattach_unavailable`
+- **THEN** rungs 1–2 fall through and the ladder recovers via the resume re-POST — the only behavior change from today being that it happens automatically
+
+#### Scenario: Attempts exhaust visibly
+
+- **WHEN** every attempt across the ladder fails or ends interrupted and the bound is reached
+- **THEN** a visible chat error is shown, the partial assistant row is preserved, and no further requests fire
+
+#### Scenario: User action cancels recovery
+
+- **WHEN** the user presses Cancel, sends a new message, or navigates while the ladder is mid-flight
+- **THEN** pending and in-flight recovery requests are aborted and no zombie request survives the action
+
+#### Scenario: Cancel stops the run deliberately, not by dropping the connection
+
+- **WHEN** the user presses Cancel on an active or recovering stream
+- **THEN** the SPA calls the run cancel endpoint first and aborts the local stream regardless of the call's outcome; the partial assistant row is dropped exactly as today, and a failed cancel call (network down) degrades to the local abort alone — the run may finish detached into history, which is acceptable
+
+#### Scenario: A backgrounded run is cancellable from the session view
+
+- **WHEN** the user opens a session whose run is still executing in the background (the composer is locked by the run-in-flight marker)
+- **THEN** the marker offers a stop control that calls the run cancel endpoint; success unlocks the composer and refreshes the session (no partial assistant row appears), and a failed call leaves the marker until the run's own terminal state lands
+
+#### Scenario: Another viewer sees a deliberate stop, not a failure
+
+- **WHEN** a stream attached in some tab receives `error{code:"user_cancelled"}` because the run was cancelled elsewhere
+- **THEN** the turn is presented as stopped-by-user (an interrupted state, not an error toast)
+
+### Requirement: Reconnect splices into the existing partial row
+
+A recovery that appends to the interrupted answer (the re-attach rung) SHALL write its continuation into the same partial assistant row. A recovery that regenerates the answer (the resume re-POST rung) SHALL replace the partial assistant row's content with the new stream's output. Neither path SHALL create a second assistant row for the same turn or concatenate the outputs of two different executions of the same answer.
+
+#### Scenario: Re-attach appends into the same row
+
+- **WHEN** a re-attach stream delivers new `delta` frames after the interrupted partial answer
+- **THEN** the deltas append to the existing partial assistant row, which remains one row for the turn
+
+#### Scenario: Resume re-POST replaces the regenerated answer
+
+- **WHEN** the ladder recovers via a resume re-POST whose regenerated deltas diverge from the partial answer
+- **THEN** the partial assistant row's content is replaced by the new stream's output and no stale prefix remains
+
+### Requirement: Recovery respects the wire's source of truth
+
+The recovery path SHALL consume every response through the same SSE parser as the primary stream, key re-attach outcomes only on the response's status and typed error codes, and treat `run_id` state (live run / session / unknown) as server-owned — the SPA SHALL NOT decide run liveness locally beyond what a response states.
+
+#### Scenario: Re-attach frames parse identically to run frames
+
+- **WHEN** the re-attach stream's bytes (note, replayed step frames, confirm_request, keep-alives, deltas, terminal trio) are fed through the SPA's parser
+- **THEN** the yielded event sequence is indistinguishable from the corresponding primary-stream sequence, and no special-case parser exists for recovery
