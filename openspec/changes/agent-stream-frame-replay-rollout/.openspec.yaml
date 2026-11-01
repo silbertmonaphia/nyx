@@ -1,0 +1,5 @@
+schema: spec-driven
+created: 2026-11-01
+goal: Track the production rollout gates for agent frame replay; let the
+  implementation change archive independently
+skip_specs: true
