@@ -17,7 +17,7 @@ Closing that gap is the difference between "the answer looks mostly right" and "
 
 ## What Changes
 
-- **Every SSE frame on the run stream carries an `id:`.** A zero-padded monotonic sequence, assigned as the frame is appended to the run's buffer. Frames are appended **before** they reach any subscriber, so every id a client sees is already replayable.
+- **Every SSE frame on the run stream carries an `id:`.** A plain decimal sequence, assigned as the frame is appended to the run's buffer. Frames are appended **before** they reach any subscriber, so every id a client sees is already replayable.
 - **The buffer is an in-memory ring on the run's session.** No new dependency, no TTL, no residue: the buffer's lifetime is the run's, and a run lives in exactly one process (re-attach already requires the instance holding the detached registry). When the run finalizes, the buffer goes with it.
 - **Re-attach accepts a cursor.** `GET /agent/runs/{run_id}/stream` accepts the `Last-Event-ID` header (or `last_event_id` query, for clients that cannot set it). With a cursor it replays the buffered frames strictly after that id, then switches to live frames with no gap and no duplicates — the switch point is a watermark taken at subscribe time. Without a cursor it keeps today's behavior (step projection replay).
 - **Retention overflow degrades, never lies.** If the cursor names a frame the ring has already rolled past, the endpoint answers with an explicit `note{kind:"replay_truncated"}` and falls back to the step projection, so the client knows the answer may be missing a span rather than being silently wrong.

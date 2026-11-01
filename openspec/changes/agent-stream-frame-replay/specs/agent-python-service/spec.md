@@ -44,7 +44,7 @@ The service SHALL expose `GET /agent/runs/{run_id}/stream` under the service-tok
 
 ### Requirement: Run streams emit replayable frame ids
 
-When `PYTHON_AGENT_FRAME_REPLAY_ENABLED=true` (the default), every frame the service emits on `/agent/run` and on a re-attach stream SHALL be appended to the run's in-memory frame buffer before it reaches any subscriber, and SHALL carry an SSE `id:` field holding the frame's zero-padded monotonic sequence. The frame's buffered bytes SHALL be the finished frame so replay is byte-identical. When the flag is `false`, the frame SHALL be emitted without an `id:` field and SHALL NOT be claimed as replayable, and the run and the stream SHALL continue unaffected.
+When `PYTHON_AGENT_FRAME_REPLAY_ENABLED=true` (the default), every frame the service emits on `/agent/run` and on a re-attach stream SHALL be appended to the run's in-memory frame buffer before it reaches any subscriber, and SHALL carry an SSE `id:` field holding the frame's plain decimal sequence, strictly increasing across the run. The frame's buffered bytes SHALL be the finished frame so replay is byte-identical. When the flag is `false`, the frame SHALL be emitted without an `id:` field and SHALL NOT be claimed as replayable, and the run and the stream SHALL continue unaffected.
 
 #### Scenario: /agent/run frames carry ids
 

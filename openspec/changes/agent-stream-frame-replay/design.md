@@ -53,8 +53,8 @@ No TTL: the buffer's lifetime is the run's, and a run is bounded by the detach c
 **D6 — The cursor travels as the protocol says; a query param is the fallback.**
 `Last-Event-ID` header when present (the protocol's own channel; Go forwards it), else `last_event_id` query param (curl, native clients, and any proxy that strips unknown headers). Absent → today's step-projection replay, unchanged.
 
-**D7 — The id is a zero-padded monotonic sequence.**
-`id: 000000000042` — fixed-width decimal so the client's "already rendered" comparison is a plain string comparison, matching what the SSE spec expects of an opaque id while staying trivially sortable. Width is 12 digits, orders of magnitude beyond any run's frame count.
+**D7 — The id is a plain decimal integer, compared numerically.**
+`id: 42` on the wire (SSE ids are text; both ends parse it as an int). The client's "already rendered" check is a numeric comparison — parsing one integer per frame is negligible next to the frame's own JSON parse. No zero-padding: it would buy a string-only comparison the client doesn't need, at the cost of readability and frame width, against the industry norm (EventStoreDB and Kafka offsets are plain integers).
 
 **D8 — Degradation is one flag, not a code-path fork.**
 `PYTHON_AGENT_FRAME_REPLAY_ENABLED=false` means: no ids, no ring appends, step-projection replay, the existing SPA ladder unchanged. The emit path checks one flag; there is no duplicated streaming loop. There is no write-failure branch to defend against, because the write is a deque append.

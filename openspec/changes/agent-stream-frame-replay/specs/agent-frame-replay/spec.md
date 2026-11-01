@@ -8,12 +8,12 @@ Gives every frame on a run stream an addressable identity and a bounded, replaya
 
 ### Requirement: Every run-stream frame carries a replayable id
 
-When frame replay is enabled, the service SHALL append every frame it emits on a run stream (the original stream and any re-attach stream) to the run's in-memory frame buffer before the frame reaches any subscriber, and SHALL emit that frame with an SSE `id:` field whose value is a zero-padded monotonic sequence assigned at append time. The buffered bytes SHALL be the finished frame (`id:` line, `event:` line, `data:` line, terminating blank line) so a replayed frame is byte-identical to the original. The buffer SHALL be owned by the run's session and its lifetime SHALL be the run's lifetime: it SHALL be released when the run reaches a terminal state and SHALL never outlive the process that holds the run.
+When frame replay is enabled, the service SHALL append every frame it emits on a run stream (the original stream and any re-attach stream) to the run's in-memory frame buffer before the frame reaches any subscriber, and SHALL emit that frame with an SSE `id:` field whose value is a plain decimal sequence, strictly increasing across the run, compared numerically by consumers. The buffered bytes SHALL be the finished frame (`id:` line, `event:` line, `data:` line, terminating blank line) so a replayed frame is byte-identical to the original. The buffer SHALL be owned by the run's session and its lifetime SHALL be the run's lifetime: it SHALL be released when the run reaches a terminal state and SHALL never outlive the process that holds the run.
 
 #### Scenario: Frames carry a monotonic id
 
 - **WHEN** a run emits frames with frame replay enabled
-- **THEN** each frame carries `id: <zero-padded sequence>`, strictly increasing across the run's frames
+- **THEN** each frame carries `id: <decimal sequence>`, strictly increasing across the run's frames
 
 #### Scenario: A client never sees an id that is not buffered
 
