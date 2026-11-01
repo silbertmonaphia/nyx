@@ -2,56 +2,56 @@
 
 ## Purpose
 
-Gives every frame on a run stream an addressable identity and a bounded, replayable buffer, so a reconnecting client can resume from the exact frame it last saw — the transport-level complement to the run-level detachment delivered by `agent-stream-resilience`.
+Gives every frame on a run stream an addressable identity and a bounded, replayable buffer that lives and dies with the run, so a reconnecting client can resume from the exact frame it last saw — the transport-level complement to the run-level detachment delivered by `agent-stream-resilience`.
 
 ## ADDED Requirements
 
 ### Requirement: Every run-stream frame carries a replayable id
 
-When frame replay is enabled, the service SHALL write every frame it emits on a run stream (the original stream and any re-attach stream) to a per-run Redis Stream before the frame reaches any subscriber, and SHALL emit that frame with an SSE `id:` field whose value is the Redis Stream entry id of the write. The stored value SHALL be the finished frame bytes (`event:` line, `data:` line, terminating blank line) so a replayed frame is byte-identical to the original.
+When frame replay is enabled, the service SHALL append every frame it emits on a run stream (the original stream and any re-attach stream) to the run's in-memory frame buffer before the frame reaches any subscriber, and SHALL emit that frame with an SSE `id:` field whose value is a zero-padded monotonic sequence assigned at append time. The buffered bytes SHALL be the finished frame (`id:` line, `event:` line, `data:` line, terminating blank line) so a replayed frame is byte-identical to the original. The buffer SHALL be owned by the run's session and its lifetime SHALL be the run's lifetime: it SHALL be released when the run reaches a terminal state and SHALL never outlive the process that holds the run.
 
-#### Scenario: Frames carry the buffer's entry id
+#### Scenario: Frames carry a monotonic id
 
-- **WHEN** a run emits a `delta` frame with frame replay enabled
-- **THEN** the frame is written to `agent:frames:{run_id}` and reaches the client with `id: <ms>-<seq>` matching that entry, ahead of the `event:` and `data:` lines
+- **WHEN** a run emits frames with frame replay enabled
+- **THEN** each frame carries `id: <zero-padded sequence>`, strictly increasing across the run's frames
 
 #### Scenario: A client never sees an id that is not buffered
 
 - **WHEN** a frame is emitted
-- **THEN** the Redis write completes before the frame is broadcast to any subscriber, so every id a client holds can be replayed
+- **THEN** the buffer append completes before the frame is broadcast to any subscriber, so every id a client holds can be replayed
 
 #### Scenario: Replay is byte-identical
 
 - **WHEN** a buffered frame is replayed on a re-attach stream
-- **THEN** the bytes delivered (including the `id:`, `event:` and `data:` lines and the terminating blank line) are identical to the bytes originally emitted
+- **THEN** the bytes delivered are identical to the bytes originally emitted
 
 #### Scenario: Replay disabled
 
 - **WHEN** `PYTHON_AGENT_FRAME_REPLAY_ENABLED=false`
-- **THEN** no frames are written to Redis, no `id:` field is emitted, and the wire is identical to the pre-change stream
+- **THEN** no frames are buffered, no `id:` field is emitted, and the wire is identical to the pre-change stream
 
-### Requirement: The buffer is bounded in size and time
+### Requirement: The buffer is bounded and dies with the run
 
-The per-run buffer SHALL be trimmed to at most `PYTHON_AGENT_FRAME_BUFFER_MAX` entries (approximate trimming is acceptable) and SHALL expire after `PYTHON_AGENT_FRAME_BUFFER_TTL_SECONDS`, which MUST exceed the detached-run cap so a client can always replay for at least as long as a run can be alive. The stream SHALL be removed on the run's terminal state in addition to the expiry, so a completed run leaves no buffer behind beyond its retention.
+The buffer SHALL retain at most `PYTHON_AGENT_FRAME_BUFFER_MAX` frames (default 5000), dropping the oldest first, and SHALL exist only in the process that executes the run. There SHALL be no external storage, no TTL, and no residue after the run reaches a terminal state: a cursor presented after the run ended SHALL be reported as truncated rather than replayed, because a re-attach never targets a terminal run.
 
 #### Scenario: Buffer is trimmed
 
 - **WHEN** a run emits more frames than `PYTHON_AGENT_FRAME_BUFFER_MAX`
-- **THEN** the oldest entries are dropped and the newest remain replayable
+- **THEN** the oldest frames are dropped and the newest remain replayable
 
-#### Scenario: Buffer expires
-
-- **WHEN** `PYTHON_AGENT_FRAME_BUFFER_TTL_SECONDS` elapses after the last write
-- **THEN** the stream key no longer exists and a cursor into it is treated as truncated
-
-#### Scenario: Terminal run leaves no buffer beyond retention
+#### Scenario: Buffer is released with the run
 
 - **WHEN** a run reaches a terminal state
-- **THEN** its buffer is deleted; a cursor presented afterward reports truncation rather than replaying into a finished run
+- **THEN** its buffer is released with the session, and a cursor into the finished run reports truncation
+
+#### Scenario: No external storage is consulted
+
+- **WHEN** the buffer is written or read
+- **THEN** no network call is made; the data lives in process memory only
 
 ### Requirement: A cursor resumes the stream without gaps or duplicates
 
-A re-attach request carrying a `Last-Event-ID` header (or a `last_event_id` query parameter when the header is absent) SHALL replay every buffered frame whose id is strictly after the cursor, then switch to live frames at a watermark taken when the subscription is established. No frame SHALL be delivered twice and no frame emitted between the cursor and the watermark SHALL be skipped. The switch SHALL be server-side: the guarantee does not depend on the client deduplicating.
+A re-attach request carrying a `Last-Event-ID` header (or a `last_event_id` query parameter when the header is absent) SHALL replay every buffered frame whose sequence is strictly after the cursor, then switch to live frames at a watermark taken when the subscription is established. No frame SHALL be delivered twice and no frame emitted between the cursor and the watermark SHALL be skipped. The switch SHALL be server-side: the guarantee does not depend on the client deduplicating.
 
 #### Scenario: Gap-free resume
 
@@ -63,9 +63,9 @@ A re-attach request carrying a `Last-Event-ID` header (or a `last_event_id` quer
 - **WHEN** a client reconnects with the id of the most recent frame
 - **THEN** it receives the live frames only
 
-#### Scenario: Unknown cursor is treated as truncation
+#### Scenario: Rolled-past cursor is treated as truncation
 
-- **WHEN** the cursor is malformed or names an id older than the buffer's oldest entry
+- **WHEN** the cursor is malformed or names a frame older than the buffer's oldest retained frame
 - **THEN** the endpoint emits `note{kind:"replay_truncated"}` and falls back to the step projection, and does not replay a partial or out-of-order span
 
 #### Scenario: No cursor keeps today's behavior
@@ -73,16 +73,16 @@ A re-attach request carrying a `Last-Event-ID` header (or a `last_event_id` quer
 - **WHEN** a re-attach request carries neither the header nor the query parameter
 - **THEN** the endpoint replays the step projection exactly as before this change
 
-### Requirement: Replay degrades to the existing wire on failure
+### Requirement: Disabling replay touches nothing else
 
-A Redis write failure SHALL NOT fail the run or the stream: the affected frame (and subsequent frames while the failure persists) SHALL be emitted without an `id:` field and SHALL NOT be buffered, and the client SHALL fall back to the step-projection replay on its next reconnect. A frame emitted without an id SHALL never be claimed as replayable.
+Turning frame replay off SHALL NOT affect run execution, the detached-run lifecycle, the cancel endpoint, or any other frame's shape. A frame emitted without an id SHALL never be claimed as replayable, and a client that presents a cursor to a replay-disabled service SHALL receive the truncation note and the step projection.
 
-#### Scenario: Redis write failure mid-run
+#### Scenario: Flag off leaves the run healthy
 
-- **WHEN** the buffer write fails while a run is streaming
-- **THEN** the run continues, the frames are emitted without ids, and no error frame is synthesized for the failure
+- **WHEN** `PYTHON_AGENT_FRAME_REPLAY_ENABLED=false` while runs are streaming
+- **THEN** runs complete normally, frames carry no ids, and nothing is buffered
 
-#### Scenario: Client reconnects after an unbuffered stretch
+#### Scenario: Cursor against a replay-disabled service
 
-- **WHEN** a client presents a cursor from before an unbuffered stretch
-- **THEN** the endpoint reports truncation and falls back to the step projection rather than replaying a span that skips frames
+- **WHEN** a client presents `Last-Event-ID` and replay is disabled
+- **THEN** the endpoint reports truncation and falls back to the step projection rather than replaying or erroring
