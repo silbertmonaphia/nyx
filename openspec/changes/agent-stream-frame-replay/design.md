@@ -67,6 +67,9 @@ The existing fixture pair (Python emitter ↔ TypeScript parser) gains an `id:`-
 
 ## Risks / Trade-offs
 
+- *[numeric ids are run-scoped counters]* → cursors only make sense within one run; a cursor from run A is numerically valid-looking against run B. Mitigated twice: the store keys the retained cursor by run id, and the server's resume tree resolves run ownership before any replay, so a foreign cursor lands in the truncation or 409 branch, never in a silent mis-replay.
+- *[plain counters disclose volume]* → an observer of the stream can count frames and estimate generation speed. Irrelevant for a self-hosted deployment; if this ever matters, the cursor becomes an opaque token behind the same contract (ordering then lives server-side).
+- *[wire format drift]* → the spec pins "plain decimal sequence, compared numerically"; a future reformat (prefixes, padding) would silently break old clients' comparisons, so it requires a spec change, not a drive-by.
 - *[memory per run]* → 5000 frames × a few hundred bytes ≈ low single-digit MB per active run, bounded by the per-user stream rate limit and the budget guard. A failed allocation surfaces as an ordinary Python error on that run, not a new global failure mode.
 - *[buffer lost on process restart]* → the run is lost with it; recovery is checkpoint resume, exactly as before this change. No regression.
 - *[replay of a very long answer]* → capped by the watermark; the client receives what it missed, bounded by the disconnect window, not the whole answer.
