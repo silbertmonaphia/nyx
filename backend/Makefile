@@ -31,7 +31,11 @@ COVERAGE_MIN ?= 70
 #     piece of logic in the file. 1.4% from the test alone — the
 #     rest is main(), which only a full-boot integration run could
 #     meaningfully cover.
-COVERAGE_IGNORE ?= nyx/internal/platform/database nyx/internal/platform/cache nyx/cmd/openapi nyx/cmd/api
+#   - nyx/cmd/kb: operator CLI. `run.go` (flag parsing, source
+#     registration, status report) is unit-tested; the uncovered part is
+#     main()/run()/runIndexCommand wiring (config load, migrations, pool,
+#     service construction), the same shape already ignored for cmd/api.
+COVERAGE_IGNORE ?= nyx/internal/platform/database nyx/internal/platform/cache nyx/cmd/openapi nyx/cmd/api nyx/cmd/kb
 
 # Shell with pipefail so a `go test` failure (a FAIL line, build
 # error, etc.) isn't masked by the downstream awk's exit code. /bin/sh
@@ -50,7 +54,7 @@ sqlc:
 # changed a query/schema without re-running `make sqlc`.
 sqlc-diff:
 	sqlc generate
-	git diff --exit-code internal/feed/db internal/user/db internal/llmsettings/db internal/rag/db
+	git diff --exit-code internal/feed/db internal/user/db internal/llmsettings/db internal/rag/db internal/kb/db
 
 sqlc-version:
 	sqlc version

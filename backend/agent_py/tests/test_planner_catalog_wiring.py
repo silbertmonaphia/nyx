@@ -60,6 +60,21 @@ class _FailingDispatcher:
         raise RuntimeError("registry down")
 
 
+class _StubRag:
+    def __init__(self, sources: list[dict] | None = None):
+        self._sources = sources if sources is not None else []
+        self.calls = 0
+
+    async def outline(self) -> list[dict]:
+        self.calls += 1
+        return list(self._sources)
+
+
+class _FailingRag:
+    async def outline(self):
+        raise RuntimeError("outline down")
+
+
 def _state() -> AgentState:
     return new_state(user_id=1, run_id="r1", messages=[], model="stub")
 
@@ -91,7 +106,7 @@ def test_prompt_byte_identical_when_catalog_absent():
 async def test_plan_node_uses_dispatcher_catalog(monkeypatch):
     captured = {}
 
-    async def _fake_emit(state, settings, tracer, prefs_text="", registry_block="", secrets=None):
+    async def _fake_emit(state, settings, tracer, prefs_text="", registry_block="", outline_block="", outline_sources=None, secrets=None):
         captured["block"] = registry_block
         return planner_module._PlanError("plan_invalid", "stop", "test")
 
@@ -106,7 +121,7 @@ async def test_plan_node_uses_dispatcher_catalog(monkeypatch):
 async def test_plan_node_catalog_fetch_failure_yields_empty_block(monkeypatch):
     captured = {}
 
-    async def _fake_emit(state, settings, tracer, prefs_text="", registry_block="", secrets=None):
+    async def _fake_emit(state, settings, tracer, prefs_text="", registry_block="", outline_block="", outline_sources=None, secrets=None):
         captured["block"] = registry_block
         return planner_module._PlanError("plan_invalid", "stop", "test")
 
@@ -117,10 +132,56 @@ async def test_plan_node_catalog_fetch_failure_yields_empty_block(monkeypatch):
     assert captured["block"] == ""
 
 
+async def test_plan_node_passes_knowledge_outline_to_emitter(monkeypatch):
+    captured = {}
+
+    async def _fake_emit(state, settings, tracer, prefs_text="", registry_block="", outline_block="", outline_sources=None, secrets=None):
+        captured["block"] = outline_block
+        captured["sources"] = outline_sources
+        return planner_module._PlanError("plan_invalid", "stop", "test")
+
+    monkeypatch.setattr(planner_module, "_emit_structured_plan", _fake_emit)
+    rag = _StubRag(
+        [
+            {
+                "id": 7,
+                "name": "notes",
+                "scope": "user",
+                "document_count": 2,
+                "chunk_count": 4,
+                "directories": ["B-Cook"],
+            }
+        ]
+    )
+    await planner_module.plan_node(
+        _state(), SETTINGS, trace.get_tracer("t"), rag=rag
+    )
+    assert rag.calls == 1
+    assert captured["sources"][0]["id"] == 7
+    assert "notes" in captured["block"]
+    assert "B-Cook" in captured["block"]
+
+
+async def test_plan_node_outline_failure_leaves_scope_unvalidated(monkeypatch):
+    captured = {}
+
+    async def _fake_emit(state, settings, tracer, prefs_text="", registry_block="", outline_block="", outline_sources=None, secrets=None):
+        captured["block"] = outline_block
+        captured["sources"] = outline_sources
+        return planner_module._PlanError("plan_invalid", "stop", "test")
+
+    monkeypatch.setattr(planner_module, "_emit_structured_plan", _fake_emit)
+    await planner_module.plan_node(
+        _state(), SETTINGS, trace.get_tracer("t"), rag=_FailingRag()
+    )
+    assert captured["sources"] is None
+    assert captured["block"] == ""
+
+
 async def test_plan_node_without_dispatcher_is_unchanged(monkeypatch):
     captured = {}
 
-    async def _fake_emit(state, settings, tracer, prefs_text="", registry_block="", secrets=None):
+    async def _fake_emit(state, settings, tracer, prefs_text="", registry_block="", outline_block="", outline_sources=None, secrets=None):
         captured["block"] = registry_block
         return planner_module._PlanError("plan_invalid", "stop", "test")
 
@@ -135,7 +196,7 @@ async def test_plan_node_without_dispatcher_is_unchanged(monkeypatch):
 async def test_planner_factory_threads_dispatcher(monkeypatch):
     captured = {}
 
-    async def _fake_plan_node(state, settings, tracer, prefs_text="", tools=None, secrets=None):
+    async def _fake_plan_node(state, settings, tracer, prefs_text="", tools=None, secrets=None, rag=None):
         captured["tools"] = tools
         return state
 

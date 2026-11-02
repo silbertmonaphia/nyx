@@ -54,6 +54,8 @@ interface ChatState {
   error: string | null;
   llmGateOpen: boolean;
   setLlmGateOpen: (open: boolean) => void;
+  knowledgeEnabled: boolean;
+  setKnowledgeEnabled: (enabled: boolean) => void;
   /**
    * Send a user message and stream the assistant response. Appends
    * the user message immediately, opens the stream, and patches a
@@ -489,6 +491,7 @@ interface LadderContext {
   controller: AbortController;
   isLive: () => boolean;
   onRunId: (id: string) => void;
+  kb: boolean;
 }
 
 function isAbortError(err: unknown): boolean {
@@ -857,6 +860,7 @@ async function runRecoveryLadder(ctx: LadderContext): Promise<LadderOutcome> {
           chatService.streamMessage(ctx.messages, ctx.signal, {
             runId: ctx.runId,
             onRunId: ctx.onRunId,
+            kb: ctx.kb,
           }),
           true,
         );
@@ -889,6 +893,20 @@ async function runRecoveryLadder(ctx: LadderContext): Promise<LadderOutcome> {
  *    surface — same class of risk as persisting tokens, and not
  *    worth the migration story yet.
  */
+const KNOWLEDGE_STORAGE_KEY = 'nyx.chat.knowledge';
+
+const knowledgeStorageKey = (userId: number): string =>
+  `${KNOWLEDGE_STORAGE_KEY}.${userId}`;
+
+const readKnowledgeEnabled = (userId: number | null): boolean => {
+  if (userId === null) return false;
+  try {
+    return window.localStorage.getItem(knowledgeStorageKey(userId)) === 'true';
+  } catch {
+    return false;
+  }
+};
+
 export const useChatStore = create<ChatState>((set, get) => ({
   messages: [],
   isStreaming: false,
@@ -899,6 +917,16 @@ export const useChatStore = create<ChatState>((set, get) => ({
   llmGateOpen: false,
   setLlmGateOpen: (open) => {
     set({ llmGateOpen: open });
+  },
+  knowledgeEnabled: false,
+  setKnowledgeEnabled: (enabled) => {
+    const owner = get().ownerUserId;
+    if (owner !== null && owner !== undefined) {
+      try {
+        window.localStorage.setItem(knowledgeStorageKey(owner), String(enabled));
+      } catch {}
+    }
+    set({ knowledgeEnabled: enabled });
   },
   currentSessionId: readPersistedSessionId(),
   ownerUserId: undefined,
@@ -1031,6 +1059,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
           // of minting a new one. Null on the tab's first message.
           runId: sentSessionId,
           onRunId: handleRunId,
+          kb: get().knowledgeEnabled,
         },
       );
       while (true) {
@@ -1088,6 +1117,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
             controller: recovery,
             isLive,
             onRunId: handleRunId,
+            kb: get().knowledgeEnabled,
           });
           if (outcome === "finished") {
             turnEndedClean = true;
@@ -1511,11 +1541,11 @@ export const useChatStore = create<ChatState>((set, get) => ({
   resetForUser: (userId) => {
     const owner = get().ownerUserId;
     if (owner === undefined) {
-      set({ ownerUserId: userId });
+      set({ ownerUserId: userId, knowledgeEnabled: readKnowledgeEnabled(userId) });
       return;
     }
     if (owner === userId) return;
-    set({ ownerUserId: userId });
+    set({ ownerUserId: userId, knowledgeEnabled: readKnowledgeEnabled(userId) });
     abortLiveStream();
     cancelRecoveryLadder();
     activeRunId = null;

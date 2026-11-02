@@ -12,6 +12,7 @@ import (
 
 	"nyx/internal/chat"
 	"nyx/internal/feed"
+	"nyx/internal/kb"
 	"nyx/internal/llm"
 	"nyx/internal/llm/openai"
 	"nyx/internal/llm/ssrf"
@@ -306,12 +307,13 @@ func buildAndServe(cfg *config.Config) {
 	// ragSvc drives the chat service's RAG injection; the indexer
 	// swaps the feed service's noop indexer so subsequent writes
 	// embed.
-	stopChatGC, ragSvc, ragIndexer := mountChatRoute(router, cfg, db, feedRepo, tracing.Provider, tokens, userLLMResolver)
+	stopChatGC, ragSvc, ragIndexer, kbSvc := mountChatRoute(router, cfg, db, feedRepo, tracing.Provider, tokens, userLLMResolver)
 	defer stopChatGC()
 	wireEmbeddingInvalidation(userLLMSettingsHandler, ragSvc, ragIndexer)
 	if ragIndexer != nil {
 		feedService.SetIndexer(ragIndexer)
 	}
+	mountKBRoutes(humaAPI, router, cfg, kbSvc, tokens)
 
 	// MCP server — gated on MCP_ENABLED. Default-off so deployments
 	// without external agents pay no allocation. See FUTURE_BACKEND.md
@@ -326,7 +328,7 @@ func buildAndServe(cfg *config.Config) {
 	// never linked from frontend. Gated on ragSvc != nil because
 	// the bridge wraps *rag.Service — deployments without an
 	// embedder (LLM_ENABLED=false) have nothing to bridge.
-	mountRAGBridgeRoute(router, ragSvc, tokens)
+	mountRAGBridgeRoute(router, ragSvc, kbSvc, tokens)
 
 	port := ":" + cfg.Port
 	server := &http.Server{
@@ -420,10 +422,10 @@ func setupTracing(cfg *config.Config) *observability.Tracing {
 // RAG facade and its indexer (both nil when LLM is disabled) so
 // main() can swap the feed service's noop indexer for the real
 // rag.Indexer.
-func mountChatRoute(router chi.Router, cfg *config.Config, db *pgxpool.Pool, feedRepo feed.Repository, tracerProvider trace.TracerProvider, tokens auth.TokenService, userLLMResolver *llmsettings.Resolver) (shutdown func(), ragSvc *rag.Service, ragIndexer feed.EmbeddingIndexer) {
+func mountChatRoute(router chi.Router, cfg *config.Config, db *pgxpool.Pool, feedRepo feed.Repository, tracerProvider trace.TracerProvider, tokens auth.TokenService, userLLMResolver *llmsettings.Resolver) (shutdown func(), ragSvc *rag.Service, ragIndexer feed.EmbeddingIndexer, kbSvc *kb.Service) {
 	if !cfg.LLMEnabled {
 		log.Info().Msg("LLM chat disabled (LLM_ENABLED=false)")
-		return func() {}, nil, nil
+		return func() {}, nil, nil, nil
 	}
 
 	// Build the primary client from the active config.
@@ -509,7 +511,7 @@ func mountChatRoute(router chi.Router, cfg *config.Config, db *pgxpool.Pool, fee
 	// when LLM_EMBEDDING_MODEL is empty. See mountRAGFacade for the
 	// extraction.
 	if cfg.LLMEnabled {
-		ragSvc, ragIndexer = mountRAGFacade(cfg, db, feedRepo, primary, llmClient, tracerProvider, userLLMResolver)
+		ragSvc, ragIndexer, kbSvc = mountRAGFacade(cfg, db, feedRepo, primary, llmClient, tracerProvider, userLLMResolver)
 	}
 
 	// Agent path (AGENT_ENABLED=true → Go chat handler is a thin
@@ -574,7 +576,7 @@ func mountChatRoute(router chi.Router, cfg *config.Config, db *pgxpool.Pool, fee
 	return func() {
 		stopGC()
 		stopApprovalsGC()
-	}, ragSvc, ragIndexer
+	}, ragSvc, ragIndexer, kbSvc
 }
 
 func agentMisconfiguration(cfg *config.Config) error {
@@ -607,7 +609,7 @@ func agentMisconfiguration(cfg *config.Config) error {
 // Returns the RAG service (nil when not built) and the indexer
 // (nil when not built) so the caller can swap the feed service's
 // noop indexer for the real rag.Indexer.
-func mountRAGFacade(cfg *config.Config, db *pgxpool.Pool, feedRepo feed.Repository, primary *llm.ProviderSlot, chatClient llm.Provider, tracerProvider trace.TracerProvider, userLLMResolver *llmsettings.Resolver) (*rag.Service, feed.EmbeddingIndexer) {
+func mountRAGFacade(cfg *config.Config, db *pgxpool.Pool, feedRepo feed.Repository, primary *llm.ProviderSlot, chatClient llm.Provider, tracerProvider trace.TracerProvider, userLLMResolver *llmsettings.Resolver) (*rag.Service, feed.EmbeddingIndexer, *kb.Service) {
 	var ragLLMClient llm.Provider = chatClient
 	var embeddingModel string
 	if cfg.LLMEmbeddingBaseURL != "" {
@@ -655,24 +657,14 @@ func mountRAGFacade(cfg *config.Config, db *pgxpool.Pool, feedRepo feed.Reposito
 		cfg.RAGTopK, cfg.RAGMaxContextChars, cfg.RAGMaxBackfillPerRequest,
 		tracerProvider.Tracer("nyx.rag"),
 	)
-	if userLLMResolver != nil {
-		perUserEmbedder := func(ctx context.Context, userID int) (*rag.Embedder, error) {
-			stack, err := userLLMResolver.Resolve(ctx, userID)
-			if err != nil {
-				if errors.Is(err, llmsettings.ErrNotFound) {
-					return nil, rag.ErrNoEmbedder
-				}
-				return nil, err
-			}
-			if stack.Embed == nil || stack.EmbedModel == "" {
-				return nil, rag.ErrNoEmbedder
-			}
-			embedder := rag.NewEmbedder(stack.Embed, stack.EmbedModel, tracerProvider.Tracer("nyx.rag.user"))
-			embedder.SetDimensions(cfg.EmbeddingDimensions)
-			return embedder, nil
-		}
+	perUserEmbedder := newPerUserEmbedderResolver(cfg, userLLMResolver, tracerProvider)
+	if perUserEmbedder != nil {
 		ragSvc.SetEmbedderResolver(perUserEmbedder)
 		ragIndexer.SetEmbedderResolver(perUserEmbedder)
+	}
+	kbSvc := mountKBStack(cfg, db, ragEmbedder, perUserEmbedder, tracerProvider)
+	if kbSvc != nil {
+		ragSvc.SetKnowledgeRetriever(kbSvc, cfg.KBTopK, cfg.KBMaxContextChars)
 	}
 	// Schema-drift warning: warn loudly if the live
 	// feed_embeddings.embedding column dim disagrees with
@@ -687,7 +679,73 @@ func mountRAGFacade(cfg *config.Config, db *pgxpool.Pool, feedRepo feed.Reposito
 		Int("top_k", cfg.RAGTopK).
 		Int("max_context_chars", cfg.RAGMaxContextChars).
 		Msg("RAG over feeds enabled")
-	return ragSvc, ragIndexer
+	return ragSvc, ragIndexer, kbSvc
+}
+
+func newPerUserEmbedderResolver(cfg *config.Config, userLLMResolver *llmsettings.Resolver, tracerProvider trace.TracerProvider) rag.EmbedderResolver {
+	if userLLMResolver == nil {
+		return nil
+	}
+	return func(ctx context.Context, userID int) (*rag.Embedder, error) {
+		stack, err := userLLMResolver.Resolve(ctx, userID)
+		if err != nil {
+			if errors.Is(err, llmsettings.ErrNotFound) {
+				return nil, rag.ErrNoEmbedder
+			}
+			return nil, err
+		}
+		if stack.Embed == nil || stack.EmbedModel == "" {
+			return nil, rag.ErrNoEmbedder
+		}
+		embedder := rag.NewEmbedder(stack.Embed, stack.EmbedModel, tracerProvider.Tracer("nyx.rag.user"))
+		embedder.SetDimensions(cfg.EmbeddingDimensions)
+		return embedder, nil
+	}
+}
+
+func mountKBStack(cfg *config.Config, db *pgxpool.Pool, deployEmbedder *rag.Embedder, perUserEmbedder rag.EmbedderResolver, tracerProvider trace.TracerProvider) *kb.Service {
+	if !cfg.KBEnabled {
+		log.Info().Msg("Knowledge base disabled (KB_ENABLED=false)")
+		return nil
+	}
+	store := kb.NewSQLStore(db)
+	indexer := kb.NewIndexer(store, deployEmbedder, kb.ChunkOptionsFrom(cfg), kb.ConnectorOptionsFrom(cfg))
+	service := kb.NewService(store, indexer, kb.ConfigFrom(cfg), deployEmbedder, tracerProvider.Tracer("nyx.kb"))
+	if perUserEmbedder != nil {
+		resolver := func(ctx context.Context, userID int64) (kb.Embedder, error) {
+			embedder, err := perUserEmbedder(ctx, int(userID))
+			if err != nil {
+				return nil, err
+			}
+			if embedder == nil {
+				return nil, nil
+			}
+			return embedder, nil
+		}
+		indexer.SetEmbedderResolver(resolver)
+		service.SetEmbedderResolver(resolver)
+	}
+	log.Info().
+		Str("root", cfg.KBRoot).
+		Str("private_base", cfg.KBPrivateBase).
+		Int("top_k", cfg.KBTopK).
+		Msg("Knowledge base enabled")
+	return service
+}
+
+func mountKBRoutes(humaAPI huma.API, router chi.Router, cfg *config.Config, kbSvc *kb.Service, tokens auth.TokenService) {
+	if kbSvc == nil {
+		if cfg.KBEnabled {
+			log.Warn().Msg("KB_ENABLED=true but LLM_ENABLED=false; knowledge routes are disabled because the KB indexer shares the feed embedder")
+		}
+		return
+	}
+	handler := kb.NewHandler(kbSvc)
+	kb.RegisterKBOps(humaAPI, handler, tokens)
+	kb.RegisterKBUploadRoute(router, handler, tokens)
+	if _, err := kbSvc.ProvisionShared(context.Background()); err != nil {
+		log.Warn().Err(err).Str("root", cfg.KBRoot).Msg("shared knowledge source could not be provisioned")
+	}
 }
 
 // buildLLMClient dispatches on cfg.LLMProvider to the right client
@@ -754,8 +812,8 @@ func mountMCPRoute(router chi.Router, cfg *config.Config, feedSvc feed.Service, 
 // to bridge. Behind middleware.NewAuth so the handler can read the
 // user id from the verified JWT via reqctx.UserIDFromContext;
 // query-param user_id is ignored as authoritative (spec §3.1).
-func mountRAGBridgeRoute(router chi.Router, ragSvc *rag.Service, tokens auth.TokenService) {
-	if ragSvc == nil {
+func mountRAGBridgeRoute(router chi.Router, ragSvc *rag.Service, kbSvc *kb.Service, tokens auth.TokenService) {
+	if ragSvc == nil && kbSvc == nil {
 		log.Info().Msg("RAG bridge disabled (LLM_ENABLED=false; ragSvc is nil)")
 		return
 	}
@@ -767,14 +825,23 @@ func mountRAGBridgeRoute(router chi.Router, ragSvc *rag.Service, tokens auth.Tok
 	// r.Get takes http.HandlerFunc, but rag.Handler returns
 	// http.Handler. The closure adapts the handler without
 	// allocating an extra wrapping type.
-	bridgeHandler := rag.Handler(ragSvc)
 	router.Group(func(r chi.Router) {
 		r.Use(middleware.NewAuth(tokens))
-		r.Get("/internal/rag/retrieve", func(w http.ResponseWriter, req *http.Request) {
-			bridgeHandler.ServeHTTP(w, req)
-		})
+		if ragSvc != nil {
+			bridgeHandler := rag.Handler(ragSvc)
+			r.Get("/internal/rag/retrieve", func(w http.ResponseWriter, req *http.Request) {
+				bridgeHandler.ServeHTTP(w, req)
+			})
+			log.Info().Msg("RAG bridge enabled at /internal/rag/retrieve")
+		}
+		if kbSvc != nil {
+			outlineHandler := kb.OutlineHandler(kbSvc)
+			r.Get("/internal/rag/outline", func(w http.ResponseWriter, req *http.Request) {
+				outlineHandler.ServeHTTP(w, req)
+			})
+			log.Info().Msg("Knowledge outline enabled at /internal/rag/outline")
+		}
 	})
-	log.Info().Msg("RAG bridge enabled at /internal/rag/retrieve")
 }
 
 // probeKeyFor returns the bearer key the per-request GET /v1/models

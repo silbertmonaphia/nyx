@@ -113,3 +113,45 @@ sql:
           created_at: "CreatedAt"
           updated_at: "UpdatedAt"
           deleted_at: "DeletedAt"
+  - engine: "postgresql"
+    queries: "queries/kb.sql"
+    schema:
+      - "migrations/000001_create_movies_table.up.sql"
+      - "migrations/000003_add_audit_fields_to_movies_table.up.sql"
+      - "migrations/000004_create_users_table.up.sql"
+      - "migrations/000011_rename_movies_to_feeds.up.sql"
+      - "migrations/000012_add_user_id_to_feeds.up.sql"
+      - "migrations/000013_drop_rating_from_feeds.up.sql"
+      - "migrations/000014_add_feed_embeddings.up.sql"
+      - "migrations/000018_create_kb_sources_documents_chunks.up.sql"
+    gen:
+      go:
+        package: "db"
+        out: "internal/kb/db"
+        sql_package: "pgx/v5"
+        emit_interface: true
+        emit_json_tags: false
+        emit_prepared_queries: false
+        emit_empty_slices: true
+        rename:
+          id: "ID"
+          owner_id: "OwnerID"
+          source_id: "SourceID"
+          document_id: "DocumentID"
+          user_id: "UserID"
+          content_hash: "ContentHash"
+          embedding_model: "EmbeddingModel"
+          rel_path: "RelPath"
+          doc_type: "DocType"
+          root_path: "RootPath"
+          last_scan_at: "LastScanAt"
+          last_error: "LastError"
+          byte_size: "ByteSize"
+          error_detail: "ErrorDetail"
+          heading_path: "HeadingPath"
+          embed_text: "EmbedText"
+          token_count: "TokenCount"
+          limit_count: "LimitCount"
+          path_prefix: "PathPrefix"
+          created_at: "CreatedAt"
+          updated_at: "UpdatedAt"

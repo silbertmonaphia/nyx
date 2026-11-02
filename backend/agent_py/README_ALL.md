@@ -358,7 +358,8 @@ the global provider belongs to the Jaeger export pipeline).
 ```
 planner node  ── one LLM call → Pydantic Plan (validated)
 executor node ── sequential over Plan.steps
-  ├─ rag   → POST /internal/rag/retrieve  (Go RAG bridge)
+  ├─ rag   → GET /internal/rag/retrieve  (Go RAG bridge, corpus=feeds)
+  ├─ kb    → GET /internal/rag/retrieve  (Go RAG bridge, corpus=kb + source/path)
   ├─ tool  → POST /mcp tools/call        (Go MCP shim)
   ├─ llm   → direct langchain-openai call
   └─ react → nested subgraph (model → tool → model), capped by

@@ -76,6 +76,112 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/kb/documents": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List knowledge documents */
+        get: operations["list-kb-documents"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/kb/documents/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get a knowledge document */
+        get: operations["get-kb-document"];
+        /** Update an inline knowledge document */
+        put: operations["update-kb-document"];
+        post?: never;
+        /** Delete an inline knowledge document */
+        delete: operations["delete-kb-document"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/kb/index": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Index the caller's visible knowledge sources */
+        post: operations["index-kb-sources"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/kb/settings": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get knowledge base settings for the caller */
+        get: operations["get-kb-settings"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/kb/sources": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List knowledge sources */
+        get: operations["list-kb-sources"];
+        put?: never;
+        /** Register a private knowledge directory */
+        post: operations["create-kb-source"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/kb/sources/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** Remove a knowledge source */
+        delete: operations["delete-kb-source"];
+        options?: never;
+        head?: never;
+        /** Enable or disable a knowledge source */
+        patch: operations["update-kb-source"];
+        trace?: never;
+    };
     "/api/livez": {
         parameters: {
             query?: never;
@@ -274,6 +380,32 @@ export interface components {
             /** @description Optional search provider group. When omitted the agent does not plan web searches. */
             tavily?: components["schemas"]["TavilyInput"];
         };
+        CreateSourceInputBody: {
+            name: string;
+            root_path: string;
+        };
+        DocumentView: {
+            /** Format: int64 */
+            byte_size: number;
+            content?: string;
+            doc_type: string;
+            error_detail?: string;
+            /** Format: int32 */
+            generation: number;
+            headings?: (string[] | null)[] | null;
+            /** Format: int64 */
+            id: number;
+            /** Format: date-time */
+            mtime: string | null;
+            origin: string;
+            rel_path: string;
+            /** Format: int64 */
+            source_id: number;
+            status: string;
+            title: string;
+            /** Format: date-time */
+            updated_at: string;
+        };
         ErrorResponse: {
             /** Format: int64 */
             code: number;
@@ -343,6 +475,15 @@ export interface components {
             /** @example up */
             database: string;
         };
+        IndexReportView: {
+            sources: components["schemas"]["SourceScanView"][] | null;
+        };
+        ListDocumentsOutputBody: {
+            documents: components["schemas"]["DocumentView"][] | null;
+        };
+        ListSourcesOutputBody: {
+            sources: components["schemas"]["SourceView"][] | null;
+        };
         LivezResponse: {
             /**
              * @description Always 'ok' as long as the process is serving HTTP.
@@ -378,6 +519,46 @@ export interface components {
             password: string;
             username: string;
         };
+        ScanSkipView: {
+            reason: string;
+            rel_path: string;
+        };
+        Settings: {
+            embedding_model: string;
+            enabled: boolean;
+            private_base: string;
+        };
+        SourceScanView: {
+            /** Format: int64 */
+            chunks: number;
+            /** Format: int64 */
+            documents: number;
+            error?: string;
+            name: string;
+            skipped: components["schemas"]["ScanSkipView"][] | null;
+            /** Format: int64 */
+            source_id: number;
+        };
+        SourceView: {
+            /** Format: int64 */
+            chunk_count: number;
+            directories: string[] | null;
+            /** Format: int64 */
+            document_count: number;
+            embedding_model?: string;
+            enabled: boolean;
+            /** Format: int64 */
+            id: number;
+            indexed_models: string[] | null;
+            kind: string;
+            last_error?: string;
+            /** Format: date-time */
+            last_scan_at: string | null;
+            name: string;
+            /** Format: int64 */
+            pending_count: number;
+            scope: string;
+        };
         TavilyInput: {
             /** @description Write-only API key. Optional: an empty key uses the provider's keyless tier; on update, empty keeps the stored key. */
             api_key?: string;
@@ -388,6 +569,12 @@ export interface components {
             /** @description Masked preview of the stored key: the last four characters only. The plaintext key is write-only and never returned. */
             api_key_masked: string;
             base_url: string;
+        };
+        UpdateDocumentInputBody: {
+            content: string;
+        };
+        UpdateSourceInputBody: {
+            enabled: boolean | null;
         };
         User: {
             /** Format: date-time */
@@ -592,6 +779,320 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HealthResponse"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    "list-kb-documents": {
+        parameters: {
+            query?: {
+                source_id?: number;
+                origin?: string;
+                status?: string;
+                limit?: number;
+                offset?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ListDocumentsOutputBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    "get-kb-document": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DocumentView"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    "update-kb-document": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdateDocumentInputBody"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DocumentView"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    "delete-kb-document": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description No Content */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    "index-kb-sources": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IndexReportView"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    "get-kb-settings": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Settings"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    "list-kb-sources": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ListSourcesOutputBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    "create-kb-source": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateSourceInputBody"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SourceView"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    "delete-kb-source": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description No Content */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    "update-kb-source": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdateSourceInputBody"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SourceView"];
                 };
             };
             /** @description Error */

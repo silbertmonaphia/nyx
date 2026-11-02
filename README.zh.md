@@ -53,7 +53,7 @@ flowchart TB
 ## Agent
 
 - **Plan-and-Execute 循环** —— planner 把你的请求拆解成带类型的步骤，executor 逐步执行，聊天 UI 通过 SSE 实时渲染每一步（`plan` → `step_start` → `tool_call` → `tool_result` → …）。
-- **工具** —— 你的 feed 条目（通过 MCP 工具面做 list / get / create / update / delete）、对自己条目的语义检索（RAG，pgvector）、web 搜索，以及带 SSRF 防护、按不可信内容封装的 web fetch。
+- **工具** —— 你的 feed 条目（通过 MCP 工具面做 list / get / create / update / delete）、对自己条目和知识文档的语义检索（RAG，pgvector）、web 搜索，以及带 SSRF 防护、按不可信内容封装的 web fetch。
 - **按生产标准打造** —— 运行状态持久化在 Postgres（配有 stale-run sweeper 与 retention GC）、每用户 token 预算、限流、有界重试并在 UI 中显示部分失败横幅、结构化 planner 输出配合有界 re-prompt。
 - **断线可自愈** —— 一次 run 的生命不再系于那条 SSE 连接：客户端断开不再杀死正在执行的工作，浏览器会自动重新挂上活着的 run；而“用户主动停止”是一个明确的动作，而不是靠摔断连接。
 - **可观测** —— 端到端 OpenTelemetry span、Prometheus 指标、可选的 Langfuse LLM tracing。
@@ -63,6 +63,7 @@ flowchart TB
 
 - **账号** —— JWT access token，加上带 reuse detection 的轮转 refresh token。
 - **你的 feed** —— 创建、编辑、删除、搜索、分页；所有查询都限定在你自己的账号范围内。
+- **知识库** —— 与 feed 并列的第二个语料库：运维托管的共享目录，加上你自己的私有目录（限定在运维配置的根目录内），按标题切分并以路径引用。可在应用内上传或编写内置文档；文件来源的文档保持只读。默认关闭（`KB_ENABLED=false`）；详见 [`docs/knowledge-base.md`](docs/knowledge-base.md)。
 - **白天/夜间主题** —— 导航栏切换按钮位于 `Nyx` 字标右侧；未选择前实时跟随系统，选择后记住（`localStorage["nyx.theme"]`，缺省 = 跟随系统）并在首帧前应用（无闪烁）。
 - **双语界面（中文 / English）** —— 语言切换按钮位于主题开关旁。每次访问默认中文（不看浏览器语言）；显式选择会存到 `localStorage["nyx.locale"]`（`"zh"` | `"en"`）并长期记住，`<html lang>` 跟随当前语言。
 - **可选基础设施**，默认关闭 —— Redis 缓存、Jaeger 链路追踪、Sentry、MCP server。（Prometheus `/metrics` 始终开启。）

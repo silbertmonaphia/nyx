@@ -1,9 +1,12 @@
 package rag
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
+	"strconv"
 	"strings"
+	"time"
 
 	"github.com/rs/zerolog/log"
 
@@ -33,8 +36,14 @@ type retrieveResponse struct {
 // embedded text one-for-one. The feed_id is the SQL SERIAL PK; the
 // Python client uses it to back-link into the user's UI.
 type retrieveCitation struct {
-	FeedID  int64  `json:"feed_id"`
-	Snippet string `json:"snippet"`
+	Kind        string   `json:"kind"`
+	FeedID      int64    `json:"feed_id"`
+	Snippet     string   `json:"snippet"`
+	DocID       int64    `json:"doc_id,omitempty"`
+	SourceName  string   `json:"source_name,omitempty"`
+	RelPath     string   `json:"rel_path,omitempty"`
+	HeadingPath []string `json:"heading_path,omitempty"`
+	Locator     any      `json:"locator,omitempty"`
 }
 
 // safeDetailMissingQuery is the static wire-level detail for a
@@ -55,6 +64,13 @@ const safeDetailMissingUser = "Authentication required"
 // surfaces an empty 200 envelope — but the detail string is still
 // returned on the rare 5xx path so operators can correlate.
 const safeDetailInternal = "RAG retrieval failed"
+
+const (
+	safeDetailInvalidCorpus = "Invalid corpus parameter"
+	safeDetailInvalidSource = "Invalid source parameter"
+	safeDetailInvalidTopK   = "Invalid top_k parameter"
+	maxRetrievalTopK        = 100
+)
 
 // Handler returns an http.Handler that wraps rag.Service.Retrieve
 // for the Python agent service. Mounted on chi at /internal/rag/retrieve
@@ -114,7 +130,38 @@ func Handler(svc *Service) http.Handler {
 			return
 		}
 
-		passages, block, err := svc.Retrieve(r.Context(), userID, query)
+		corpus, corpusErr := ParseCorpus(r.URL.Query().Get("corpus"))
+		if corpusErr != nil {
+			api.WriteError(w, r, http.StatusBadRequest, safeDetailInvalidCorpus,
+				api.ClassifyAndLog(r.Context(), nil, safeDetailInvalidCorpus))
+			return
+		}
+		sourceID, sourceErr := parseSourceParam(r.URL.Query().Get("source"))
+		if sourceErr != nil {
+			api.WriteError(w, r, http.StatusBadRequest, safeDetailInvalidSource,
+				api.ClassifyAndLog(r.Context(), nil, safeDetailInvalidSource))
+			return
+		}
+		topK, topKErr := parseTopKParam(r.URL.Query().Get("top_k"))
+		if topKErr != nil {
+			api.WriteError(w, r, http.StatusBadRequest, safeDetailInvalidTopK,
+				api.ClassifyAndLog(r.Context(), nil, safeDetailInvalidTopK))
+			return
+		}
+		if corpus != CorpusFeeds {
+			bgCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			go func() {
+				defer cancel()
+				svc.CatchUpKnowledge(bgCtx, userID)
+			}()
+		}
+
+		result, err := svc.RetrieveCorpus(r.Context(), userID, query, RetrievalOptions{
+			Corpus:     corpus,
+			SourceID:   sourceID,
+			PathPrefix: strings.TrimSpace(r.URL.Query().Get("path")),
+			TopK:       topK,
+		})
 		if err != nil {
 			// Internal failure: log via the safe-error funnel
 			// and return 200 with an empty envelope. The Python
@@ -134,16 +181,34 @@ func Handler(svc *Service) http.Handler {
 		// no passages. httpx's JSON deserialiser rejects null for
 		// a list field with a confusing TypeError; the Go-side
 		// one-line allocation is cheaper than a Python bug.
-		citations := make([]retrieveCitation, 0, len(passages))
-		for _, p := range passages {
+		citations := make([]retrieveCitation, 0, len(result.Passages))
+		for _, p := range result.Passages {
+			if p.Kind == CitationKindDoc {
+				headings := p.Knowledge.HeadingPath
+				if headings == nil {
+					headings = []string{}
+				}
+				citations = append(citations, retrieveCitation{
+					Kind:        CitationKindDoc,
+					FeedID:      0,
+					Snippet:     p.Knowledge.Content,
+					DocID:       p.Knowledge.DocID,
+					SourceName:  p.Knowledge.SourceName,
+					RelPath:     p.Knowledge.RelPath,
+					HeadingPath: headings,
+					Locator:     p.Knowledge.Locator,
+				})
+				continue
+			}
 			citations = append(citations, retrieveCitation{
-				FeedID:  int64(p.FeedID),
-				Snippet: citationSnippet(p),
+				Kind:    CitationKindFeed,
+				FeedID:  int64(p.Feed.FeedID),
+				Snippet: citationSnippet(p.Feed),
 			})
 		}
 
 		renderResponse(w, retrieveResponse{
-			ContextBlock: block,
+			ContextBlock: result.ContextBlock,
 			Citations:    citations,
 		})
 	})
@@ -170,4 +235,28 @@ func renderResponse(w http.ResponseWriter, body retrieveResponse) {
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.WriteHeader(http.StatusOK)
 	_ = json.NewEncoder(w).Encode(body)
+}
+
+func parseSourceParam(raw string) (*int64, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil, nil
+	}
+	value, err := strconv.ParseInt(raw, 10, 64)
+	if err != nil || value <= 0 {
+		return nil, ErrInvalidRetrievalParam
+	}
+	return &value, nil
+}
+
+func parseTopKParam(raw string) (int, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return 0, nil
+	}
+	value, err := strconv.Atoi(raw)
+	if err != nil || value <= 0 || value > maxRetrievalTopK {
+		return 0, ErrInvalidRetrievalParam
+	}
+	return value, nil
 }

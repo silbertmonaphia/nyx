@@ -227,3 +227,9 @@ Patterns the next agent change should follow, learned the hard way in the `agent
 
 - The `test-reviewer` agent caught 4 CRITICAL + 4 HIGH issues after I had marked the change "ready". None of those came from me. Run `/review` per chunk, not just at the end.
 - For changes that introduce a new wire surface (a new event kind, a new RPC method), update both the change's tests *and* the consumer's tests in the same PR. Otherwise both drift apart silently.
+
+## Knowledge retrieval step
+
+- [x] **`kb` step kind** — vector retrieval over the caller's knowledge corpus, carrying a query and optional `source`/`path`; the executor calls the Go bridge with `corpus=kb`, records an empty result on unavailability, and never surfaces an internal error to the model.
+- [x] **Planner outline** — `GET /internal/rag/outline` supplies source names, scopes, counts, and top-level directories (no document content) so the planner can narrow a knowledge search instead of guessing.
+- [x] **Unchanged SSE surface** — a `kb` step emits the existing `step_start`/`step_end` frames; no new frame kinds.

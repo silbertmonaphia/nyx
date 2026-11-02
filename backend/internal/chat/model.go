@@ -60,6 +60,7 @@ type ChatRequest struct {
 	// DisallowUnknownFields on the handler decoder rejects typos
 	// like "ragged" with 400.
 	RAG bool `json:"rag,omitempty"`
+	KB  bool `json:"kb,omitempty"`
 	// RunID, when supplied, is the session the client wants the
 	// agent to resume. The handler forwards it unchanged in the
 	// proxied /agent/run body; the Python service owns validation (a

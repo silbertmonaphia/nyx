@@ -19,7 +19,7 @@ flowchart TB
     subgraph PY["Python agent :9000<br/>(AGENT_ENABLED=true)"]
         PL["planner<br/>one LLM call → validated Plan"]
         EX["executor<br/>sequential steps"]
-        K["rag · tool · llm · react"]
+        K["rag · kb · tool · llm · react"]
     end
 
     LLM["LLM<br/>vLLM or OpenAI"]
@@ -44,8 +44,12 @@ flowchart TB
   step precedes the write and its id is referenced from the write args. Draft/preview/negation
   requests do not plan a write. The deterministic guard's lexical triggers are Chinese-only in this
   change, and it covers only the structured planner path; the legacy free-text path has no retry.
-- **Step kinds** — `rag` (your feed via the Go RAG bridge), `tool` (the MCP tool surface),
-  `llm` (single call), `react` (nested model ↔ tool loop, iteration-capped).
+- **Step kinds** — `rag` (your feed via the Go RAG bridge), `kb` (your knowledge corpus, with
+  optional `source` and `path` narrowing), `tool` (the MCP tool surface), `llm` (single call),
+  `react` (nested model ↔ tool loop, iteration-capped).
+- **Knowledge outline** — the planner receives the caller's visible knowledge sources and their
+  top-level directories (names and counts only, never document content) so it can scope a `kb`
+  step instead of guessing.
 - **Robust by default** — bounded retries on both tool-dispatch failure classes (validator
   re-prompt / transient backoff), per-user Redis token budget (fail-closed), per-IP rate limit,
   run state in Postgres with resume-by-`run_id`, stale-run sweeper + retention GC.

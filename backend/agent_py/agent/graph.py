@@ -86,6 +86,7 @@ def _planner_step_factory(
     prefs_text: str = "",
     tools: ToolDispatcher | None = None,
     secrets: OverrideSecrets | None = None,
+    rag: RagClient | None = None,
 ):
     """Closure that returns the LangGraph-compatible async node for the planner.
 
@@ -100,7 +101,13 @@ def _planner_step_factory(
     """
     async def _planner_step(state: AgentState) -> AgentState:
         return await plan_node(
-            state, settings, tracer, prefs_text=prefs_text, tools=tools, secrets=secrets
+            state,
+            settings,
+            tracer,
+            prefs_text=prefs_text,
+            tools=tools,
+            secrets=secrets,
+            rag=rag,
         )
 
     return _planner_step
@@ -150,7 +157,7 @@ def build_graph(
         tracer = trace.get_tracer("nyx.agent")
     builder = StateGraph(AgentState)
     builder.add_node(
-        "planner", _planner_step_factory(settings, tracer, prefs_text, tools, secrets)
+        "planner", _planner_step_factory(settings, tracer, prefs_text, tools, secrets, rag)
     )
     builder.add_node(
         "executor",

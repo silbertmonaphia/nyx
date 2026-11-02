@@ -182,6 +182,21 @@ type Config struct {
 	RAGMaxContextChars          int    `mapstructure:"RAG_MAX_CONTEXT_CHARS"`
 	RAGMaxBackfillPerRequest    int    `mapstructure:"RAG_MAX_BACKFILL_PER_REQUEST"`
 
+	KBEnabled            bool   `mapstructure:"KB_ENABLED"`
+	KBRoot               string `mapstructure:"KB_ROOT"`
+	KBPrivateBase        string `mapstructure:"KB_PRIVATE_BASE"`
+	KBSharedSourceName   string `mapstructure:"KB_SHARED_SOURCE_NAME"`
+	KBMaxFileBytes       int64  `mapstructure:"KB_MAX_FILE_BYTES"`
+	KBMaxFiles           int    `mapstructure:"KB_MAX_FILES"`
+	KBMaxDepth           int    `mapstructure:"KB_MAX_DEPTH"`
+	KBChunkTargetTokens  int    `mapstructure:"KB_CHUNK_TARGET_TOKENS"`
+	KBChunkMaxTokens     int    `mapstructure:"KB_CHUNK_MAX_TOKENS"`
+	KBChunkMinTokens     int    `mapstructure:"KB_CHUNK_MIN_TOKENS"`
+	KBChunkOverlapTokens int    `mapstructure:"KB_CHUNK_OVERLAP_TOKENS"`
+	KBTopK               int    `mapstructure:"KB_TOP_K"`
+	KBMaxContextChars    int    `mapstructure:"KB_MAX_CONTEXT_CHARS"`
+	KBIndexConcurrency   int    `mapstructure:"KB_INDEX_CONCURRENCY"`
+
 	// MCP server (Model Context Protocol) for the feed domain.
 	// MCP_ENABLED is the master switch. When false (default) no
 	// route is mounted and no mcp-go server is constructed — a
@@ -287,10 +302,8 @@ func Load() (*Config, error) {
 		}
 	}
 
-	if cfg.MCPEnabled {
-		if err := validateMCPConfig(&cfg); err != nil {
-			return nil, err
-		}
+	if err := validateFeatureConfigs(&cfg); err != nil {
+		return nil, err
 	}
 
 	return &cfg, nil
@@ -396,6 +409,21 @@ func setDefaults() {
 	viper.SetDefault("RAG_MAX_CONTEXT_CHARS", 4000)
 	viper.SetDefault("RAG_MAX_BACKFILL_PER_REQUEST", 20)
 
+	viper.SetDefault("KB_ENABLED", false)
+	viper.SetDefault("KB_ROOT", "")
+	viper.SetDefault("KB_PRIVATE_BASE", "")
+	viper.SetDefault("KB_SHARED_SOURCE_NAME", "shared")
+	viper.SetDefault("KB_MAX_FILE_BYTES", 2<<20)
+	viper.SetDefault("KB_MAX_FILES", 10000)
+	viper.SetDefault("KB_MAX_DEPTH", 20)
+	viper.SetDefault("KB_CHUNK_TARGET_TOKENS", 400)
+	viper.SetDefault("KB_CHUNK_MAX_TOKENS", 700)
+	viper.SetDefault("KB_CHUNK_MIN_TOKENS", 50)
+	viper.SetDefault("KB_CHUNK_OVERLAP_TOKENS", 80)
+	viper.SetDefault("KB_TOP_K", 5)
+	viper.SetDefault("KB_MAX_CONTEXT_CHARS", 4000)
+	viper.SetDefault("KB_INDEX_CONCURRENCY", 2)
+
 	// MCP defaults. MCP_ENABLED=false (default) means no /mcp
 	// route is mounted and no mcp-go server is constructed.
 	// MCP_PATH default /mcp matches the standard convention; the
@@ -448,6 +476,11 @@ func bindEnvVars() {
 		"LLM_EMBEDDING_API_KEY", "LLM_EMBEDDING_ALLOW_PRIVATE_URL",
 		"EMBEDDING_DIMENSIONS",
 		"RAG_TOP_K", "RAG_MAX_CONTEXT_CHARS", "RAG_MAX_BACKFILL_PER_REQUEST",
+		"KB_ENABLED", "KB_ROOT", "KB_PRIVATE_BASE", "KB_SHARED_SOURCE_NAME",
+		"KB_MAX_FILE_BYTES", "KB_MAX_FILES", "KB_MAX_DEPTH",
+		"KB_CHUNK_TARGET_TOKENS", "KB_CHUNK_MAX_TOKENS", "KB_CHUNK_MIN_TOKENS",
+		"KB_CHUNK_OVERLAP_TOKENS", "KB_TOP_K", "KB_MAX_CONTEXT_CHARS",
+		"KB_INDEX_CONCURRENCY",
 		"MCP_ENABLED", "MCP_PATH", "MCP_MAX_BODY_BYTES",
 		"AGENT_ENABLED", "PYTHON_AGENT_URL", "AGENT_SERVICE_TOKEN",
 		"AGENT_ALLOW_PRIVATE_URL",
@@ -523,6 +556,96 @@ func validateRAGBackfillSize(cfg *Config) error {
 			"RAG_MAX_BACKFILL_PER_REQUEST must be between 1 and %d, got %d",
 			maxRAGBackfillPerRequest, cfg.RAGMaxBackfillPerRequest,
 		)
+	}
+	return nil
+}
+
+const (
+	minKBMaxFileBytes     = 1024
+	maxKBMaxFileBytes     = 100 << 20
+	maxKBMaxFiles         = 1_000_000
+	maxKBMaxDepth         = 100
+	maxKBChunkTokens      = 100_000
+	maxKBTopK             = 100
+	maxKBMaxContextChars  = 1_000_000
+	maxKBIndexConcurrency = 64
+)
+
+func validateFeatureConfigs(cfg *Config) error {
+	if cfg.MCPEnabled {
+		if err := validateMCPConfig(cfg); err != nil {
+			return err
+		}
+	}
+	return validateKBConfig(cfg)
+}
+
+func validateKBConfig(cfg *Config) error {
+	if !cfg.KBEnabled {
+		return nil
+	}
+	if err := validateKBLimits(cfg); err != nil {
+		return err
+	}
+	if err := validateKBChunking(cfg); err != nil {
+		return err
+	}
+	if strings.TrimSpace(cfg.KBSharedSourceName) == "" {
+		return fmt.Errorf("KB_SHARED_SOURCE_NAME must not be empty when KB_ENABLED=true")
+	}
+	if cfg.EmbeddingDimensions != 1024 {
+		return fmt.Errorf(
+			"KB vectors are 1024-dimensional; EMBEDDING_DIMENSIONS must be 1024 when KB_ENABLED=true, got %d",
+			cfg.EmbeddingDimensions,
+		)
+	}
+	return nil
+}
+
+func validateKBLimits(cfg *Config) error {
+	if cfg.KBMaxFileBytes < minKBMaxFileBytes || cfg.KBMaxFileBytes > maxKBMaxFileBytes {
+		return fmt.Errorf("KB_MAX_FILE_BYTES must be between %d and %d, got %d",
+			minKBMaxFileBytes, maxKBMaxFileBytes, cfg.KBMaxFileBytes)
+	}
+	if cfg.KBMaxFiles < 1 || cfg.KBMaxFiles > maxKBMaxFiles {
+		return fmt.Errorf("KB_MAX_FILES must be between 1 and %d, got %d",
+			maxKBMaxFiles, cfg.KBMaxFiles)
+	}
+	if cfg.KBMaxDepth < 1 || cfg.KBMaxDepth > maxKBMaxDepth {
+		return fmt.Errorf("KB_MAX_DEPTH must be between 1 and %d, got %d",
+			maxKBMaxDepth, cfg.KBMaxDepth)
+	}
+	if cfg.KBTopK < 1 || cfg.KBTopK > maxKBTopK {
+		return fmt.Errorf("KB_TOP_K must be between 1 and %d, got %d",
+			maxKBTopK, cfg.KBTopK)
+	}
+	if cfg.KBMaxContextChars < 100 || cfg.KBMaxContextChars > maxKBMaxContextChars {
+		return fmt.Errorf("KB_MAX_CONTEXT_CHARS must be between 100 and %d, got %d",
+			maxKBMaxContextChars, cfg.KBMaxContextChars)
+	}
+	if cfg.KBIndexConcurrency < 1 || cfg.KBIndexConcurrency > maxKBIndexConcurrency {
+		return fmt.Errorf("KB_INDEX_CONCURRENCY must be between 1 and %d, got %d",
+			maxKBIndexConcurrency, cfg.KBIndexConcurrency)
+	}
+	return nil
+}
+
+func validateKBChunking(cfg *Config) error {
+	if cfg.KBChunkTargetTokens < 1 || cfg.KBChunkTargetTokens > maxKBChunkTokens {
+		return fmt.Errorf("KB_CHUNK_TARGET_TOKENS must be between 1 and %d, got %d",
+			maxKBChunkTokens, cfg.KBChunkTargetTokens)
+	}
+	if cfg.KBChunkMaxTokens < cfg.KBChunkTargetTokens || cfg.KBChunkMaxTokens > maxKBChunkTokens {
+		return fmt.Errorf("KB_CHUNK_MAX_TOKENS must be between KB_CHUNK_TARGET_TOKENS (%d) and %d, got %d",
+			cfg.KBChunkTargetTokens, maxKBChunkTokens, cfg.KBChunkMaxTokens)
+	}
+	if cfg.KBChunkMinTokens < 0 || cfg.KBChunkMinTokens > cfg.KBChunkTargetTokens {
+		return fmt.Errorf("KB_CHUNK_MIN_TOKENS must be between 0 and KB_CHUNK_TARGET_TOKENS (%d), got %d",
+			cfg.KBChunkTargetTokens, cfg.KBChunkMinTokens)
+	}
+	if cfg.KBChunkOverlapTokens < 0 || cfg.KBChunkOverlapTokens >= cfg.KBChunkTargetTokens {
+		return fmt.Errorf("KB_CHUNK_OVERLAP_TOKENS must be at least 0 and less than KB_CHUNK_TARGET_TOKENS (%d), got %d",
+			cfg.KBChunkTargetTokens, cfg.KBChunkOverlapTokens)
 	}
 	return nil
 }

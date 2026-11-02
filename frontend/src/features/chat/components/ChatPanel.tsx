@@ -186,6 +186,8 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ open, onOpenChange }) => {
       s.currentSessionId !== null &&
       s.runningSessionIds.includes(s.currentSessionId),
   );
+  const knowledgeEnabled = useChat((s) => s.knowledgeEnabled);
+  const setKnowledgeEnabled = useChat((s) => s.setKnowledgeEnabled);
   const composerLocked = isStreaming || sessionBusy;
 
   const [draft, setDraft] = useState("");
@@ -483,6 +485,15 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ open, onOpenChange }) => {
                   {t("chat.recovery.reconnecting")}
                 </p>
               )}
+              <label className="flex items-center gap-2 text-xs text-muted-foreground">
+                <input
+                  type="checkbox"
+                  checked={knowledgeEnabled}
+                  onChange={(e) => setKnowledgeEnabled(e.target.checked)}
+                  data-testid="chat-kb-toggle"
+                />
+                {t("chat.knowledgeToggle")}
+              </label>
               <Textarea
                 value={draft}
                 onChange={(e) => setDraft(e.target.value)}

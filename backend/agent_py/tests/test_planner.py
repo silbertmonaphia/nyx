@@ -336,6 +336,53 @@ def test_retry_succeeds_after_validation_failure(monkeypatch, scripted_settings)
     assert client._call_count == 2
 
 
+def test_retry_recovers_from_kb_scope_validation(monkeypatch, scripted_settings):
+    invalid = Plan(
+        steps=[
+            PlanStep(
+                id="kb_1",
+                kind=StepKind.kb,
+                query="饮食",
+                source=3,
+                path="B-Cook/diet.md",
+            ),
+            PlanStep(id="llm_2", kind=StepKind.llm, prompt="answer"),
+        ]
+    )
+    valid = Plan(
+        steps=[
+            PlanStep(id="kb_1", kind=StepKind.kb, query="饮食", source=3),
+            PlanStep(id="llm_2", kind=StepKind.llm, prompt="answer"),
+        ]
+    )
+    client = _ScriptedStructuredClient(script=["ok", "ok"], successes=[invalid, valid])
+    monkeypatch.setattr(
+        "agent.planner._build_structured_client",
+        lambda _s, _state, _secrets=None: client,
+    )
+
+    state = new_state(
+        user_id=1,
+        run_id="r1",
+        model="test-model",
+        messages=[{"role": "user", "content": "我的笔记里饮食怎么安排"}],
+    )
+    plan_or_error = await_call(
+        _emit_structured_plan(
+            state,
+            scripted_settings,
+            _NoopTracer(),
+            outline_sources=[{"id": 3, "directories": ["B-Cook"]}],
+        )
+    )
+
+    assert isinstance(plan_or_error, Plan)
+    assert plan_or_error.steps[0].path is None
+    assert client._call_count == 2
+    retry_prompt = client._captured_messages[1][-1].content
+    assert "is not a directory listed in KNOWLEDGE_OUTLINE" in retry_prompt
+
+
 def test_retry_exhaustion_emits_plan_invalid(monkeypatch, scripted_settings):
     """When every attempt raises ValidationError, the planner emits `plan_invalid`."""
 
@@ -1042,7 +1089,7 @@ def test_guard_prompt_reconciles_unsure_rule_with_write_mandate():
 
 
 def test_prompt_preserves_web_routing_and_caps_feed_length():
-    assert "never use `rag` for those requests" in PLANNER_SYSTEM_PROMPT
+    assert "never use `rag` or `kb` for those requests" in PLANNER_SYSTEM_PROMPT
     assert "under 300 Chinese characters" in PLANNER_SYSTEM_PROMPT
     assert "`create_feed` / `update_feed`" in PLANNER_SYSTEM_PROMPT
     assert "1000 bytes" in PLANNER_SYSTEM_PROMPT

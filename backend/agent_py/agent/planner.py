@@ -60,6 +60,7 @@ from .observability import (
     trace_observation,
     update_observation,
 )
+from .rag_client import RagClient
 from .state import AgentState, accumulate_usage, accumulate_usage_metadata
 from .tool_dispatch import ToolDispatcher, registry_planner_block
 from .types import (
@@ -79,25 +80,27 @@ from .web_tools import planner_block
 
 log = logging.getLogger("nyx.agent.planner")
 
-PLANNER_SYSTEM_PROMPT = """You are a planner that decomposes a user's chat request into an ordered sequence of agent steps. The steps are executed sequentially by an orchestrator that supports four kinds:
+PLANNER_SYSTEM_PROMPT = """You are a planner that decomposes a user's chat request into an ordered sequence of agent steps. The steps are executed sequentially by an orchestrator that supports five kinds:
 
 - rag:    vector retrieval over the user's feed corpus; { query: <str> }
+- kb:     vector retrieval over the user's knowledge corpus; { query: <str>, source?: <int>, path?: <text> }
 - tool:   call a registered tool by name; { tool: <name>, args: <object> }
 - llm:    a single LLM completion; { prompt: <str> }
 - react:  a nested model-tool loop that ends when the model writes its result text, capped by max_iterations; { prompt: <objective>, max_iterations: <int> }
 
 Return ONLY a JSON object matching this schema:
-{{"steps": [{{"id": "<step_id>", "kind": "rag|tool|llm|react", "tool": "<name>", "args": {{...}}, "prompt": "<text>", "query": "<text>", "max_iterations": <int>}}, ...]}}
+{{"steps": [{{"id": "<step_id>", "kind": "rag|kb|tool|llm|react", "tool": "<name>", "args": {{...}}, "prompt": "<text>", "query": "<text>", "source": <int>, "path": "<text>", "max_iterations": <int>}}, ...]}}
 
 Rules:
 - step `id` MUST be unique within the plan and stable across the run
 - plan for only the MOST RECENT user message; earlier messages are context, never re-answer them
-- `rag` and `tool` steps gather data and emit NO user-visible text; the plan MUST end with an `llm` step that writes the final answer using the data gathered by earlier steps
+- `rag`, `kb`, and `tool` steps gather data and emit NO user-visible text; the plan MUST end with an `llm` step that writes the final answer using the data gathered by earlier steps
 - a `react` step MUST carry a `prompt` stating its objective — it is the loop's system instruction, and the text the loop writes is user-visible
 - the plan MUST contain at least one step; for greetings, small talk, or anything needing no retrieval or tools, emit exactly one `llm` step that answers the user
 - prefer the minimum number of steps; don't insert filler
-- use `rag` only when the request is clearly about the user's own data
-- for weather, current events, or any external information, use the available web tools when they are enabled; never use `rag` for those requests — `rag` is only for the user's own feed data
+- use `rag` only when the request is clearly about the user's own feeds
+- use `kb` when the request is about the user's knowledge base, notes, or documents; a `kb` step MUST set `query` to the search text; set `source` only to a source id named in KNOWLEDGE_OUTLINE and `path` only to a directory listed there — never invent a document filename or a path
+- for weather, current events, or any external information, use the available web tools when they are enabled; never use `rag` or `kb` for those requests
 - when the user explicitly asks to change their feeds — create or publish (发布 / 发出去 / 创建), update (更新 / 修改), or delete (删除 / 删掉) — the plan MUST contain a `tool` step calling the matching write tool (`create_feed` / `update_feed` / `delete_feed`) before the answering `llm` step; an `llm` step composes text and never performs the write
 - do NOT plan a write tool when the user asks to compose, draft, review, suggest, or preview content, when the message says not to publish yet (草稿 / 先别发 / 不要发布 / 仅供预览), or when an ambiguous request could be either composing or publishing — such requests are draft-and-report
 - when the write's content must be composed from earlier results, plan the composing `llm` step BEFORE the write step and make the write's content argument reference that step's output; never pass a plan-time placeholder as the created or updated content
@@ -190,6 +193,7 @@ async def plan_node(
     prefs_text: str = "",
     tools: ToolDispatcher | None = None,
     secrets: OverrideSecrets | None = None,
+    rag: RagClient | None = None,
 ) -> AgentState:
     """Invoke the planner LLM; mutate state.plan and state.events_so_far.
 
@@ -222,6 +226,14 @@ async def plan_node(
             registry_block = registry_planner_block(await tools.registry_tools())
         except Exception as exc:  # noqa: BLE001 — catalog is best-effort
             log.warning("planner: registry catalog fetch failed: %r", exc)
+    outline_block = ""
+    outline_sources: list[dict] | None = None
+    if rag is not None:
+        try:
+            outline_sources = await rag.outline()
+            outline_block = _knowledge_outline_block(outline_sources)
+        except Exception as exc:  # noqa: BLE001 — outline is best-effort
+            log.warning("planner: knowledge outline fetch failed: %r", exc)
     override_view = state.get("llm_override")
     use_structured = structured_supported(
         override_view.base_url if override_view else None, settings
@@ -265,6 +277,8 @@ async def plan_node(
                 tracer,
                 prefs_text,
                 registry_block=registry_block,
+                outline_block=outline_block,
+                outline_sources=outline_sources,
                 secrets=secrets,
             )
         else:
@@ -274,6 +288,8 @@ async def plan_node(
                 tracer,
                 prefs_text,
                 registry_block=registry_block,
+                outline_block=outline_block,
+                outline_sources=outline_sources,
                 secrets=secrets,
             )
 
@@ -382,6 +398,7 @@ def _initial_messages(
     settings: Settings,
     prefs_text: str = "",
     registry_block: str = "",
+    outline_block: str = "",
 ) -> list:
     """The planner's opening messages.
 
@@ -409,10 +426,72 @@ def _initial_messages(
                 + planner_block(settings)
                 + (prefs_text or "")
                 + (registry_block or "")
+                + (outline_block or "")
             )
         ),
         HumanMessage(content=_messages_to_prompt(state.get("messages", []))),
     ]
+
+
+_OUTLINE_BLOCK_MAX_CHARS = 2800
+_OUTLINE_VALUE_MAX_CHARS = 120
+
+
+def _outline_text(value: str) -> str:
+    printable = "".join(character if character.isprintable() else " " for character in value)
+    return " ".join(printable.split())[:_OUTLINE_VALUE_MAX_CHARS]
+
+
+def _knowledge_outline_block(sources: list[dict]) -> str:
+    lines: list[str] = []
+    for source in sources:
+        if not isinstance(source, dict):
+            continue
+        source_id = source.get("id")
+        if not isinstance(source_id, int) or isinstance(source_id, bool):
+            continue
+        name = _outline_text(str(source.get("name", "")))
+        if not name:
+            continue
+        raw_directories = source.get("directories")
+        if not isinstance(raw_directories, list):
+            raw_directories = []
+        directories = [
+            _outline_text(directory)
+            for directory in raw_directories
+            if isinstance(directory, str) and _outline_text(directory)
+        ]
+        try:
+            document_count = int(source.get("document_count", 0))
+        except (TypeError, ValueError):
+            document_count = 0
+        line = (
+            f"- source {source_id}: {name} "
+            f"(scope: {_outline_text(str(source.get('scope', '')))}, documents: {document_count})"
+        )
+        if directories:
+            line += "; directories: " + ", ".join(directories)
+        else:
+            line += "; directories: none"
+        lines.append(line)
+    if not lines:
+        return ""
+    header = "\n\nKNOWLEDGE_OUTLINE\n"
+    footer = (
+        "\nUse `kb` with `source` to narrow to a source; set `path` only to one of "
+        "the listed directories and omit it when the source lists none."
+    )
+    budget = _OUTLINE_BLOCK_MAX_CHARS - len(header) - len(footer)
+    kept: list[str] = []
+    used = 0
+    for line in lines:
+        addition = len(line) + (1 if kept else 0)
+        if used + addition > budget:
+            kept.append("- additional sources omitted")
+            break
+        kept.append(line)
+        used += addition
+    return header + "\n".join(kept) + footer
 
 
 def _append_error_to_messages(messages: list, error: str) -> list:
@@ -463,6 +542,8 @@ async def _emit_structured_plan(
     tracer: trace.Tracer,
     prefs_text: str = "",
     registry_block: str = "",
+    outline_block: str = "",
+    outline_sources: list[dict] | None = None,
     secrets: OverrideSecrets | None = None,
 ) -> Plan | _PlanError:
     """Bound the structured-output retry loop. Returns `Plan` or `_PlanError`.
@@ -492,7 +573,7 @@ async def _emit_structured_plan(
         log.warning("planner client construction failed: %r", exc)
         return _PlanError("planner_failed", "Plan generation failed", "provider call failed")
 
-    messages = _initial_messages(state, settings, prefs_text, registry_block)
+    messages = _initial_messages(state, settings, prefs_text, registry_block, outline_block)
     latest_user_message = _latest_user_message(state.get("messages", []))
     had_validation_failure = False
 
@@ -568,6 +649,7 @@ async def _emit_structured_plan(
                 plan_obj,
                 settings.plan_max_steps,
                 latest_user_message=latest_user_message,
+                outline_sources=outline_sources,
             )
             if isinstance(enriched, _PlanError):
                 reason = enriched.reason or enriched.code
@@ -661,6 +743,8 @@ async def _emit_legacy_plan(
     tracer: trace.Tracer,
     prefs_text: str = "",
     registry_block: str = "",
+    outline_block: str = "",
+    outline_sources: list[dict] | None = None,
     secrets: OverrideSecrets | None = None,
 ) -> Plan | _PlanError:
     """Legacy free-text path: fence-strip + `json.loads` + post-parse enrichment.
@@ -695,7 +779,7 @@ async def _emit_legacy_plan(
         span.set_attribute("structured", False)
         try:
             resp = await client.ainvoke(
-                _initial_messages(state, settings, prefs_text, registry_block)
+                _initial_messages(state, settings, prefs_text, registry_block, outline_block)
             )
         except Exception as exc:  # noqa: BLE001 — surface as a typed error event
             log.warning("planner provider call failed (legacy path): %r", exc)
@@ -707,7 +791,11 @@ async def _emit_legacy_plan(
         if _total:
             agent_tokens_total.labels("planner", effective.model).inc(_total)
         raw = _extract_text(resp)
-        plan_or_error = _parse_and_validate(raw, max_steps=settings.plan_max_steps)
+        plan_or_error = _parse_and_validate(
+            raw,
+            max_steps=settings.plan_max_steps,
+            outline_sources=outline_sources,
+        )
         if (
             isinstance(plan_or_error, _PlanError)
             and plan_or_error.code == "plan_invalid"
@@ -719,7 +807,65 @@ async def _emit_legacy_plan(
         return plan_or_error
 
 
-def _parse_and_validate(raw: str, max_steps: int) -> Plan | _PlanError:
+def _kb_step_error(
+    step: PlanStep, outline_sources: list[dict] | None
+) -> _PlanError | None:
+    if step.kind is not StepKind.kb:
+        return None
+    if not (step.query or "").strip():
+        return _PlanError(
+            "plan_invalid",
+            "Plan is invalid",
+            f"kb step {step.id!r} requires a non-empty query",
+        )
+    if outline_sources is None:
+        return None
+
+    directories_by_source: dict[int, list[str]] = {}
+    all_directories: list[str] = []
+    for raw in outline_sources:
+        if not isinstance(raw, dict):
+            continue
+        source_id = raw.get("id")
+        if not isinstance(source_id, int) or isinstance(source_id, bool):
+            continue
+        raw_directories = raw.get("directories")
+        if not isinstance(raw_directories, list):
+            raw_directories = []
+        directories = [
+            directory.strip().strip("/")
+            for directory in raw_directories
+            if isinstance(directory, str) and directory.strip().strip("/")
+        ]
+        directories_by_source[source_id] = directories
+        all_directories.extend(directories)
+
+    if step.source is not None:
+        if step.source not in directories_by_source:
+            return _PlanError(
+                "plan_invalid",
+                "Plan is invalid",
+                f"kb step {step.id!r} references source {step.source} not listed in KNOWLEDGE_OUTLINE",
+            )
+        allowed = directories_by_source[step.source]
+    else:
+        allowed = all_directories
+
+    path = (step.path or "").strip().replace("\\", "/").strip("/")
+    if not path:
+        return None
+    if path not in allowed:
+        return _PlanError(
+            "plan_invalid",
+            "Plan is invalid",
+            f"kb step {step.id!r} path {step.path!r} is not a directory listed in KNOWLEDGE_OUTLINE",
+        )
+    return None
+
+
+def _parse_and_validate(
+    raw: str, max_steps: int, *, outline_sources: list[dict] | None = None
+) -> Plan | _PlanError:
     """Legacy free-text parser. See `tests/test_planner.py` for behaviour."""
     text = raw.strip()
     if text.startswith(_FENCE_PREFIX):
@@ -765,6 +911,9 @@ def _parse_and_validate(raw: str, max_steps: int) -> Plan | _PlanError:
                 return _PlanError(
                     "plan_invalid", "Plan is invalid", f"duplicate step id {parsed.id!r}"
                 )
+            kb_error = _kb_step_error(parsed, outline_sources)
+            if kb_error is not None:
+                return kb_error
             seen_ids.add(parsed.id)
             parsed_steps.append(parsed)
 
@@ -922,6 +1071,7 @@ def _enforce_plan_shape(
     max_steps: int,
     *,
     latest_user_message: str | None = None,
+    outline_sources: list[dict] | None = None,
 ) -> Plan | _PlanError:
     """Same enrichment as the legacy parser, on a typed `Plan` instance.
 
@@ -929,7 +1079,7 @@ def _enforce_plan_shape(
       deterministically return `{"steps": []}` for greetings).
     - Plans exceeding `max_steps` are rejected with `plan_too_large`.
     - Duplicate step ids are rejected with `plan_invalid`.
-    - Plans whose last step is a data step (`rag`, `tool`) get a final
+    - Plans whose last step is a data step (`rag`, `kb`, `tool`) get a final
       answering `llm` step appended so the run produces a user-visible
       answer (the 2026-10 "summarize my feeds" bug).
 
@@ -968,6 +1118,9 @@ def _enforce_plan_shape(
             return _PlanError(
                 "plan_invalid", "Plan is invalid", f"duplicate step id {s.id!r}"
             )
+        kb_error = _kb_step_error(s, outline_sources)
+        if kb_error is not None:
+            return kb_error
         seen_ids.add(s.id)
 
     if steps[-1].kind.value not in ("llm", "react"):

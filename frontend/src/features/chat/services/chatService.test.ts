@@ -398,6 +398,30 @@ describe('chatService.streamMessage', () => {
     ]);
   });
 
+  it('sends the kb flag only when knowledge search is enabled', async () => {
+    const sse = 'data: [DONE]\n\n';
+    fetchMock.mockResolvedValueOnce(sseResponse([sse]));
+    for await (const e of chatService.streamMessage(
+      [{ role: 'user', content: 'hi' }],
+      new AbortController().signal,
+      { kb: true },
+    )) {
+      void e;
+    }
+    const body = JSON.parse(fetchMock.mock.calls[0][1].body as string);
+    expect(body.kb).toBe(true);
+
+    fetchMock.mockResolvedValueOnce(sseResponse([sse]));
+    for await (const e of chatService.streamMessage(
+      [{ role: 'user', content: 'hi' }],
+      new AbortController().signal,
+    )) {
+      void e;
+    }
+    const omitted = JSON.parse(fetchMock.mock.calls[1][1].body as string);
+    expect(omitted).not.toHaveProperty('kb');
+  });
+
   it('omits the rag field from the request body', async () => {
     const sse =
       'event: done\ndata: {"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}}\n\n' +
@@ -570,6 +594,43 @@ describe('chatService.streamMessage', () => {
         request_id: 'req-1',
         code: 'plan_too_large',
       },
+      { kind: 'terminator' },
+    ]);
+  });
+
+  it('parses a kb plan and step frames through the real parser', async () => {
+    const sse =
+      'event: plan\ndata: {"steps":[{"id":"kb_1","kind":"kb","query":"饮食"}]}\n\n' +
+      'event: step_start\ndata: {"step_id":"kb_1","kind":"kb"}\n\n' +
+      'event: step_end\ndata: {"step_id":"kb_1","status":"ok","reason":""}\n\n' +
+      'data: [DONE]\n\n';
+    fetchMock.mockResolvedValueOnce(sseResponse([sse]));
+
+    const events: unknown[] = [];
+    for await (const e of chatService.streamMessage(
+      [{ role: 'user', content: 'hi' }],
+      new AbortController().signal,
+    )) {
+      events.push(e);
+    }
+
+    expect(events).toEqual([
+      {
+        kind: 'plan',
+        steps: [
+          {
+            id: 'kb_1',
+            kind: 'kb',
+            tool: undefined,
+            args: undefined,
+            query: '饮食',
+            prompt: undefined,
+            max_iterations: undefined,
+          },
+        ],
+      },
+      { kind: 'step_start', step_id: 'kb_1', step_kind: 'kb' },
+      { kind: 'step_end', step_id: 'kb_1', status: 'ok', reason: '' },
       { kind: 'terminator' },
     ]);
   });

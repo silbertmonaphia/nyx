@@ -6,24 +6,18 @@ The pipeline that turns a file on disk into retrievable passages: normalize the 
 
 ## ADDED Requirements
 
-### Requirement: A document is normalized into a heading-aware block sequence
+### Requirement: A document is normalized into an ordered block sequence
 
-A Markdown document SHALL be normalized into an ordered sequence of blocks, each carrying the heading path in effect at that position, a kind, and a locator identifying where the block came from. Headings SHALL be recognised at every level and SHALL establish the heading path for the blocks that follow them. Fenced code blocks SHALL be preserved intact as single blocks. Tables SHALL be preserved as table blocks rather than being flattened into prose. Front matter SHALL not appear in any block's text. An image reference SHALL contribute its alt text, if any, as ordinary text in the block in effect, and SHALL never contribute the image URL; an image reference with no alt text SHALL contribute nothing to any block's text. v1 does not parse image content itself — the bytes behind the reference are outside the pipeline.
-
-#### Scenario: An image with alt text contributes only the alt text
-
-- **WHEN** a document contains `![黄昏的庆云顶](https://example.com/img.jpg)` as its own line
-- **THEN** a block carries the text `黄昏的庆云顶`, and no block's text contains the URL
-
-#### Scenario: An image without alt text contributes nothing
-
-- **WHEN** a document contains `![](https://example.com/img.jpg)` as its own line
-- **THEN** no block carries the URL, and the line does not produce an empty text block
+A Markdown document SHALL be normalized into an ordered sequence of blocks, each carrying the heading path in effect at that position, a kind, and a locator identifying where the block came from. Headings SHALL be recognised at every level and SHALL establish the heading path for the blocks that follow them.
 
 #### Scenario: Headings establish a nested path
 
 - **WHEN** a document contains a level-one heading followed by a level-two heading and a paragraph under it
 - **THEN** the paragraph's heading path names both headings, in document order
+
+### Requirement: Block kinds preserve code, tables, and front matter
+
+Fenced code blocks SHALL be preserved intact as single blocks. Tables SHALL be preserved as table blocks rather than flattened into prose. Front matter SHALL not appear in any block's text.
 
 #### Scenario: Code block stays intact
 
@@ -40,48 +34,78 @@ A Markdown document SHALL be normalized into an ordered sequence of blocks, each
 - **WHEN** a document begins with front matter followed by a heading
 - **THEN** no block's text contains the front matter, and the first block belongs to the first heading
 
-### Requirement: Chunks respect the document's structure and carry a context header
+### Requirement: Image references contribute only their alt text
 
-A chunk SHALL belong to exactly one heading path and SHALL NOT span two heading paths. No chunk's embedded text SHALL exceed the configured hard token cap, except a fenced code block kept whole under the rule below — the cap is a packing budget for splittable content, not a licence to cut through an atomic block. A table SHALL NOT be split across chunks; a table larger than the cap SHALL be split by rows with its header repeated in each part. A fenced code block SHALL NOT be split, and a fenced code block larger than the hard cap SHALL still be kept whole as one chunk. A fenced code block whose size exceeds the embedding model's usable window cannot receive an embedding; the document SHALL then end pending with that reason observable, the document's previous generation SHALL continue to serve retrieval when one exists, and the remedy is editing the source file — the pipeline SHALL NOT truncate code to fit. A section whose content falls below the configured minimum size SHALL be kept rather than dropped, and SHALL still carry its heading. The text that is embedded for a chunk SHALL be the chunk's relative path, its heading path, and its body, in that order; the body alone SHALL be stored separately for citation.
+An image reference SHALL contribute its alt text, if any, as ordinary text in the block in effect, and SHALL never contribute the image URL. An image reference with no alt text SHALL contribute nothing. v1 does not parse image content itself.
+
+#### Scenario: An image with alt text contributes only the alt text
+
+- **WHEN** a document contains `![黄昏的庆云顶](https://example.com/img.jpg)` as its own line
+- **THEN** a block carries the text `黄昏的庆云顶`, and no block's text contains the URL
+
+#### Scenario: An image without alt text contributes nothing
+
+- **WHEN** a document contains `![](https://example.com/img.jpg)` as its own line
+- **THEN** no block carries the URL, and the line does not produce an empty text block
+
+### Requirement: A chunk never spans two heading paths
+
+A chunk SHALL belong to exactly one heading path and SHALL NOT span two heading paths. A section below the configured minimum size SHALL be kept rather than dropped and SHALL still carry its heading.
 
 #### Scenario: Chunk never spans two headings
 
 - **WHEN** a document has a paragraph under one heading followed by a paragraph under a different heading
 - **THEN** no chunk contains both paragraphs
 
-#### Scenario: Oversized table splits by rows with a repeated header
-
-- **WHEN** a table exceeds the hard token cap
-- **THEN** it is split into multiple chunks, each of which begins with the table's header row
-
 #### Scenario: Short section survives with its heading
 
 - **WHEN** a section contains only a single short line
 - **THEN** it produces a chunk whose embedded text includes that section's heading path
 
-#### Scenario: Embedded text carries the provenance header
+### Requirement: Atomic blocks and the token cap
 
-- **WHEN** a chunk is produced for a file at `B-Cook/2019-11-16-Cook-Diet.md` under the heading path `煮食记 / 碳水列表`
-- **THEN** the chunk's embedded text begins with that relative path and heading path, and the separately stored body contains neither
+No chunk's embedded text SHALL exceed the configured hard token cap, except a fenced code block kept whole. A table SHALL NOT be split across chunks; one larger than the cap SHALL be split by rows with its header repeated in each part. A fenced code block SHALL NOT be split, and one larger than the hard cap SHALL still be kept whole.
+
+#### Scenario: Oversized table splits by rows with a repeated header
+
+- **WHEN** a table exceeds the hard token cap
+- **THEN** it is split into multiple chunks, each of which begins with the table's header row
 
 #### Scenario: An oversized fenced code block is kept whole
 
 - **WHEN** a document contains a fenced code block larger than the hard token cap
 - **THEN** it produces one chunk that may exceed the cap, and no content from another heading path joins that chunk
 
+### Requirement: Embedded text carries a context header
+
+The text that is embedded for a chunk SHALL be the chunk's relative path, its heading path, and its body, in that order. The body alone SHALL be stored separately for citation.
+
+#### Scenario: Embedded text carries the provenance header
+
+- **WHEN** a chunk is produced for a file at `B-Cook/2019-11-16-Cook-Diet.md` under the heading path `煮食记 / 碳水列表`
+- **THEN** the chunk's embedded text begins with that relative path and heading path, and the separately stored body contains neither
+
+### Requirement: A fence too large for the embedding window leaves the document pending
+
+A fenced code block whose size exceeds the embedding model's usable window cannot receive an embedding. The document SHALL then end pending with that reason observable, the previous generation SHALL continue to serve retrieval when one exists, and the pipeline SHALL NOT truncate code to fit.
+
 #### Scenario: A fence too large for the embedding window leaves the document pending
 
 - **WHEN** a fenced code block kept whole exceeds the embedding model's usable window and no embedding can be produced for it
 - **THEN** the document ends pending with the reason recorded, any previously indexed generation of that document remains retrievable, and no code text is truncated to fit
 
-### Requirement: Indexing is change-driven and idempotent
+### Requirement: Indexing skips unchanged documents
 
-Each document SHALL carry a hash of the content it was indexed from — the raw file bytes for a directory document, the stored body for an inline document. When a scan finds a document whose hash equals the stored hash, the document SHALL be skipped entirely and no embedding call SHALL be made for it. When the hash differs, the document's existing chunks SHALL be removed and the document SHALL be re-chunked and re-embedded. When a directory document that was previously indexed is no longer present in its source, its chunks SHALL be removed and it SHALL no longer be retrievable.
+Each document SHALL carry a hash of the content it was indexed from — the raw file bytes for a directory document, the stored body for an inline document. When a scan finds a document whose hash equals the stored hash, the document SHALL be skipped entirely and no embedding call SHALL be made for it.
 
 #### Scenario: Unchanged document costs no embedding call
 
 - **WHEN** a scan runs twice over an unmodified document
 - **THEN** the second scan performs no embedding call for that document and its chunks are unchanged
+
+### Requirement: Changed and removed documents are re-indexed
+
+When the hash differs, the document's existing chunks SHALL be removed and it SHALL be re-chunked and re-embedded. When a previously indexed directory document is no longer present and the scan found at least one readable candidate, its chunks SHALL be removed and it SHALL no longer be retrievable. A scan that finds no readable candidate at all SHALL leave existing documents in place, because an empty or unreadable root may be a transient mount failure.
 
 #### Scenario: Changed document is re-indexed
 
@@ -90,17 +114,26 @@ Each document SHALL carry a hash of the content it was indexed from — the raw 
 
 #### Scenario: Removed document stops being retrievable
 
-- **WHEN** a document that was indexed is deleted from its source directory
+- **WHEN** a document that was indexed is deleted from its source directory and the scan still finds another readable candidate
 - **THEN** a later scan removes its chunks and a retrieval no longer returns it
 
-### Requirement: A document's origin decides where its truth lives and whether it can be edited in place
+#### Scenario: An empty or unreadable root preserves documents
 
-Every document SHALL carry an origin: `file` for a document whose authoritative content is a file on disk, and `inline` for a document whose authoritative content is stored with the document itself. A document's origin SHALL NOT change once the document exists. Editing a `file` document through the application SHALL be refused with a static message that names no path, and SHALL leave the document and its chunks untouched. Editing an `inline` document through the application SHALL replace its authoritative content, re-chunk and re-embed it, and SHALL keep the document's identity — the same document identifier, the same source, the same relative name — so that references to it remain valid.
+- **WHEN** a scan finds no readable candidate files, for example because the root is unreadable or its mount is temporarily empty
+- **THEN** existing documents and chunks are left untouched and the scan reports the failure when the root itself is unreadable
+
+### Requirement: A file document is authoritative on disk
+
+Every document SHALL carry an origin of `file` (authoritative content is a file on disk) or `inline` (authoritative content is stored with the document). A document's origin SHALL NOT change once it exists. Editing a `file` document through the application SHALL be refused with a static message that names no path and SHALL leave the document and its chunks untouched.
 
 #### Scenario: Editing a directory document in place is refused
 
 - **WHEN** a caller attempts to edit the content of a document whose origin is `file`
 - **THEN** the edit is refused with a static message that names no path, and the document's content and chunks are unchanged
+
+### Requirement: An inline document is authoritative in the database
+
+Editing an `inline` document SHALL replace its authoritative content, re-chunk and re-embed it, and keep the same document identifier, source, and relative name.
 
 #### Scenario: Editing an inline document re-indexes it in place
 
@@ -114,9 +147,7 @@ Every document SHALL carry an origin: `file` for a document whose authoritative 
 
 ### Requirement: Parsing is separated from embedding, and the embedding pass is resumable
 
-Chunks SHALL be written with an empty embedding before any embedding call is made. A later fill pass SHALL claim unembedded chunks and store their vectors. A failed embedding call SHALL leave the affected document in a pending state with its chunks already parsed and stored, and a subsequent fill pass SHALL complete it without re-parsing the source file. Chunks that carry no embedding SHALL never be returned by a retrieval.
-
-A document SHALL advance to its newly indexed content only when the new chunks are fully embedded. Until then the document's previously indexed content SHALL remain the retrievable one, so a failed embedding call never removes a document from the corpus.
+Chunks SHALL be written with an empty embedding before any embedding call is made. A later fill pass SHALL claim unembedded chunks and store their vectors. A failed embedding call SHALL leave the document pending with its chunks already parsed, and a subsequent fill pass SHALL complete it without re-parsing the source file. Chunks with no embedding SHALL never be returned by a retrieval.
 
 #### Scenario: Embedding failure leaves parsed chunks in place
 
@@ -128,15 +159,19 @@ A document SHALL advance to its newly indexed content only when the new chunks a
 - **WHEN** a fill pass runs while the embedding endpoint is healthy
 - **THEN** the pending document's new chunks receive embeddings, the document becomes indexed, and the new chunks replace the previous ones as the retrievable content
 
-#### Scenario: A document stays retrievable while its replacement is pending
-
-- **WHEN** a document's content changed and the replacement chunks have not been embedded yet
-- **THEN** a retrieval returns the document's previously indexed chunks, not none
-
 #### Scenario: Unembedded chunks are never retrieved
 
 - **WHEN** a chunk has no embedding
 - **THEN** a retrieval returns no such chunk
+
+### Requirement: A document swaps generations only when fully embedded
+
+A document SHALL advance to its newly indexed content only when the new chunks are fully embedded. Until then its previously indexed content SHALL remain the retrievable one.
+
+#### Scenario: A document stays retrievable while its replacement is pending
+
+- **WHEN** a document's content changed and the replacement chunks have not been embedded yet
+- **THEN** a retrieval returns the document's previously indexed chunks, not none
 
 ### Requirement: Indexing runs on an explicit trigger and on a bounded lazy catch-up
 
@@ -159,17 +194,22 @@ Indexing SHALL run when the caller explicitly triggers it over the sources visib
 
 ### Requirement: Every document has an observable status
 
-Each document SHALL carry a status of `pending`, `indexed`, or `failed`, together with a reason when it is `failed`. A document that is `failed` or `pending` SHALL contribute no chunk to a retrieval.
+Each document SHALL carry a status of `pending`, `indexed`, or `failed`, together with a reason when it is `failed`. A document contributes only chunks of its current generation; a document that has never completed a generation SHALL contribute no chunk to a retrieval.
 
 #### Scenario: Failed document is recorded with a reason
 
 - **WHEN** a document cannot be parsed
 - **THEN** the document's status is `failed` and it carries a reason naming the failure
 
-#### Scenario: Only indexed documents are retrievable
+#### Scenario: A document without a completed generation is not retrievable
 
-- **WHEN** a retrieval runs over a corpus containing pending and failed documents
-- **THEN** no chunk from those documents is returned
+- **WHEN** a retrieval runs over a corpus containing a pending or failed document that has never advanced a generation
+- **THEN** no chunk from that document is returned
+
+#### Scenario: A previously indexed document keeps serving while pending
+
+- **WHEN** a document's replacement content is indexed but not yet fully embedded
+- **THEN** a retrieval returns its previous generation's chunks, not none
 
 ### Requirement: A document's origin decides whether it can be deleted in place
 

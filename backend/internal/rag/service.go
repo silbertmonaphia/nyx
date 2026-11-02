@@ -48,14 +48,17 @@ type EmbedderResolver func(ctx context.Context, userID int) (*Embedder, error)
 // LLM_ENABLED=false) and only invokes Retrieve when the request
 // body carries rag:true.
 type Service struct {
-	embedder    *Embedder
-	retriever   RetrieverIface
-	pool        Pool
-	feedRepo    feed.Repository
-	topK        int
-	maxCtxChars int
-	maxBackfill int
-	tracer      trace.Tracer
+	embedder          *Embedder
+	retriever         RetrieverIface
+	pool              Pool
+	feedRepo          feed.Repository
+	topK              int
+	maxCtxChars       int
+	maxBackfill       int
+	kbTopK            int
+	kbMaxContextChars int
+	knowledge         KnowledgeRetriever
+	tracer            trace.Tracer
 
 	// backfillInFlight serialises BackfillOnce per userID via the
 	// canonical LoadOrStore + sync.Once pattern. The map itself is
@@ -228,6 +231,9 @@ func renderContextBlock(passages []Passage, maxChars int) string {
 // survives the originating request.
 func (s *Service) ResetBackfill(userID int) {
 	s.backfillInFlight.Delete(userID)
+	if resetter, ok := s.knowledge.(interface{ ResetCatchUp(userID int64) }); ok {
+		resetter.ResetCatchUp(int64(userID))
+	}
 }
 
 func (s *Service) BackfillOnce(ctx context.Context, userID int) {

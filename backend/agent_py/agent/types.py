@@ -9,13 +9,14 @@ from __future__ import annotations
 from enum import Enum
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_serializer
 
 # --- Steps / Plans --------------------------------------------------------
 
 
 class StepKind(str, Enum):
     rag = "rag"
+    kb = "kb"
     tool = "tool"
     llm = "llm"
     react = "react"
@@ -43,7 +44,19 @@ class PlanStep(BaseModel):
     args: dict[str, Any] | None = None
     prompt: str | None = None
     query: str | None = None
+    source: int | None = None
+    path: str | None = None
     max_iterations: int | None = None
+
+    @model_serializer(mode="wrap")
+    def _drop_absent_scope(self, handler):
+        data = handler(self)
+        if isinstance(data, dict):
+            if data.get("source") is None:
+                data.pop("source", None)
+            if data.get("path") is None:
+                data.pop("path", None)
+        return data
 
 
 class Plan(BaseModel):

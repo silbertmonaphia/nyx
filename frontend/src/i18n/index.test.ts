@@ -178,6 +178,7 @@ describe('resource parity', () => {
       'feeds',
       'chat',
       'llmConfig',
+      'kb',
       'time',
       'errors',
       'common',

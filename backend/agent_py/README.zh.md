@@ -17,7 +17,7 @@ flowchart TB
     subgraph PY["Python agent :9000<br/>（AGENT_ENABLED=true）"]
         PL["planner<br/>一次 LLM 调用 → 校验后的 Plan"]
         EX["executor<br/>顺序执行各步骤"]
-        K["rag · tool · llm · react"]
+        K["rag · kb · tool · llm · react"]
     end
 
     LLM["LLM<br/>vLLM 或 OpenAI"]
@@ -38,7 +38,8 @@ flowchart TB
 
 - **Plan-and-Execute** —— planner 只做一次 LLM 调用（走 provider 结构化输出，Pydantic 校验，校验失败时有界重试），executor 然后按顺序执行各步骤。
 - **写路由** —— 状态变更请求必须规划对应的写工具；写操作前先有组稿 `llm` 步，写参数引用该步输出。草稿/预览/否定请求不规划写操作。本变更里的确定性 guard 词法触发仅覆盖中文，且只覆盖 structured planner 路径；legacy 自由文本路径没有重试。
-- **步骤类型** —— `rag`（通过 Go RAG 桥读取你的 feed）、`tool`（MCP 工具面）、`llm`（单次调用）、`react`（模型 ↔ 工具嵌套循环，有迭代上限）。
+- **步骤类型** —— `rag`（通过 Go RAG 桥读取你的 feed）、`kb`（你的知识库，可用 `source` 与 `path` 缩小范围）、`tool`（MCP 工具面）、`llm`（单次调用）、`react`（模型 ↔ 工具嵌套循环，有迭代上限）。
+- **知识大纲** —— planner 会收到调用者可见的知识来源及其顶层目录（只有名称与计数，绝不包含文档内容），从而可以直接限定 `kb` 步骤的范围。
 - **默认就稳** —— 工具分发两类失败均有有界重试（校验失败重新提示 / 瞬时错误退避重试）、每用户 Redis token 预算（fail-closed）、按 IP 限流、运行状态存 Postgres 支持 `run_id` 恢复、僵尸运行清扫 + 保留期 GC。
 - **可观测** —— Prometheus 指标（:9001）、OpenTelemetry 链路（Jaeger）、可选 Langfuse LLM 追踪，以及启动时配置好的进程日志（root 为 WARNING，agent 自身的 logger —— `agent` 包与 `nyx.agent.*` 运行时树 —— 为 INFO，行格式 `时间 级别 logger: 消息`）：追踪状态、启动行与导出失败在默认日志里就可见。
 - **可选 web 工具，默认关闭** —— agent 原生的 `web_search`（Tavily，无账号也可用 keyless 档）和带 SSRF 防护、非受信内容框定的 `web_fetch`。

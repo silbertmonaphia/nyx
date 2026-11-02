@@ -11,6 +11,9 @@ import { i18n } from '~/i18n';
 vi.mock('./features/feeds/hooks/useFeeds');
 vi.mock('./store/authStore');
 vi.mock('./features/chat/hooks/useLlmConfig');
+vi.mock('./features/kb/components/KnowledgeBasePage', () => ({
+  KnowledgeBasePage: () => <div data-testid="kb-page-mock" />,
+}));
 vi.mock('./features/chat/components/ChatPanel', () => ({
   ChatPanel: ({
     open,
@@ -82,6 +85,29 @@ describe('App', () => {
   it('renders the brand in the nav', () => {
     render(<App />);
     expect(screen.getAllByText('Nyx').length).toBeGreaterThan(0);
+  });
+
+  it('switches the main area between feeds and knowledge without unmounting the chat panel', async () => {
+    const authed = {
+      isAuthenticated: true,
+      user: { id: 1, username: 'alice', created_at: '', updated_at: '' },
+      logout: vi.fn(),
+      logoutAll: vi.fn(),
+    };
+    mockUseAuthStore.mockReturnValue(authed);
+    mockUseAuthStore.getState = vi.fn().mockReturnValue(authed);
+
+    render(<App />);
+    expect(screen.getByTestId('chat-panel-mock')).toBeInTheDocument();
+    expect(screen.queryByTestId('kb-page-mock')).not.toBeInTheDocument();
+
+    await userEvent.click(screen.getByTestId('view-tab-knowledge'));
+    expect(screen.getByTestId('kb-page-mock')).toBeInTheDocument();
+    expect(screen.getByTestId('chat-panel-mock')).toBeInTheDocument();
+
+    await userEvent.click(screen.getByTestId('view-tab-feeds'));
+    expect(screen.queryByTestId('kb-page-mock')).not.toBeInTheDocument();
+    expect(screen.getByTestId('chat-panel-mock')).toBeInTheDocument();
   });
 
   it('gates the app behind a non-dismissable auth dialog while logged out', async () => {

@@ -297,6 +297,10 @@ func (s *Service) ChatWithProvider(ctx context.Context, provider llm.Provider, r
 		}
 	}
 
+	if req.KB && s.rag != nil {
+		msgs = s.applyKnowledgeContext(ctx, msgs, req, span)
+	}
+
 	usage, err := provider.Chat(ctx, llm.ChatRequest{
 		Model:     "", // model is configured at the provider level (openai.NewClient reads cfg.LLMModel)
 		Messages:  msgs,
@@ -318,6 +322,25 @@ func (s *Service) ChatWithProvider(ctx context.Context, provider llm.Provider, r
 	}
 	span.SetStatus(codes.Ok, "")
 	return usage, nil
+}
+
+func (s *Service) applyKnowledgeContext(ctx context.Context, msgs []llm.Message, req ChatRequest, span trace.Span) []llm.Message {
+	userID := reqctx.UserIDFromContext(ctx)
+	if userID == 0 {
+		return msgs
+	}
+	lastUser := lastUserContent(req.Messages)
+	if lastUser != "" {
+		_, ctxBlock, err := s.rag.RetrieveKnowledge(ctx, userID, lastUser)
+		if err != nil {
+			span.RecordError(err)
+		} else if ctxBlock != "" {
+			msgs = injectKnowledgeContext(msgs, ctxBlock, lastUser)
+		}
+	}
+	bgCtx := detachContext(ctx)
+	go s.rag.CatchUpKnowledge(bgCtx, userID)
+	return msgs
 }
 
 // Validate exposes the per-request rules for callers that need to
@@ -408,6 +431,32 @@ func injectContext(msgs []llm.Message, contextBlock, lastUser string) []llm.Mess
 	}
 	if lastIdx == -1 {
 		// No user message after the system prompt — just append.
+		return append(msgs, injection)
+	}
+	out := make([]llm.Message, 0, len(msgs)+1)
+	out = append(out, msgs[:lastIdx+1]...)
+	out = append(out, injection)
+	out = append(out, msgs[lastIdx+1:]...)
+	return out
+}
+
+func injectKnowledgeContext(msgs []llm.Message, contextBlock, lastUser string) []llm.Message {
+	injection := llm.Message{
+		Role: llmRoleUser,
+		Content: fmt.Sprintf(
+			"Use the following context from my knowledge base to answer my question. If the context is irrelevant, ignore it and answer from your general knowledge.\n\nContext:\n%s\n\nMy question: %s",
+			contextBlock,
+			lastUser,
+		),
+	}
+	lastIdx := -1
+	for i := len(msgs) - 1; i >= 1; i-- {
+		if msgs[i].Role == llmRoleUser {
+			lastIdx = i
+			break
+		}
+	}
+	if lastIdx == -1 {
 		return append(msgs, injection)
 	}
 	out := make([]llm.Message, 0, len(msgs)+1)

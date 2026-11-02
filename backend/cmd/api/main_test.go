@@ -4,8 +4,18 @@ import (
 	"strings"
 	"testing"
 
+	"go.opentelemetry.io/otel/trace/noop"
+
 	"nyx/internal/platform/config"
 )
+
+func TestMountKBStackIsNilWhenDisabled(t *testing.T) {
+	cfg := &config.Config{KBEnabled: false}
+	service := mountKBStack(cfg, nil, nil, nil, noop.NewTracerProvider())
+	if service != nil {
+		t.Fatal("mountKBStack() returned a service with KB_ENABLED=false, want nil (no route, no table write)")
+	}
+}
 
 func TestAgentMisconfiguration(t *testing.T) {
 	validToken := strings.Repeat("a", 32)

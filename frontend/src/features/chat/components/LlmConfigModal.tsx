@@ -10,6 +10,7 @@ import { Label } from "~/components/ui/Label";
 import { useAuthStore } from "~/store/authStore";
 import { useUiStore } from "~/store/uiStore";
 import { t as translate } from "~/i18n";
+import { KbPrivateSourceField } from "~/features/kb/components/KbPrivateSourceField";
 import { useLlmConfig } from "../hooks/useLlmConfig";
 import type {
   LlmConfigStatus,
@@ -614,6 +615,8 @@ export const LlmConfigModal = ({
               </div>
             ) : null}
           </fieldset>
+
+          <KbPrivateSourceField />
 
           <p className="text-xs text-muted-foreground">
             {t("llmConfig.sections.agentNote")}

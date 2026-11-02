@@ -1,0 +1,181 @@
+{
+  "version": 1,
+  "note": "Hand-labelled Chinese retrieval baseline for the knowledge corpus. Documents are synthetic notes under four directory families; queries are grouped into path-scoped, heading-scoped, exact-term, semantic, and negative categories. Chunk keys are rel_path::heading path and resolve against the production Markdown normalizer and chunker.",
+  "top_k": 5,
+  "documents": [
+    { "path": "A-Art/music.md" },
+    { "path": "B-BodyCare/teeth.md" },
+    { "path": "B-Cook/diet.md" },
+    { "path": "B-Cook/kitchen.md" },
+    { "path": "B-Drink/coffee.md" },
+    { "path": "B-Sleep/sleep.md" },
+    { "path": "B-Sport/gym.md" },
+    { "path": "B-Sport/running.md" },
+    { "path": "P-Polyglot/japanese.md" },
+    { "path": "P-Travel/sea.md" },
+    { "path": "W-Invest/estate.md" },
+    { "path": "W-Invest/fund.md" }
+  ],
+  "queries": [
+    {
+      "key": "q-protein-cook",
+      "category": "path_scope",
+      "text": "训练后补充蛋白质，晚餐吃什么比较好",
+      "path": "B-Cook/",
+      "relevant": ["B-Cook/diet.md::饮食笔记 / 蛋白列表"],
+      "exclude": ["B-Sport/gym.md::健身计划 / 训练后营养"]
+    },
+    {
+      "key": "q-caffeine-sleep",
+      "category": "path_scope",
+      "text": "咖啡因会影响晚上睡觉吗，下午几点后要停",
+      "path": "B-Sleep/",
+      "relevant": ["B-Sleep/sleep.md::睡眠改善 / 咖啡因"],
+      "exclude": ["B-Drink/coffee.md::咖啡 / 咖啡因含量"]
+    },
+    {
+      "key": "q-fund-dca",
+      "category": "path_scope",
+      "text": "每个月固定投入指数基金的比例怎么调整",
+      "path": "W-Invest/",
+      "relevant": ["W-Invest/fund.md::基金笔记 / 定投"]
+    },
+    {
+      "key": "q-teeth-routine",
+      "category": "path_scope",
+      "text": "每天口腔护理要做哪些步骤",
+      "path": "B-BodyCare/",
+      "relevant": [
+        "B-BodyCare/teeth.md::口腔护理 / 刷牙",
+        "B-BodyCare/teeth.md::口腔护理 / 牙线"
+      ]
+    },
+    {
+      "key": "q-travel-prep",
+      "category": "path_scope",
+      "text": "去东南亚旅行要准备什么签证和行李",
+      "path": "P-Travel/",
+      "relevant": [
+        "P-Travel/sea.md::东南亚旅行 / 签证",
+        "P-Travel/sea.md::东南亚旅行 / 行李"
+      ]
+    },
+    {
+      "key": "q-pour-over",
+      "category": "heading_scope",
+      "text": "手冲咖啡的水温、粉量和总时间是多少",
+      "relevant": ["B-Drink/coffee.md::咖啡 / 手冲参数"]
+    },
+    {
+      "key": "q-fund-takeprofit",
+      "category": "heading_scope",
+      "text": "基金定投达到多少收益应该止盈",
+      "relevant": ["W-Invest/fund.md::基金笔记 / 止盈"]
+    },
+    {
+      "key": "q-running-pace",
+      "category": "heading_scope",
+      "text": "轻松跑、节奏跑和间歇跑的配速怎么安排",
+      "relevant": ["B-Sport/running.md::跑步笔记 / 配速"]
+    },
+    {
+      "key": "q-japanese-listening",
+      "category": "heading_scope",
+      "text": "日语听力用精听和影子跟读怎么练",
+      "relevant": ["P-Polyglot/japanese.md::日语学习 / 听力"]
+    },
+    {
+      "key": "q-steak-sear",
+      "category": "heading_scope",
+      "text": "牛排怎么煎出焦香的外壳",
+      "relevant": ["B-Cook/kitchen.md::厨房技巧 / 煎牛排"]
+    },
+    {
+      "key": "q-sleep-env",
+      "category": "heading_scope",
+      "text": "卧室温度和光线怎样调整有助于睡眠",
+      "relevant": ["B-Sleep/sleep.md::睡眠改善 / 睡眠环境"]
+    },
+    {
+      "key": "q-jian-tou",
+      "category": "exact_term",
+      "text": "简投法怎么根据指数温度调整定投金额",
+      "relevant": ["W-Invest/fund.md::基金笔记 / 定投"]
+    },
+    {
+      "key": "q-maillard",
+      "category": "exact_term",
+      "text": "美拉德反应需要什么条件才能产生焦香",
+      "relevant": ["B-Cook/kitchen.md::厨房技巧 / 美拉德反应"]
+    },
+    {
+      "key": "q-bass",
+      "category": "exact_term",
+      "text": "Bass 刷牙法的角度和力度怎么掌握",
+      "relevant": ["B-BodyCare/teeth.md::口腔护理 / 刷牙"]
+    },
+    {
+      "key": "q-index-temp",
+      "category": "exact_term",
+      "text": "指数温度进入高估区间后要怎么减仓",
+      "relevant": [
+        "W-Invest/fund.md::基金笔记 / 定投",
+        "W-Invest/fund.md::基金笔记 / 止盈"
+      ]
+    },
+    {
+      "key": "q-leftover-money",
+      "category": "semantic",
+      "text": "每个月有闲钱，想分批买宽基指数，长期持有",
+      "relevant": [
+        "W-Invest/fund.md::基金笔记 / 指数基金",
+        "W-Invest/fund.md::基金笔记 / 定投"
+      ]
+    },
+    {
+      "key": "q-can-insomnia",
+      "category": "semantic",
+      "text": "晚上躺下很久睡不着，半夜容易醒怎么办",
+      "relevant": [
+        "B-Sleep/sleep.md::睡眠改善 / 作息",
+        "B-Sleep/sleep.md::睡眠改善 / 情绪管理"
+      ]
+    },
+    {
+      "key": "q-practice-music",
+      "category": "semantic",
+      "text": "练琴时总在同一个地方卡住，怎么安排练习",
+      "relevant": ["A-Art/music.md::音乐 / 练习"]
+    },
+    {
+      "key": "q-strength-routine",
+      "category": "semantic",
+      "text": "一周三次力量训练，推拉腿怎么分",
+      "relevant": ["B-Sport/gym.md::健身计划 / 增肌训练"]
+    },
+    {
+      "key": "q-negative-fish",
+      "category": "negative",
+      "text": "热带鱼白点病怎么治疗",
+      "relevant": []
+    },
+    {
+      "key": "q-negative-python",
+      "category": "negative",
+      "text": "Python 异步爬虫怎么限制并发",
+      "relevant": []
+    },
+    {
+      "key": "q-negative-tire",
+      "category": "negative",
+      "text": "汽车轮胎多久换一次，怎么自己换备胎",
+      "relevant": []
+    },
+    {
+      "key": "q-negative-wedding",
+      "category": "negative",
+      "text": "婚礼请柬的措辞怎么写",
+      "relevant": []
+    }
+  ]
+}

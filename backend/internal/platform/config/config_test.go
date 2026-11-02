@@ -158,6 +158,140 @@ func TestLoadAcceptsInRangeRAGMaxBackfillPerRequest(t *testing.T) {
 	}
 }
 
+func TestLoadKBDefaults(t *testing.T) {
+	t.Setenv("DB_URL", "postgres://x")
+	t.Setenv("JWT_SECRET", auth.TestSecret)
+	for _, key := range []string{
+		"KB_ENABLED", "KB_ROOT", "KB_PRIVATE_BASE", "KB_SHARED_SOURCE_NAME",
+		"KB_MAX_FILE_BYTES", "KB_MAX_FILES", "KB_MAX_DEPTH",
+		"KB_CHUNK_TARGET_TOKENS", "KB_CHUNK_MAX_TOKENS", "KB_CHUNK_MIN_TOKENS",
+		"KB_CHUNK_OVERLAP_TOKENS", "KB_TOP_K", "KB_MAX_CONTEXT_CHARS",
+		"KB_INDEX_CONCURRENCY",
+	} {
+		t.Setenv(key, "")
+	}
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg.KBEnabled {
+		t.Error("KBEnabled default = true, want false")
+	}
+	if cfg.KBSharedSourceName != "shared" {
+		t.Errorf("KBSharedSourceName default = %q, want %q", cfg.KBSharedSourceName, "shared")
+	}
+	if cfg.KBMaxFileBytes != 2<<20 {
+		t.Errorf("KBMaxFileBytes default = %d, want %d", cfg.KBMaxFileBytes, int64(2<<20))
+	}
+	if cfg.KBMaxFiles != 10000 {
+		t.Errorf("KBMaxFiles default = %d, want 10000", cfg.KBMaxFiles)
+	}
+	if cfg.KBMaxDepth != 20 {
+		t.Errorf("KBMaxDepth default = %d, want 20", cfg.KBMaxDepth)
+	}
+	if cfg.KBChunkTargetTokens != 400 || cfg.KBChunkMaxTokens != 700 {
+		t.Errorf("chunk token defaults = %d/%d, want 400/700", cfg.KBChunkTargetTokens, cfg.KBChunkMaxTokens)
+	}
+	if cfg.KBChunkMinTokens != 50 || cfg.KBChunkOverlapTokens != 80 {
+		t.Errorf("chunk min/overlap defaults = %d/%d, want 50/80", cfg.KBChunkMinTokens, cfg.KBChunkOverlapTokens)
+	}
+	if cfg.KBTopK != 5 || cfg.KBMaxContextChars != 4000 || cfg.KBIndexConcurrency != 2 {
+		t.Errorf("kb top_k/context/concurrency defaults = %d/%d/%d, want 5/4000/2",
+			cfg.KBTopK, cfg.KBMaxContextChars, cfg.KBIndexConcurrency)
+	}
+}
+
+func TestLoadRejectsOutOfRangeKBKnobs(t *testing.T) {
+	cases := []struct {
+		key   string
+		value string
+	}{
+		{"KB_MAX_FILE_BYTES", "0"},
+		{"KB_MAX_FILES", "0"},
+		{"KB_MAX_DEPTH", "-1"},
+		{"KB_CHUNK_TARGET_TOKENS", "0"},
+		{"KB_CHUNK_MAX_TOKENS", "10"},
+		{"KB_CHUNK_MIN_TOKENS", "5000"},
+		{"KB_CHUNK_OVERLAP_TOKENS", "400"},
+		{"KB_TOP_K", "0"},
+		{"KB_MAX_CONTEXT_CHARS", "1"},
+		{"KB_INDEX_CONCURRENCY", "0"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.key, func(t *testing.T) {
+			t.Setenv("DB_URL", "postgres://x")
+			t.Setenv("JWT_SECRET", auth.TestSecret)
+			t.Setenv("KB_ENABLED", "true")
+			t.Setenv(tc.key, tc.value)
+
+			if _, err := Load(); err == nil {
+				t.Fatalf("Load() error = nil for %s=%s, want range error", tc.key, tc.value)
+			}
+		})
+	}
+}
+
+func TestLoadAcceptsKBDisabledWithoutPaths(t *testing.T) {
+	t.Setenv("DB_URL", "postgres://x")
+	t.Setenv("JWT_SECRET", auth.TestSecret)
+	t.Setenv("KB_ENABLED", "false")
+	t.Setenv("KB_ROOT", "")
+	t.Setenv("KB_PRIVATE_BASE", "")
+	t.Setenv("KB_TOP_K", "0")
+	t.Setenv("KB_CHUNK_TARGET_TOKENS", "0")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg.KBEnabled {
+		t.Error("KBEnabled = true, want false")
+	}
+}
+
+func TestLoadRejectsNon1024KBEmbeddingDimensions(t *testing.T) {
+	t.Setenv("DB_URL", "postgres://x")
+	t.Setenv("JWT_SECRET", auth.TestSecret)
+	t.Setenv("KB_ENABLED", "true")
+	t.Setenv("EMBEDDING_DIMENSIONS", "1536")
+
+	if _, err := Load(); err == nil {
+		t.Fatal("Load() error = nil for KB_ENABLED=true with EMBEDDING_DIMENSIONS=1536")
+	}
+}
+
+func TestLoadAcceptsKBEnabledWithValidValues(t *testing.T) {
+	t.Setenv("DB_URL", "postgres://x")
+	t.Setenv("JWT_SECRET", auth.TestSecret)
+	t.Setenv("KB_ENABLED", "true")
+	t.Setenv("KB_ROOT", "/srv/kb/shared")
+	t.Setenv("KB_PRIVATE_BASE", "/srv/kb/users")
+	t.Setenv("KB_SHARED_SOURCE_NAME", "notes")
+	t.Setenv("KB_CHUNK_TARGET_TOKENS", "300")
+	t.Setenv("KB_CHUNK_MAX_TOKENS", "600")
+	t.Setenv("KB_CHUNK_OVERLAP_TOKENS", "60")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if !cfg.KBEnabled || cfg.KBSharedSourceName != "notes" {
+		t.Fatalf("KB config = enabled:%v name:%q, want enabled:true name:notes", cfg.KBEnabled, cfg.KBSharedSourceName)
+	}
+}
+
+func TestLoadRejectsEmptyKBSharedSourceNameWhenEnabled(t *testing.T) {
+	t.Setenv("DB_URL", "postgres://x")
+	t.Setenv("JWT_SECRET", auth.TestSecret)
+	t.Setenv("KB_ENABLED", "true")
+	t.Setenv("KB_SHARED_SOURCE_NAME", " ")
+
+	if _, err := Load(); err == nil {
+		t.Fatal("Load() error = nil, want empty KB_SHARED_SOURCE_NAME error")
+	}
+}
+
 // Sanity check on the duration string-to-time.Duration conversion that Load
 // uses internally, so a typo in a default surfaces a clear test failure
 // instead of a runtime DB connection tuning surprise.

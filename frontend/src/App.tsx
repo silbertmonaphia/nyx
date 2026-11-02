@@ -31,9 +31,11 @@ import { ChatPanel } from './features/chat/components/ChatPanel';
 import { resetFeedStateForNewUser } from './features/feeds/services/resetFeedState';
 import { useChatStateReset } from './features/chat/hooks/useChatStateReset';
 import { resetLlmConfigStateForNewUser } from './features/chat/services/resetLlmConfigState';
+import { resetKbStateForNewUser } from './features/kb/services/resetKbState';
 import { LlmConfigModal } from './features/chat/components/LlmConfigModal';
 import { useLlmConfig } from './features/chat/hooks/useLlmConfig';
 import { useChatStore } from './features/chat/store/chatStore';
+import { KnowledgeBasePage } from './features/kb/components/KnowledgeBasePage';
 
 function App() {
   const { t } = useTranslation();
@@ -50,6 +52,8 @@ function App() {
   } = useFeedUiStore();
 
   const { isAuthenticated, user, logout, logoutAll } = useAuthStore();
+  const activeView = useUiStore((state) => state.activeView);
+  const setActiveView = useUiStore((state) => state.setActiveView);
   const [confirmDeleteId, setConfirmDeleteId] = useState<number | null>(null);
   const [chatDismissed, setChatDismissed] = useState(false);
   const chatOpen = isAuthenticated && !chatDismissed;
@@ -111,6 +115,7 @@ function App() {
   useEffect(() => {
     resetFeedStateForNewUser();
     resetLlmConfigStateForNewUser(user?.id ?? null);
+    resetKbStateForNewUser();
   }, [user?.id]);
 
   // The input stays fully controlled by `searchTerm` (instant typing),
@@ -222,6 +227,24 @@ function App() {
             </div>
             <LocaleToggle />
             <ThemeToggle />
+            <div className="hidden md:flex items-center gap-1 rounded-md border p-1">
+              <Button
+                variant={activeView === 'feeds' ? 'default' : 'ghost'}
+                size="sm"
+                onClick={() => setActiveView('feeds')}
+                data-testid="view-tab-feeds"
+              >
+                {t('nav.feeds')}
+              </Button>
+              <Button
+                variant={activeView === 'knowledge' ? 'default' : 'ghost'}
+                size="sm"
+                onClick={() => setActiveView('knowledge')}
+                data-testid="view-tab-knowledge"
+              >
+                {t('nav.knowledge')}
+              </Button>
+            </div>
           </div>
           <div className="relative w-full max-w-3xl">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
@@ -292,6 +315,25 @@ function App() {
       </nav>
 
       <section id="center" className="container mx-auto px-4 pb-8 flex flex-1 min-h-0 flex-col place-content-start items-stretch">
+        <div className="md:hidden flex items-center gap-1 rounded-md border p-1 mb-4 self-start">
+          <Button
+            variant={activeView === 'feeds' ? 'default' : 'ghost'}
+            size="sm"
+            onClick={() => setActiveView('feeds')}
+            data-testid="view-tab-feeds-mobile"
+          >
+            {t('nav.feeds')}
+          </Button>
+          <Button
+            variant={activeView === 'knowledge' ? 'default' : 'ghost'}
+            size="sm"
+            onClick={() => setActiveView('knowledge')}
+            data-testid="view-tab-knowledge-mobile"
+          >
+            {t('nav.knowledge')}
+          </Button>
+        </div>
+        {activeView === 'feeds' ? (
         <div className="w-full max-w-2xl mx-auto flex flex-1 min-h-0 flex-col items-center">
           <FeedList
             feeds={feeds}
@@ -371,6 +413,9 @@ function App() {
             )}
           </div>
         </div>
+        ) : isAuthenticated ? (
+          <KnowledgeBasePage key={user?.id} />
+        ) : null}
       </section>
 
       <Dialog open={!isAuthenticated}>

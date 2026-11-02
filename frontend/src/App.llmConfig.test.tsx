@@ -13,6 +13,15 @@ import { i18n } from '~/i18n';
 vi.mock('./features/feeds/hooks/useFeeds');
 vi.mock('./store/authStore');
 vi.mock('./features/chat/hooks/useLlmConfig');
+vi.mock('~/features/kb/hooks/useKb', () => ({
+  useKbSettings: () => ({
+    data: { enabled: false, private_base: '', embedding_model: '' },
+    isLoading: false,
+  }),
+  useKbMutations: () => ({
+    createSource: { mutateAsync: vi.fn(), isPending: false },
+  }),
+}));
 vi.mock('./features/chat/components/ChatPanel', () => ({
   ChatPanel: ({
     open,

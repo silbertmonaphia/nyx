@@ -18,6 +18,7 @@ export const chatRequestSchema = z.object({
   // Omitted on the wire when false so today's non-RAG requests
   // look identical to before this field landed.
   rag: z.boolean().optional(),
+  kb: z.boolean().optional(),
   // run_id echoes the active chat session id (agent-chat-history-ui)
   // so the agent resumes that conversation instead of minting a new
   // one. Omitted when the tab has no active session yet — the first
@@ -80,7 +81,7 @@ export type ChatPartialFailure = PartialFailureNote;
 
 // Step kinds the planner may emit. Locked per agent-loop design §6;
 // matching backend/internal/agent/types.go StepKind constants.
-export const stepKindSchema = z.enum(["rag", "tool", "llm", "react"]);
+export const stepKindSchema = z.enum(["rag", "kb", "tool", "llm", "react"]);
 export type ChatStepKind = z.infer<typeof stepKindSchema>;
 
 // One entry in the planner's `plan` event. The backend allows a few

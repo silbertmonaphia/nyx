@@ -44,24 +44,32 @@ A knowledge retrieval SHALL accept an optional source filter and an optional rel
 - **WHEN** a retrieval carries neither filter
 - **THEN** passages from every visible source are eligible to be returned
 
-### Requirement: Corpus selection is explicit, and the feed corpus is unaffected
+### Requirement: Corpus selection is explicit
 
-A retrieval SHALL name the corpus it searches: `feeds`, `kb`, or `both`. A `feeds` retrieval SHALL return exactly the passages the feed corpus returned before this change, in the same shape. A `kb` retrieval SHALL search only the knowledge corpus. A `both` retrieval SHALL take the top results from each corpus and combine them by rank rather than by score, so that a result's position within its own corpus — not its raw similarity number — decides the combined order.
+A retrieval SHALL name the corpus it searches: `feeds`, `kb`, or `both`. A `kb` retrieval SHALL search only the knowledge corpus.
+
+#### Scenario: KB-only retrieval ignores the feed corpus
+
+- **WHEN** a retrieval names the `kb` corpus
+- **THEN** no feed passage is returned, even when feed passages would have scored highly
+
+### Requirement: The feed corpus is unaffected
+
+A `feeds` retrieval SHALL return exactly the passages and order the feed corpus returned before this change; its citations gain the additive `kind` discriminator required by the bridge delta.
 
 #### Scenario: Feeds-only retrieval is unchanged
 
 - **WHEN** a retrieval names the `feeds` corpus
 - **THEN** the returned passages and their order match the pre-existing feed retrieval for the same query
 
+### Requirement: Both-corpus fusion is by rank
+
+A `both` retrieval SHALL take the top results from each corpus and combine them by rank rather than by score, so a result's position within its own corpus — not its raw similarity number — decides the combined order.
+
 #### Scenario: Both-corpus retrieval fuses by rank
 
 - **WHEN** a retrieval names the `both` corpus and the two corpora return passages with different similarity scores
 - **THEN** the combined order follows each passage's rank within its own corpus rather than its raw score
-
-#### Scenario: KB-only retrieval ignores the feed corpus
-
-- **WHEN** a retrieval names the `kb` corpus
-- **THEN** no feed passage is returned, even when feed passages would have scored highly
 
 ### Requirement: A returned knowledge passage carries its provenance
 
@@ -77,24 +85,28 @@ Each returned knowledge passage SHALL carry the document it came from, the sourc
 - **WHEN** a knowledge passage is rendered for a model or a user
 - **THEN** the rendered excerpt is the chunk body alone and does not contain the embedded path-and-heading prefix
 
-### Requirement: A chunk is only retrievable by a caller in the same embedding space
+### Requirement: Every chunk records its embedding identity
 
-Every indexed chunk SHALL record the identity of the embedding model that produced its vector. A retrieval SHALL return only chunks whose recorded embedding identity matches the identity of the embedding model that produced the caller's query vector. A chunk indexed under a different identity SHALL be excluded even when it belongs to a source the caller can see. This SHALL hold for shared sources as well as private ones: a shared corpus is indexed once under the deployment's embedding identity, and a caller whose own embedding identity differs from it SHALL not receive its passages.
+Every indexed chunk SHALL record the identity of the embedding model that produced its vector. A retrieval SHALL return only chunks whose recorded identity matches the identity that produced the caller's query vector, regardless of which source the chunk came from.
 
-#### Scenario: A caller in a different embedding space receives nothing from the shared corpus
+#### Scenario: The filter is on the recorded identity, not the source
 
-- **WHEN** the shared corpus was indexed under embedding model A and the caller queries with a vector produced by embedding model B
-- **THEN** no shared passage is returned, and no shared passage's score is computed against the caller's vector
+- **WHEN** a chunk's recorded embedding identity differs from the caller's
+- **THEN** it is excluded regardless of which source it came from
 
 #### Scenario: A caller's own passages are unaffected
 
 - **WHEN** a user's private corpus was indexed under the same embedding model the caller queries with
 - **THEN** those passages remain retrievable
 
-#### Scenario: The filter is on the recorded identity, not the source
+### Requirement: A caller in a different embedding space receives nothing from the shared corpus
 
-- **WHEN** a chunk's recorded embedding identity differs from the caller's
-- **THEN** it is excluded regardless of which source it came from
+A shared corpus is indexed once under the deployment's embedding identity. A caller whose own embedding identity differs SHALL not receive its passages, and no shared passage's score SHALL be computed against the caller's vector.
+
+#### Scenario: A caller in a different embedding space receives nothing from the shared corpus
+
+- **WHEN** the shared corpus was indexed under embedding model A and the caller queries with a vector produced by embedding model B
+- **THEN** no shared passage is returned, and no shared passage's score is computed against the caller's vector
 
 ### Requirement: A knowledge outline describes the corpus to the caller
 

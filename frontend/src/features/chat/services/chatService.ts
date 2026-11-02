@@ -262,6 +262,7 @@ async function* consumeEventStream(
                 if (typeof obj.id !== "string") continue;
                 if (
                   obj.kind !== "rag" &&
+                  obj.kind !== "kb" &&
                   obj.kind !== "tool" &&
                   obj.kind !== "llm" &&
                   obj.kind !== "react"
@@ -298,6 +299,7 @@ async function* consumeEventStream(
             if (
               id !== null &&
               (kind === "rag" ||
+                kind === "kb" ||
                 kind === "tool" ||
                 kind === "llm" ||
                 kind === "react")
@@ -530,6 +532,7 @@ function toSessionStep(raw: unknown): SessionStep | null {
   if (typeof row.id !== "string" || row.id === "") return null;
   if (
     row.kind !== "rag" &&
+    row.kind !== "kb" &&
     row.kind !== "tool" &&
     row.kind !== "llm" &&
     row.kind !== "react"
@@ -626,11 +629,15 @@ export const chatService = {
        * when this tab had none).
        */
       onRunId?: (id: string) => void;
+      kb?: boolean;
     } = {},
   ): AsyncGenerator<ChatEvent> {
     const body: ChatRequest = { messages };
     if (opts.runId) {
       body.run_id = opts.runId;
+    }
+    if (opts.kb) {
+      body.kb = true;
     }
     // `model` is intentionally omitted — the backend ignores it for
     // v1 and the brief explicitly forbids a model picker in the UI.

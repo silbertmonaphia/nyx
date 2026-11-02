@@ -164,6 +164,8 @@ async def executor_node(
             try:
                 if step.kind.value == "rag":
                     await _run_rag(state, step, rag, span)
+                elif step.kind.value == "kb":
+                    await _run_kb(state, step, rag, span)
                 elif step.kind.value == "tool":
                     await _run_tool(
                         state,
@@ -269,6 +271,24 @@ async def _run_rag(state: AgentState, step, rag: RagClient, span: trace.Span) ->
         # Per spec: empty context is acceptable; not a hard failure.
         state["step_outputs"][step.id] = {"context_block": "", "citations": []}
         span.set_attribute("rag_unavailable", True)
+        return
+    state["step_outputs"][step.id] = {"context_block": result.context_block, "citations": result.citations}
+
+
+async def _run_kb(state: AgentState, step, rag: RagClient, span: trace.Span) -> None:
+    query = step.query or ""
+    try:
+        result = await rag.retrieve(
+            query,
+            corpus="kb",
+            source=step.source,
+            path=step.path,
+        )
+    except RagAuthError as exc:
+        raise _step_runtime_error("KB auth", type(exc).__name__) from exc
+    except RagUnavailableError:
+        state["step_outputs"][step.id] = {"context_block": "", "citations": []}
+        span.set_attribute("kb_unavailable", True)
         return
     state["step_outputs"][step.id] = {"context_block": result.context_block, "citations": result.citations}
 
@@ -582,6 +602,13 @@ _UNTRUSTED_OPEN_RE = re.compile(r"<untrusted_web_content[^>]*>")
 _UNTRUSTED_CLOSE_RE = re.compile(r"</untrusted_web_content>")
 
 
+def _frame_knowledge_context(text: str) -> str:
+    safe = text.replace(
+        "<untrusted_knowledge_content", "&lt;untrusted_knowledge_content"
+    ).replace("</untrusted_knowledge_content", "&lt;/untrusted_knowledge_content")
+    return f"<untrusted_knowledge_content>\n{safe}\n</untrusted_knowledge_content>"
+
+
 def _cap_section(text: str, limit: int) -> str:
     if limit <= 0 or len(text) <= limit:
         return text
@@ -744,14 +771,21 @@ def _render_prior_data(state: AgentState, current_step_id: str) -> str:
         out = outputs.get(s.id)
         if out is None:
             continue
-        if s.kind.value == "rag" and isinstance(out, dict):
+        if s.kind.value in ("rag", "kb") and isinstance(out, dict):
             block = out.get("context_block")
             if block:
-                # `rag` context blocks are bare text — strip markers
-                # directly on the block.
-                plan_sections.append(
-                    (s.id, f"[{s.id} — retrieved context]\n{_strip_untrusted_markers(block)}")
-                )
+                stripped = _strip_untrusted_markers(block)
+                if s.kind.value == "kb":
+                    plan_sections.append(
+                        (
+                            s.id,
+                            f"[{s.id} — retrieved knowledge]\n{_frame_knowledge_context(stripped)}",
+                        )
+                    )
+                else:
+                    plan_sections.append(
+                        (s.id, f"[{s.id} — retrieved context]\n{stripped}")
+                    )
         elif s.kind.value == "tool":
             # `tool` sections JSON-dump the entire result dict, so the
             # `description` field carrying the untrusted-framed text is

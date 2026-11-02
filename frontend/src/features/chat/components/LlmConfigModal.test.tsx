@@ -8,6 +8,15 @@ import { useUiStore } from '~/store/uiStore';
 import type { LlmConfigStatus, LlmConfigUpdateInput } from '../types/llmConfig';
 
 vi.mock('../hooks/useLlmConfig');
+vi.mock('~/features/kb/hooks/useKb', () => ({
+  useKbSettings: () => ({
+    data: { enabled: false, private_base: '', embedding_model: '' },
+    isLoading: false,
+  }),
+  useKbMutations: () => ({
+    createSource: { mutateAsync: vi.fn(), isPending: false },
+  }),
+}));
 
 const mockedUseLlmConfig = useLlmConfig as unknown as ReturnType<typeof vi.fn>;
 
