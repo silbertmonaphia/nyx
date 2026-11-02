@@ -10,7 +10,6 @@ import { Label } from "~/components/ui/Label";
 import { useAuthStore } from "~/store/authStore";
 import { useUiStore } from "~/store/uiStore";
 import { t as translate } from "~/i18n";
-import { KbPrivateSourceField } from "~/features/kb/components/KbPrivateSourceField";
 import { useLlmConfig } from "../hooks/useLlmConfig";
 import type {
   LlmConfigStatus,
@@ -323,6 +322,7 @@ interface LlmConfigModalProps {
   onDismissed?: () => void;
   blocking?: boolean;
   onSaved?: () => void;
+  kbField?: React.ReactNode;
 }
 
 export const LlmConfigModal = ({
@@ -331,6 +331,7 @@ export const LlmConfigModal = ({
   onDismissed,
   blocking = false,
   onSaved,
+  kbField,
 }: LlmConfigModalProps) => {
   const { t } = useTranslation();
   const addToast = useUiStore((state) => state.addToast);
@@ -616,7 +617,7 @@ export const LlmConfigModal = ({
             ) : null}
           </fieldset>
 
-          <KbPrivateSourceField />
+          {kbField}
 
           <p className="text-xs text-muted-foreground">
             {t("llmConfig.sections.agentNote")}
