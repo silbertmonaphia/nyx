@@ -8,7 +8,17 @@ The pipeline that turns a file on disk into retrievable passages: normalize the 
 
 ### Requirement: A document is normalized into a heading-aware block sequence
 
-A Markdown document SHALL be normalized into an ordered sequence of blocks, each carrying the heading path in effect at that position, a kind, and a locator identifying where the block came from. Headings SHALL be recognised at every level and SHALL establish the heading path for the blocks that follow them. Fenced code blocks SHALL be preserved intact as single blocks. Tables SHALL be preserved as table blocks rather than being flattened into prose. Front matter SHALL not appear in any block's text.
+A Markdown document SHALL be normalized into an ordered sequence of blocks, each carrying the heading path in effect at that position, a kind, and a locator identifying where the block came from. Headings SHALL be recognised at every level and SHALL establish the heading path for the blocks that follow them. Fenced code blocks SHALL be preserved intact as single blocks. Tables SHALL be preserved as table blocks rather than being flattened into prose. Front matter SHALL not appear in any block's text. An image reference SHALL contribute its alt text, if any, as ordinary text in the block in effect, and SHALL never contribute the image URL; an image reference with no alt text SHALL contribute nothing to any block's text. v1 does not parse image content itself — the bytes behind the reference are outside the pipeline.
+
+#### Scenario: An image with alt text contributes only the alt text
+
+- **WHEN** a document contains `![黄昏的庆云顶](https://example.com/img.jpg)` as its own line
+- **THEN** a block carries the text `黄昏的庆云顶`, and no block's text contains the URL
+
+#### Scenario: An image without alt text contributes nothing
+
+- **WHEN** a document contains `![](https://example.com/img.jpg)` as its own line
+- **THEN** no block carries the URL, and the line does not produce an empty text block
 
 #### Scenario: Headings establish a nested path
 
@@ -32,7 +42,7 @@ A Markdown document SHALL be normalized into an ordered sequence of blocks, each
 
 ### Requirement: Chunks respect the document's structure and carry a context header
 
-A chunk SHALL belong to exactly one heading path and SHALL NOT span two heading paths. No chunk's embedded text SHALL exceed the configured hard token cap. A table SHALL NOT be split across chunks; a table larger than the cap SHALL be split by rows with its header repeated in each part. A fenced code block SHALL NOT be split. A section whose content falls below the configured minimum size SHALL be kept rather than dropped, and SHALL still carry its heading. The text that is embedded for a chunk SHALL be the chunk's relative path, its heading path, and its body, in that order; the body alone SHALL be stored separately for citation.
+A chunk SHALL belong to exactly one heading path and SHALL NOT span two heading paths. No chunk's embedded text SHALL exceed the configured hard token cap, except a fenced code block kept whole under the rule below — the cap is a packing budget for splittable content, not a licence to cut through an atomic block. A table SHALL NOT be split across chunks; a table larger than the cap SHALL be split by rows with its header repeated in each part. A fenced code block SHALL NOT be split, and a fenced code block larger than the hard cap SHALL still be kept whole as one chunk. A fenced code block whose size exceeds the embedding model's usable window cannot receive an embedding; the document SHALL then end pending with that reason observable, the document's previous generation SHALL continue to serve retrieval when one exists, and the remedy is editing the source file — the pipeline SHALL NOT truncate code to fit. A section whose content falls below the configured minimum size SHALL be kept rather than dropped, and SHALL still carry its heading. The text that is embedded for a chunk SHALL be the chunk's relative path, its heading path, and its body, in that order; the body alone SHALL be stored separately for citation.
 
 #### Scenario: Chunk never spans two headings
 
@@ -53,6 +63,16 @@ A chunk SHALL belong to exactly one heading path and SHALL NOT span two heading 
 
 - **WHEN** a chunk is produced for a file at `B-Cook/2019-11-16-Cook-Diet.md` under the heading path `煮食记 / 碳水列表`
 - **THEN** the chunk's embedded text begins with that relative path and heading path, and the separately stored body contains neither
+
+#### Scenario: An oversized fenced code block is kept whole
+
+- **WHEN** a document contains a fenced code block larger than the hard token cap
+- **THEN** it produces one chunk that may exceed the cap, and no content from another heading path joins that chunk
+
+#### Scenario: A fence too large for the embedding window leaves the document pending
+
+- **WHEN** a fenced code block kept whole exceeds the embedding model's usable window and no embedding can be produced for it
+- **THEN** the document ends pending with the reason recorded, any previously indexed generation of that document remains retrievable, and no code text is truncated to fit
 
 ### Requirement: Indexing is change-driven and idempotent
 
