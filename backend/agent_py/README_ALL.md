@@ -372,12 +372,17 @@ budget guard ── Redis counter `agent:budget:u={user_id}:h={utc_hour}`,
 
 ```
 cp .env.example .env
-# fill in PYTHON_AGENT_LLM_BASE_URL + PYTHON_AGENT_LLM_API_KEY + AGENT_SERVICE_TOKEN
+# fill in PYTHON_AGENT_LLM_BASE_URL + PYTHON_AGENT_LLM_API_KEY + AGENT_SERVICE_TOKEN + PYTHON_AGENT_DATABASE_URL
 uv sync --locked --extra dev
 python -m agent.main
 # or
 uvicorn agent.main:app --port 9000 --reload
 ```
+
+On a box whose `~/.config/uv/uv.toml` points the default index at a PyPI mirror (China-mainland
+machines), use `uv sync --frozen --extra dev` instead — the mirror changes uv's default index,
+which makes `--locked` report a false "lockfile needs to be updated". `--frozen` installs the
+same package set and never rewrites the lock; `make bootstrap` (repo root) does this.
 
 ## Tests
 

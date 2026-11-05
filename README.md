@@ -107,10 +107,24 @@ off by default. Full production topology → [`README_FULL.md` § Architecture](
 
 ## Run it
 
+Fresh box: one command checks toolchains (go / node 24 / python ≥ 3.12 / uv), writes the `.env`
+files with fresh secrets, installs frontend + agent deps, and builds the backend. Idempotent —
+safe to re-run; existing `.env` values are kept.
+
+```bash
+make bootstrap    # DOMAIN=app.example.com also bakes VITE_API_URL and stages an nginx site config
+make up           # Postgres + Redis + Jaeger
+make dev          # backend + frontend + agent, one Ctrl+C stops all
+```
+
+Manual equivalent:
+
 ```bash
 cp .env.example .env                      # infra
 cp backend/.env.example backend/.env      # backend (set AGENT_ENABLED=true for the agent path)
 cp frontend/.env.example frontend/.env    # frontend
+(cd backend/agent_py && uv sync --frozen --extra dev)    # agent venv
+(cd frontend && npm ci --workspaces=false)               # frontend deps
 
 make up    # Postgres + Redis + Jaeger
 make dev   # backend + frontend + agent, one Ctrl+C stops all

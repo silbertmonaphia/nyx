@@ -98,7 +98,7 @@ standalone:
 
 ```bash
 cd backend/agent_py
-cp .env.example .env        # fill in PYTHON_AGENT_LLM_BASE_URL + PYTHON_AGENT_LLM_API_KEY + AGENT_SERVICE_TOKEN
+cp .env.example .env        # fill in PYTHON_AGENT_LLM_BASE_URL + PYTHON_AGENT_LLM_API_KEY + AGENT_SERVICE_TOKEN + PYTHON_AGENT_DATABASE_URL
 uv sync --locked --extra dev
 python -m agent.main        # or: uvicorn agent.main:app --port 9000 --reload
 ```
@@ -112,6 +112,13 @@ profile).
 `uv.lock` is committed and pins every package. After editing `pyproject.toml`, run `uv lock` and
 commit the result; installs use `--locked`, so a stale lock fails instead of silently resolving
 fresh.
+
+On a machine whose user-level uv config (`~/.config/uv/uv.toml`) points the default index at a
+PyPI mirror (common on China-mainland boxes), `--locked` reports a false "lockfile needs to be
+updated": the mirror replaces uv's default index, and uv counts the index as part of the
+resolution it compares against the lock. Install with `--frozen` there — same package set, the
+mirror is only used for downloads, and the lock file is never rewritten. `make bootstrap` (repo
+root) already does this.
 
 ## Tests
 

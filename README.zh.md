@@ -81,10 +81,22 @@ flowchart TB
 
 ## 跑起来
 
+新机器一条命令搞定：检查工具链（go / node 24 / python ≥ 3.12 / uv）、生成带随机密钥的各份 `.env`、装前端与 agent 依赖、构建后端。幂等 —— 可重复执行，已有的 `.env` 值不会被覆盖。
+
+```bash
+make bootstrap    # DOMAIN=app.example.com 还会烘焙 VITE_API_URL 并生成 nginx 站点配置到 /tmp
+make up           # Postgres + Redis + Jaeger
+make dev          # 后端 + 前端 + agent，一次 Ctrl+C 全部停止
+```
+
+手动等价流程：
+
 ```bash
 cp .env.example .env                      # 基础设施
 cp backend/.env.example backend/.env      # 后端（走 agent 路径需设 AGENT_ENABLED=true）
 cp frontend/.env.example frontend/.env    # 前端
+(cd backend/agent_py && uv sync --frozen --extra dev)    # agent venv
+(cd frontend && npm ci --workspaces=false)               # 前端依赖
 
 make up    # Postgres + Redis + Jaeger
 make dev   # 后端 + 前端 + agent，一次 Ctrl+C 全部停止
