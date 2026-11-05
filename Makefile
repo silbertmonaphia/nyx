@@ -17,7 +17,7 @@
 # the `docker compose` plugin on PATH. Backend invocations assume
 # `make up` has been run.
 
-.PHONY: dev dev-backend dev-frontend dev-agent dev-vllm-main dev-vllm-embed dev-infra dev-pgsql-inspect dev-redis-inspect dev-gpu-inspect dev-gpu-watch up down up-vllm down-vllm dev-up-langfuse dev-down-langfuse logs status stop help eval-golden eval-security eval-run e2e-agent-auth
+.PHONY: dev dev-backend dev-frontend dev-agent bootstrap dev-vllm-main dev-vllm-embed dev-infra dev-pgsql-inspect dev-redis-inspect dev-gpu-inspect dev-gpu-watch up down up-vllm down-vllm dev-up-langfuse dev-down-langfuse logs status stop help eval-golden eval-security eval-run e2e-agent-auth
 
 COMPOSE := docker compose
 
@@ -69,6 +69,10 @@ dev-frontend:
 #: Run the Python agent service in the foreground (DETACH=1 to background). Assumes `make up` has been run.
 dev-agent:
 	@./scripts/dev.sh agent $(DETACH_FLAG)
+
+#: Bootstrap a fresh dev box: toolchain checks + .env generation (fresh secrets) + npm ci + agent venv (uv sync --frozen, mirror-safe) + go build. DOMAIN=x.com bakes VITE_API_URL and stages an nginx config to /tmp. Idempotent; add --dry-run via ARGS=.
+bootstrap:
+	@./scripts/bootstrap-dev.sh $(if $(DOMAIN),--domain $(DOMAIN),) $(ARGS)
 
 #: Run the vLLM chat model on the host (port 8000, Qwen3-4B-Instruct FP8, hermes tool parser, ~6970 MiB VRAM). Foreground by default (DETACH=1 to background); host-run alternative to the compose vllm profile — don't run both.
 dev-vllm-main:
