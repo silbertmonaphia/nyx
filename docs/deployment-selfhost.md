@@ -87,6 +87,7 @@ points at the (profile-off) in-compose vLLM service.
 ```dotenv
 JWT_SECRET=<openssl rand -base64 48>
 DB_URL=postgres://nyx:<password>@db:5432/nyx?sslmode=disable
+SERVER_HOST=0.0.0.0
 REDIS_ENABLED=true
 REDIS_URL=redis://redis:6379
 CORS_ALLOWED_ORIGINS=https://app.<domain>
@@ -102,6 +103,12 @@ AGENT_ENABLED=true
 PYTHON_AGENT_URL=http://agent:9000
 AGENT_SERVICE_TOKEN=<openssl rand -hex 32>
 ```
+
+`SERVER_HOST=0.0.0.0` is **required for the compose backend**: the bind
+default is loopback (`127.0.0.1`) since 2026-11, and a container bound
+to loopback is unreachable through its published port. Upgrading a
+server provisioned before that change: append the line to
+`backend/.env` and `docker compose --profile app up -d backend`.
 
 `USER_LLM_ENCRYPTION_KEY` (≥ 32 bytes) is required once
 `LLM_ENABLED=true`; rotating it makes every stored per-user BYOK key

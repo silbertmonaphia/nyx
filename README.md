@@ -161,8 +161,11 @@ SPA on Vercel, API on Render — the repo carries the config (`render.yaml`,
 | Render | `CORS_ALLOWED_ORIGINS` | `https://<app>.vercel.app` |
 
 `VITE_API_URL` is inlined into the bundle at build time, so changing it needs a new
-deploy. Walkthrough, verification commands and the free-tier caveats:
-[`docs/deployment.md`](docs/deployment.md).
+deploy. Leave it unset and the bundle falls back to `http://localhost:8080/api` —
+the **visitor's own machine**, so login/register die with a network-error toast for
+anyone but you. Every deployment bakes a real value: `https://<api-domain>/api`
+(cross-origin) or `/api` behind a same-origin reverse proxy. Walkthrough, verification
+commands and the free-tier caveats: [`docs/deployment.md`](docs/deployment.md).
 
 ## Common commands
 
@@ -186,6 +189,8 @@ deploy. Walkthrough, verification commands and the free-tier caveats:
 - [`backend/agent_py/README.md`](backend/agent_py/README.md) — the Python service in detail.
 - [`docs/agent-deployment.md`](docs/agent-deployment.md) — production rollout for the agent.
 - [`docs/deployment.md`](docs/deployment.md) — the Render + Vercel deploy path.
+- [`docs/deployment-selfhost.md`](docs/deployment-selfhost.md) — self-hosted server (Docker Compose + Caddy + CD).
+- [`docs/deployment-vps-smoke.md`](docs/deployment-vps-smoke.md) — quick VPS smoke rig (host dev stack + nginx + bare IP).
 - [`CLAUDE.md`](CLAUDE.md) · [`SECURITY.md`](SECURITY.md) · [`FUTURE.md`](FUTURE.md) · [`openspec/`](openspec/)
 
 ## License
