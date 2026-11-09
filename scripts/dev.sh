@@ -7,13 +7,12 @@
 #
 # Default is foreground — the started process attaches to your
 # terminal so output streams live and Ctrl+C kills it cleanly. Pass
-# --detach to run in background: stdout/stderr tee to the terminal
-# AND to /tmp/nyx-{backend,frontend,agent}.log; the script waits on
-# each child, so Ctrl+C tears them down together. PIDs land in
-# /tmp/nyx-*.pid for `make stop`.
-#
-# `both` and `all` require --detach — multiple foreground processes
-# can't share one terminal.
+# --detach on a SINGLE (backend / frontend / agent / vllm-*) to
+# daemonize it: output goes to /tmp/nyx-*.log only, the prompt comes
+# back immediately, and `make stop` (pid files in /tmp/nyx-*.pid) is
+# the teardown path. `both`/`all` --detach instead stay attached as a
+# supervisor (output tees to terminal + log) so one Ctrl+C tears every
+# child down — multiple foreground processes can't share one terminal.
 #
 # Assumes the infra containers are already up for the backend —
 # bring them with `make up` or `docker compose up -d db redis
@@ -228,69 +227,106 @@ fi
 
 # --- start -------------------------------------------------------------
 if $detach; then
-  # Detached mode: each child runs as a backgrounded pipeline so the
-  # script can wait on both simultaneously. Output tees to terminal +
-  # per-process log file; PIDs land in /tmp/nyx-*.pid for `make stop`.
   started_pid_files=()
-  children_reaped=false
-  cleanup() {
-    local code=$?
-    local file pid
-    for file in "${started_pid_files[@]}"; do
-      pid="$(cat "$file" 2>/dev/null || true)"
-      if [[ -n "$pid" && "$children_reaped" != true ]]; then
-        kill "$pid" 2>/dev/null || true
-      fi
-      rm -f "$file"
-    done
-    exit "$code"
-  }
-  trap cleanup INT TERM EXIT
+  single=false
+  case "$mode" in backend|frontend|agent|vllm-main|vllm-embed) single=true ;; esac
 
-  if needs_backend; then
-    echo ">> backend  → $BACKEND_LOG"
-    started_pid_files+=("$BACKEND_PID")
-    # Capture the subshell's PID (the one that exec's into the process
-    # we actually want to control) before tee steals the rightmost
-    # slot of the pipeline. $BASHPID is the current subshell's PID; $!
-    # would report tee's PID, which is downstream and dies naturally
-    # when its stdin EOFs.
-    ( cd backend && echo $BASHPID > "$BACKEND_PID" && exec go run ./cmd/api ) \
-      2>&1 | tee "$BACKEND_LOG" &
-  fi
-
-  if needs_frontend; then
-    echo ">> frontend → $FRONTEND_LOG"
-    started_pid_files+=("$FRONTEND_PID")
-    ( cd frontend && echo $BASHPID > "$FRONTEND_PID" && exec npm run dev ) \
-      2>&1 | tee "$FRONTEND_LOG" &
-  fi
-
-  if needs_agent; then
-    echo ">> agent    → $AGENT_LOG"
-    started_pid_files+=("$AGENT_PID")
-    # Boot the Python orchestrator locally. `python -m agent.main`
-    # is the entrypoint added in the `python -m agent.main boots` fix.
-    ( cd backend/agent_py && echo $BASHPID > "$AGENT_PID" && exec .venv/bin/python -m agent.main ) \
-      2>&1 | tee "$AGENT_LOG" &
-  fi
-
-  if needs_vllm_main; then
-    echo ">> vllm-main → $VLLM_MAIN_LOG  (first run downloads the model)"
-    started_pid_files+=("$VLLM_MAIN_PID")
-    ( echo $BASHPID > "$VLLM_MAIN_PID" && exec "$vllm_bin" serve Qwen/Qwen3-4B-Instruct-2507-FP8 \
+  if $single; then
+    spawn() {
+      local name="$1" cwd="$2" logfile="$3" pidfile="$4"; shift 4
+      echo ">> $name → $logfile (detached)"
+      ( cd "$cwd" && exec setsid "$@" ) </dev/null >"$logfile" 2>&1 &
+      echo $! > "$pidfile"
+      started_pid_files+=("$pidfile")
+      disown "$!" 2>/dev/null || true
+    }
+    if needs_backend; then
+      spawn backend backend "$BACKEND_LOG" "$BACKEND_PID" go run ./cmd/api
+    fi
+    if needs_frontend; then
+      spawn frontend frontend "$FRONTEND_LOG" "$FRONTEND_PID" npm run dev
+    fi
+    if needs_agent; then
+      spawn agent backend/agent_py "$AGENT_LOG" "$AGENT_PID" .venv/bin/python -m agent.main
+    fi
+    if needs_vllm_main; then
+      spawn vllm-main . "$VLLM_MAIN_LOG" "$VLLM_MAIN_PID" "$vllm_bin" serve Qwen/Qwen3-4B-Instruct-2507-FP8 \
         --host 0.0.0.0 --port 8000 --tensor-parallel-size 1 \
         --gpu-memory-utilization 0.9 --max-model-len 4096 \
-        --enable-auto-tool-choice --tool-call-parser hermes ) \
-      2>&1 | tee "$VLLM_MAIN_LOG" &
-  fi
+        --enable-auto-tool-choice --tool-call-parser hermes
+    fi
+    if needs_vllm_embed; then
+      spawn vllm-embed . "$VLLM_EMBED_LOG" "$VLLM_EMBED_PID" "$vllm_bin" serve Qwen/Qwen3-Embedding-0.6B \
+        --port 8001 --enforce-eager --gpu-memory-utilization 0.1 --max-model-len 2048
+    fi
+  else
+    # Detached supervisor (both/all only): each child is a backgrounded
+    # pipeline so the script can wait on all of them; output tees to
+    # terminal + per-process log file; PIDs land in /tmp/nyx-*.pid.
+    children_reaped=false
+    cleanup() {
+      local code=$?
+      local file pid
+      for file in "${started_pid_files[@]}"; do
+        pid="$(cat "$file" 2>/dev/null || true)"
+        if [[ -n "$pid" && "$children_reaped" != true ]]; then
+          if [[ "$(ps -o pgid= -p "$pid" 2>/dev/null | tr -d '[:space:]')" == "$pid" ]]; then
+            kill -TERM -- -"$pid" 2>/dev/null || true
+          else
+            kill -TERM "$pid" 2>/dev/null || true
+          fi
+        fi
+        rm -f "$file"
+      done
+      exit "$code"
+    }
+    trap cleanup INT TERM EXIT
 
-  if needs_vllm_embed; then
-    echo ">> vllm-embed → $VLLM_EMBED_LOG  (first run downloads the model)"
-    started_pid_files+=("$VLLM_EMBED_PID")
-    ( echo $BASHPID > "$VLLM_EMBED_PID" && exec "$vllm_bin" serve Qwen/Qwen3-Embedding-0.6B \
-        --port 8001 --enforce-eager --gpu-memory-utilization 0.1 --max-model-len 2048 ) \
-      2>&1 | tee "$VLLM_EMBED_LOG" &
+    if needs_backend; then
+      echo ">> backend  → $BACKEND_LOG"
+      started_pid_files+=("$BACKEND_PID")
+      # Capture the subshell's PID (the one that exec's into the process
+      # we actually want to control) before tee steals the rightmost
+      # slot of the pipeline. $BASHPID is the current subshell's PID; $!
+      # would report tee's PID, which is downstream and dies naturally
+      # when its stdin EOFs.
+      ( cd backend && echo $BASHPID > "$BACKEND_PID" && exec setsid go run ./cmd/api ) \
+        2>&1 | tee "$BACKEND_LOG" &
+    fi
+
+    if needs_frontend; then
+      echo ">> frontend → $FRONTEND_LOG"
+      started_pid_files+=("$FRONTEND_PID")
+      ( cd frontend && echo $BASHPID > "$FRONTEND_PID" && exec setsid npm run dev ) \
+        2>&1 | tee "$FRONTEND_LOG" &
+    fi
+
+    if needs_agent; then
+      echo ">> agent    → $AGENT_LOG"
+      started_pid_files+=("$AGENT_PID")
+      # Boot the Python orchestrator locally. `python -m agent.main`
+      # is the entrypoint added in the `python -m agent.main boots` fix.
+      ( cd backend/agent_py && echo $BASHPID > "$AGENT_PID" && exec setsid .venv/bin/python -m agent.main ) \
+        2>&1 | tee "$AGENT_LOG" &
+    fi
+
+    if needs_vllm_main; then
+      echo ">> vllm-main → $VLLM_MAIN_LOG  (first run downloads the model)"
+      started_pid_files+=("$VLLM_MAIN_PID")
+      ( echo $BASHPID > "$VLLM_MAIN_PID" && exec setsid "$vllm_bin" serve Qwen/Qwen3-4B-Instruct-2507-FP8 \
+          --host 0.0.0.0 --port 8000 --tensor-parallel-size 1 \
+          --gpu-memory-utilization 0.9 --max-model-len 4096 \
+          --enable-auto-tool-choice --tool-call-parser hermes ) \
+        2>&1 | tee "$VLLM_MAIN_LOG" &
+    fi
+
+    if needs_vllm_embed; then
+      echo ">> vllm-embed → $VLLM_EMBED_LOG  (first run downloads the model)"
+      started_pid_files+=("$VLLM_EMBED_PID")
+      ( echo $BASHPID > "$VLLM_EMBED_PID" && exec setsid "$vllm_bin" serve Qwen/Qwen3-Embedding-0.6B \
+          --port 8001 --enforce-eager --gpu-memory-utilization 0.1 --max-model-len 2048 ) \
+        2>&1 | tee "$VLLM_EMBED_LOG" &
+    fi
   fi
 
   echo
@@ -315,6 +351,22 @@ if $detach; then
     echo "    tail vllm-embed : tail -f $VLLM_EMBED_LOG"
   fi
   echo
+
+  if $single; then
+    echo "make stop to halt · make status to inspect."
+    sleep 2
+    rc=0
+    for file in "${started_pid_files[@]}"; do
+      pid="$(cat "$file" 2>/dev/null || true)"
+      if [[ -z "$pid" ]] || ! kill -0 "$pid" 2>/dev/null; then
+        echo "a child exited during boot — see the log above (pid file removed)" >&2
+        rm -f "$file"
+        rc=1
+      fi
+    done
+    exit "$rc"
+  fi
+
   echo "Ctrl+C to stop."
 
   # Wait for whichever children were started (explicit file checks —

@@ -2,8 +2,8 @@
 # the background with shared Ctrl+C cleanup. The `make dev-*` singles
 # (backend / frontend / agent / vllm-main / vllm-embed) run one process
 # in the foreground by default — output streams live to your terminal
-# and Ctrl+C kills it. Pass DETACH=1 to any single target to background
-# it instead (output also tees to /tmp/nyx-*.log). The two vllm targets
+# and Ctrl+C kills it. DETACH=1 on a single daemonizes it: the prompt
+# comes back, output goes to /tmp/nyx-*.log, `make stop` halts. The two vllm targets
 # serve the chat / embedding models on the HOST for a faster dev loop
 # than the compose `vllm` / `embed` profiles (needs a local vLLM
 # install + GPU; do not run alongside the compose profiles).
@@ -42,7 +42,15 @@ help:
 stop:
 	@for f in /tmp/nyx-backend.pid /tmp/nyx-frontend.pid /tmp/nyx-agent.pid \
 	          /tmp/nyx-vllm-main.pid /tmp/nyx-vllm-embed.pid; do \
-	  [ -f "$$f" ] && kill "$$(cat $$f)" 2>/dev/null && rm -f "$$f" || true; \
+	  [ -f "$$f" ] || continue; \
+	  pid=$$(cat "$$f" 2>/dev/null); \
+	  pgid=$$(ps -o pgid= -p "$$pid" 2>/dev/null | tr -d '[:space:]'); \
+	  if [ -n "$$pid" ] && [ "$$pgid" = "$$pid" ]; then \
+	    kill -TERM -"$$pid" 2>/dev/null || true; \
+	  else \
+	    kill -TERM "$$pid" 2>/dev/null || true; \
+	  fi; \
+	  rm -f "$$f"; \
 	done
 
 #: Show running infra containers + dev backend/frontend/agent/vllm processes.
