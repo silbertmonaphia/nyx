@@ -162,6 +162,9 @@ if needs_backend; then
   # host-mapped port is 6380 (see docker-compose.yml).
   export DB_URL='postgres://postgres:postgres@127.0.0.1:5433/nyx?sslmode=disable'
   export REDIS_URL='redis://127.0.0.1:6380'
+  # Loopback bind for host-run dev even when backend/.env carries the
+  # compose-shaped SERVER_HOST=0.0.0.0 from .env.example.
+  export SERVER_HOST='127.0.0.1'
 fi
 
 # --- frontend preflight ------------------------------------------------

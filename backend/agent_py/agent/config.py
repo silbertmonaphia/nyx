@@ -26,6 +26,8 @@ class Settings(BaseSettings):
     # --- Server ---
     port: int = 9000
     metrics_port: int = 9001
+    host: str = "127.0.0.1"
+    metrics_host: str = "127.0.0.1"
     service_token: SecretStr = Field(
         default=SecretStr(""), validation_alias="AGENT_SERVICE_TOKEN"
     )

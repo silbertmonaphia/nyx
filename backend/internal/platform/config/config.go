@@ -31,6 +31,7 @@ type Config struct {
 	JWTAccessTTL  string `mapstructure:"JWT_ACCESS_TTL"`
 	JWTRefreshTTL string `mapstructure:"JWT_REFRESH_TTL"`
 	Port          string `mapstructure:"PORT"`
+	Host          string `mapstructure:"SERVER_HOST"`
 	MigrationPath string `mapstructure:"MIGRATION_PATH"`
 
 	// Database Connection Pool
@@ -314,6 +315,7 @@ func Load() (*Config, error) {
 // are documented as a single block.
 func setDefaults() {
 	viper.SetDefault("PORT", "8080")
+	viper.SetDefault("SERVER_HOST", "127.0.0.1")
 	viper.SetDefault("MIGRATION_PATH", "file://migrations")
 	viper.SetDefault("JWT_SECRET", "your-default-secret-key-change-it-in-prod")
 
@@ -458,7 +460,7 @@ func setDefaults() {
 func bindEnvVars() {
 	for _, key := range []string{
 		"DB_URL", "JWT_SECRET", "JWT_ACCESS_TTL", "JWT_REFRESH_TTL",
-		"PORT", "MIGRATION_PATH",
+		"PORT", "SERVER_HOST", "MIGRATION_PATH",
 		"DB_MAX_OPEN_CONNS", "DB_MAX_IDLE_CONNS",
 		"DB_CONN_MAX_LIFETIME", "DB_CONN_MAX_IDLE_TIME",
 		"REDIS_URL", "REDIS_ENABLED", "CACHE_TTL",

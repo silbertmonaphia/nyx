@@ -167,6 +167,7 @@ Common flags:
 | `PYTHON_AGENT_PREFS_ENABLED` | `true` | Preference extraction + planner-injection kill switch |
 | `PYTHON_AGENT_GDPR_ENABLED` | `true` | GDPR export/erase kill switch (503, touches nothing) |
 | `PYTHON_AGENT_STREAM_DETACH_ENABLED` | `true` | A run outlives its SSE connection; `false` restores "a disconnect cancels the run" |
+| `PYTHON_AGENT_HOST` / `PYTHON_AGENT_METRICS_HOST` | `127.0.0.1` / `127.0.0.1` | uvicorn + Prometheus exporter bind address; compose sets `PYTHON_AGENT_METRICS_HOST=0.0.0.0` (bridge scraping) and its CMD pins `--host 0.0.0.0` |
 | `PYTHON_AGENT_DETACHED_RUN_CAP_SECONDS` | `600` | Wall-clock cap on a detached run (kills it and marks it failed) |
 | `PYTHON_AGENT_KEEPALIVE_SECONDS` | `15` | Idle cadence of the SSE keep-alive comment frame; `0` disables |
 | `PYTHON_AGENT_FRAME_REPLAY_ENABLED` | `true` | Frames carry an SSE `id:` and are buffered in-process so a reconnect resumes from its last id; `false` restores the id-less wire |

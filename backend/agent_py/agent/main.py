@@ -350,7 +350,7 @@ async def lifespan(app: FastAPI):
     from prometheus_client import start_http_server as _prom_start
 
     try:
-        _prom_start(settings.metrics_port)
+        _prom_start(settings.metrics_port, addr=settings.metrics_host)
     except OSError as exc:
         if "Address already in use" not in str(exc):
             raise
@@ -2052,7 +2052,7 @@ if __name__ == "__main__":
     settings = get_settings()
     uvicorn.run(
         "agent.main:app",
-        host="0.0.0.0",  # noqa: S104 — intentional bind-all for uvicorn entrypoint
+        host=settings.host,
         port=settings.port,
         log_level="info",
     )

@@ -330,9 +330,9 @@ func buildAndServe(cfg *config.Config) {
 	// embedder (LLM_ENABLED=false) have nothing to bridge.
 	mountRAGBridgeRoute(router, ragSvc, kbSvc, tokens)
 
-	port := ":" + cfg.Port
+	addr := cfg.Host + ":" + cfg.Port
 	server := &http.Server{
-		Addr:    port,
+		Addr:    addr,
 		Handler: router,
 	}
 
@@ -342,7 +342,7 @@ func buildAndServe(cfg *config.Config) {
 
 	// Start server in a goroutine
 	go func() {
-		log.Info().Str("port", port).Msg("Server starting")
+		log.Info().Str("addr", addr).Msg("Server starting")
 		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			log.Fatal().Err(err).Msg("Server failed to start")
 		}

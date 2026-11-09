@@ -21,6 +21,7 @@ func TestLoadFromEnv(t *testing.T) {
 	t.Setenv("CACHE_TTL", "10m")
 	t.Setenv("DB_CONN_MAX_LIFETIME", "2h")
 	t.Setenv("DB_CONN_MAX_IDLE_TIME", "15m")
+	t.Setenv("SERVER_HOST", "0.0.0.0")
 
 	cfg, err := Load()
 	if err != nil {
@@ -48,6 +49,9 @@ func TestLoadFromEnv(t *testing.T) {
 	if cfg.DBConnMaxIdleTime != "15m" {
 		t.Errorf("DBConnMaxIdleTime = %q, want %q", cfg.DBConnMaxIdleTime, "15m")
 	}
+	if cfg.Host != "0.0.0.0" {
+		t.Errorf("Host = %q, want from env", cfg.Host)
+	}
 }
 
 func TestLoadAppliesDefaults(t *testing.T) {
@@ -56,6 +60,7 @@ func TestLoadAppliesDefaults(t *testing.T) {
 	t.Setenv("JWT_SECRET", auth.TestSecret)
 	t.Setenv("REDIS_ENABLED", "")
 	t.Setenv("PORT", "")
+	t.Setenv("SERVER_HOST", "")
 	t.Setenv("DB_MAX_OPEN_CONNS", "")
 	t.Setenv("DB_MAX_IDLE_CONNS", "")
 	t.Setenv("DB_CONN_MAX_LIFETIME", "")
@@ -71,6 +76,9 @@ func TestLoadAppliesDefaults(t *testing.T) {
 
 	if cfg.Port != "8080" {
 		t.Errorf("Port default = %q, want %q", cfg.Port, "8080")
+	}
+	if cfg.Host != "127.0.0.1" {
+		t.Errorf("Host default = %q, want %q", cfg.Host, "127.0.0.1")
 	}
 	if cfg.DBMaxOpenConns != 25 {
 		t.Errorf("DBMaxOpenConns default = %d, want 25", cfg.DBMaxOpenConns)

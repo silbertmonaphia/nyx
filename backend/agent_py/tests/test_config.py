@@ -25,6 +25,8 @@ AGENT_PY_DIR = Path(__file__).resolve().parents[1]
         ("rag_bridge_url", "http://localhost:8080/internal/rag/retrieve"),
         ("redis_url", "redis://localhost:6380"),
         ("langfuse_host", "http://localhost:3000"),
+        ("host", "127.0.0.1"),
+        ("metrics_host", "127.0.0.1"),
     ],
 )
 def test_host_facing_defaults_are_host_reachable(monkeypatch, field, expected):

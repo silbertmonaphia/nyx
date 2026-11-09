@@ -468,6 +468,10 @@ services:
       - PYTHON_AGENT_RAG_BRIDGE_URL=http://backend:8080/internal/rag/retrieve
       - PYTHON_AGENT_REDIS_URL=redis://redis:6379
       - PYTHON_AGENT_OTEL_ENDPOINT=http://jaeger:4318
+      # Prometheus scrapes /metrics across the bridge, so the
+      # in-container exporter must bind all interfaces; host-run dev
+      # keeps the default loopback bind.
+      - PYTHON_AGENT_METRICS_HOST=0.0.0.0
       # Langfuse tracing (--profile langfuse). Keys are interpolated
       # from the root .env's LANGFUSE_INIT_* pair — the same values the
       # langfuse-web first-boot bootstrap creates — so the agent can
