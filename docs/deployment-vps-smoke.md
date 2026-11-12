@@ -2,7 +2,9 @@
 
 A minimal rig for eyeballing the stack on a rented VPS within minutes of
 `make bootstrap`: the host dev stack (`make dev-{backend,agent,frontend}`
-`DETACH=1`) behind one nginx server block. **This is a smoke-test rig, not
+`DETACH=1`) behind one nginx server block, with a
+[static-build variant](#static-build-variant-no-vite) that drops vite.
+**This is a smoke-test rig, not
 a durable deployment** — no restart-on-failure, vite dev serves source
 maps, `go run` recompiles on boot. For anything long-lived use
 [`deployment.md`](deployment.md) (Render + Vercel) or
@@ -82,6 +84,58 @@ server {
 - Bare IPs can't get CA certificates, so this rig is `http://`-only.
   Real TLS needs a domain (`make bootstrap --domain <domain>` bakes
   `VITE_API_URL` and stages a certbot-ready site config).
+
+## Static build variant (no vite)
+
+For a longer-lived feel, serve the built bundle from nginx instead of
+proxying to the dev server. Backend + agent still run via
+`make dev-*` — only vite goes away.
+
+Swap the `location /` block:
+
+```nginx
+root /home/<user>/nyx/frontend/dist;
+index index.html;
+
+location / {
+    try_files $uri $uri/ /index.html;
+}
+```
+
+Build with the API baked same-origin — the absolute-URL gotcha above
+disappears because axios resolves `/api` against the page origin:
+
+```sh
+cd /home/<user>/nyx/frontend && VITE_API_URL=/api npm run build
+```
+
+Then stop vite (it owns a process group, per `scripts/dev.sh`):
+
+```sh
+kill -TERM -- -"$(cat /tmp/nyx-frontend.pid)"
+rm -f /tmp/nyx-frontend.pid
+```
+
+`make stop` still works afterward — it skips missing PID files.
+
+Redeploy is just `npm run build` again: `dist/` is swapped in place,
+nginx picks it up on the next request, no reload, no restart. Changing
+`VITE_API_URL` means rebuilding, not restarting.
+
+Gotchas seen in practice:
+
+- `www-data` (nginx worker user) needs traverse (`o+x`) permission on
+  every path component above `dist/` — stock cloud images ship
+  `/home/<user>` without it. The failure mode is subtle: the first
+  `stat()` fails with `Permission denied`, `try_files` falls back to
+  `/index.html`, which fails the same way, and nginx reports the
+  internal-redirect loop as a bare **500**. Fix is
+  `sudo chmod o+x /home/<user> /home/<user>/nyx /home/<user>/nyx/frontend`,
+  no reload needed. `/var/log/nginx/error.log` shows the `stat()`
+  denial — check it before guessing.
+- No security headers/CSP in this rig; `frontend/nginx.conf` (the
+  container image) is the reference for the full header set if the rig
+  graduates to something durable.
 
 ## Verify
 
