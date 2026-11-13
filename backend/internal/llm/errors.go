@@ -41,6 +41,28 @@ var (
 	ErrToolCallsUnsupported = errors.New("llm tool calls unsupported")
 )
 
+type UpstreamStatusError struct {
+	Status   int
+	msg      string
+	sentinel error
+}
+
+func (e *UpstreamStatusError) Error() string { return e.msg }
+
+func (e *UpstreamStatusError) Unwrap() error { return e.sentinel }
+
+func NewUpstreamStatus(status int, msg string, sentinel error) *UpstreamStatusError {
+	return &UpstreamStatusError{Status: status, msg: msg, sentinel: sentinel}
+}
+
+func UpstreamStatusOf(err error) (int, bool) {
+	var us *UpstreamStatusError
+	if errors.As(err, &us) && us.Status > 0 {
+		return us.Status, true
+	}
+	return 0, false
+}
+
 // Register each sentinel with api.MapError so handlers can funnel
 // any wrapped error through the canonical envelope. Init order across
 // packages is not deterministic but each registration is independent,

@@ -63,6 +63,14 @@ type Client struct {
 // config. Returns an error when LLM is not enabled — callers in
 // cmd/api/main.go guard on cfg.LLMEnabled before constructing.
 func NewClient(cfg *config.Config, tracer trace.Tracer) (*Client, error) {
+	return newClient(cfg, tracer, nil)
+}
+
+func NewClientWithCapture(cfg *config.Config, tracer trace.Tracer, capture *llm.RequestCapture) (*Client, error) {
+	return newClient(cfg, tracer, capture)
+}
+
+func newClient(cfg *config.Config, tracer trace.Tracer, capture *llm.RequestCapture) (*Client, error) {
 	if !cfg.LLMEnabled {
 		return nil, fmt.Errorf("openai.NewClient: LLM_ENABLED=false")
 	}
@@ -89,6 +97,9 @@ func NewClient(cfg *config.Config, tracer trace.Tracer) (*Client, error) {
 			return nil, fmt.Errorf("openai.NewClient: %w", err)
 		}
 		oc.HTTPClient = httpClient
+	}
+	if capture != nil {
+		oc.HTTPClient = capture.WrapDoer(oc.HTTPClient)
 	}
 
 	return &Client{
@@ -403,7 +414,7 @@ func (c *Client) mapError(err error) error {
 	// SDK's typed wrapper around *http.Request errors.
 	var reqErr *openai.RequestError
 	if errors.As(err, &reqErr) {
-		return fmt.Errorf("upstream unreachable: %w", llm.ErrProviderUnavailable)
+		return llm.NewUpstreamStatus(reqErr.HTTPStatusCode, fmt.Sprintf("upstream unreachable: %v", llm.ErrProviderUnavailable), llm.ErrProviderUnavailable)
 	}
 
 	// HTTP status from the upstream. *openai.APIError carries the
@@ -415,9 +426,9 @@ func (c *Client) mapError(err error) error {
 	if errors.As(err, &apiErr) {
 		switch {
 		case apiErr.HTTPStatusCode == 429:
-			return fmt.Errorf("upstream 429: %w", llm.ErrRateLimited)
+			return llm.NewUpstreamStatus(apiErr.HTTPStatusCode, fmt.Sprintf("upstream %d: %v", apiErr.HTTPStatusCode, llm.ErrRateLimited), llm.ErrRateLimited)
 		default:
-			return fmt.Errorf("upstream %d: %w", apiErr.HTTPStatusCode, llm.ErrProviderUnavailable)
+			return llm.NewUpstreamStatus(apiErr.HTTPStatusCode, fmt.Sprintf("upstream %d: %v", apiErr.HTTPStatusCode, llm.ErrProviderUnavailable), llm.ErrProviderUnavailable)
 		}
 	}
 
@@ -427,11 +438,11 @@ func (c *Client) mapError(err error) error {
 func (c *Client) mapEmbedError(err error) error {
 	var apiErr *openai.APIError
 	if errors.As(err, &apiErr) && apiErr.HTTPStatusCode == http.StatusBadRequest {
-		return fmt.Errorf("upstream 400: %w", llm.ErrInvalidInput)
+		return llm.NewUpstreamStatus(apiErr.HTTPStatusCode, fmt.Sprintf("upstream %d: %v", apiErr.HTTPStatusCode, llm.ErrInvalidInput), llm.ErrInvalidInput)
 	}
 	var reqErr *openai.RequestError
 	if errors.As(err, &reqErr) && reqErr.HTTPStatusCode == http.StatusBadRequest {
-		return fmt.Errorf("upstream 400: %w", llm.ErrInvalidInput)
+		return llm.NewUpstreamStatus(reqErr.HTTPStatusCode, fmt.Sprintf("upstream %d: %v", reqErr.HTTPStatusCode, llm.ErrInvalidInput), llm.ErrInvalidInput)
 	}
 	return c.mapError(err)
 }

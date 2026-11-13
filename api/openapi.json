@@ -32,6 +32,31 @@
         ],
         "type": "object"
       },
+      "CapturedRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "body": {},
+          "headers": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": "object"
+          },
+          "method": {
+            "type": "string"
+          },
+          "url": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "method",
+          "url",
+          "headers",
+          "body"
+        ],
+        "type": "object"
+      },
       "ConfigResponse": {
         "additionalProperties": false,
         "properties": {
@@ -788,6 +813,109 @@
           "username",
           "created_at",
           "updated_at"
+        ],
+        "type": "object"
+      },
+      "ValidateRequestBody": {
+        "additionalProperties": false,
+        "properties": {
+          "embedding": {
+            "$ref": "#/components/schemas/LlmEndpointInput",
+            "description": "Optional embedding group to probe. Blank api_key resolves to the stored key exactly as PUT does."
+          },
+          "fallback": {
+            "$ref": "#/components/schemas/LlmEndpointInput",
+            "description": "Optional retry-model group to probe."
+          },
+          "llm": {
+            "$ref": "#/components/schemas/LlmEndpointInput",
+            "description": "Optional main-LLM group to probe. Blank api_key resolves to the stored key exactly as PUT does."
+          },
+          "slots": {
+            "description": "Optional subset of slots to probe: chat, embedding, fallback, tavily. Absent probes every filled slot.",
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "tavily": {
+            "$ref": "#/components/schemas/TavilyInput",
+            "description": "Optional search-provider group to probe. Blank api_key probes the provider's keyless tier when no key is stored."
+          }
+        },
+        "type": "object"
+      },
+      "ValidateResponseSlots": {
+        "additionalProperties": false,
+        "properties": {
+          "chat": {
+            "$ref": "#/components/schemas/ValidateSlotResponse"
+          },
+          "embedding": {
+            "$ref": "#/components/schemas/ValidateSlotResponse"
+          },
+          "fallback": {
+            "$ref": "#/components/schemas/ValidateSlotResponse"
+          },
+          "tavily": {
+            "$ref": "#/components/schemas/ValidateSlotResponse"
+          }
+        },
+        "required": [
+          "chat",
+          "embedding",
+          "fallback",
+          "tavily"
+        ],
+        "type": "object"
+      },
+      "ValidateSlotResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "detail": {
+            "type": "string"
+          },
+          "http_status": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "probed": {
+            "type": "boolean"
+          },
+          "request": {
+            "$ref": "#/components/schemas/CapturedRequest"
+          },
+          "status": {
+            "enum": [
+              "ok",
+              "auth_failed",
+              "rate_limited",
+              "invalid_model",
+              "invalid_config",
+              "width_mismatch",
+              "unreachable",
+              "timeout"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "probed"
+        ],
+        "type": "object"
+      },
+      "ValidateSlotsBody": {
+        "additionalProperties": false,
+        "properties": {
+          "slots": {
+            "$ref": "#/components/schemas/ValidateResponseSlots"
+          }
+        },
+        "required": [
+          "slots"
         ],
         "type": "object"
       }
@@ -1889,6 +2017,53 @@
           }
         ],
         "summary": "Save LLM configuration",
+        "tags": [
+          "llm-config"
+        ]
+      }
+    },
+    "/api/me/llm-config/validate": {
+      "post": {
+        "description": "Runs one minimal live request per filled slot (main LLM, embedding, fallback, Tavily) using the submitted values, resolving a blank key against the stored key exactly as PUT does. Returns a classified per-slot result plus the exact outbound request with credentials masked to their last four characters. Saves nothing.",
+        "operationId": "validate-llm-config",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ValidateRequestBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ValidateSlotsBody"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Probe LLM configuration connectivity",
         "tags": [
           "llm-config"
         ]

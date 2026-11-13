@@ -69,9 +69,9 @@ func loadConfigOrFatal() *config.Config {
 	return cfg
 }
 
-func mountLLMSettingsOps(humaAPI huma.API, cfg *config.Config, db *pgxpool.Pool, tracerProvider trace.TracerProvider, tokens auth.TokenService) (*llmsettings.Resolver, *llmsettings.Handler) {
+func mountLLMSettingsOps(humaAPI huma.API, cfg *config.Config, db *pgxpool.Pool, tracerProvider trace.TracerProvider, tokens auth.TokenService) (*llmsettings.Resolver, *llmsettings.Handler, func()) {
 	if !cfg.LLMEnabled {
-		return nil, nil
+		return nil, nil, func() {}
 	}
 	settingsCipher, err := crypto.NewCipher(cfg.UserLLMEncryptionKey)
 	if err != nil {
@@ -82,7 +82,12 @@ func mountLLMSettingsOps(humaAPI huma.API, cfg *config.Config, db *pgxpool.Pool,
 	service.SetBYOKAllowPrivate(cfg.BYOKAllowPrivateURL)
 	handler := llmsettings.NewHandler(service)
 	llmsettings.RegisterLLMConfigOps(humaAPI, handler, tokens)
-	return llmsettings.NewResolver(service, cfg, tracerProvider), handler
+	resolver := llmsettings.NewResolver(service, cfg, tracerProvider)
+	handler.SetValidator(resolver.ValidateValues)
+	validateLimiter := chat.NewUserRateLimiter(6.0/60.0, 2)
+	handler.SetValidateLimiter(validateLimiter.Allow)
+	stopValidateGC := validateLimiter.RunGC(time.Minute, time.Hour)
+	return resolver, handler, stopValidateGC
 }
 
 func newEmbeddingProbe(cfg *config.Config, tracerProvider trace.TracerProvider) func(ctx context.Context, baseURL, apiKey, model string) error {
@@ -300,7 +305,8 @@ func buildAndServe(cfg *config.Config) {
 	feed.RegisterFeedOps(humaAPI, feedHandler, tokens)
 	user.RegisterUserOps(humaAPI, userHandler, tokens)
 
-	userLLMResolver, userLLMSettingsHandler := mountLLMSettingsOps(humaAPI, cfg, db, tracing.Provider, tokens)
+	userLLMResolver, userLLMSettingsHandler, stopValidateGC := mountLLMSettingsOps(humaAPI, cfg, db, tracing.Provider, tokens)
+	defer stopValidateGC()
 
 	// Build the LLM provider (single-provider or router with
 	// failover) + the RAG facade (nil when LLM is disabled). The

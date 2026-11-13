@@ -2,6 +2,8 @@ import api from "~/services/api";
 import type {
   LlmConfigStatus,
   LlmConfigUpdateInput,
+  LlmConfigValidateInput,
+  LlmConfigValidateResponse,
   LlmEndpointSection,
   TavilySection,
 } from "../types/llmConfig";
@@ -64,5 +66,16 @@ export const llmConfigService = {
 
   async remove(): Promise<void> {
     await api.delete("/me/llm-config", SENSITIVE_REQUEST);
+  },
+
+  async validate(
+    input: LlmConfigValidateInput,
+  ): Promise<LlmConfigValidateResponse> {
+    const response = await api.post(
+      "/me/llm-config/validate",
+      input,
+      SENSITIVE_REQUEST,
+    );
+    return response.data as LlmConfigValidateResponse;
   },
 };

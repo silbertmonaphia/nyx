@@ -7,6 +7,7 @@ import (
 
 	"github.com/danielgtaylor/huma/v2"
 
+	"nyx/internal/llm"
 	"nyx/internal/middleware"
 	"nyx/internal/platform/api"
 	"nyx/internal/platform/auth"
@@ -16,6 +17,8 @@ import (
 type Handler struct {
 	service                *Service
 	onEmbeddingInvalidated func(ctx context.Context, userID int)
+	validator              func(ctx context.Context, userID int, values UpdateInput, slots []string) (*ValidateResult, error)
+	validateAllow          func(userID int) bool
 }
 
 func NewHandler(service *Service) *Handler {
@@ -24,6 +27,14 @@ func NewHandler(service *Service) *Handler {
 
 func (h *Handler) SetEmbeddingInvalidatedHook(fn func(ctx context.Context, userID int)) {
 	h.onEmbeddingInvalidated = fn
+}
+
+func (h *Handler) SetValidator(fn func(ctx context.Context, userID int, values UpdateInput, slots []string) (*ValidateResult, error)) {
+	h.validator = fn
+}
+
+func (h *Handler) SetValidateLimiter(fn func(userID int) bool) {
+	h.validateAllow = fn
 }
 
 type llmEndpointResponse struct {
@@ -130,6 +141,41 @@ type configUpdateInput struct {
 	Fallback  *llmEndpointInput `json:"fallback,omitempty" required:"false" doc:"Optional retry-model group. Supply all three fields or omit the section entirely."`
 }
 
+type validateRequestBody struct {
+	LLM       *llmEndpointInput `json:"llm" required:"false" doc:"Optional main-LLM group to probe. Blank api_key resolves to the stored key exactly as PUT does."`
+	Embedding *llmEndpointInput `json:"embedding" required:"false" doc:"Optional embedding group to probe. Blank api_key resolves to the stored key exactly as PUT does."`
+	Tavily    *tavilyInput      `json:"tavily" required:"false" doc:"Optional search-provider group to probe. Blank api_key probes the provider's keyless tier when no key is stored."`
+	Fallback  *llmEndpointInput `json:"fallback,omitempty" required:"false" doc:"Optional retry-model group to probe."`
+	Slots     []string          `json:"slots,omitempty" required:"false" doc:"Optional subset of slots to probe: chat, embedding, fallback, tavily. Absent probes every filled slot."`
+}
+
+type validateRequestInput struct {
+	Body validateRequestBody `required:"false"`
+}
+
+type validateSlotResponse struct {
+	Probed     bool                 `json:"probed"`
+	Status     string               `json:"status,omitempty" enum:"ok,auth_failed,rate_limited,invalid_model,invalid_config,width_mismatch,unreachable,timeout"`
+	HTTPStatus int                  `json:"http_status,omitempty"`
+	Detail     string               `json:"detail,omitempty"`
+	Request    *llm.CapturedRequest `json:"request,omitempty"`
+}
+
+type validateResponseSlots struct {
+	Chat      *validateSlotResponse `json:"chat"`
+	Embedding *validateSlotResponse `json:"embedding"`
+	Fallback  *validateSlotResponse `json:"fallback"`
+	Tavily    *validateSlotResponse `json:"tavily"`
+}
+
+type validateSlotsBody struct {
+	Slots validateResponseSlots `json:"slots"`
+}
+
+type validateConfigOutput struct {
+	Body validateSlotsBody
+}
+
 type getConfigInput struct{}
 
 type getConfigOutput struct {
@@ -187,6 +233,17 @@ func RegisterLLMConfigOpsTest(api huma.API, h *Handler, tokens auth.TokenService
 		Security:    []map[string][]string{{"BearerAuth": {}}},
 		Middlewares: llmConfigMiddlewares(tokens, withAuth),
 	}, h.DeleteConfig)
+
+	huma.Register(api, huma.Operation{
+		OperationID: "validate-llm-config",
+		Method:      http.MethodPost,
+		Path:        "/api/me/llm-config/validate",
+		Summary:     "Probe LLM configuration connectivity",
+		Description: "Runs one minimal live request per filled slot (main LLM, embedding, fallback, Tavily) using the submitted values, resolving a blank key against the stored key exactly as PUT does. Returns a classified per-slot result plus the exact outbound request with credentials masked to their last four characters. Saves nothing.",
+		Tags:        []string{"llm-config"},
+		Security:    []map[string][]string{{"BearerAuth": {}}},
+		Middlewares: llmConfigMiddlewares(tokens, withAuth),
+	}, h.ValidateConfig)
 }
 
 func llmConfigMiddlewares(tokens auth.TokenService, withAuth bool) huma.Middlewares {
@@ -241,6 +298,50 @@ func (h *Handler) DeleteConfig(ctx context.Context, _ *deleteConfigInput) (*dele
 		h.onEmbeddingInvalidated(ctx, userID)
 	}
 	return &deleteConfigOutput{Status: http.StatusNoContent}, nil
+}
+
+//nolint:revive // unexported-return is huma's idiomatic op pattern
+func (h *Handler) ValidateConfig(ctx context.Context, in *validateRequestInput) (*validateConfigOutput, error) {
+	userID := reqctx.UserIDFromContext(ctx)
+	if h.validateAllow != nil && !h.validateAllow(userID) {
+		return nil, api.NewErrorResponseFromContext(ctx, http.StatusTooManyRequests, "Too many probe requests, slow down", nil)
+	}
+	if h.validator == nil {
+		return nil, api.NewErrorResponseFromContext(ctx, http.StatusServiceUnavailable, "Probe not available", nil)
+	}
+	res, err := h.validator(ctx, userID, updateInputFrom(configUpdateInput{
+		LLM:       in.Body.LLM,
+		Embedding: in.Body.Embedding,
+		Tavily:    in.Body.Tavily,
+		Fallback:  in.Body.Fallback,
+	}), in.Body.Slots)
+	if err != nil {
+		return nil, api.MapError(ctx, err, "Failed to probe LLM configuration")
+	}
+	out := validateResponseSlots{}
+	if res.Slots.Chat != nil {
+		out.Chat = slotResponseFor(res.Slots.Chat)
+	}
+	if res.Slots.Embedding != nil {
+		out.Embedding = slotResponseFor(res.Slots.Embedding)
+	}
+	if res.Slots.Fallback != nil {
+		out.Fallback = slotResponseFor(res.Slots.Fallback)
+	}
+	if res.Slots.Tavily != nil {
+		out.Tavily = slotResponseFor(res.Slots.Tavily)
+	}
+	return &validateConfigOutput{Body: validateSlotsBody{Slots: out}}, nil
+}
+
+func slotResponseFor(r *SlotProbeResult) *validateSlotResponse {
+	return &validateSlotResponse{
+		Probed:     r.Probed,
+		Status:     r.Status,
+		HTTPStatus: r.HTTPStatus,
+		Detail:     r.Detail,
+		Request:    r.Request,
+	}
 }
 
 func responseFrom(s *Settings) configResponse {

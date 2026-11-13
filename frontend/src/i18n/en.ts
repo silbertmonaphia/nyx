@@ -223,7 +223,7 @@ export const en: Translation = {
           urlConvention:
             'Must be an OpenAI-compatible endpoint: the path carries the version prefix (a trailing /v1), e.g. http://localhost:8000/v1.',
           dimensionNote:
-            'The deployment requires 1024-dimension vectors, e.g. Qwen/Qwen3-Embedding-0.6B. A model emitting a different width is rejected at query time, not when saving. Changing the endpoint or API key with the same model keeps your stored vectors.',
+            'The deployment requires 1024-dimension vectors, e.g. Qwen/Qwen3-Embedding-0.6B. A model emitting a different width is refused by the save-time probe; at runtime the width guard drops mismatched vectors before they are stored. Changing the endpoint or API key with the same model keeps your stored vectors.',
           modelRequirement:
             'Must emit 1024-dimension vectors — the deployment\'s vector column width. The model is probed on save: a different width is rejected.',
           removeHint:
@@ -261,6 +261,27 @@ export const en: Translation = {
         apiKey: 'API key',
         keyPlaceholder: 'Your API key',
         keySaved: 'Saved {{masked}} — leave blank to keep',
+      },
+      probe: {
+        button: 'Test connection',
+        probing: 'Probing…',
+        viewRequest: 'View request',
+        hideRequest: 'Hide request',
+        copy: 'Copy as curl',
+        copied: 'Copied',
+        keyPlaceholder: '<your API key>',
+        skipped: 'Empty section — nothing probed',
+        httpStatus: '(upstream HTTP {{code}})',
+        status: {
+          ok: 'Connected',
+          auth_failed: 'Authentication failed — the endpoint rejected your API key',
+          rate_limited: 'Rate limited — endpoint reachable but throttled, retry later',
+          invalid_model: 'Model not found — the endpoint does not serve this model',
+          invalid_config: 'Incomplete configuration — check the URL, model, and key',
+          width_mismatch: 'Width mismatch — the returned vector width differs from the deployment requirement',
+          unreachable: 'Unreachable — network failure or endpoint down',
+          timeout: 'Timed out — the endpoint did not respond in time',
+        },
       },
       errors: {
         required: 'Required',

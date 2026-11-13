@@ -310,6 +310,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/me/llm-config/validate": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Probe LLM configuration connectivity
+         * @description Runs one minimal live request per filled slot (main LLM, embedding, fallback, Tavily) using the submitted values, resolving a blank key against the stored key exactly as PUT does. Returns a classified per-slot result plus the exact outbound request with credentials masked to their last four characters. Saves nothing.
+         */
+        post: operations["validate-llm-config"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/refresh": {
         parameters: {
             query?: never;
@@ -362,6 +382,14 @@ export interface components {
             /** @example Bearer */
             token_type: string;
             user: components["schemas"]["User"];
+        };
+        CapturedRequest: {
+            body: unknown;
+            headers: {
+                [key: string]: string;
+            };
+            method: string;
+            url: string;
         };
         ConfigResponse: {
             configured: boolean;
@@ -586,6 +614,36 @@ export interface components {
             /** Format: date-time */
             updated_at: string;
             username: string;
+        };
+        ValidateRequestBody: {
+            /** @description Optional embedding group to probe. Blank api_key resolves to the stored key exactly as PUT does. */
+            embedding?: components["schemas"]["LlmEndpointInput"];
+            /** @description Optional retry-model group to probe. */
+            fallback?: components["schemas"]["LlmEndpointInput"];
+            /** @description Optional main-LLM group to probe. Blank api_key resolves to the stored key exactly as PUT does. */
+            llm?: components["schemas"]["LlmEndpointInput"];
+            /** @description Optional subset of slots to probe: chat, embedding, fallback, tavily. Absent probes every filled slot. */
+            slots?: string[] | null;
+            /** @description Optional search-provider group to probe. Blank api_key probes the provider's keyless tier when no key is stored. */
+            tavily?: components["schemas"]["TavilyInput"];
+        };
+        ValidateResponseSlots: {
+            chat: components["schemas"]["ValidateSlotResponse"];
+            embedding: components["schemas"]["ValidateSlotResponse"];
+            fallback: components["schemas"]["ValidateSlotResponse"];
+            tavily: components["schemas"]["ValidateSlotResponse"];
+        };
+        ValidateSlotResponse: {
+            detail?: string;
+            /** Format: int64 */
+            http_status?: number;
+            probed: boolean;
+            request?: components["schemas"]["CapturedRequest"];
+            /** @enum {string} */
+            status?: "ok" | "auth_failed" | "rate_limited" | "invalid_model" | "invalid_config" | "width_mismatch" | "unreachable" | "timeout";
+        };
+        ValidateSlotsBody: {
+            slots: components["schemas"]["ValidateResponseSlots"];
         };
     };
     responses: never;
@@ -1332,6 +1390,39 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    "validate-llm-config": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ValidateRequestBody"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ValidateSlotsBody"];
+                };
             };
             /** @description Error */
             default: {

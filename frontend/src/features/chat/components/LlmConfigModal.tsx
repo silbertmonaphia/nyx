@@ -10,10 +10,15 @@ import { Label } from "~/components/ui/Label";
 import { useAuthStore } from "~/store/authStore";
 import { useUiStore } from "~/store/uiStore";
 import { t as translate } from "~/i18n";
-import { useLlmConfig } from "../hooks/useLlmConfig";
+import { useLlmConfig, useLlmSlotProbe } from "../hooks/useLlmConfig";
 import type {
   LlmConfigStatus,
   LlmConfigUpdateInput,
+  LlmConfigValidateInput,
+  LlmSlotName,
+  LlmSlotProbeRequest,
+  LlmSlotProbeResult,
+  LlmSlotProbeStatus,
 } from "../types/llmConfig";
 
 const EXAMPLE_BASE_URLS = {
@@ -316,6 +321,146 @@ function Guidance({
   );
 }
 
+function probeStatusClass(status: LlmSlotProbeStatus): string {
+  switch (status) {
+    case "ok":
+      return "text-green-600 dark:text-green-400";
+    case "rate_limited":
+    case "unreachable":
+    case "timeout":
+      return "text-amber-600 dark:text-amber-400";
+    default:
+      return "text-destructive";
+  }
+}
+
+function toCurl(req: LlmSlotProbeRequest, keyPlaceholder: string): string {
+  const header = (k: string, v: string) =>
+    /^authorization$/i.test(k) ? `${k}: Bearer ${keyPlaceholder}` : `${k}: ${v}`;
+  const lines = [`curl -X ${req.method} '${req.url}'`];
+  for (const [k, v] of Object.entries(req.headers)) {
+    lines.push(`  -H '${header(k, v)}'`);
+  }
+  if (req.body != null) {
+    lines.push(`  -d '${JSON.stringify(req.body)}'`);
+  }
+  return lines.join(" \\\n");
+}
+
+const SlotProbePanel = ({
+  slot,
+  buildValues,
+}: {
+  slot: LlmSlotName;
+  buildValues: () => LlmConfigValidateInput;
+}) => {
+  const { t } = useTranslation();
+  const [showRequest, setShowRequest] = useState(false);
+  const [copied, setCopied] = useState(false);
+  const { probeAsync, isPending, result } = useLlmSlotProbe(slot);
+  const probed: LlmSlotProbeResult | null = result;
+
+  const run = async () => {
+    setCopied(false);
+    try {
+      await probeAsync(buildValues());
+    } catch {
+      return;
+    }
+  };
+
+  const copy = async () => {
+    if (!probed?.request) return;
+    try {
+      await navigator.clipboard.writeText(
+        toCurl(probed.request, t("llmConfig.probe.keyPlaceholder")),
+      );
+      setCopied(true);
+    } catch {
+      return;
+    }
+  };
+
+  return (
+    <div className="space-y-1" data-testid={`llm-probe-${slot}`}>
+      <div className="flex items-center gap-3">
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          onClick={run}
+          disabled={isPending}
+          data-testid={`llm-probe-${slot}-button`}
+        >
+          {isPending ? t("llmConfig.probe.probing") : t("llmConfig.probe.button")}
+        </Button>
+        {probed?.probed && probed.status ? (
+          <span
+            className={`text-xs font-medium ${probeStatusClass(probed.status)}`}
+            data-testid={`llm-probe-${slot}-status`}
+          >
+            {t(`llmConfig.probe.status.${probed.status}`)}
+            {probed.http_status
+              ? ` ${t("llmConfig.probe.httpStatus", { code: probed.http_status })}`
+              : ""}
+            {probed.detail ? ` — ${probed.detail}` : ""}
+          </span>
+        ) : probed && !probed.probed ? (
+          <span
+            className="text-xs text-muted-foreground"
+            data-testid={`llm-probe-${slot}-status`}
+          >
+            {t("llmConfig.probe.skipped")}
+          </span>
+        ) : null}
+      </div>
+      {probed?.request ? (
+        <div>
+          <button
+            type="button"
+            aria-expanded={showRequest}
+            onClick={() => setShowRequest(!showRequest)}
+            className="text-xs font-medium text-primary hover:underline"
+            data-testid={`llm-probe-${slot}-toggle`}
+          >
+            {showRequest
+              ? t("llmConfig.probe.hideRequest")
+              : t("llmConfig.probe.viewRequest")}
+          </button>
+          {showRequest ? (
+            <div className="mt-1 space-y-1 rounded-md bg-muted p-2">
+              <pre
+                className="overflow-x-auto text-xs"
+                data-testid={`llm-probe-${slot}-request`}
+              >
+                {`${probed.request.method} ${probed.request.url}\n${Object.entries(
+                  probed.request.headers,
+                )
+                  .map(([k, v]) => `${k}: ${v}`)
+                  .join("\n")}`}
+                {probed.request.body != null
+                  ? `\n${JSON.stringify(probed.request.body)}`
+                  : ""}
+              </pre>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={copy}
+                data-testid={`llm-probe-${slot}-copy`}
+              >
+                {copied
+                  ? t("llmConfig.probe.copied")
+                  : t("llmConfig.probe.copy")}
+              </Button>
+            </div>
+          ) : null}
+        </div>
+      ) : null}
+    </div>
+  );
+};
+
 interface LlmConfigModalProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -394,6 +539,36 @@ export const LlmConfigModal = ({
     section
       ? t("llmConfig.fields.keySaved", { masked: section.api_key_masked })
       : t("llmConfig.fields.keyPlaceholder");
+
+  const probeLlmValues = (): LlmConfigValidateInput => {
+    const v = getValues();
+    return {
+      llm: {
+        base_url: v.llm.base_url.trim(),
+        api_key: v.llm.api_key.trim(),
+        model: v.llm.model.trim(),
+      },
+    };
+  };
+  const probeEmbeddingValues = (): LlmConfigValidateInput => {
+    const v = getValues();
+    return {
+      embedding: {
+        base_url: v.embedding.base_url.trim(),
+        api_key: v.embedding.api_key.trim(),
+        model: v.embedding.model.trim(),
+      },
+    };
+  };
+  const probeTavilyValues = (): LlmConfigValidateInput => {
+    const v = getValues();
+    return {
+      tavily: {
+        base_url: v.tavily.base_url.trim(),
+        api_key: v.tavily.api_key.trim(),
+      },
+    };
+  };
 
   const submit = handleSubmit(async (values) => {
     const ownerId = userId;
@@ -490,6 +665,7 @@ export const LlmConfigModal = ({
                 registration={register("llm.model")}
               />
             </div>
+            <SlotProbePanel slot="chat" buildValues={probeLlmValues} />
           </fieldset>
 
           <fieldset className="space-y-3 rounded-md border border-dashed p-4">
@@ -561,6 +737,10 @@ export const LlmConfigModal = ({
                     }
                   />
                 </div>
+                <SlotProbePanel
+                  slot="embedding"
+                  buildValues={probeEmbeddingValues}
+                />
               </div>
             ) : null}
           </fieldset>
@@ -613,6 +793,7 @@ export const LlmConfigModal = ({
                   error={errors.tavily?.api_key?.message}
                   registration={register("tavily.api_key")}
                 />
+                <SlotProbePanel slot="tavily" buildValues={probeTavilyValues} />
               </div>
             ) : null}
           </fieldset>

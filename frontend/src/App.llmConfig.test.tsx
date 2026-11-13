@@ -5,7 +5,7 @@ import { vi, describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { useFeeds } from './features/feeds/hooks/useFeeds';
 import { useAuthStore } from './store/authStore';
 import { useFeedUiStore } from './features/feeds/store/feedUiStore';
-import { useLlmConfig } from './features/chat/hooks/useLlmConfig';
+import { useLlmConfig, useLlmSlotProbe } from './features/chat/hooks/useLlmConfig';
 import { useChatStore } from './features/chat/store/chatStore';
 import type { LlmConfigStatus } from './features/chat/types/llmConfig';
 import { i18n } from '~/i18n';
@@ -42,6 +42,7 @@ vi.mock('./features/chat/components/ChatPanel', () => ({
 const mockUseFeeds = useFeeds as any;
 const mockUseAuthStore = useAuthStore as any;
 const mockUseLlmConfig = useLlmConfig as any;
+const mockUseLlmSlotProbe = useLlmSlotProbe as any;
 
 const baseFeeds = {
   feeds: [],
@@ -160,6 +161,13 @@ describe('App LLM config gating', () => {
       logout: vi.fn(),
     });
     mockUseLlmConfig.mockReset();
+    mockUseLlmSlotProbe.mockImplementation(() => ({
+      probe: vi.fn(),
+      probeAsync: vi.fn().mockResolvedValue(undefined),
+      isPending: false,
+      result: null,
+      reset: vi.fn(),
+    }));
     mockHook();
     useFeedUiStore.setState({
       searchTerm: '',

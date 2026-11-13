@@ -34,3 +34,47 @@ export interface LlmConfigUpdateInput {
   tavily: LlmConfigTavilyInput;
   fallback?: LlmConfigEndpointInput | null;
 }
+
+export type LlmSlotName = "chat" | "embedding" | "fallback" | "tavily";
+
+export type LlmSlotProbeStatus =
+  | "ok"
+  | "auth_failed"
+  | "rate_limited"
+  | "invalid_model"
+  | "invalid_config"
+  | "width_mismatch"
+  | "unreachable"
+  | "timeout";
+
+export interface LlmSlotProbeRequest {
+  method: string;
+  url: string;
+  headers: Record<string, string>;
+  body?: unknown;
+}
+
+export interface LlmSlotProbeResult {
+  probed: boolean;
+  status?: LlmSlotProbeStatus;
+  http_status?: number;
+  detail?: string;
+  request?: LlmSlotProbeRequest;
+}
+
+export interface LlmConfigValidateInput {
+  llm?: Partial<LlmConfigEndpointInput>;
+  embedding?: Partial<LlmConfigEndpointInput>;
+  tavily?: Partial<LlmConfigTavilyInput>;
+  fallback?: Partial<LlmConfigEndpointInput>;
+  slots?: LlmSlotName[];
+}
+
+export interface LlmConfigValidateResponse {
+  slots: {
+    chat: LlmSlotProbeResult | null;
+    embedding: LlmSlotProbeResult | null;
+    fallback: LlmSlotProbeResult | null;
+    tavily: LlmSlotProbeResult | null;
+  };
+}

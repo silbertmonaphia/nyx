@@ -151,7 +151,7 @@ func (r *Resolver) embedSlot(s *Settings) (llm.Provider, error) {
 	})
 }
 
-func (r *Resolver) buildClient(baseURL, apiKey, model string) (llm.Provider, error) {
+func (r *Resolver) clientConfig(baseURL, apiKey, model string) *config.Config {
 	if apiKey == "" {
 		apiKey = resolverKeylessAPIKey
 	}
@@ -161,7 +161,11 @@ func (r *Resolver) buildClient(baseURL, apiKey, model string) (llm.Provider, err
 	cfg.LLMAPIKey = apiKey
 	cfg.LLMModel = model
 	cfg.LLMAllowPrivateURL = cfg.BYOKAllowPrivateURL
-	return openai.NewClient(&cfg, r.tp.Tracer("nyx.llm.user"))
+	return &cfg
+}
+
+func (r *Resolver) buildClient(baseURL, apiKey, model string) (llm.Provider, error) {
+	return openai.NewClient(r.clientConfig(baseURL, apiKey, model), r.tp.Tracer("nyx.llm.user"))
 }
 
 func (r *Resolver) cached(key string, build func() (llm.Provider, error)) (llm.Provider, error) {
