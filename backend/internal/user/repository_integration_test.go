@@ -40,7 +40,7 @@ func TestMain(m *testing.M) {
 
 	skipContainers := os.Getenv("SKIP_CONTAINERS") == "true"
 
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	ctx, cancel := context.WithTimeout(context.Background(), test.LockWaitTimeout)
 	defer cancel()
 
 	var release func()

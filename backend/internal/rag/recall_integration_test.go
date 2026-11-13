@@ -284,7 +284,7 @@ func requireRecallDB(t *testing.T) *pgxpool.Pool {
 	}
 	baseURL := recallBaseURL(t)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	ctx, cancel := context.WithTimeout(context.Background(), test.LockWaitTimeout)
 	defer cancel()
 
 	release, err := test.AcquireIntegrationLock(ctx, baseURL)

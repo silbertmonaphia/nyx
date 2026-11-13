@@ -74,7 +74,7 @@ func requirePgvector(t *testing.T) *pgxpool.Pool {
 		t.Skip("DB_URL is not set; rag integration test requires pgvector Postgres")
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), test.LockWaitTimeout)
 	defer cancel()
 
 	// Quick pgvector-availability probe. Skips the test on a

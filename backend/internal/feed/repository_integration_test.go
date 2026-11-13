@@ -34,7 +34,7 @@ func TestMain(m *testing.M) {
 	skipContainers := os.Getenv("SKIP_CONTAINERS") == "true"
 
 	// Set up the database container once for all tests in this package
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	ctx, cancel := context.WithTimeout(context.Background(), test.LockWaitTimeout)
 	defer cancel()
 
 	var release func()

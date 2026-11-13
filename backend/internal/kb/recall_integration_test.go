@@ -482,7 +482,7 @@ func requireKbRecallPgvector(t *testing.T) *pgxpool.Pool {
 	if url == "" {
 		t.Skip("DB_URL is not set; kb recall baseline requires pgvector Postgres")
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), test.LockWaitTimeout)
 	defer cancel()
 	probe, err := pgxpool.New(ctx, url)
 	require.NoError(t, err)

@@ -2,11 +2,14 @@ package test
 
 import (
 	"context"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 )
 
 const sharedIntegrationLockKey int64 = 0x6e7978
+
+const LockWaitTimeout = 5 * time.Minute
 
 func AcquireIntegrationLock(ctx context.Context, url string) (func(), error) {
 	conn, err := pgx.Connect(ctx, url)
