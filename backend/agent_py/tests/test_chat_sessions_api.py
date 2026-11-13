@@ -759,3 +759,139 @@ async def test_404_span_has_no_result_count(app, monkeypatch):
     assert attrs["endpoint"] == "session_messages"
     assert "user_id" in attrs
     assert "result_count" not in attrs
+
+
+async def _seed_n_messages(store, pool, *, user_id: int, count: int) -> str:
+    sid = str(_uuid.uuid4())
+    await store.create_session(user_id, sid)
+    for i in range(count):
+        role = "user" if i % 2 == 0 else "assistant"
+        await store.record_message(sid, user_id, role=role, content=f"msg-{i}")
+    return sid
+
+
+async def _seeded_message_ids(store, sid: str, user_id: int) -> list[int]:
+    full = await store.list_messages(sid, user_id)
+    return [m.id for m in full]
+
+
+async def test_messages_replay_no_params_has_no_new_keys(app, pool, store):
+    sid = await _seed_n_messages(store, pool, user_id=1, count=3)
+
+    resp = await _call(app, "GET", f"/agent/sessions/{sid}/messages")
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert set(body.keys()) == {"messages"}
+    for m in body["messages"]:
+        assert set(m.keys()) == {
+            "id", "role", "content", "tool_calls", "steps",
+            "tokens", "prompt_tokens", "completion_tokens", "created_at",
+        }
+
+
+async def test_messages_replay_limit_returns_newest_window(app, pool, store):
+    sid = await _seed_n_messages(store, pool, user_id=1, count=7)
+    ids = await _seeded_message_ids(store, sid, 1)
+
+    resp = await _call(app, "GET", f"/agent/sessions/{sid}/messages?limit=3")
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert [m["id"] for m in body["messages"]] == ids[-3:]
+    assert [m["content"] for m in body["messages"]] == [
+        "msg-4", "msg-5", "msg-6",
+    ]
+    assert body["has_more"] is True
+    assert body["next_before"] == str(ids[4])
+
+
+async def test_messages_replay_cursor_walks_to_exhaustion(app, pool, store):
+    sid = await _seed_n_messages(store, pool, user_id=1, count=7)
+    ids = await _seeded_message_ids(store, sid, 1)
+
+    resp = await _call(app, "GET", f"/agent/sessions/{sid}/messages?limit=3")
+    page1 = resp.json()
+    assert [m["id"] for m in page1["messages"]] == ids[-3:]
+
+    resp = await _call(
+        app,
+        "GET",
+        f"/agent/sessions/{sid}/messages?limit=3&before={page1['next_before']}",
+    )
+    page2 = resp.json()
+    assert [m["id"] for m in page2["messages"]] == ids[1:4]
+    assert page2["has_more"] is True
+
+    resp = await _call(
+        app,
+        "GET",
+        f"/agent/sessions/{sid}/messages?limit=3&before={page2['next_before']}",
+    )
+    page3 = resp.json()
+    assert [m["id"] for m in page3["messages"]] == ids[:1]
+    assert page3["has_more"] is False
+    assert page3["next_before"] is None
+
+
+async def test_messages_replay_empty_page_below_first(app, pool, store):
+    sid = await _seed_n_messages(store, pool, user_id=1, count=2)
+    ids = await _seeded_message_ids(store, sid, 1)
+
+    resp = await _call(
+        app, "GET", f"/agent/sessions/{sid}/messages?limit=3&before={ids[0]}"
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["messages"] == []
+    assert body["has_more"] is False
+    assert body["next_before"] is None
+
+
+@pytest.mark.parametrize(
+    "query",
+    [
+        "limit=0",
+        "limit=201",
+        "limit=abc",
+        "limit=-1",
+        "before=not-a-cursor&limit=3",
+        "before=0&limit=3",
+        "before=-5&limit=3",
+        "before=4.2&limit=3",
+        "before=9223372036854775808&limit=3",
+        "before=" + "9" * 5000 + "&limit=3",
+    ],
+)
+async def test_messages_replay_invalid_pagination_400(app, pool, store, query):
+    sid = await _seed_n_messages(store, pool, user_id=1, count=2)
+
+    resp = await _call(app, "GET", f"/agent/sessions/{sid}/messages?{query}")
+    assert resp.status_code == 400, resp.text
+
+
+async def test_messages_replay_well_formed_unminted_cursor_pages_own_messages(
+    app, pool, store
+):
+    sid = await _seed_n_messages(store, pool, user_id=1, count=2)
+    ids = await _seeded_message_ids(store, sid, 1)
+
+    resp = await _call(app, "GET", f"/agent/sessions/{sid}/messages?limit=3&before=42")
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert [m["id"] for m in body["messages"]] == ids
+    assert body["has_more"] is False
+    assert body["next_before"] is None
+
+
+async def test_messages_replay_pagination_404_parity(app, pool, store):
+    sid = await _seed_n_messages(store, pool, user_id=1, count=2)
+
+    foreign = await _call(
+        app, "GET", f"/agent/sessions/{sid}/messages?limit=3", user_id=2
+    )
+    assert foreign.status_code == 404
+
+    await store.soft_delete_session(sid, 1)
+    deleted = await _call(
+        app, "GET", f"/agent/sessions/{sid}/messages?limit=3"
+    )
+    assert deleted.status_code == 404

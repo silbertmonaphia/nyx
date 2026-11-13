@@ -1,5 +1,5 @@
 agent/audit.py:44: error: Skipping analyzing "asyncpg": module is installed, but missing library stubs or py.typed marker  [import-untyped]
-agent/chat_store.py:72: error: Skipping analyzing "asyncpg": module is installed, but missing library stubs or py.typed marker  [import-untyped]
+agent/chat_store.py:76: error: Skipping analyzing "asyncpg": module is installed, but missing library stubs or py.typed marker  [import-untyped]
 agent/executor.py:1070: error: Assignment to variable "exc" outside except: block  [misc]
 agent/executor.py:1071: error: Trying to read deleted variable "exc"  [misc]
 agent/executor.py:1072: error: Trying to read deleted variable "exc"  [misc]

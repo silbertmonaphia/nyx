@@ -48,7 +48,9 @@ flowchart TB
 ## 端点
 
 - `POST /agent/run` —— 入参 `{messages, agent?, model?, run_id?}`，出参 SSE（`plan`、`step_start`、`tool_call`、`tool_result`、`step_end`、`delta`、`done`、`note`、`error`、`terminator`）。
-- `GET|POST|DELETE /agent/sessions*` —— 历史侧边栏 API（列表 / 回放 / 新建 / 恢复 / 删除），经 `X-Nyx-User-Id` 按 owner 限定。
+- `GET|POST|DELETE /agent/sessions*` —— 历史侧边栏 API（列表 / 回放 / 新建 / 恢复 / 删除），经 `X-Nyx-User-Id` 按 owner 限定。回放接口
+  （`GET /agent/sessions/{id}/messages`）可选 `limit`（1–200）与 `before`（上一页响应里的 `next_before` 游标）；不带参数时返回全量历史、响应仍是
+  原来的 `{messages}` 结构，带参数时返回最新一页并附带 `has_more` / `next_before`。
 - `GET /agent/runs/{run_id}/stream` —— 重新挂上活着的 run：`note{reattached}` → 回放已持久化的步骤事件 → 实时帧；经 `X-Nyx-User-Id` 按 owner 限定（终态/未知 run 返回 409 `run_not_live`，未开持久化返回 501）。
 - `POST /agent/runs/{run_id}/cancel` —— 主动停止活着的 run（`user_cancelled`，半截回答不落库），经 `X-Nyx-User-Id` 按 owner 限定。
 - `GET /agent/me/export` · `DELETE /agent/me` —— GDPR 主体导出 + 物理擦除（幂等，含 langGraph 线程，审计仅记计数）；`PYTHON_AGENT_GDPR_ENABLED=false` 时两者均返回 503。

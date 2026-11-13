@@ -159,6 +159,15 @@ func TestSessionsRoutes_ForwardToAgent(t *testing.T) {
 			upstreamBody:   `{"session_id":"` + sessionIDFixture + `","messages":[]}`,
 		},
 		{
+			name:           "messages forwards pagination query verbatim",
+			method:         http.MethodGet,
+			clientPath:     "/api/chat/sessions/" + sessionIDFixture + "/messages?limit=50&before=1730000000000005",
+			wantPath:       "/agent/sessions/" + sessionIDFixture + "/messages",
+			wantQuery:      "limit=50&before=1730000000000005",
+			upstreamStatus: http.StatusOK,
+			upstreamBody:   `{"messages":[],"has_more":true,"next_before":"1730000000000002"}`,
+		},
+		{
 			name:           "create posts the body",
 			method:         http.MethodPost,
 			clientPath:     "/api/chat/sessions",

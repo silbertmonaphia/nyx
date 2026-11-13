@@ -25,7 +25,9 @@ Pagination cursor: base64url (padding stripped) of
 last row in the page (design.md D1). The `id` tiebreaker keeps the
 total order strict when sessions share a `last_active_at` microsecond.
 A cursor that fails to decode is a 400; the SPA recovers by re-fetching
-page one (design.md risk "Pagination cursor drift").
+page one (design.md risk "Pagination cursor drift"). The messages
+replay uses a second, simpler cursor: a decimal string of the window's
+oldest message id (`next_before`), valid only together with `limit`.
 
 Serialization is explicit: asyncpg hands back `uuid.UUID` / `datetime`
 objects, so every response field is converted to `str` / ISO-8601 here
@@ -88,24 +90,43 @@ async def list_sessions(request: Request) -> dict:
 
 @router.get("/agent/sessions/{session_id}/messages")
 async def session_messages(request: Request, session_id: str) -> dict:
-    """Chronological replay of one session's messages.
+    """Chronological replay of one session's messages, optionally paged.
 
-    Response: `{"messages": [...]}` ordered `created_at ASC, id ASC`.
-    404 when the session is unknown, foreign, or soft-deleted (the
-    messages still exist in the table in the last case — they are just
-    not exposed).
+    Without pagination params the response is the full replay,
+    `{"messages": [...]}` ordered `created_at ASC, id ASC` — the
+    pre-pagination contract, byte-shape unchanged. With `limit` (and
+    optionally `before`) the response is the newest window plus
+    `has_more` / `next_before`
+    (openspec/changes/agent-chat-history-perf). 404 when the session is
+    unknown, foreign, or soft-deleted (the messages still exist in the
+    table in the last case — they are just not exposed).
     """
     with _tracer.start_as_current_span("agent.sessions.messages") as span:
         span.set_attribute("endpoint", "session_messages")
         user_id = _require_user_id(request)
         span.set_attribute("user_id", user_id)
         session_id = _require_session_id(session_id)
+        limit = _parse_message_limit(request)
+        before = _parse_message_before(request, require_limit=limit is None)
         store = _chat_store(request)
-        messages = await store.list_messages(session_id, user_id)
-        if messages is None:
+        if limit is None:
+            messages = await store.list_messages(session_id, user_id)
+            if messages is None:
+                raise HTTPException(status_code=404, detail="session not found")
+            span.set_attribute("result_count", len(messages))
+            return {"messages": [_message_json(m) for m in messages]}
+        page = await store.list_messages_page(
+            session_id, user_id, limit=limit, before=before
+        )
+        if page is None:
             raise HTTPException(status_code=404, detail="session not found")
-        span.set_attribute("result_count", len(messages))
-        return {"messages": [_message_json(m) for m in messages]}
+        rows, has_more, next_before = page
+        span.set_attribute("result_count", len(rows))
+        return {
+            "messages": [_message_json(m) for m in rows],
+            "has_more": has_more,
+            "next_before": next_before,
+        }
 
 
 @router.post("/agent/sessions")
@@ -276,6 +297,61 @@ def _decode_cursor(cursor: str) -> tuple[datetime, str]:
         # UUID(); OverflowError covers micros far outside the calendar.
         raise HTTPException(status_code=400, detail="invalid before cursor") from exc
     return last_active_at, session_id
+
+
+def _parse_message_limit(request: Request) -> int | None:
+    """`limit` query param for the messages replay: absent → full replay.
+
+    Present it must be an integer in `[1, 200]` (else 400) — the replay
+    window is client-chosen per request, so unlike the session list
+    there is no settings default: absent means the legacy unbounded
+    read, present means paginate.
+    """
+    raw = request.query_params.get("limit")
+    if raw is None:
+        return None
+    try:
+        limit = int(raw)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=400, detail=f"limit must be an integer, got {raw!r}"
+        ) from exc
+    if not 1 <= limit <= 200:
+        raise HTTPException(
+            status_code=400, detail=f"limit must be in [1, 200]; got {limit}"
+        )
+    return limit
+
+
+def _parse_message_before(request: Request, *, require_limit: bool) -> int | None:
+    """`before` query param for the messages replay: a message-id cursor.
+
+    The wire value is the decimal string this endpoint's responses mint
+    (`next_before` — the oldest id of the previous window); clients
+    MUST NOT construct cursor values themselves, so anything that is
+    not a decimal string of a positive integer is a 400. `before`
+    without `limit` is also a 400 — the two params go together, and
+    silently ignoring the cursor would page the client's request
+    wrong.
+    """
+    raw = request.query_params.get("before")
+    if raw is None:
+        return None
+    if require_limit:
+        raise HTTPException(
+            status_code=400, detail="before requires limit"
+        )
+    try:
+        value = int(raw) if raw.isascii() and raw.isdigit() else 0
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=400, detail="invalid before cursor"
+        ) from exc
+    if not 1 <= value <= 2**63 - 1:
+        raise HTTPException(
+            status_code=400, detail="invalid before cursor"
+        )
+    return value
 
 
 # ---------------------------------------------------------------------------

@@ -78,7 +78,11 @@ flowchart TB
   paused mutating-call confirmation (see the `confirm_request` frame). Owner-scoped via
   `X-Nyx-User-Id`.
 - `GET|POST|DELETE /agent/sessions*` — history sidebar API (list / replay / create / resume /
-  delete), owner-scoped via `X-Nyx-User-Id`.
+  delete), owner-scoped via `X-Nyx-User-Id`. The replay
+  (`GET /agent/sessions/{id}/messages`) accepts optional `limit` (1–200) and `before` (the
+  previous response's `next_before` cursor); without params it returns the full history with
+  the original `{messages}` shape, with them it returns the newest window plus `has_more` /
+  `next_before`.
 - `GET /agent/runs/{run_id}/stream` — re-attach to a live run: `note{reattached}`, then either the
   frames the client missed (when it presents `Last-Event-ID`) or the persisted step events, then the
   live frames (owner-scoped via `X-Nyx-User-Id`; 409 `run_not_live` for a terminal/unknown run, 501

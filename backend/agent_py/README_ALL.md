@@ -264,7 +264,11 @@ Coupled surfaces sharing the same DB and lifecycle (see
 - **Session API** — `GET/POST/DELETE /agent/sessions*` serves the SPA's
   history sidebar (list, replay, create, resume, soft-delete),
   owner-scoped via `X-Nyx-User-Id`. An echoed `run_id` on
-  `/agent/run` continues the matching live session.
+  `/agent/run` continues the matching live session. The replay
+  (`GET /agent/sessions/{id}/messages`) is optionally paged: `limit`
+  (1–200) + the `before` cursor from the prior `next_before` returns
+  the newest window with `has_more` / `next_before`; no params keeps
+  the full-history `{messages}` contract.
 - **Session titles** — the session's first exchange titles it: the
   session-init block derives a deterministic label from the first user
   message (whitespace collapsed, 48 characters max, CJK-safe) and writes

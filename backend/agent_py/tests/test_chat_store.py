@@ -462,3 +462,118 @@ async def test_touch_session_refreshes_last_active(
     after = await store.get_session(run_id, user_id)
     assert after is not None
     assert after.last_active_at > initial_active
+
+
+async def _seed_messages(store, sid: str, user_id: int, count: int) -> list[int]:
+    ids = []
+    for i in range(count):
+        role = "user" if i % 2 == 0 else "assistant"
+        ids.append(
+            await store.record_message(
+                sid, user_id, role=role, content=f"msg-{i}"
+            )
+        )
+    return ids
+
+
+async def test_list_messages_page_newest_window_and_cursor_chain(
+    pool: asyncpg.Pool,
+) -> None:
+    from agent.chat_store import ChatStore
+
+    store = ChatStore(pool)
+    sid = str(_uuid.uuid4())
+    await store.create_session(1, sid)
+    ids = await _seed_messages(store, sid, 1, 7)
+
+    window, has_more, next_before = await store.list_messages_page(
+        sid, 1, limit=3
+    )
+    assert [m.id for m in window] == ids[-3:]
+    assert [m.content for m in window] == ["msg-4", "msg-5", "msg-6"]
+    assert has_more is True
+    assert next_before == str(ids[4])
+
+    window2, has_more2, next_before2 = await store.list_messages_page(
+        sid, 1, limit=3, before=int(next_before)
+    )
+    assert [m.id for m in window2] == ids[1:4]
+    assert has_more2 is True
+    assert next_before2 == str(ids[1])
+
+    window3, has_more3, next_before3 = await store.list_messages_page(
+        sid, 1, limit=3, before=int(next_before2)
+    )
+    assert [m.id for m in window3] == ids[:1]
+    assert has_more3 is False
+    assert next_before3 is None
+
+
+async def test_list_messages_page_matches_full_replay_order(
+    pool: asyncpg.Pool,
+) -> None:
+    from agent.chat_store import ChatStore
+
+    store = ChatStore(pool)
+    sid = str(_uuid.uuid4())
+    await store.create_session(1, sid)
+    await _seed_messages(store, sid, 1, 5)
+
+    full = await store.list_messages(sid, 1)
+    window, has_more, _ = await store.list_messages_page(sid, 1, limit=2)
+    assert has_more is True
+    assert [m.id for m in window] == [m.id for m in full][-2:]
+
+
+async def test_list_messages_page_empty_window_below_first(
+    pool: asyncpg.Pool,
+) -> None:
+    from agent.chat_store import ChatStore
+
+    store = ChatStore(pool)
+    sid = str(_uuid.uuid4())
+    await store.create_session(1, sid)
+    await _seed_messages(store, sid, 1, 2)
+    first_id = (await store.list_messages(sid, 1))[0].id
+
+    window, has_more, next_before = await store.list_messages_page(
+        sid, 1, limit=3, before=first_id
+    )
+    assert window == []
+    assert has_more is False
+    assert next_before is None
+
+
+async def test_list_messages_page_owner_scoping_404_parity(
+    pool: asyncpg.Pool,
+) -> None:
+    from agent.chat_store import ChatStore
+
+    store = ChatStore(pool)
+    sid = str(_uuid.uuid4())
+    await store.create_session(1, sid)
+    await _seed_messages(store, sid, 1, 2)
+
+    assert await store.list_messages_page(sid, 2, limit=3) is None
+
+    await store.soft_delete_session(sid, 1)
+    assert await store.list_messages_page(sid, 1, limit=3) is None
+    assert await store.list_messages_page(sid, 1, limit=3, before=1) is None
+
+
+async def test_list_messages_page_first_page_has_no_upper_bound(
+    pool: asyncpg.Pool,
+) -> None:
+    from agent.chat_store import ChatStore
+
+    store = ChatStore(pool)
+    sid = str(_uuid.uuid4())
+    await store.create_session(1, sid)
+    ids = await _seed_messages(store, sid, 1, 4)
+
+    window, has_more, next_before = await store.list_messages_page(
+        sid, 1, limit=4
+    )
+    assert [m.id for m in window] == ids
+    assert has_more is False
+    assert next_before is None

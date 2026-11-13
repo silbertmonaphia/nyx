@@ -13,6 +13,10 @@ the `agent.*` schema) for user-facing chat history:
   - `list_messages(session_id, user_id)` — chronological replay of one
     session's messages; `None` when the session is unknown / foreign /
     soft-deleted (the API maps that to 404)
+  - `list_messages_page(session_id, user_id, limit, before)` — one
+    bounded window of the replay, keyset-paginated on the message id
+    (`openspec/changes/agent-chat-history-perf`); same `None` contract,
+    returns `(rows, has_more, next_before)`
   - `record_message(session_id, user_id, role, content, tool_calls, steps,
     tokens, prompt_tokens, completion_tokens)` — append one row to
     `chat_messages` and bump `last_active_at` on the parent session
@@ -368,6 +372,74 @@ class ChatStore:
                 return [_row_to_message(r) for r in rows]
 
         return await self._with_retry("list_messages", _select)
+
+    async def list_messages_page(
+        self,
+        session_id: str | uuid_lib.UUID,
+        user_id: int,
+        *,
+        limit: int,
+        before: int | None = None,
+    ) -> tuple[list[MessageRow], bool, str | None] | None:
+        """One bounded window of a session's messages, newest-first keyed.
+
+        Returns `None` under the same contract as `list_messages` —
+        unknown id, wrong user, or soft-deleted (the API maps all three
+        to 404). An existing session returns
+        `(rows, has_more, next_before)` where `rows` is the window in
+        chronological order (oldest first, same as the full replay),
+        `has_more` says whether at least one older message exists
+        beyond the window, and `next_before` encodes the OLDEST
+        INCLUDED row's id as a decimal string (the wire cursor; `None`
+        when `has_more` is false).
+
+        Keyset on the primary key: `chat_messages.id` is an IDENTITY
+        bigint assigned in insertion order and never rewritten, so
+        `id` order equals the replay's `(created_at, id)` order — a
+        plain index-only keyset with no sort and no tuple cursor
+        (design.md D1 in openspec/changes/agent-chat-history-perf).
+        `before` is the decoded cursor: the window is strictly below
+        that id, so following `next_before` yields the page immediately
+        older than the previous one. A cursor below the session's
+        first message yields an empty window with `has_more=False`.
+
+        Fetches `limit + 1` rows: a full extra row proves an older
+        message exists, so `has_more` costs no `count(*)` (same
+        pattern as `list_sessions`). The ownership probe + transaction
+        wrap mirror `list_messages` — a concurrent retention purge
+        cannot slip between the probe and the read.
+        """
+        page_sql = (
+            "SELECT id, session_id, role, content, "
+            "tool_calls::text AS tool_calls, "
+            "steps::text AS steps, "
+            "tokens, prompt_tokens, completion_tokens, "
+            "created_at FROM chat_messages "
+            "WHERE session_id=$1 AND ($2::bigint IS NULL OR id < $2::bigint) "
+            "ORDER BY id DESC "
+            "LIMIT $3"
+        )
+
+        async def _select(
+            conn: asyncpg.Connection,
+        ) -> tuple[list[MessageRow], bool, str | None] | None:
+            async with conn.transaction():
+                exists = await conn.fetchval(
+                    "SELECT 1 FROM chat_sessions "
+                    "WHERE id=$1 AND user_id=$2 AND deleted_at IS NULL",
+                    str(session_id),
+                    user_id,
+                )
+                if exists is None:
+                    return None
+                rows = await conn.fetch(page_sql, str(session_id), before, limit + 1)
+            has_more = len(rows) > limit
+            page = rows[:limit]
+            window = [_row_to_message(r) for r in reversed(page)]
+            next_before = str(page[-1]["id"]) if has_more and page else None
+            return window, has_more, next_before
+
+        return await self._with_retry("list_messages_page", _select)
 
     async def record_message(
         self,
