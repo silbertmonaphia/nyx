@@ -97,6 +97,7 @@ function mockHook(overrides: HookOverrides = {}) {
   const remove: MutationMock =
     overrides.remove ??
     { mutateAsync: vi.fn().mockResolvedValue(undefined), isPending: false };
+  const clearProbeResults = vi.fn();
   mockedUseLlmConfig.mockReturnValue({
     userId: overrides.userId !== undefined ? overrides.userId : 1,
     status,
@@ -106,8 +107,9 @@ function mockHook(overrides: HookOverrides = {}) {
     refetch: vi.fn(),
     save,
     remove,
+    clearProbeResults,
   });
-  return { save, remove };
+  return { save, remove, clearProbeResults };
 }
 
 const input = (id: string) =>
@@ -747,5 +749,57 @@ describe('LlmConfigModal slot probe', () => {
     expect(curl).toContain('Authorization: Bearer <your API key>');
     expect(curl).not.toContain('••••abcd');
     expect(screen.getByTestId('llm-probe-chat-copy')).toHaveTextContent('Copied');
+  });
+});
+
+describe('LlmConfigModal probe result lifecycle', () => {
+  beforeEach(() => {
+    mockedUseLlmConfig.mockReset();
+    mockSlotProbes();
+    useUiStore.setState({ toasts: [] });
+    useAuthStore.setState({ user: makeUser(1), isAuthenticated: true });
+    document.body.innerHTML = '';
+  });
+
+  afterEach(() => {
+    useAuthStore.setState({ user: null, isAuthenticated: false });
+  });
+
+  const statusLabels: Record<string, RegExp> = {
+    ok: /Connected/,
+    auth_failed: /Authentication failed/,
+    rate_limited: /Rate limited/,
+    invalid_model: /Model not found/,
+    invalid_config: /Incomplete configuration/,
+    width_mismatch: /Width mismatch/,
+    unreachable: /Unreachable/,
+    timeout: /Timed out/,
+  };
+
+  for (const [status, label] of Object.entries(statusLabels)) {
+    it(`renders the ${status} status class`, async () => {
+      mockHook({ status: unconfigured });
+      mockSlotProbes({ chat: { result: { probed: true, status } } });
+      renderModal();
+      const el = screen.getByTestId('llm-probe-chat-status');
+      expect(el).toHaveTextContent(label);
+      const destructive = el.className.includes('destructive');
+      if (status === 'ok') expect(destructive).toBe(false);
+      if (status === 'rate_limited' || status === 'unreachable' || status === 'timeout') {
+        expect(el.className).toContain('amber');
+      } else if (status !== 'ok') {
+        expect(destructive).toBe(true);
+      }
+    });
+  }
+
+  it('clears probe results when the modal closes', async () => {
+    const { clearProbeResults } = mockHook({ status: unconfigured });
+    const { rerender } = render(<LlmConfigModal open onOpenChange={vi.fn()} />);
+    expect(clearProbeResults).not.toHaveBeenCalled();
+    rerender(<LlmConfigModal open={false} onOpenChange={vi.fn()} />);
+    await vi.waitFor(() => {
+      expect(clearProbeResults).toHaveBeenCalled();
+    });
   });
 });

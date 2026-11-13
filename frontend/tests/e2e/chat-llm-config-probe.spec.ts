@@ -100,6 +100,7 @@ test.describe('BYOK connectivity probe (browser-level)', () => {
     if (PRIVATE_DENIED) {
       expect(await status.textContent()).toContain('Unreachable');
       await expect(page.getByTestId('llm-probe-embedding-request')).toHaveCount(0);
+      expect(stub.requests).toHaveLength(0);
     } else {
       expect(await status.textContent()).toContain('Authentication failed');
       expect(await status.textContent()).toContain('401');
@@ -108,7 +109,25 @@ test.describe('BYOK connectivity probe (browser-level)', () => {
       await expect(disclosure).toContainText('Bearer ••••');
       await expect(disclosure).not.toContainText(WRONG_KEY);
       await expect(disclosure).not.toContainText(RIGHT_KEY);
+      expect(stub.requests).toHaveLength(1);
+      expect(stub.requests[0].auth).toBe(`Bearer ${WRONG_KEY}`);
+      const body = JSON.parse(stub.requests[0].bodies[0]) as {
+        model?: string;
+        input?: string[];
+      };
+      expect(body.model).toBe('e2e-probe-model');
+      expect(body.input).toHaveLength(1);
     }
+
+    await page.getByTestId('llm-probe-chat-button').click();
+    await expect(page.getByTestId('llm-probe-chat-status')).toContainText(
+      'Empty section',
+      { timeout: 15_000 },
+    );
+    expect(
+      stub.requests.length,
+      'probing an empty section must not dial any upstream',
+    ).toBe(PRIVATE_DENIED ? 0 : 1);
 
     expect(putRequests).toHaveLength(0);
     await page.keyboard.press('Escape');
@@ -140,9 +159,12 @@ test.describe('BYOK connectivity probe (browser-level)', () => {
 
     if (PRIVATE_DENIED) {
       expect(await status.textContent()).toContain('Unreachable');
+      expect(stub.requests).toHaveLength(0);
     } else {
       expect(await status.textContent()).toContain('Connected');
       expect(await status.textContent()).toContain('1024 dims');
+      expect(stub.requests).toHaveLength(1);
+      expect(stub.requests[0].auth).toBe(`Bearer ${RIGHT_KEY}`);
     }
     await stub.close();
   });

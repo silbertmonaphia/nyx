@@ -12,6 +12,8 @@ import (
 
 var ErrPrivateAddress = errors.New("private/restricted address")
 
+var ErrHostUnresolvable = errors.New("host unresolvable")
+
 var ResolveHost = func(host string) ([]net.IP, error) {
 	if ip := net.ParseIP(host); ip != nil {
 		return []net.IP{ip}, nil
@@ -45,10 +47,10 @@ func CheckHost(host, label string) error {
 	}
 	addrs, err := ResolveHost(host)
 	if err != nil {
-		return fmt.Errorf("%s DNS lookup failed for %q: %w", label, host, err)
+		return fmt.Errorf("%s DNS lookup failed for %q: %w", label, host, errors.Join(ErrHostUnresolvable, err))
 	}
 	if len(addrs) == 0 {
-		return fmt.Errorf("%s DNS lookup returned no addresses for %q", label, host)
+		return fmt.Errorf("%s DNS lookup returned no addresses for %q: %w", label, host, ErrHostUnresolvable)
 	}
 	for _, ip := range addrs {
 		if refused, reason := IPClassRefused(ip); refused {

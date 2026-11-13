@@ -59,6 +59,7 @@ describe('App', () => {
       refetch: vi.fn(),
       save: { mutateAsync: vi.fn(), isPending: false },
       remove: { mutateAsync: vi.fn(), isPending: false },
+      clearProbeResults: vi.fn(),
     });
     // SECURITY.md L7: useAuthReconciliation reads
     // `useAuthStore.getState().user` on mount, so the mock must

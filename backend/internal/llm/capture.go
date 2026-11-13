@@ -16,10 +16,11 @@ type CapturedRequest struct {
 }
 
 type RequestCapture struct {
-	mu    sync.Mutex
-	inner http.RoundTripper
-	doer  Doer
-	got   *CapturedRequest
+	mu     sync.Mutex
+	inner  http.RoundTripper
+	doer   Doer
+	got    *CapturedRequest
+	status int
 }
 
 type Doer interface {
@@ -41,15 +42,37 @@ func (c *RequestCapture) WrapDoer(inner Doer) Doer {
 
 func (c *RequestCapture) RoundTrip(req *http.Request) (*http.Response, error) {
 	c.record(req)
-	return c.inner.RoundTrip(req)
+	resp, err := c.inner.RoundTrip(req)
+	c.recordStatus(resp)
+	return resp, err
 }
 
 func (c *RequestCapture) Do(req *http.Request) (*http.Response, error) {
 	c.record(req)
+	var resp *http.Response
+	var err error
 	if c.doer != nil {
-		return c.doer.Do(req)
+		resp, err = c.doer.Do(req)
+	} else {
+		resp, err = http.DefaultClient.Do(req)
 	}
-	return http.DefaultClient.Do(req)
+	c.recordStatus(resp)
+	return resp, err
+}
+
+func (c *RequestCapture) recordStatus(resp *http.Response) {
+	if resp == nil {
+		return
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.status = resp.StatusCode
+}
+
+func (c *RequestCapture) LastStatus() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.status
 }
 
 func (c *RequestCapture) record(req *http.Request) {
@@ -95,11 +118,10 @@ func MaskCredential(key string, vals []string) string {
 	for _, scheme := range []string{"Bearer ", "bearer ", "Basic ", "basic "} {
 		if len(v) > len(scheme) && v[:len(scheme)] == scheme {
 			rest := v[len(scheme):]
-			tail := rest
-			if len(rest) > 4 {
-				tail = rest[len(rest)-4:]
+			if len(rest) <= 4 {
+				return scheme[:len(scheme)-1] + " ••••"
 			}
-			return scheme[:len(scheme)-1] + " ••••" + tail
+			return scheme[:len(scheme)-1] + " ••••" + rest[len(rest)-4:]
 		}
 	}
 	return "••••"

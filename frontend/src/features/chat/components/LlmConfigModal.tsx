@@ -480,7 +480,9 @@ export const LlmConfigModal = ({
 }: LlmConfigModalProps) => {
   const { t } = useTranslation();
   const addToast = useUiStore((state) => state.addToast);
-  const { userId, status, save, remove } = useLlmConfig({ enabled: open });
+  const { userId, status, save, remove, clearProbeResults } = useLlmConfig({
+    enabled: open,
+  });
   const configured = status?.configured === true;
   const schema = useMemo(() => buildLlmConfigSchema(!configured), [configured]);
   const {
@@ -519,6 +521,7 @@ export const LlmConfigModal = ({
         setEmbeddingOverride(null);
         setTavilyOverride(null);
         setConfirmClearOpen(false);
+        clearProbeResults();
         reset(toFormValues(null));
         return;
       }
@@ -531,7 +534,11 @@ export const LlmConfigModal = ({
       sameFormValues(current, toFormValues(null));
     if (!untouched) return;
     reset(fromStatus);
-  }, [open, status, userId, reset, getValues]);
+  }, [open, status, userId, reset, getValues, clearProbeResults]);
+
+  useEffect(() => {
+    if (!open) clearProbeResults();
+  }, [open, clearProbeResults]);
 
   const keyPlaceholder = (
     section: { api_key_masked: string } | null | undefined,

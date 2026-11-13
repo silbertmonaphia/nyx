@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"time"
 
 	"github.com/rs/zerolog/log"
@@ -30,8 +31,8 @@ const (
 	ProbeUnreachable   = "unreachable"
 	ProbeTimeout       = "timeout"
 
-	probeQueryText  = "nyx connectivity probe"
-	defaultProbeTTL = 10 * time.Second
+	probeQueryText            = "nyx connectivity probe"
+	defaultConfigProbeTimeout = 10 * time.Second
 )
 
 type SlotProbeResult struct {
@@ -147,6 +148,11 @@ func (r *Resolver) probeOpenAISlot(ctx context.Context, tracer trace.Tracer, p o
 		res.Probed = false
 		return finish()
 	}
+	if err := validateProbeURL(p.baseURL); err != nil {
+		res.Status = ProbeInvalidConfig
+		res.Detail = "base URL must be http(s) without embedded credentials"
+		return finish()
+	}
 	if p.model == "" {
 		res.Status = ProbeInvalidConfig
 		res.Detail = "model is required for this slot"
@@ -163,14 +169,14 @@ func (r *Resolver) probeOpenAISlot(ctx context.Context, tracer trace.Tracer, p o
 	}
 
 	capture := &llm.RequestCapture{}
+	probeCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
 	client, err := openai.NewClientWithCapture(r.clientConfig(p.baseURL, apiKey, p.model), r.tp.Tracer("nyx.llmsettings.validate"), capture)
 	if err != nil {
 		res.Status = classifyConstructErr(err)
 		return finish()
 	}
 
-	probeCtx, cancel := context.WithTimeout(ctx, timeout)
-	defer cancel()
 	var probeErr error
 	if p.embed {
 		probeErr = r.runEmbedProbe(probeCtx, client, p.model, res)
@@ -178,7 +184,11 @@ func (r *Resolver) probeOpenAISlot(ctx context.Context, tracer trace.Tracer, p o
 		probeErr = r.runChatProbe(probeCtx, client, res)
 	}
 	res.Status = classifyProbeErr(probeErr)
-	res.HTTPStatus, _ = llm.UpstreamStatusOf(probeErr)
+	if st, ok := llm.UpstreamStatusOf(probeErr); ok {
+		res.HTTPStatus = st
+	} else if last := capture.LastStatus(); last > 0 {
+		res.HTTPStatus = last
+	}
 	res.Request = capture.Captured()
 	span.RecordError(probeErr)
 	return finish()
@@ -226,6 +236,11 @@ func (r *Resolver) probeTavilySlot(ctx context.Context, tracer trace.Tracer, bas
 		res.Probed = false
 		return finish()
 	}
+	if err := validateProbeURL(baseURL); err != nil {
+		res.Status = ProbeInvalidConfig
+		res.Detail = "base URL must be http(s) without embedded credentials"
+		return finish()
+	}
 
 	payload, _ := json.Marshal(map[string]any{"query": probeQueryText, "max_results": 1})
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, baseURL, bytes.NewReader(payload))
@@ -266,6 +281,8 @@ func (r *Resolver) probeTavilySlot(ctx context.Context, tracer trace.Tracer, bas
 		res.Status = ProbeAuthFailed
 	case resp.StatusCode == http.StatusTooManyRequests:
 		res.Status = ProbeRateLimited
+	case resp.StatusCode == http.StatusBadRequest || resp.StatusCode == http.StatusNotFound:
+		res.Status = ProbeInvalidConfig
 	default:
 		res.Status = ProbeUnreachable
 	}
@@ -273,10 +290,29 @@ func (r *Resolver) probeTavilySlot(ctx context.Context, tracer trace.Tracer, bas
 }
 
 func classifyConstructErr(err error) string {
-	if errors.Is(err, ssrf.ErrPrivateAddress) {
+	if errors.Is(err, ssrf.ErrPrivateAddress) || errors.Is(err, ssrf.ErrHostUnresolvable) {
 		return ProbeUnreachable
 	}
 	return ProbeInvalidConfig
+}
+
+func validateProbeURL(raw string) error {
+	u, err := url.Parse(raw)
+	if err != nil {
+		return err
+	}
+	switch u.Scheme {
+	case "http", "https":
+	default:
+		return errors.New("scheme must be http or https")
+	}
+	if u.Hostname() == "" {
+		return errors.New("host is empty")
+	}
+	if u.User != nil {
+		return errors.New("userinfo is not allowed")
+	}
+	return nil
 }
 
 func classifyProbeErr(err error) string {
@@ -325,7 +361,7 @@ func classifyTransportErr(err error) string {
 func (r *Resolver) configProbeTimeout() time.Duration {
 	d, err := time.ParseDuration(r.base.LLMConfigProbeTimeout)
 	if err != nil || d <= 0 {
-		return defaultProbeTTL
+		return defaultConfigProbeTimeout
 	}
 	return d
 }

@@ -4,7 +4,9 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -21,6 +23,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"go.opentelemetry.io/otel/trace/noop"
 
+	"nyx/internal/llm/ssrf"
 	"nyx/internal/middleware"
 	platapi "nyx/internal/platform/api"
 	"nyx/internal/platform/auth"
@@ -79,13 +82,16 @@ func TestValidate_OKAcrossSlots(t *testing.T) {
 	require.NotNil(t, res.Slots.Fallback)
 	assert.False(t, res.Slots.Fallback.Probed)
 	assert.Equal(t, ProbeOK, res.Slots.Chat.Status)
+	assert.Equal(t, http.StatusOK, res.Slots.Chat.HTTPStatus)
 	assert.Equal(t, ProbeOK, res.Slots.Embedding.Status)
+	assert.Equal(t, http.StatusOK, res.Slots.Embedding.HTTPStatus)
 	assert.Equal(t, "1024 dims", res.Slots.Embedding.Detail)
 	assert.Equal(t, ProbeOK, res.Slots.Tavily.Status)
 	assert.GreaterOrEqual(t, chatHits.Load(), int64(1))
 	require.NotNil(t, res.Slots.Chat.Request)
 	assert.Equal(t, "POST", res.Slots.Chat.Request.Method)
-	assert.True(t, strings.HasSuffix(res.Slots.Chat.Request.URL, "/chat/completions"))
+	assert.Equal(t, chatSrv.URL+"/v1/chat/completions", res.Slots.Chat.Request.URL)
+	assert.Contains(t, string(res.Slots.Chat.Request.Body), `"model":"m"`)
 	require.NotNil(t, tavilyGot.load())
 	assert.Equal(t, 1, tavilyGot.load().maxResults)
 	assert.Equal(t, probeQueryText, tavilyGot.load().query)
@@ -138,6 +144,7 @@ func TestValidate_WidthMismatch(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, res.Slots.Embedding)
 	assert.Equal(t, ProbeWidthMismatch, res.Slots.Embedding.Status)
+	assert.Equal(t, http.StatusOK, res.Slots.Embedding.HTTPStatus)
 	assert.Contains(t, res.Slots.Embedding.Detail, "expected 1024 dims, got 3")
 }
 
@@ -301,6 +308,8 @@ func TestValidate_TavilyStatusMapping(t *testing.T) {
 	}{
 		{"unauthorized", http.StatusUnauthorized, ProbeAuthFailed},
 		{"rate limited", http.StatusTooManyRequests, ProbeRateLimited},
+		{"bad request", http.StatusBadRequest, ProbeInvalidConfig},
+		{"not found", http.StatusNotFound, ProbeInvalidConfig},
 		{"server error", http.StatusInternalServerError, ProbeUnreachable},
 	}
 	for _, tc := range cases {
@@ -471,7 +480,17 @@ func TestHandler_ValidateProbesSingleSlotOverTheWire(t *testing.T) {
 
 func TestHandler_ValidateRateLimited(t *testing.T) {
 	stubPublicResolve(t)
-	srv, _ := newEmbedServer(t, make([]float32, 1024))
+	var upstreamHits atomic.Int64
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		upstreamHits.Add(1)
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"object": "list",
+			"data":   []map[string]any{{"object": "embedding", "index": 0, "embedding": make([]float32, 1024)}},
+			"model":  "e",
+		})
+	}))
+	t.Cleanup(srv.Close)
 	calls := 0
 	router, tokens := setupValidateRouter(t, func(int) bool { calls++; return calls == 1 })
 	tok := mustToken(t, tokens, 5)
@@ -481,8 +500,11 @@ func TestHandler_ValidateRateLimited(t *testing.T) {
 	}
 	first := validateRequest(t, router, tok, body)
 	assert.Equal(t, http.StatusOK, first.Code, first.Body.String())
+	hitsAfterFirst := upstreamHits.Load()
+	assert.GreaterOrEqual(t, hitsAfterFirst, int64(1))
 	second := validateRequest(t, router, tok, body)
 	assert.Equal(t, http.StatusTooManyRequests, second.Code, second.Body.String())
+	assert.Equal(t, hitsAfterFirst, upstreamHits.Load(), "a limited call must not dial upstream")
 }
 
 func TestHandler_ValidateUnauthenticated(t *testing.T) {
@@ -534,4 +556,67 @@ func TestValidate_LoopbackRefusedWhenPrivateDenied(t *testing.T) {
 	require.NotNil(t, res.Slots.Embedding)
 	assert.Equal(t, ProbeUnreachable, res.Slots.Embedding.Status)
 	assert.Nil(t, res.Slots.Embedding.Request, "an SSRF-refused probe never left the server")
+}
+
+func TestValidate_DNSFailureIsUnreachable(t *testing.T) {
+	svc, _, _ := newTestService(t)
+	orig := ssrf.ResolveHost
+	ssrf.ResolveHost = func(string) ([]net.IP, error) { return nil, errors.New("no such host") }
+	t.Cleanup(func() { ssrf.ResolveHost = orig })
+	base := &config.Config{LLMConfigProbeTimeout: "2s", EmbeddingDimensions: 1024, BYOKAllowPrivateURL: false}
+	r := NewResolver(svc, base, noop.NewTracerProvider())
+
+	res, err := r.Validate(context.Background(), 5, ValidateInput{Values: UpdateInput{
+		EmbeddingBaseURL: "http://unresolvable.example/v1",
+		EmbeddingAPIKey:  plantedKey,
+		EmbeddingModel:   "e",
+	}})
+	require.NoError(t, err)
+	require.NotNil(t, res.Slots.Embedding)
+	assert.Equal(t, ProbeUnreachable, res.Slots.Embedding.Status)
+}
+
+func TestValidate_PopulatedFallbackSlotProbes(t *testing.T) {
+	r, _ := newValidateFixture(t)
+	var hits atomic.Int64
+	fallbackSrv := newChatServer(t, "pong", &hits)
+	res, err := r.Validate(context.Background(), 5, ValidateInput{Values: UpdateInput{
+		FallbackBaseURL: fallbackSrv.URL + "/v1",
+		FallbackAPIKey:  plantedKey,
+		FallbackModel:   "fm",
+	}, Slots: []string{"fallback"}})
+	require.NoError(t, err)
+	require.NotNil(t, res.Slots.Fallback)
+	assert.True(t, res.Slots.Fallback.Probed)
+	assert.Equal(t, ProbeOK, res.Slots.Fallback.Status)
+	assert.Equal(t, http.StatusOK, res.Slots.Fallback.HTTPStatus)
+	assert.GreaterOrEqual(t, hits.Load(), int64(1))
+}
+
+func TestValidate_UserinfoBaseURLIsInvalidConfig(t *testing.T) {
+	r, _ := newValidateFixture(t)
+	res, err := r.Validate(context.Background(), 5, ValidateInput{Values: UpdateInput{
+		EmbeddingBaseURL: "https://key:secret@embed.example.test/v1",
+		EmbeddingAPIKey:  plantedKey,
+		EmbeddingModel:   "e",
+	}})
+	require.NoError(t, err)
+	require.NotNil(t, res.Slots.Embedding)
+	assert.Equal(t, ProbeInvalidConfig, res.Slots.Embedding.Status)
+	assert.Nil(t, res.Slots.Embedding.Request, "a rejected URL must never be dialed or echoed")
+	wire, merr := json.Marshal(res)
+	require.NoError(t, merr)
+	assert.NotContains(t, string(wire), "key:secret")
+}
+
+func TestValidate_TavilyUserinfoRejected(t *testing.T) {
+	r, _ := newValidateFixture(t)
+	res, err := r.Validate(context.Background(), 5, ValidateInput{Values: UpdateInput{
+		TavilyBaseURL: "https://k:s@api.tavily.test/search",
+		TavilyAPIKey:  "tvly-x",
+	}})
+	require.NoError(t, err)
+	require.NotNil(t, res.Slots.Tavily)
+	assert.Equal(t, ProbeInvalidConfig, res.Slots.Tavily.Status)
+	assert.Nil(t, res.Slots.Tavily.Request)
 }

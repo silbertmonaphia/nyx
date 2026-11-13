@@ -216,6 +216,7 @@ const capturedFromGoHandler = {
     chat: {
       probed: true,
       status: 'ok',
+      http_status: 200,
       request: {
         method: 'POST',
         url: 'https://upstream.example/v1/chat/completions',
@@ -266,6 +267,7 @@ describe('llmConfigService.validate', () => {
     );
     expect(out.slots.chat?.probed).toBe(true);
     expect(out.slots.chat?.status).toBe('ok');
+    expect(out.slots.chat?.http_status).toBe(200);
     expect(out.slots.chat?.request?.method).toBe('POST');
     expect(out.slots.chat?.request?.headers.Authorization).toBe('Bearer ••••9876');
     expect(out.slots.chat?.request?.body).toMatchObject({ model: 'm', stream: true });
@@ -275,11 +277,40 @@ describe('llmConfigService.validate', () => {
     expect(out.slots.tavily).toBeNull();
   });
 
+  it('renders a width mismatch that still carries its upstream 200', async () => {
+    const widthMismatch = {
+      slots: {
+        chat: null,
+        embedding: {
+          probed: true,
+          status: 'width_mismatch',
+          http_status: 200,
+          detail: 'expected 1024 dims, got 3',
+          request: {
+            method: 'POST',
+            url: 'https://upstream.example/v1/embeddings',
+            headers: { Authorization: 'Bearer ••••9876' },
+            body: { model: 'e', input: ['nyx connectivity probe'] },
+          },
+        },
+        fallback: null,
+        tavily: null,
+      },
+    };
+    mockedPost.mockResolvedValueOnce({ data: widthMismatch });
+    const out = await llmConfigService.validate({ slots: ['embedding'] });
+    expect(out.slots.embedding?.status).toBe('width_mismatch');
+    expect(out.slots.embedding?.http_status).toBe(200);
+    expect(out.slots.embedding?.detail).toContain('expected 1024 dims');
+  });
+
   it('never lets a plaintext key through the parsed result', async () => {
-    mockedPost.mockResolvedValueOnce({
-      data: JSON.parse(JSON.stringify(capturedFromGoHandler)),
-    });
+    const withSecret = JSON.parse(JSON.stringify(capturedFromGoHandler));
+    withSecret.slots.chat.request.headers.Authorization = 'Bearer ••••9876';
+    mockedPost.mockResolvedValueOnce({ data: withSecret });
     const out = await llmConfigService.validate({});
-    expect(JSON.stringify(out)).not.toContain('sk-validate-planted-key-9876');
+    const wire = JSON.stringify(out);
+    expect(wire).toContain('••••9876');
+    expect(wire).not.toMatch(/sk-[a-z0-9-]{8,}/i);
   });
 });

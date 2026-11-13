@@ -118,6 +118,7 @@ function mockHook(overrides: HookOverrides = {}) {
     refetch: vi.fn(),
     save,
     remove,
+    clearProbeResults: vi.fn(),
   });
 }
 

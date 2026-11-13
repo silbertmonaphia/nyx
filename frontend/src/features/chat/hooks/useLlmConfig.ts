@@ -1,3 +1,4 @@
+import { useCallback } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { llmConfigService } from "../services/llmConfigService";
 import { useAuthStore } from "~/store/authStore";
@@ -61,6 +62,12 @@ export function useLlmConfig(options: UseLlmConfigOptions = {}) {
     },
   });
 
+  const clearProbeResults = useCallback(() => {
+    queryClient.removeQueries({
+      queryKey: [LLM_CONFIG_QUERY_KEY, "validate"],
+    });
+  }, [queryClient]);
+
   return {
     userId,
     status: statusQuery.data ?? null,
@@ -72,6 +79,7 @@ export function useLlmConfig(options: UseLlmConfigOptions = {}) {
     refetch: statusQuery.refetch,
     save,
     remove,
+    clearProbeResults,
   };
 }
 
@@ -83,6 +91,7 @@ export function useLlmSlotProbe(slot: LlmSlotName) {
     mutationFn: (values: LlmConfigValidateInput) =>
       llmConfigService.validate({ ...values, slots: [slot] }),
     onSuccess: (data) => {
+      if (!sameIdentity(userId)) return;
       queryClient.setQueryData(queryKey, data.slots[slot] ?? null);
     },
   });

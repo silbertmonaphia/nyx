@@ -84,7 +84,7 @@ func mountLLMSettingsOps(humaAPI huma.API, cfg *config.Config, db *pgxpool.Pool,
 	llmsettings.RegisterLLMConfigOps(humaAPI, handler, tokens)
 	resolver := llmsettings.NewResolver(service, cfg, tracerProvider)
 	handler.SetValidator(resolver.ValidateValues)
-	validateLimiter := chat.NewUserRateLimiter(6.0/60.0, 2)
+	validateLimiter := chat.NewUserRateLimiter(6.0/60.0, 4)
 	handler.SetValidateLimiter(validateLimiter.Allow)
 	stopValidateGC := validateLimiter.RunGC(time.Minute, time.Hour)
 	return resolver, handler, stopValidateGC

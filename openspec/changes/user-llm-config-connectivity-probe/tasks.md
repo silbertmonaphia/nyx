@@ -7,7 +7,7 @@
 
 ## 2. Tavily probe client
 
-- [x] 2.1 Implement the minimal Tavily probe in `backend/internal/llmsettings/`: `POST {base}/search`, `Authorization: Bearer`, `X-Tavily-Access-Mode: keyless` when keyless, body `{"query": ..., "max_results": 1}`, through the same SSRF transport the resolver builds. Verify the request bytes match `backend/agent_py/agent/web_tools.py:350-371` in a wire-contract test.
+- [x] 2.1 Implement the minimal Tavily probe in `backend/internal/llmsettings/`: `POST {base_url}` verbatim (the stored URL carries `/search`), `Authorization: Bearer`, `X-Tavily-Access-Mode: keyless` when keyless, body `{"query": ..., "max_results": 1}`, through the same SSRF transport the resolver builds. Verify the request bytes match `backend/agent_py/agent/web_tools.py:350-371` in a wire-contract test.
 - [x] 2.2 Map Tavily outcomes into the shared status enum (2xx ok, 401/403 auth_failed, 429 rate_limited, network unreachable, timeout) — Tavily has no width/model semantics, so `invalid_model`/`width_mismatch` are unreachable for this slot.
 
 ## 3. Validate service + handler
