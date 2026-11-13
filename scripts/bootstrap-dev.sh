@@ -113,7 +113,7 @@ command -v openssl >/dev/null 2>&1 || die "openssl required for secret generatio
 command -v docker >/dev/null 2>&1 && docker compose version >/dev/null 2>&1 \
   || die "docker + compose plugin required (infra: db/redis/jaeger)"
 
-command -v go >/dev/null 2>&1 || die "go not on PATH — backend/go.mod pins go 1.26.10 (gvm install go1.26.10)"
+command -v go >/dev/null 2>&1 || die "go not on PATH — backend/go.mod pins go 1.26.11 (gvm install go1.26.11)"
 say "go: $(go version)"
 
 command -v python3 >/dev/null 2>&1 || die "python3 not on PATH — agent_py requires >= 3.12"
