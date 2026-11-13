@@ -26,10 +26,11 @@ Chat history feels slow and stale: clicking a session serializes a `resume` POST
 
 ## Impact
 
-- `backend/agent_py/agent/chat_store.py` — paged `list_messages` variant (keyset on `(id)`, `LIMIT n+1` has_more probe; existing `chat_messages_session_created_idx` index suffices — no migration).
+- `backend/agent_py/agent/chat_store.py` — paged `list_messages_page` (keyset on the message id, `LIMIT n+1` has_more probe).
 - `backend/agent_py/agent/api/chat_sessions.py` — parse/validate `limit`/`before`, emit `has_more`/`next_before`; cursor serialized as string to keep the bigint id exact across JS.
+- `backend/agent_py/migrations/versions/0009_chat_msg_session_idx.py` — `(session_id, id)` composite index so the keyset stays inside the session's slice.
 - `backend/internal/chat/sessions_proxy.go` — no code change expected (GET `RawQuery` is already forwarded verbatim); add a pinning test for the query-string passthrough.
-- `frontend/src/features/chat/services/chatService.ts` — `getMessages` gains paging opts; response coercion for `has_more`/`next_before`.
+- `frontend/src/features/chat/services/chatService.ts` — new `getMessagesPage` with paging opts; response coercion for `has_more`/`next_before`.
 - `frontend/src/features/chat/store/chatStore.ts` — `loadSessionInto` parallelization; `loadOlderMessages`; pagination-aware detached-run refresh; visibility-refresh wiring.
 - `frontend/src/features/chat/components/ChatPanel.tsx` / `ChatSidebar.tsx` — skeleton state, scroll-up sentinel, visibility listener.
-- Wire contract is additive (new optional query params + new response fields); no SSE frames, no stored-schema changes, no Go route changes. Rollout gates: none foreseen — everything is verifiable in dev/CI (pytest, vitest, agent-free Playwright on the side stack); no sibling rollout change is created.
+- Wire contract is additive (new optional query params + new response fields); no SSE frames, no Go route changes. One additive index migration (`0009_chat_msg_session_idx`) backs the session-scoped keyset. Rollout gates: none foreseen — everything is verifiable in dev/CI (pytest, vitest, agent-free Playwright on the side stack); no sibling rollout change is created.

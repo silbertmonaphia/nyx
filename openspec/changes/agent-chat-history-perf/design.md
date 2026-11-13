@@ -38,7 +38,7 @@ SELECT ... FROM agent.chat_messages
 WHERE session_id=$1 AND id < $2::bigint   -- $2 omitted (NULL) for the first page
 ORDER BY id DESC LIMIT $3                 -- $3 = limit + 1 (has_more probe)
 ```
-reversed in Python before return. `id` is the PK: index-only keyset, no sort spill. The existing ownership probe + transaction wrap from `list_messages` is reused (same 404 posture). `chat_messages_session_created_idx` is not even needed for this path — the PK suffices. Fetching `limit + 1` proves `has_more` without a `count(*)` (same pattern as `list_sessions`).
+reversed in Python before return. `id` is the PK, but ordering by `id` while filtering on `session_id` does NOT use the PK index usefully — the planner would scan the global PK backwards across other users' rows until it fills the session's page. A new composite index `chat_messages_session_id_idx (session_id, id)` (migration `0009_chat_msg_session_idx`) makes the scan start inside the session's slice and stop at `LIMIT`. The existing ownership probe + transaction wrap from `list_messages` is reused (same 404 posture). Fetching `limit + 1` proves `has_more` without a `count(*)` (same pattern as `list_sessions`).
 
 `before` as NULL-able param keeps one SQL text for both first-page and continuation (avoids the two-SQL-text branch `list_sessions` needs because its sort key mutates; here it doesn't).
 
@@ -73,7 +73,7 @@ Today the panel clears `messages` and renders the welcome state during the fetch
 
 ## Migration Plan
 
-No schema migration. Deploy order is irrelevant (additive contract, both directions compatible): the agent service and SPA can land in either order, Go untouched. Rollback = revert either side; no data backfill. Verification is dev-stack: pytest (store + API + wire), vitest (store/service/component), agent-free Playwright against the side stack.
+One additive migration: `0009_chat_msg_session_idx` creates `agent.chat_messages (session_id, id)` with `CREATE INDEX CONCURRENTLY` (autocommit block — a plain build would take a SHARE lock and block chat-message writes on a populated table; the concurrent build is a no-op when the index already exists), no data backfill. It runs on agent boot like every other migration. Deploy order is otherwise irrelevant (additive wire contract, both directions compatible): the agent service and SPA can land in either order, Go untouched. Rollback = revert either side; the index may be left in place (harmless). Verification is dev-stack: pytest (store + API + wire), vitest (store/service/component), agent-free Playwright against the side stack.
 
 ## Open Questions
 

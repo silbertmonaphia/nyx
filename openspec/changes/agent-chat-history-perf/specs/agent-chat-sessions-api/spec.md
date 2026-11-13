@@ -48,8 +48,8 @@ The endpoint SHALL support optional pagination via `limit` and `before` query pa
 #### Scenario: Following the cursor assembles the older page
 
 - **WHEN** the client requests `limit=3&before=<next_before from the previous page>`
-- **THEN** the response carries messages 2, 3, 4 in chronological order with `has_more=true` and a cursor encoding message 2's id
-- **AND** a further page returns messages 0, 1 with `has_more=false` and `next_before=null`
+- **THEN** the response carries messages 2, 3, 4 in chronological order with `has_more=true` and a cursor encoding message 2's id (the page's oldest INCLUDED row)
+- **AND** a further page returns message 1 alone with `has_more=false` and `next_before=null` (the window is strictly below the cursor — the boundary row is never repeated)
 
 #### Scenario: A cursor below the first message returns an empty page
 
