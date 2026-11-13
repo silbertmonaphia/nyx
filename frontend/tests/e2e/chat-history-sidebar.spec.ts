@@ -2,6 +2,7 @@ import { expect, type Page } from '@playwright/test';
 import { test } from './fixtures/e2e-fixtures';
 import {
   makeTestUser,
+  readAccessToken,
   registerAndOpenChat as registerAndOpenChatShared,
   seedLlmConfig,
 } from './helpers/llm-config';
@@ -122,12 +123,7 @@ async function railRowIds(page: Page): Promise<string[]> {
 const API_BASE = process.env.E2E_API_URL ?? 'http://localhost:8080/api';
 
 async function seedSessions(page: Page, count: number): Promise<void> {
-  const token = await page.evaluate(() => {
-    const raw = window.sessionStorage.getItem('nyx-token-store');
-    if (raw === null) return null;
-    return (JSON.parse(raw) as { accessToken: string }).accessToken;
-  });
-  if (token === null) throw new Error('no auth token in sessionStorage');
+  const token = await readAccessToken(page);
   for (let i = 0; i < count; i++) {
     const res = await page.request.post(`${API_BASE}/chat/sessions`, {
       headers: { Authorization: `Bearer ${token}` },

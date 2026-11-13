@@ -43,6 +43,7 @@ export interface ChatMessage {
   // diverged from the plan and the answer below may be incomplete.
   // Drives the <PartialFailureBanner> above the final answer.
   partialFailure?: { failedSteps: string[] };
+  id?: number;
 }
 
 interface ChatState {
@@ -52,6 +53,10 @@ interface ChatState {
   stoppedReason: "user_cancelled" | null;
   possiblyIncomplete: boolean;
   error: string | null;
+  isLoadingReplay: boolean;
+  replayNextBefore: string | null;
+  replayHasMore: boolean;
+  isFetchingOlder: boolean;
   llmGateOpen: boolean;
   setLlmGateOpen: (open: boolean) => void;
   knowledgeEnabled: boolean;
@@ -163,6 +168,7 @@ interface ChatState {
    * no persisted id, when messages are already on screen, or mid-stream.
    */
   hydrateSession: () => Promise<void>;
+  loadOlderMessages: () => Promise<void>;
   resetForUser: (userId: number | null) => void;
   /**
    * Soft-delete a session and drop it from the sidebar. Deleting the
@@ -195,6 +201,8 @@ let attachedToken: number | null = null;
 let detachHook: (() => void) | null = null;
 let activeRunId: string | null = null;
 let recoveryController: AbortController | null = null;
+let listRefreshInFlight = false;
+let listRefreshRerun = false;
 
 const frameCursors = new Map<string, number>();
 
@@ -319,7 +327,7 @@ function isRunNotLive(err: unknown): boolean {
  */
 function toReplayMessage(row: SessionMessage): ChatMessage {
   if (row.role === "user") {
-    return { role: "user", content: row.content };
+    return { role: "user", content: row.content, id: row.id };
   }
   const steps: ChatStep[] = [];
   if (row.steps && row.steps.length > 0) {
@@ -360,6 +368,7 @@ function toReplayMessage(row: SessionMessage): ChatMessage {
         ? { prompt_tokens: null, completion_tokens: null, total_tokens: row.tokens }
         : undefined;
   const message: ChatMessage = { role: "assistant", content: row.content };
+  message.id = row.id;
   if (steps.length > 0) message.steps = steps;
   if (usage) message.usage = usage;
   return message;
@@ -426,17 +435,16 @@ let replaySeq = 0;
  * session deletion clears gracefully"). Any other failure is logged and
  * leaves the panel empty; the user can pick another session.
  */
+const REPLAY_PAGE_SIZE = 50;
+
 async function loadSessionInto(
   get: ChatGet,
   set: ChatSet,
   id: string,
+  opts: { preservePaging?: boolean } = {},
 ): Promise<void> {
   const replay = ++replaySeq;
-  try {
-    // Touch `last_active_at` so the session ranks at the top of the next
-    // list fetch and retention sees it as live.
-    await chatService.resumeSession(id);
-  } catch (err) {
+  const resumePromise = chatService.resumeSession(id).catch((err: unknown) => {
     if (isSessionGone(err)) {
       if (replay !== replaySeq) return;
       if (get().currentSessionId !== id) return;
@@ -444,20 +452,16 @@ async function loadSessionInto(
       return;
     }
     logger.warn("chat.session.resume_failed", { error: String(err) });
-  }
+  });
+  let paged: Awaited<
+    ReturnType<typeof chatService.getMessagesPage>
+  > | null = null;
   try {
-    const rows = await chatService.getMessages(id);
-    // The write is guarded three ways. A switch (or `+ New chat`) may
-    // have landed while the fetch was in flight — the later intent wins.
-    // A NEWER replay of the same session supersedes this snapshot. And a
-    // stream may have attached to the panel meanwhile — writing would
-    // clobber its live turn (the send that started it snapshotted the
-    // messages before this fetch resolved).
-    if (replay !== replaySeq) return;
-    if (get().currentSessionId !== id) return;
-    if (attachedToken !== null) return;
-    set({ messages: rows.map(toReplayMessage) });
+    paged = await chatService.getMessagesPage(id, {
+      limit: REPLAY_PAGE_SIZE,
+    });
   } catch (err) {
+    void resumePromise;
     if (isSessionGone(err)) {
       if (replay !== replaySeq) return;
       if (get().currentSessionId !== id) return;
@@ -465,7 +469,59 @@ async function loadSessionInto(
       return;
     }
     logger.warn("chat.session.replay_failed", { error: String(err) });
+    if (replay === replaySeq && get().currentSessionId === id) {
+      set({ isLoadingReplay: false });
+    }
+    return;
   }
+  void resumePromise;
+  if (replay !== replaySeq) return;
+  if (get().currentSessionId !== id) return;
+  if (attachedToken !== null) {
+    set({ isLoadingReplay: false });
+    return;
+  }
+  const fresh = paged.messages.map(toReplayMessage);
+  if (opts.preservePaging) {
+    const merged = mergeReplayWindow(
+      get().messages,
+      fresh,
+      { hasMore: get().replayHasMore, nextBefore: get().replayNextBefore },
+      { hasMore: paged.hasMore, nextBefore: paged.nextBefore },
+    );
+    set({
+      messages: merged.messages,
+      replayHasMore: merged.hasMore,
+      replayNextBefore: merged.nextBefore,
+      isLoadingReplay: false,
+    });
+    return;
+  }
+  set({
+    messages: fresh,
+    replayHasMore: paged.hasMore,
+    replayNextBefore: paged.nextBefore,
+    isLoadingReplay: false,
+  });
+}
+
+export function mergeReplayWindow(
+  existing: ChatMessage[],
+  fresh: ChatMessage[],
+  oldPaging: { hasMore: boolean; nextBefore: string | null },
+  freshPaging: { hasMore: boolean; nextBefore: string | null },
+): { messages: ChatMessage[]; hasMore: boolean; nextBefore: string | null } {
+  const allHaveIds = existing.every((m) => typeof m.id === "number");
+  if (!allHaveIds) {
+    return { messages: fresh, ...freshPaging };
+  }
+  const freshIds = new Set(fresh.map((m) => m.id as number));
+  const older = existing.filter((m) => !freshIds.has(m.id as number));
+  const overlap = existing.some((m) => freshIds.has(m.id as number));
+  if (older.length === 0 || !overlap) {
+    return { messages: fresh, ...freshPaging };
+  }
+  return { messages: [...older, ...fresh], ...oldPaging };
 }
 
 const LADDER_MAX_ATTEMPTS = 3;
@@ -934,6 +990,10 @@ export const useChatStore = create<ChatState>((set, get) => ({
   sessionListNextCursor: null,
   isFetchingMore: false,
   runningSessionIds: [],
+  isLoadingReplay: false,
+  replayNextBefore: null,
+  replayHasMore: false,
+  isFetchingOlder: false,
 
   send: async (text) => {
     const trimmed = text.trim();
@@ -1257,7 +1317,9 @@ export const useChatStore = create<ChatState>((set, get) => ({
               runSessionId !== null &&
               get().currentSessionId === runSessionId
             ) {
-              await loadSessionInto(get, set, runSessionId);
+              await loadSessionInto(get, set, runSessionId, {
+                preservePaging: true,
+              });
             }
           } finally {
             if (turnEndedClean) railMark(null);
@@ -1276,6 +1338,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
     // through the rail.
     detachLiveStream();
     invalidateFeedQueries();
+    replaySeq++;
     set({
       messages: [],
       isStreaming: false,
@@ -1283,6 +1346,10 @@ export const useChatStore = create<ChatState>((set, get) => ({
       stoppedReason: null,
       possiblyIncomplete: false,
       error: null,
+      isLoadingReplay: false,
+      replayHasMore: false,
+      replayNextBefore: null,
+      isFetchingOlder: false,
     });
   },
 
@@ -1423,6 +1490,12 @@ export const useChatStore = create<ChatState>((set, get) => ({
     // shows up in the rail immediately. Merging (rather than
     // reset-and-replace) means a concurrently resolving mount/scroll
     // fetch cannot duplicate or reorder what is already on screen.
+    if (listRefreshInFlight) {
+      listRefreshRerun = true;
+      return;
+    }
+    listRefreshInFlight = true;
+    listRefreshRerun = false;
     const epoch = identityEpoch;
     try {
       const page = await chatService.listSessions({});
@@ -1438,6 +1511,12 @@ export const useChatStore = create<ChatState>((set, get) => ({
       });
     } catch (err) {
       logger.warn("chat.session.refresh_failed", { error: String(err) });
+    } finally {
+      listRefreshInFlight = false;
+    }
+    if (listRefreshRerun) {
+      listRefreshRerun = false;
+      void get().refreshSessionList();
     }
   },
 
@@ -1458,6 +1537,9 @@ export const useChatStore = create<ChatState>((set, get) => ({
       stoppedReason: null,
       possiblyIncomplete: false,
       error: null,
+      isLoadingReplay: true,
+      replayHasMore: false,
+      replayNextBefore: null,
     });
     persistSessionId(id);
     await loadSessionInto(get, set, id);
@@ -1474,6 +1556,9 @@ export const useChatStore = create<ChatState>((set, get) => ({
       stoppedReason: null,
       possiblyIncomplete: false,
       error: null,
+      isLoadingReplay: false,
+      replayHasMore: false,
+      replayNextBefore: null,
     });
   },
 
@@ -1493,6 +1578,9 @@ export const useChatStore = create<ChatState>((set, get) => ({
       stoppedReason: null,
       possiblyIncomplete: false,
       error: null,
+      isLoadingReplay: false,
+      replayHasMore: false,
+      replayNextBefore: null,
     });
     const epoch = identityEpoch;
     try {
@@ -1535,7 +1623,71 @@ export const useChatStore = create<ChatState>((set, get) => ({
     // Hydration is a reload / reopen concern: a conversation already on
     // screen (or mid-stream) must not be refetched and replaced.
     if (get().messages.length > 0 || get().isStreaming) return;
+    set({
+      isLoadingReplay: true,
+      replayHasMore: false,
+      replayNextBefore: null,
+    });
     await loadSessionInto(get, set, id);
+  },
+
+  loadOlderMessages: async () => {
+    const {
+      currentSessionId,
+      replayHasMore,
+      replayNextBefore,
+      isFetchingOlder,
+      isLoadingReplay,
+    } = get();
+    if (
+      currentSessionId === null ||
+      !replayHasMore ||
+      replayNextBefore === null ||
+      isFetchingOlder ||
+      isLoadingReplay
+    ) {
+      return;
+    }
+    if (attachedToken !== null) return;
+
+    const sessionAtFetch = currentSessionId;
+    const replay = replaySeq;
+    set({ isFetchingOlder: true });
+    try {
+      const page = await chatService.getMessagesPage(sessionAtFetch, {
+        limit: REPLAY_PAGE_SIZE,
+        before: replayNextBefore,
+      });
+      if (replay !== replaySeq) return;
+      if (get().currentSessionId !== sessionAtFetch) return;
+      if (attachedToken !== null) return;
+      const older = page.messages.map(toReplayMessage);
+      set((state) => {
+        const seen = new Set(
+          state.messages
+            .map((m) => m.id)
+            .filter((id): id is number => typeof id === "number"),
+        );
+        const deduped = older.filter(
+          (m) => typeof m.id !== "number" || !seen.has(m.id),
+        );
+        return {
+          messages: [...deduped, ...state.messages],
+          replayHasMore: page.hasMore,
+          replayNextBefore: page.nextBefore,
+        };
+      });
+    } catch (err) {
+      if (isSessionGone(err)) {
+        if (replay !== replaySeq) return;
+        if (get().currentSessionId !== sessionAtFetch) return;
+        get().clearActiveSession();
+        return;
+      }
+      logger.warn("chat.session.replay_page_failed", { error: String(err) });
+    } finally {
+      set({ isFetchingOlder: false });
+    }
   },
 
   resetForUser: (userId) => {
@@ -1566,6 +1718,10 @@ export const useChatStore = create<ChatState>((set, get) => ({
       sessionListNextCursor: null,
       isFetchingMore: false,
       runningSessionIds: [],
+      isLoadingReplay: false,
+      replayNextBefore: null,
+      replayHasMore: false,
+      isFetchingOlder: false,
     });
   },
 

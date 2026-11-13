@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { act, waitFor } from '@testing-library/react';
 import { chatService } from '../services/chatService';
-import { useChatStore } from './chatStore';
+import { mergeReplayWindow, useChatStore } from './chatStore';
 import { ChatApiError, ChatStreamError, type ChatEvent, type SessionMessage } from '../types/chat';
 import { queryClient } from '~/services/queryClient';
 import { useAuthStore } from '~/store/authStore';
@@ -19,6 +19,7 @@ const mockedService = chatService as unknown as {
   submitApproval: ReturnType<typeof vi.fn>;
   listSessions: ReturnType<typeof vi.fn>;
   getMessages: ReturnType<typeof vi.fn>;
+  getMessagesPage: ReturnType<typeof vi.fn>;
   createSession: ReturnType<typeof vi.fn>;
   resumeSession: ReturnType<typeof vi.fn>;
   deleteSession: ReturnType<typeof vi.fn>;
@@ -65,6 +66,15 @@ function resetService() {
     .mockReset()
     .mockResolvedValue({ sessions: [], nextCursor: null });
   mockedService.getMessages.mockReset().mockResolvedValue([]);
+  mockedService.getMessagesPage
+    .mockReset()
+    .mockImplementation(async (id: string) => ({
+      messages: await (
+        mockedService.getMessages as unknown as (sid: string) => Promise<unknown[]>
+      )(id),
+      hasMore: false,
+      nextBefore: null,
+    }));
   mockedService.createSession
     .mockReset()
     .mockResolvedValue({ session_id: 'srv-new', started_at: '2026-10-14T00:00:00Z' });
@@ -1267,10 +1277,11 @@ describe('useChatStore', () => {
       // Stored `tool_calls` rehydrate as the same agent-step shape the
       // live stream renders.
       expect(state.messages).toEqual([
-        { role: 'user', content: 'hello' },
+        { role: 'user', content: 'hello', id: 1 },
         {
           role: 'assistant',
           content: 'hi there',
+          id: 2,
           steps: [
             {
               id: 's1',
@@ -1303,6 +1314,7 @@ describe('useChatStore', () => {
       expect(useChatStore.getState().messages[1]).toEqual({
         role: 'assistant',
         content: 'hi there',
+        id: 2,
         usage: { prompt_tokens: null, completion_tokens: null, total_tokens: 42 },
       });
     });
@@ -1569,7 +1581,7 @@ describe('useChatStore', () => {
       expect(useChatStore.getState().currentSessionId).toBe('sess-restored');
       expect(mockedService.getMessages).toHaveBeenCalledWith('sess-restored');
       expect(useChatStore.getState().messages).toEqual([
-        { role: 'user', content: 'earlier' },
+        { role: 'user', content: 'earlier', id: 1 },
       ]);
     });
 
@@ -2262,7 +2274,7 @@ describe('useChatStore', () => {
         await useChatStore.getState().setCurrentSession('sess-a');
       });
       expect(useChatStore.getState().messages).toEqual([
-        { role: 'user', content: 'hi' },
+        { role: 'user', content: 'hi', id: 1 },
       ]);
 
       // … and the run's terminal frame re-replays: by then the
@@ -2278,12 +2290,70 @@ describe('useChatStore', () => {
       });
       await waitFor(() => {
         expect(useChatStore.getState().messages).toEqual([
-          { role: 'user', content: 'hi' },
-          { role: 'assistant', content: 'full answer' },
+          { role: 'user', content: 'hi', id: 1 },
+          { role: 'assistant', content: 'full answer', id: 2 },
         ]);
       });
       expect(mockedService.getMessages).toHaveBeenCalledTimes(2);
       expect(useChatStore.getState().runningSessionIds).toEqual([]);
+    });
+
+    it('terminal refresh keeps loaded older pages and appends the new turn at the bottom', async () => {
+      useChatStore.setState({ currentSessionId: 'sess-a' });
+      const stream = makePushStream();
+      mockedService.streamMessage.mockImplementationOnce(stream.impl);
+
+      act(() => {
+        void useChatStore.getState().send('hi');
+      });
+      await waitFor(() => {
+        expect(useChatStore.getState().isStreaming).toBe(true);
+      });
+
+      await act(async () => {
+        await useChatStore.getState().startNewSession();
+      });
+      mockedService.getMessagesPage.mockResolvedValueOnce({
+        messages: [makeMessageRow({ id: 1, role: 'user', content: 'hi' })],
+        hasMore: true,
+        nextBefore: '1',
+      });
+      await act(async () => {
+        await useChatStore.getState().setCurrentSession('sess-a');
+      });
+      mockedService.getMessagesPage.mockResolvedValueOnce({
+        messages: [makeMessageRow({ id: 0, role: 'user', content: 'older' })],
+        hasMore: false,
+        nextBefore: null,
+      });
+      await act(async () => {
+        await useChatStore.getState().loadOlderMessages();
+      });
+      expect(useChatStore.getState().messages.map((m) => m.id)).toEqual([0, 1]);
+
+      mockedService.getMessagesPage.mockResolvedValueOnce({
+        messages: [
+          makeMessageRow({ id: 1, role: 'user', content: 'hi' }),
+          makeMessageRow({ id: 2, role: 'assistant', content: 'full answer' }),
+        ],
+        hasMore: true,
+        nextBefore: '1',
+      });
+      await act(async () => {
+        stream.close();
+        await Promise.resolve();
+      });
+      await waitFor(() => {
+        expect(useChatStore.getState().messages.map((m) => m.id)).toEqual([
+          0, 1, 2,
+        ]);
+      });
+      const state = useChatStore.getState();
+      expect(state.messages[state.messages.length - 1].content).toBe(
+        'full answer',
+      );
+      expect(state.replayHasMore).toBe(false);
+      expect(state.replayNextBefore).toBeNull();
     });
 
     it('a run_id frame arriving while detached marks the frame id and is never adopted', async () => {
@@ -2671,8 +2741,8 @@ describe('useChatStore', () => {
         expect(useChatStore.getState().runningSessionIds).toEqual([]);
       });
       expect(useChatStore.getState().messages).toEqual([
-        { role: 'user', content: 'hi' },
-        { role: 'assistant', content: 'answer' },
+        { role: 'user', content: 'hi', id: 1 },
+        { role: 'assistant', content: 'answer', id: 2 },
       ]);
     });
 
@@ -3210,6 +3280,7 @@ describe('useChatStore', () => {
       expect(state.messages[1]).toEqual({
         role: 'assistant',
         content: 'stored answer',
+        id: 2,
         usage: { prompt_tokens: 4, completion_tokens: 3, total_tokens: 7 },
       });
       expect(state.isStreaming).toBe(false);
@@ -3777,5 +3848,398 @@ describe('useChatStore', () => {
       expect(state.messages[3]?.content).toBe('second');
       expect(state.error).toBeNull();
     });
+  });
+});
+
+describe('useChatStore replay paging (agent-chat-history-perf)', () => {
+  beforeEach(() => {
+    resetStore();
+    resetService();
+  });
+
+  function setPagedReplay(
+    messages: Array<{ id: number; role: 'user' | 'assistant'; content: string }>,
+    hasMore: boolean,
+    nextBefore: string | null,
+  ) {
+    useChatStore.setState({
+      currentSessionId: 'sess-paged',
+      messages: messages.map((m) => ({ ...m })),
+      replayHasMore: hasMore,
+      replayNextBefore: nextBefore,
+      isLoadingReplay: false,
+    });
+  }
+
+  it('replays concurrently with the resume: a rejected resume still renders the window', async () => {
+    mockedService.resumeSession.mockRejectedValueOnce(new Error('resume down'));
+    mockedService.getMessagesPage.mockResolvedValueOnce({
+      messages: [makeMessageRow({ id: 1, role: 'user', content: 'hello' })],
+      hasMore: true,
+      nextBefore: '1',
+    });
+
+    await act(async () => {
+      await useChatStore.getState().setCurrentSession('sess-x');
+    });
+
+    const state = useChatStore.getState();
+    expect(state.messages).toHaveLength(1);
+    expect(state.replayHasMore).toBe(true);
+    expect(state.replayNextBefore).toBe('1');
+    expect(state.isLoadingReplay).toBe(false);
+  });
+
+  it('does not queue the replay behind a slow resume', async () => {
+    let resolveResume!: () => void;
+    mockedService.resumeSession.mockReturnValueOnce(
+      new Promise<void>((resolve) => {
+        resolveResume = resolve;
+      }),
+    );
+    mockedService.getMessagesPage.mockResolvedValueOnce({
+      messages: [makeMessageRow({ id: 1, role: 'user', content: 'fast' })],
+      hasMore: false,
+      nextBefore: null,
+    });
+
+    let done = false;
+    const pending = useChatStore
+      .getState()
+      .setCurrentSession('sess-slow-resume')
+      .then(() => {
+        done = true;
+      });
+    await waitFor(() => {
+      expect(useChatStore.getState().messages).toHaveLength(1);
+    });
+    expect(useChatStore.getState().messages[0].content).toBe('fast');
+    resolveResume();
+    await pending;
+    expect(done).toBe(true);
+  });
+
+  it('shows the replay skeleton while a session switch fetch is in flight', async () => {
+    let resolvePage!: (value: unknown) => void;
+    mockedService.getMessagesPage.mockReturnValueOnce(
+      new Promise((resolve) => {
+        resolvePage = resolve;
+      }),
+    );
+
+    const pending = useChatStore.getState().setCurrentSession('sess-skeleton');
+    await waitFor(() => {
+      expect(useChatStore.getState().isLoadingReplay).toBe(true);
+    });
+    resolvePage({
+      messages: [makeMessageRow({ id: 1, role: 'user', content: 'landed' })],
+      hasMore: false,
+      nextBefore: null,
+    });
+    await pending;
+    expect(useChatStore.getState().isLoadingReplay).toBe(false);
+    expect(useChatStore.getState().messages).toHaveLength(1);
+  });
+
+  it('clears the replay skeleton on a 404 and drops the panel', async () => {
+    mockedService.getMessagesPage.mockRejectedValueOnce(new ChatApiError(404, 'gone'));
+
+    await act(async () => {
+      await useChatStore.getState().setCurrentSession('sess-gone');
+    });
+
+    const state = useChatStore.getState();
+    expect(state.isLoadingReplay).toBe(false);
+    expect(state.currentSessionId).toBeNull();
+    expect(state.messages).toEqual([]);
+  });
+
+  it('clears the replay skeleton on a non-404 failure without clearing the session', async () => {
+    mockedService.getMessagesPage.mockRejectedValueOnce(new Error('network down'));
+
+    await act(async () => {
+      await useChatStore.getState().setCurrentSession('sess-flaky');
+    });
+
+    const state = useChatStore.getState();
+    expect(state.isLoadingReplay).toBe(false);
+    expect(state.currentSessionId).toBe('sess-flaky');
+    expect(state.messages).toEqual([]);
+  });
+
+  it('prepends the older page and advances the cursor', async () => {
+    setPagedReplay(
+      [
+        { id: 4, role: 'user', content: 'd' },
+        { id: 5, role: 'assistant', content: 'e' },
+      ],
+      true,
+      '4',
+    );
+    mockedService.getMessagesPage.mockResolvedValueOnce({
+      messages: [
+        makeMessageRow({ id: 2, role: 'user', content: 'b' }),
+        makeMessageRow({ id: 3, role: 'assistant', content: 'c' }),
+      ],
+      hasMore: true,
+      nextBefore: '2',
+    });
+
+    await act(async () => {
+      await useChatStore.getState().loadOlderMessages();
+    });
+
+    expect(mockedService.getMessagesPage).toHaveBeenCalledWith('sess-paged', {
+      limit: 50,
+      before: '4',
+    });
+    const state = useChatStore.getState();
+    expect(state.messages.map((m) => m.id)).toEqual([2, 3, 4, 5]);
+    expect(state.replayHasMore).toBe(true);
+    expect(state.replayNextBefore).toBe('2');
+    expect(state.isFetchingOlder).toBe(false);
+  });
+
+  it('deduplicates a page that overlaps the loaded rows', async () => {
+    setPagedReplay([{ id: 3, role: 'user', content: 'c' }], true, '3');
+    mockedService.getMessagesPage.mockResolvedValueOnce({
+      messages: [
+        makeMessageRow({ id: 2, role: 'user', content: 'b' }),
+        makeMessageRow({ id: 3, role: 'user', content: 'c' }),
+      ],
+      hasMore: false,
+      nextBefore: null,
+    });
+
+    await act(async () => {
+      await useChatStore.getState().loadOlderMessages();
+    });
+
+    const state = useChatStore.getState();
+    expect(state.messages.map((m) => m.id)).toEqual([2, 3]);
+    expect(state.replayHasMore).toBe(false);
+    expect(state.replayNextBefore).toBeNull();
+  });
+
+  it('is single-flight: a second trigger while a page is in flight is dropped', async () => {
+    setPagedReplay([{ id: 9, role: 'user', content: 'i' }], true, '9');
+    let resolvePage!: (value: unknown) => void;
+    mockedService.getMessagesPage.mockReturnValueOnce(
+      new Promise((resolve) => {
+        resolvePage = resolve;
+      }),
+    );
+
+    const first = useChatStore.getState().loadOlderMessages();
+    await waitFor(() => {
+      expect(useChatStore.getState().isFetchingOlder).toBe(true);
+    });
+    await useChatStore.getState().loadOlderMessages();
+    expect(mockedService.getMessagesPage).toHaveBeenCalledTimes(1);
+
+    resolvePage({
+      messages: [makeMessageRow({ id: 8, role: 'user', content: 'h' })],
+      hasMore: false,
+      nextBefore: null,
+    });
+    await first;
+    expect(useChatStore.getState().messages.map((m) => m.id)).toEqual([8, 9]);
+  });
+
+  it('discards an older page that resolves after a session switch', async () => {
+    setPagedReplay([{ id: 9, role: 'user', content: 'i' }], true, '9');
+    let resolvePage!: (value: unknown) => void;
+    mockedService.getMessagesPage.mockReturnValueOnce(
+      new Promise((resolve) => {
+        resolvePage = resolve;
+      }),
+    );
+
+    const pending = useChatStore.getState().loadOlderMessages();
+    await waitFor(() => {
+      expect(useChatStore.getState().isFetchingOlder).toBe(true);
+    });
+
+    mockedService.getMessagesPage.mockResolvedValueOnce({
+      messages: [makeMessageRow({ id: 100, role: 'user', content: 'other' })],
+      hasMore: false,
+      nextBefore: null,
+    });
+    await act(async () => {
+      await useChatStore.getState().setCurrentSession('sess-other');
+    });
+
+    resolvePage({
+      messages: [makeMessageRow({ id: 8, role: 'user', content: 'stale page' })],
+      hasMore: true,
+      nextBefore: '8',
+    });
+    await pending;
+
+    const state = useChatStore.getState();
+    expect(state.currentSessionId).toBe('sess-other');
+    expect(state.messages.map((m) => m.id)).toEqual([100]);
+    expect(state.isFetchingOlder).toBe(false);
+  });
+
+  it('discards a pending older page when the dialog resets', async () => {
+    setPagedReplay([{ id: 9, role: 'user', content: 'i' }], true, '9');
+    let resolvePage!: (value: unknown) => void;
+    mockedService.getMessagesPage.mockReturnValueOnce(
+      new Promise((resolve) => {
+        resolvePage = resolve;
+      }),
+    );
+
+    const pending = useChatStore.getState().loadOlderMessages();
+    await waitFor(() => {
+      expect(useChatStore.getState().isFetchingOlder).toBe(true);
+    });
+
+    act(() => {
+      useChatStore.getState().reset();
+    });
+
+    resolvePage({
+      messages: [makeMessageRow({ id: 8, role: 'user', content: 'stale older' })],
+      hasMore: true,
+      nextBefore: '8',
+    });
+    await pending;
+
+    const state = useChatStore.getState();
+    expect(state.messages).toEqual([]);
+    expect(state.replayHasMore).toBe(false);
+    expect(state.replayNextBefore).toBeNull();
+    expect(state.isFetchingOlder).toBe(false);
+
+    useChatStore.setState({ currentSessionId: 'sess-paged' });
+    mockedService.getMessagesPage.mockResolvedValueOnce({
+      messages: [
+        makeMessageRow({ id: 40, role: 'user', content: 'fresh-40' }),
+        makeMessageRow({ id: 41, role: 'assistant', content: 'fresh-41' }),
+      ],
+      hasMore: false,
+      nextBefore: null,
+    });
+    await act(async () => {
+      await useChatStore.getState().hydrateSession();
+    });
+    expect(useChatStore.getState().messages.map((m) => m.id)).toEqual([40, 41]);
+  });
+
+  it('refuses to prepend while a live stream owns the panel', async () => {
+    let closeStream!: () => void;
+    mockedService.streamMessage.mockImplementationOnce(
+      async function* () {
+        await new Promise<void>((resolve) => {
+          closeStream = resolve;
+        });
+        yield { kind: 'terminator' } as ChatEvent;
+      },
+    );
+    setPagedReplay([{ id: 9, role: 'user', content: 'i' }], true, '9');
+
+    act(() => {
+      void useChatStore.getState().send('new message');
+    });
+    await waitFor(() => {
+      expect(useChatStore.getState().isStreaming).toBe(true);
+    });
+
+    await useChatStore.getState().loadOlderMessages();
+    expect(mockedService.getMessagesPage).not.toHaveBeenCalled();
+
+    await act(async () => {
+      closeStream();
+      await Promise.resolve();
+    });
+  });
+
+  it('is a no-op when the loaded window reaches the first message', async () => {
+    setPagedReplay([{ id: 1, role: 'user', content: 'a' }], false, null);
+
+    await useChatStore.getState().loadOlderMessages();
+
+    expect(mockedService.getMessagesPage).not.toHaveBeenCalled();
+  });
+});
+
+describe('mergeReplayWindow (agent-chat-history-perf D4)', () => {
+  const row = (id: number, content = `m${id}`) => ({
+    role: 'user' as const,
+    content,
+    id,
+  });
+
+  it('merges a fresh window that overlaps retained older rows, oldest first', () => {
+    const existing = [row(1), row(2), row(3)];
+    const fresh = [row(3), row(4), row(5)];
+    const merged = mergeReplayWindow(
+      existing,
+      fresh,
+      { hasMore: false, nextBefore: null },
+      { hasMore: true, nextBefore: '3' },
+    );
+    expect(merged.messages.map((m) => m.id)).toEqual([1, 2, 3, 4, 5]);
+    expect(merged.hasMore).toBe(false);
+    expect(merged.nextBefore).toBeNull();
+  });
+
+  it('resets to the fresh window when the gap is too large (50 new messages)', () => {
+    const existing = [row(1), row(2)];
+    const fresh = Array.from({ length: 50 }, (_, i) => row(100 + i));
+    const merged = mergeReplayWindow(
+      existing,
+      fresh,
+      { hasMore: false, nextBefore: null },
+      { hasMore: true, nextBefore: '100' },
+    );
+    expect(merged.messages).toHaveLength(50);
+    expect(merged.messages[0].id).toBe(100);
+    expect(merged.hasMore).toBe(true);
+    expect(merged.nextBefore).toBe('100');
+  });
+
+  it('merges at the exact page boundary (49 new messages)', () => {
+    const existing = [row(1), row(2)];
+    const fresh = [row(2), ...Array.from({ length: 49 }, (_, i) => row(10 + i))];
+    const merged = mergeReplayWindow(
+      existing,
+      fresh,
+      { hasMore: false, nextBefore: null },
+      { hasMore: true, nextBefore: '2' },
+    );
+    expect(merged.messages[0].id).toBe(1);
+    expect(merged.messages).toHaveLength(51);
+    expect(merged.messages[merged.messages.length - 1].id).toBe(58);
+    expect(merged.hasMore).toBe(false);
+  });
+
+  it('resets when a row has no server id (live-streamed local row)', () => {
+    const existing = [
+      { role: 'user' as const, content: 'local' },
+      row(3),
+    ];
+    const fresh = [row(3), row(4)];
+    const merged = mergeReplayWindow(
+      existing,
+      fresh,
+      { hasMore: false, nextBefore: null },
+      { hasMore: false, nextBefore: null },
+    );
+    expect(merged.messages.map((m) => m.id)).toEqual([3, 4]);
+  });
+
+  it('keeps a single segment when the rendered window was already the latest page', () => {
+    const existing = [row(1), row(2)];
+    const fresh = [row(1), row(2)];
+    const merged = mergeReplayWindow(
+      existing,
+      fresh,
+      { hasMore: true, nextBefore: '1' },
+      { hasMore: true, nextBefore: '1' },
+    );
+    expect(merged.messages.map((m) => m.id)).toEqual([1, 2]);
   });
 });

@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from "react";
+import React, { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import {
   ChevronDown,
@@ -19,6 +19,7 @@ import { Button } from "~/components/ui/Button";
 import { Textarea } from "~/components/ui/Textarea";
 import { cn } from "~/utils/cn";
 import { useChat } from "../hooks/useChat";
+import type { ChatMessage } from "../store/chatStore";
 import { ChatSidebar } from "./ChatSidebar";
 import { ConfirmationCard } from "./ConfirmationCard";
 import { PartialFailureBanner } from "./PartialFailureBanner";
@@ -188,6 +189,10 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ open, onOpenChange }) => {
   );
   const knowledgeEnabled = useChat((s) => s.knowledgeEnabled);
   const setKnowledgeEnabled = useChat((s) => s.setKnowledgeEnabled);
+  const isLoadingReplay = useChat((s) => s.isLoadingReplay);
+  const replayHasMore = useChat((s) => s.replayHasMore);
+  const isFetchingOlder = useChat((s) => s.isFetchingOlder);
+  const loadOlderMessages = useChat((s) => s.loadOlderMessages);
   const composerLocked = isStreaming || sessionBusy;
 
   const [draft, setDraft] = useState("");
@@ -197,6 +202,9 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ open, onOpenChange }) => {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const listRef = useRef<HTMLDivElement | null>(null);
   const rafRef = useRef<number | null>(null);
+  const prevTailRef = useRef<ChatMessage | null>(null);
+  const prependPinRef = useRef<{ top: number; height: number } | null>(null);
+  const [topSentinelNode, setTopSentinelNode] = useState<HTMLDivElement | null>(null);
   // Track the previous `open` value so the close → reset transition
   // fires exactly once per close, without setState-inside-effect.
   const wasOpenRef = useRef(open);
@@ -230,6 +238,9 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ open, onOpenChange }) => {
   // Auto-scroll on new content. Skip the first paint of a fresh
   // open — the empty list shouldn't snap to a non-existent bottom.
   useEffect(() => {
+    const tail = messages.length > 0 ? messages[messages.length - 1] : null;
+    if (tail === prevTailRef.current) return;
+    prevTailRef.current = tail;
     if (!listRef.current) return;
     if (rafRef.current !== null) cancelAnimationFrame(rafRef.current);
     rafRef.current = requestAnimationFrame(() => {
@@ -245,6 +256,34 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ open, onOpenChange }) => {
       }
     };
   }, [messages]);
+
+  useLayoutEffect(() => {
+    const pin = prependPinRef.current;
+    if (pin === null) return;
+    prependPinRef.current = null;
+    const el = listRef.current;
+    if (!el) return;
+    el.scrollTop = pin.top + (el.scrollHeight - pin.height);
+  }, [messages]);
+
+  useEffect(() => {
+    if (!topSentinelNode || !replayHasMore) return;
+    const root = listRef.current;
+    if (!root) return;
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (!entries[0]?.isIntersecting) return;
+        const el = listRef.current;
+        prependPinRef.current = el
+          ? { top: el.scrollTop, height: el.scrollHeight }
+          : null;
+        void loadOlderMessages();
+      },
+      { root, rootMargin: "200px" },
+    );
+    observer.observe(topSentinelNode);
+    return () => observer.disconnect();
+  }, [topSentinelNode, replayHasMore, loadOlderMessages]);
 
   const handleSubmit = (e?: React.FormEvent) => {
     e?.preventDefault();
@@ -330,9 +369,45 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ open, onOpenChange }) => {
               className="flex-1 min-h-0 overflow-y-auto rounded-md border bg-muted/30 p-3 space-y-3"
               data-testid="chat-message-list"
             >
-              {messages.length === 0 && (
+              {messages.length === 0 && isLoadingReplay && (
+                <div
+                  data-testid="chat-replay-skeleton"
+                  aria-busy="true"
+                  className="space-y-3"
+                >
+                  {[0, 1, 2].map((i) => (
+                    <div
+                      key={i}
+                      className={cn(
+                        "flex",
+                        i % 2 === 0 ? "justify-end" : "justify-start",
+                      )}
+                    >
+                      <div className="h-10 w-3/5 animate-pulse rounded-lg bg-muted" />
+                    </div>
+                  ))}
+                </div>
+              )}
+              {messages.length === 0 && !isLoadingReplay && (
                 <p className="text-sm text-muted-foreground text-center py-8">
                   {t("chat.emptyState")}
+                </p>
+              )}
+              {replayHasMore && messages.length > 0 && (
+                <div
+                  ref={setTopSentinelNode}
+                  data-testid="chat-replay-top-sentinel"
+                  aria-hidden="true"
+                  className="h-px"
+                />
+              )}
+              {isFetchingOlder && (
+                <p
+                  className="text-xs text-muted-foreground text-center"
+                  data-testid="chat-replay-loading-older"
+                  role="status"
+                >
+                  {t("chat.loading")}
                 </p>
               )}
               {messages.map((m, i) => (

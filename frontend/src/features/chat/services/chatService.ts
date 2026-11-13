@@ -828,6 +828,49 @@ export const chatService = {
       .filter((m): m is SessionMessage => m !== null);
   },
 
+  async getMessagesPage(
+    sessionId: string,
+    opts: {
+      limit?: number;
+      before?: string | null;
+      signal?: AbortSignal;
+    } = {},
+  ): Promise<{
+    messages: SessionMessage[];
+    hasMore: boolean;
+    nextBefore: string | null;
+  }> {
+    const params = new URLSearchParams();
+    if (typeof opts.limit === "number") {
+      params.set("limit", String(opts.limit));
+    }
+    if (opts.before) {
+      params.set("before", opts.before);
+    }
+    const qs = params.toString();
+    const data = await requestJson<{
+      messages?: unknown;
+      has_more?: unknown;
+      next_before?: unknown;
+    }>(
+      qs
+        ? `${SESSIONS_URL}/${encodeURIComponent(sessionId)}/messages?${qs}`
+        : `${SESSIONS_URL}/${encodeURIComponent(sessionId)}/messages`,
+      { signal: opts.signal },
+    );
+    const rows = Array.isArray(data?.messages) ? data.messages : [];
+    return {
+      messages: rows
+        .map(toSessionMessage)
+        .filter((m): m is SessionMessage => m !== null),
+      hasMore: data?.has_more === true,
+      nextBefore:
+        typeof data?.next_before === "string" && data.next_before !== ""
+          ? data.next_before
+          : null,
+    };
+  },
+
   /**
    * POST /api/chat/sessions — mint an empty session owned by the
    * caller. The returned id is the uuid4 the agent uses as the run id,

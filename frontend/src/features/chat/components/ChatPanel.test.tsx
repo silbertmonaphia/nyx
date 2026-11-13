@@ -13,6 +13,7 @@ const mockedService = chatService as unknown as {
   submitApproval: ReturnType<typeof vi.fn>;
   listSessions: ReturnType<typeof vi.fn>;
   getMessages: ReturnType<typeof vi.fn>;
+  getMessagesPage: ReturnType<typeof vi.fn>;
   resumeSession: ReturnType<typeof vi.fn>;
   createSession: ReturnType<typeof vi.fn>;
   deleteSession: ReturnType<typeof vi.fn>;
@@ -83,6 +84,15 @@ describe('ChatPanel', () => {
       .mockReset()
       .mockResolvedValue({ sessions: [], nextCursor: null });
     mockedService.getMessages.mockReset().mockResolvedValue([]);
+    mockedService.getMessagesPage
+      .mockReset()
+      .mockImplementation(async (id: string) => ({
+        messages: await (
+          mockedService.getMessages as unknown as (sid: string) => Promise<unknown[]>
+        )(id),
+        hasMore: false,
+        nextBefore: null,
+      }));
     mockedService.resumeSession.mockReset().mockResolvedValue(undefined);
     mockedService.createSession
       .mockReset()
@@ -545,6 +555,15 @@ describe('ChatPanel chat history', () => {
       .mockReset()
       .mockResolvedValue({ sessions: [], nextCursor: null });
     mockedService.getMessages.mockReset().mockResolvedValue([]);
+    mockedService.getMessagesPage
+      .mockReset()
+      .mockImplementation(async (id: string) => ({
+        messages: await (
+          mockedService.getMessages as unknown as (sid: string) => Promise<unknown[]>
+        )(id),
+        hasMore: false,
+        nextBefore: null,
+      }));
     mockedService.resumeSession.mockReset().mockResolvedValue(undefined);
     mockedService.createSession
       .mockReset()
@@ -774,6 +793,15 @@ describe('ChatPanel approval card', () => {
       .mockReset()
       .mockResolvedValue({ sessions: [], nextCursor: null });
     mockedService.getMessages.mockReset().mockResolvedValue([]);
+    mockedService.getMessagesPage
+      .mockReset()
+      .mockImplementation(async (id: string) => ({
+        messages: await (
+          mockedService.getMessages as unknown as (sid: string) => Promise<unknown[]>
+        )(id),
+        hasMore: false,
+        nextBefore: null,
+      }));
     mockedService.resumeSession.mockReset().mockResolvedValue(undefined);
     mockedService.createSession
       .mockReset()
@@ -1057,5 +1085,149 @@ describe('ChatPanel approval card', () => {
 
     expect(screen.getByTestId('chat-input')).not.toBeDisabled();
     expect(screen.queryByTestId('chat-session-busy-hint')).toBeNull();
+  });
+});
+
+describe('ChatPanel replay paging UI (agent-chat-history-perf)', () => {
+  const IOStub = globalThis.IntersectionObserver as unknown as {
+    last: {
+      trigger: (isIntersecting: boolean, target?: Element | null) => void;
+    } | null;
+    reset: () => void;
+  };
+
+  beforeEach(() => {
+    IOStub.reset();
+    resetStore();
+    mockedService.listSessions
+      .mockReset()
+      .mockResolvedValue({ sessions: [makeSession('s1')], nextCursor: null });
+    mockedService.getMessages.mockReset().mockResolvedValue([]);
+    mockedService.getMessagesPage.mockReset();
+    mockedService.resumeSession.mockReset().mockResolvedValue(undefined);
+  });
+
+  it('shows the skeleton while the replay fetch is in flight', async () => {
+    useChatStore.setState({ currentSessionId: 's1' });
+    sessionStorage.setItem('nyx.chat.currentSessionId', 's1');
+    let resolvePage!: (v: unknown) => void;
+    mockedService.getMessagesPage.mockReturnValueOnce(
+      new Promise((resolve) => {
+        resolvePage = resolve;
+      }),
+    );
+
+    render(<ChatPanel open={true} onOpenChange={vi.fn()} />);
+
+    expect(await screen.findByTestId('chat-replay-skeleton')).toBeInTheDocument();
+    expect(screen.queryByText('Start a conversation')).toBeNull();
+
+    await act(async () => {
+      resolvePage({
+        messages: [makeRow(1, 'user', 'from history')],
+        hasMore: false,
+        nextBefore: null,
+      });
+      await Promise.resolve();
+    });
+
+    expect(screen.queryByTestId('chat-replay-skeleton')).toBeNull();
+    expect(await screen.findByText('from history')).toBeInTheDocument();
+  });
+
+  it('clears the skeleton on a 404 and shows the welcome state', async () => {
+    useChatStore.setState({ currentSessionId: 'gone' });
+    sessionStorage.setItem('nyx.chat.currentSessionId', 'gone');
+    const { ChatApiError } = await import('../types/chat');
+    mockedService.getMessagesPage.mockRejectedValueOnce(
+      new ChatApiError(404, 'gone'),
+    );
+
+    render(<ChatPanel open={true} onOpenChange={vi.fn()} />);
+
+    await waitFor(() => {
+      expect(useChatStore.getState().currentSessionId).toBeNull();
+    });
+    expect(screen.queryByTestId('chat-replay-skeleton')).toBeNull();
+  });
+
+  it('loads the older page when the top sentinel intersects', async () => {
+    useChatStore.setState({
+      currentSessionId: 's1',
+      messages: [
+        { role: 'user', content: 'newer', id: 5 },
+      ],
+      replayHasMore: true,
+      replayNextBefore: '5',
+      isLoadingReplay: false,
+    });
+    mockedService.getMessagesPage.mockResolvedValueOnce({
+      messages: [makeRow(3, 'user', 'older question')],
+      hasMore: true,
+      nextBefore: '3',
+    });
+
+    render(<ChatPanel open={true} onOpenChange={vi.fn()} />);
+
+    expect(screen.getByTestId('chat-replay-top-sentinel')).toBeInTheDocument();
+    await act(async () => {
+      IOStub.last?.trigger(true);
+      await Promise.resolve();
+    });
+
+    await waitFor(() => {
+      expect(useChatStore.getState().messages.map((m) => m.id)).toEqual([3, 5]);
+    });
+    expect(mockedService.getMessagesPage).toHaveBeenCalledWith('s1', {
+      limit: 50,
+      before: '5',
+    });
+  });
+
+  it('compensates scrollTop when the older page prepends', async () => {
+    useChatStore.setState({
+      currentSessionId: 's1',
+      messages: [{ role: 'user', content: 'newer', id: 5 }],
+      replayHasMore: true,
+      replayNextBefore: '5',
+      isLoadingReplay: false,
+    });
+    mockedService.getMessagesPage.mockResolvedValueOnce({
+      messages: [makeRow(3, 'user', 'older question')],
+      hasMore: false,
+      nextBefore: null,
+    });
+
+    render(<ChatPanel open={true} onOpenChange={vi.fn()} />);
+    const list = screen.getByTestId('chat-message-list');
+    Object.defineProperty(list, 'scrollHeight', {
+      configurable: true,
+      get: () => (useChatStore.getState().messages.length > 1 ? 180 : 100),
+    });
+    list.scrollTop = 10;
+
+    await act(async () => {
+      IOStub.last?.trigger(true);
+      await Promise.resolve();
+    });
+    await waitFor(() => {
+      expect(useChatStore.getState().messages).toHaveLength(2);
+    });
+
+    expect(list.scrollTop).toBe(90);
+  });
+
+  it('drops the sentinel once the history is fully loaded', async () => {
+    useChatStore.setState({
+      currentSessionId: 's1',
+      messages: [{ role: 'user', content: 'only', id: 1 }],
+      replayHasMore: false,
+      replayNextBefore: null,
+      isLoadingReplay: false,
+    });
+
+    render(<ChatPanel open={true} onOpenChange={vi.fn()} />);
+
+    expect(screen.queryByTestId('chat-replay-top-sentinel')).toBeNull();
   });
 });

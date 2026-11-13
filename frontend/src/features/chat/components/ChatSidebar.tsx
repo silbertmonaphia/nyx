@@ -65,6 +65,14 @@ function timeLabel(iso: string): string {
   return [absoluteTime(iso), relativeTime(iso)].filter(Boolean).join(" · ");
 }
 
+const VISIBILITY_REFRESH_THROTTLE_MS = 30_000;
+
+let lastVisibilityRefreshAt = 0;
+
+export function resetVisibilityRefreshThrottleForTests(): void {
+  lastVisibilityRefreshAt = 0;
+}
+
 interface ChatSidebarProps {
   /**
    * Fired on every row click, before the store call — the mobile drawer
@@ -111,6 +119,26 @@ export const ChatSidebar: React.FC<ChatSidebarProps> = ({
       void loadMore();
     }
   }, [loadMore]);
+
+  useEffect(() => {
+    const refresh = () => {
+      const now = Date.now();
+      if (now - lastVisibilityRefreshAt < VISIBILITY_REFRESH_THROTTLE_MS) {
+        return;
+      }
+      lastVisibilityRefreshAt = now;
+      void useChat.getState().refreshSessionList();
+    };
+    const onVisibility = () => {
+      if (document.visibilityState === "visible") refresh();
+    };
+    document.addEventListener("visibilitychange", onVisibility);
+    window.addEventListener("focus", refresh);
+    return () => {
+      document.removeEventListener("visibilitychange", onVisibility);
+      window.removeEventListener("focus", refresh);
+    };
+  }, []);
 
   // Lazy-load the next page. The observer is pinned to the scroll
   // container (not the document viewport) and skipped while a page is in

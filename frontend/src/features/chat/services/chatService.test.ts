@@ -26,6 +26,7 @@ import CONFIRM_FRAME from './__fixtures__/confirm_request.sse?raw';
 import REATTACH_STREAM from './__fixtures__/reattach_stream.sse?raw';
 import STEP_TRACE_WIRE from './__fixtures__/step_trace.json';
 import FRAME_ID_STREAM from './__fixtures__/frame_id_stream.sse?raw';
+import MESSAGES_PAGE_FIXTURE from './__fixtures__/messages_page.json';
 
 // The chatService uses raw `fetch` for SSE (axios can't stream), and
 // `refreshTokensAndReplay` for the 401-retry contract. Mock both.
@@ -1813,5 +1814,87 @@ describe('chatService session endpoints', () => {
     expect(err).toBeInstanceOf(ChatApiError);
     expect((err as ChatApiError).status).toBe(401);
     expect(mockedRefresh).not.toHaveBeenCalled();
+  });
+});
+
+describe('chatService.getMessagesPage (agent-chat-history-perf 2.2)', () => {
+  beforeEach(() => {
+    fetchMock.mockReset();
+    mockedRefresh.mockReset();
+  });
+
+  it('parses the producer-captured paged response fixture', async () => {
+    fetchMock.mockResolvedValueOnce(jsonResponse(200, MESSAGES_PAGE_FIXTURE));
+
+    const page = await chatService.getMessagesPage('sess-1', { limit: 3 });
+
+    expect(fetchMock.mock.calls[0][0]).toMatch(
+      /\/chat\/sessions\/sess-1\/messages\?limit=3$/,
+    );
+    expect(page.messages.map((m) => m.id)).toEqual([5, 6, 7]);
+    expect(page.messages[0].content).toBe('msg-4');
+    expect(page.messages[1].steps?.[0]).toMatchObject({
+      id: 'step_1',
+      kind: 'tool',
+      status: 'ok',
+      tool_name: 'list_feeds',
+    });
+    expect(page.hasMore).toBe(true);
+    expect(page.nextBefore).toBe('5');
+  });
+
+  it('forwards the cursor as an opaque string parameter', async () => {
+    fetchMock.mockResolvedValueOnce(
+      jsonResponse(200, {
+        messages: [],
+        has_more: false,
+        next_before: null,
+      }),
+    );
+
+    const page = await chatService.getMessagesPage('sess-1', {
+      limit: 50,
+      before: '1730000000000000005',
+    });
+
+    expect(fetchMock.mock.calls[0][0]).toMatch(
+      /\/chat\/sessions\/sess-1\/messages\?limit=50&before=1730000000000000005$/,
+    );
+    expect(page.hasMore).toBe(false);
+    expect(page.nextBefore).toBeNull();
+  });
+
+  it('treats a pre-pagination response as a complete window', async () => {
+    fetchMock.mockResolvedValueOnce(
+      jsonResponse(200, {
+        messages: [
+          {
+            id: 1,
+            role: 'user',
+            content: 'old agent',
+            tool_calls: null,
+            steps: null,
+            tokens: 0,
+            created_at: '2026-10-14T10:00:00Z',
+          },
+        ],
+      }),
+    );
+
+    const page = await chatService.getMessagesPage('sess-1', { limit: 50 });
+
+    expect(page.messages).toHaveLength(1);
+    expect(page.hasMore).toBe(false);
+    expect(page.nextBefore).toBeNull();
+  });
+
+  it('ignores a non-string next_before', async () => {
+    fetchMock.mockResolvedValueOnce(
+      jsonResponse(200, { messages: [], has_more: true, next_before: 5 }),
+    );
+
+    const page = await chatService.getMessagesPage('sess-1', { limit: 50 });
+
+    expect(page.nextBefore).toBeNull();
   });
 });

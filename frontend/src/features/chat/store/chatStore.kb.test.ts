@@ -12,6 +12,7 @@ const mockedService = chatService as unknown as {
   createSession: ReturnType<typeof vi.fn>;
   listSessions: ReturnType<typeof vi.fn>;
   getMessages: ReturnType<typeof vi.fn>;
+  getMessagesPage: ReturnType<typeof vi.fn>;
   cancelRun: ReturnType<typeof vi.fn>;
 };
 
@@ -58,6 +59,15 @@ const reset = () => {
     .mockReset()
     .mockResolvedValue({ sessions: [], nextCursor: null });
   mockedService.getMessages.mockReset().mockResolvedValue([]);
+  mockedService.getMessagesPage
+    .mockReset()
+    .mockImplementation(async (id: string) => ({
+      messages: await (
+        mockedService.getMessages as unknown as (sid: string) => Promise<unknown[]>
+      )(id),
+      hasMore: false,
+      nextBefore: null,
+    }));
   mockedService.cancelRun.mockReset().mockResolvedValue(undefined);
 };
 

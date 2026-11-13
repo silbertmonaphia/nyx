@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { ChatSidebar } from './ChatSidebar';
+import { ChatSidebar, resetVisibilityRefreshThrottleForTests } from './ChatSidebar';
 import { i18n } from '~/i18n';
 import { useChatStore } from '../store/chatStore';
 import { chatService } from '../services/chatService';
@@ -15,6 +15,7 @@ vi.mock('../services/chatService');
 const mockedService = chatService as unknown as {
   listSessions: ReturnType<typeof vi.fn>;
   getMessages: ReturnType<typeof vi.fn>;
+  getMessagesPage: ReturnType<typeof vi.fn>;
   resumeSession: ReturnType<typeof vi.fn>;
   deleteSession: ReturnType<typeof vi.fn>;
 };
@@ -66,11 +67,21 @@ function resetStore(
 describe('ChatSidebar', () => {
   beforeEach(() => {
     IntersectionObserverStub.reset();
+    resetVisibilityRefreshThrottleForTests();
     resetStore();
     mockedService.listSessions
       .mockReset()
       .mockResolvedValue({ sessions: [], nextCursor: null });
     mockedService.getMessages.mockReset().mockResolvedValue([]);
+    mockedService.getMessagesPage
+      .mockReset()
+      .mockImplementation(async (id: string) => ({
+        messages: await (
+          mockedService.getMessages as unknown as (sid: string) => Promise<unknown[]>
+        )(id),
+        hasMore: false,
+        nextBefore: null,
+      }));
     mockedService.resumeSession.mockReset().mockResolvedValue(undefined);
     mockedService.deleteSession.mockReset().mockResolvedValue(undefined);
   });
@@ -233,7 +244,7 @@ describe('ChatSidebar', () => {
 
     await waitFor(() => {
       expect(useChatStore.getState().messages).toEqual([
-        { role: 'user', content: 'from history' },
+        { role: 'user', content: 'from history', id: 1 },
       ]);
     });
     expect(screen.getAllByTestId('chat-session-row')[1]).toHaveAttribute(
@@ -407,5 +418,76 @@ describe('ChatSidebar', () => {
     expect(times[1]).toHaveTextContent(/^\d{2}-\d{2} \d{2}:\d{2} · 3 天前$/);
 
     await i18n.changeLanguage('en');
+  });
+});
+
+describe('ChatSidebar visibility refresh (agent-chat-history-perf)', () => {
+  beforeEach(() => {
+    IntersectionObserverStub.reset();
+    resetVisibilityRefreshThrottleForTests();
+    resetStore({ sessionList: [makeSession('s1')] });
+    mockedService.listSessions
+      .mockReset()
+      .mockResolvedValue({ sessions: [makeSession('s2')], nextCursor: null });
+  });
+
+  it('refetches page 1 on focus and merges the fresh rows in', async () => {
+    render(<ChatSidebar />);
+    expect(mockedService.listSessions).not.toHaveBeenCalled();
+
+    window.dispatchEvent(new Event('focus'));
+
+    await waitFor(() => {
+      const rows = screen.getAllByTestId('chat-session-row');
+      expect(rows[0]).toHaveAttribute('data-session-id', 's2');
+    });
+    expect(mockedService.listSessions).toHaveBeenCalledTimes(1);
+  });
+
+  it('refetches when the tab becomes visible', async () => {
+    render(<ChatSidebar />);
+
+    document.dispatchEvent(new Event('visibilitychange'));
+
+    await waitFor(() => {
+      expect(mockedService.listSessions).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  it('throttles repeated triggers inside the window', async () => {
+    render(<ChatSidebar />);
+
+    window.dispatchEvent(new Event('focus'));
+    window.dispatchEvent(new Event('focus'));
+    document.dispatchEvent(new Event('visibilitychange'));
+
+    await waitFor(() => {
+      expect(mockedService.listSessions).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  it('keeps the existing rows and stays quiet when the refresh fails', async () => {
+    mockedService.listSessions.mockReset().mockRejectedValue(new Error('down'));
+    render(<ChatSidebar />);
+
+    window.dispatchEvent(new Event('focus'));
+
+    await waitFor(() => {
+      expect(mockedService.listSessions).toHaveBeenCalledTimes(1);
+    });
+    expect(screen.getAllByTestId('chat-session-row')[0]).toHaveAttribute(
+      'data-session-id',
+      's1',
+    );
+  });
+
+  it('stops listening on unmount', async () => {
+    const { unmount } = render(<ChatSidebar />);
+    unmount();
+
+    window.dispatchEvent(new Event('focus'));
+
+    await Promise.resolve();
+    expect(mockedService.listSessions).not.toHaveBeenCalled();
   });
 });
