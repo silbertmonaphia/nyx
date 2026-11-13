@@ -357,6 +357,57 @@ func TestSessionsProxy_ForwardBoundedBySessionsTimeout(t *testing.T) {
 	}
 }
 
+func TestSessionsProxy_ForwardBodySurvivesReturn(t *testing.T) {
+	release := make(chan struct{})
+	var releaseOnce sync.Once
+	unblock := func() { releaseOnce.Do(func() { close(release) }) }
+
+	payload := strings.Repeat("a", 64*1024)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		if f, ok := w.(http.Flusher); ok {
+			f.Flush()
+		}
+		<-release
+		_, _ = w.Write([]byte(payload))
+	}))
+	t.Cleanup(srv.Close)
+	t.Cleanup(unblock)
+
+	proxy, err := NewSessionsProxy(srv.URL, testServiceToken, &http.Client{})
+	require.NoError(t, err)
+
+	resp, err := proxy.Forward(context.Background(), sessionProxyRequest{
+		method: http.MethodGet,
+		path:   sessionsBasePath,
+		userID: 1,
+	})
+	require.NoError(t, err)
+	defer func() { _ = resp.Body.Close() }()
+
+	type readResult struct {
+		body []byte
+		err  error
+	}
+	done := make(chan readResult, 1)
+	go func() {
+		body, err := io.ReadAll(resp.Body)
+		done <- readResult{body: body, err: err}
+	}()
+
+	unblock()
+
+	select {
+	case got := <-done:
+		require.NoError(t, got.err,
+			"the response body must stay readable after Forward returns")
+		assert.Equal(t, payload, string(got.body))
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out reading the forwarded body")
+	}
+}
+
 // TestSessionsRoutes_AgentUnreachable_Returns502 pins the spec
 // scenario "Agent unreachable fails with 502": a dead upstream yields
 // the standard envelope with a STATIC detail — the dial error itself

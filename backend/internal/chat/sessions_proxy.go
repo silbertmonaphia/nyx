@@ -99,6 +99,17 @@ type SessionsProxy struct {
 	httpClient   *http.Client
 }
 
+type cancelOnCloseBody struct {
+	io.ReadCloser
+	cancel context.CancelFunc
+}
+
+func (b *cancelOnCloseBody) Close() error {
+	err := b.ReadCloser.Close()
+	b.cancel()
+	return err
+}
+
 // NewSessionsProxy builds a proxy that forwards to baseURL under
 // /agent/sessions. baseURL and serviceToken are required — an empty
 // value means the operator never configured the agent path, and the
@@ -166,10 +177,10 @@ type sessionProxyRequest struct {
 // indefinitely.
 func (p *SessionsProxy) Forward(ctx context.Context, req sessionProxyRequest) (*http.Response, error) {
 	ctx, cancel := context.WithTimeout(ctx, defaultSessionsTimeout)
-	defer cancel()
 
 	target, err := url.Parse(p.baseURL + req.path)
 	if err != nil {
+		cancel()
 		return nil, fmt.Errorf("chat: build agent session URL: %w", err)
 	}
 	// RawQuery is the already-escaped form taken off the inbound
@@ -181,6 +192,7 @@ func (p *SessionsProxy) Forward(ctx context.Context, req sessionProxyRequest) (*
 
 	httpReq, err := http.NewRequestWithContext(ctx, req.method, target.String(), req.body)
 	if err != nil {
+		cancel()
 		return nil, fmt.Errorf("chat: build agent session request: %w", err)
 	}
 	httpReq.Header.Set("X-Nyx-User-Id", strconv.Itoa(req.userID))
@@ -199,8 +211,10 @@ func (p *SessionsProxy) Forward(ctx context.Context, req sessionProxyRequest) (*
 		// Connection refused, DNS failure, timeout, TLS handshake
 		// error, ctx cancel — all land here and are rendered as 502
 		// by the handler. The wrapped error is logged, never shipped.
+		cancel()
 		return nil, fmt.Errorf("chat: agent session request failed: %w", err)
 	}
+	resp.Body = &cancelOnCloseBody{ReadCloser: resp.Body, cancel: cancel}
 	return resp, nil
 }
 
