@@ -7,6 +7,7 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { Button } from "~/components/ui/Button";
 import { Input } from "~/components/ui/Input";
 import { Label } from "~/components/ui/Label";
+import { Textarea } from "~/components/ui/Textarea";
 import { useAuthStore } from "~/store/authStore";
 import { useUiStore } from "~/store/uiStore";
 import { t as translate } from "~/i18n";
@@ -463,6 +464,18 @@ const SlotProbePanel = ({
                   ? `\n${JSON.stringify(probed.request.body)}`
                   : ""}
               </pre>
+              <Textarea
+                readOnly
+                rows={4}
+                value={toCurl(
+                  probed.request,
+                  t("llmConfig.probe.keyPlaceholder"),
+                )}
+                aria-label={t("llmConfig.probe.curlLabel")}
+                data-testid={`llm-probe-${slot}-curl`}
+                onFocus={(e) => e.currentTarget.select()}
+                className="min-h-0 bg-background p-2 font-mono text-xs md:text-xs"
+              />
               <Button
                 type="button"
                 variant="outline"

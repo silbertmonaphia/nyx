@@ -270,6 +270,7 @@ export const en: Translation = {
         copy: 'Copy as curl',
         copied: 'Copied',
         copyFailed: 'Copy failed',
+        curlLabel: 'Replayable curl command (click to select all)',
         keyPlaceholder: '<your API key>',
         skipped: 'Empty section — nothing probed',
         httpStatus: '(upstream HTTP {{code}})',

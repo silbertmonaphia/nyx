@@ -248,6 +248,17 @@ test.describe('BYOK connectivity probe (browser-level)', () => {
       await expect(page.getByTestId('llm-probe-chat-request')).toContainText(
         'Bearer ••••',
       );
+      const curlBox = page.getByTestId('llm-probe-chat-curl');
+      const curlValue = await curlBox.inputValue();
+      expect(curlValue).toContain(`curl -X POST '${stub.url}/chat/completions'`);
+      expect(curlValue).toContain('Bearer <your API key>');
+      expect(curlValue).not.toContain(RIGHT_KEY);
+      await curlBox.click();
+      expect(
+        await curlBox.evaluate(
+          (el) => (el as HTMLTextAreaElement).selectionEnd,
+        ),
+      ).toBe(curlValue.length);
       await page.getByTestId('llm-probe-chat-copy').click();
       await expect(page.getByTestId('llm-probe-chat-copy')).toHaveText(
         /Copied/,

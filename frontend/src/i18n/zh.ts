@@ -250,6 +250,7 @@ export const zh = {
         copy: '复制为 curl',
         copied: '已复制',
         copyFailed: '复制失败',
+        curlLabel: '可重放的 curl 命令（点击全选）',
         keyPlaceholder: '<你的API密钥>',
         skipped: '该分区为空，未探测',
         httpStatus: '（上游 HTTP {{code}}）',

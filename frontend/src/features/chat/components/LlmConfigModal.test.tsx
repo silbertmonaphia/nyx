@@ -622,6 +622,8 @@ describe('LlmConfigModal', () => {
 });
 
 describe('LlmConfigModal slot probe', () => {
+  const originalExecCommand = document.execCommand;
+
   beforeEach(() => {
     mockedUseLlmConfig.mockReset();
     mockSlotProbes();
@@ -631,6 +633,8 @@ describe('LlmConfigModal slot probe', () => {
   });
 
   afterEach(() => {
+    Object.assign(navigator, { clipboard: undefined });
+    document.execCommand = originalExecCommand;
     useAuthStore.setState({ user: null, isAuthenticated: false });
   });
 
@@ -739,6 +743,13 @@ describe('LlmConfigModal slot probe', () => {
     renderModal();
 
     await userEvent.click(screen.getByTestId('llm-probe-chat-toggle'));
+    const curlBox = screen.getByTestId(
+      'llm-probe-chat-curl',
+    ) as HTMLTextAreaElement;
+    expect(curlBox.value).toContain(
+      "curl -X POST 'https://api.deepseek.com/v1/chat/completions'",
+    );
+    expect(curlBox.value).toContain('Authorization: Bearer <your API key>');
     await userEvent.click(screen.getByTestId('llm-probe-chat-copy'));
 
     await vi.waitFor(() => {
@@ -749,6 +760,28 @@ describe('LlmConfigModal slot probe', () => {
     expect(curl).toContain('Authorization: Bearer <your API key>');
     expect(curl).not.toContain('••••abcd');
     expect(screen.getByTestId('llm-probe-chat-copy')).toHaveTextContent('Copied');
+  });
+
+  it('renders a selectable curl without any clipboard involvement', async () => {
+    Object.assign(navigator, { clipboard: undefined });
+    document.execCommand = vi.fn(
+      () => false,
+    ) as unknown as typeof document.execCommand;
+    mockHook({ status: unconfigured });
+    mockSlotProbes({ chat: { result: probeRequestFixture } });
+    renderModal();
+
+    await userEvent.click(screen.getByTestId('llm-probe-chat-toggle'));
+    const curlBox = screen.getByTestId(
+      'llm-probe-chat-curl',
+    ) as HTMLTextAreaElement;
+    expect(curlBox.value).toContain('Authorization: Bearer <your API key>');
+    expect(curlBox.value).not.toContain('••••abcd');
+    expect(document.execCommand).not.toHaveBeenCalled();
+
+    await userEvent.click(curlBox);
+    expect(curlBox.selectionStart).toBe(0);
+    expect(curlBox.selectionEnd).toBe(curlBox.value.length);
   });
 
   const probeRequestFixture = {
