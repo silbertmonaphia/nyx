@@ -2,7 +2,7 @@
 
 ## 1. Agent full-suite CI gate
 
-- [ ] 1.1 Add the `agent-test` job to `.github/workflows/ci.yml`: `backend/agent_py/**` path filter, `pgvector/pgvector:pg17` service with `POSTGRES_DB=nyx_test`, Python 3.12 + uv 0.10.9 setup, `uv sync --locked --extra dev`, `alembic upgrade head`, then `pytest tests/ -q`. Set `TEST_ASYNC_PG_DSN` (plain DSN), `PYTHON_AGENT_DATABASE_URL` (asyncpg DSN), `AGENT_SERVICE_TOKEN`, and `PYTHON_AGENT_LLM_BASE_URL`. Verify: the workflow YAML parses, and the job runs green on a branch with DB-backed tests reported as run, not skipped.
+- [x] 1.1 Add the `agent-test` job to `.github/workflows/ci.yml`: `backend/agent_py/**` path filter, `pgvector/pgvector:pg17` service with `POSTGRES_DB=nyx_test`, Python 3.12 + uv 0.10.9 setup, `uv sync --locked --extra dev`, `alembic upgrade head`, then `pytest tests/ -q`. Set `TEST_ASYNC_PG_DSN` (plain DSN), `PYTHON_AGENT_DATABASE_URL` (asyncpg DSN), `AGENT_SERVICE_TOKEN`, and `PYTHON_AGENT_LLM_BASE_URL`. Verify: the workflow YAML parses, and the job runs green on a branch with DB-backed tests reported as run, not skipped.
 
 - [x] 1.2 Add the anti-vacuity guard to the same job: run pytest with `-rs`, tee output, and fail when the skip summary contains `TEST_ASYNC_PG_DSN not set`. Verify: a local reproduction of the guard's shell snippet with the DSN unset exits non-zero, and the real job with the DSN set exits zero.
 
@@ -14,7 +14,7 @@
 
 - [x] 2.1 Add `RACE ?= -race` and a `test` target (`go test $(RACE) -count=1 ./...`) to `backend/Makefile`; keep `coverage*` targets race-free. Verify: `make -C backend test` runs the suite with `-race` and exits 0, and `RACE=` produces a race-free invocation.
 
-- [ ] 2.2 Change the CI backend `Test` step to `go test -race -v ./...`. Verify: the CI log shows the race flag, and the backend job stays green with the Postgres service.
+- [x] 2.2 Change the CI backend `Test` step to `go test -race -v ./...`. Verify: the CI log shows the race flag, and the backend job stays green with the Postgres service.
 
 - [x] 2.3 Update the `CLAUDE.md` backend test commands and `Harness.md` / `Harness.zh.md` gate inventory to name the race-enabled default. Verify: the documented commands and gate list match the Makefile and workflow.
 
@@ -34,7 +34,7 @@
 
 - [x] 4.1 Add `test.coverage` to `frontend/vite.config.ts` (v8, `src/**/*.{ts,tsx}` include, test/test-setup/generated-schema excludes, `text-summary` + `text` reporters, thresholds statements 86 / branches 80 / functions 84 / lines 88) and a `test:coverage` script. Verify: `npm run test:coverage` exits 0 and prints a summary above every threshold.
 
-- [ ] 4.2 Make `npm run test:coverage` the `frontend-test` CI `Test` step, replacing the plain `npm test` step. Verify: the CI log shows the coverage summary and the job is green.
+- [x] 4.2 Make `npm run test:coverage` the `frontend-test` CI `Test` step, replacing the plain `npm test` step. Verify: the CI log shows the coverage summary and the job is green.
 
 - [x] 4.3 Prove the floor is not vacuous: temporarily add a small untested module under `src/`, confirm coverage drops, then temporarily delete a covered test module and confirm the gate fails; restore both. Verify: both experiments exit non-zero only in the expected direction, and the restored tree is green.
 
@@ -44,7 +44,7 @@
 
 - [x] 5.1 Run the local gate sweep: `make -C backend test`, `make -C backend coverage-check`, `make -C backend/agent_py lint`, `make -C backend/agent_py test` (bare and with `TEST_ASYNC_PG_DSN`), `make -C backend/agent_py test-cov`, `npm test`, `npm run test:coverage`, `npm run build`. Verify: every command exits 0 and the coverage numbers meet their floors.
 
-- [ ] 5.2 Verify the CI run on the branch: all jobs green; the agent job's log shows DB-backed tests executing and the skip guard passing; the backend log shows `-race`; both coverage summaries are present. Verify: paste the four log excerpts into the task evidence.
+- [x] 5.2 Verify the CI run on the branch: all jobs green; the agent job's log shows DB-backed tests executing and the skip guard passing; the backend log shows `-race`; both coverage summaries are present. Verify: paste the four log excerpts into the task evidence.
 
 - [x] 5.3 Verify no new explanatory comments were added on changed lines (`python3 scripts/check_no_comments.py --range origin/mvp...HEAD` or the CI `no-new-comments` job). Verify: `python3 scripts/check_no_comments.py --range HEAD` exits 0 on the working tree (post-commit, the CI range check applies).
 
