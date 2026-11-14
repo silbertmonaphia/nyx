@@ -315,7 +315,12 @@ export const en: Translation = {
       upload: 'Upload file',
       uploadDone: 'Document uploaded',
       uploadFailed: 'Upload failed',
+      uploadEmpty: 'File is empty',
       uploadTooLarge: 'File is too large (max 1 MiB)',
+      uploadNotText:
+        'Only UTF-8 text files are supported (binary files cannot be indexed)',
+      uploadHint:
+        'UTF-8 text files only — .md, .txt, .csv, .json, source code; max 1 MiB per file',
       newDocument: 'New document',
       namePlaceholder: 'Document name (optional)',
       contentPlaceholder: 'Write your document in Markdown…',

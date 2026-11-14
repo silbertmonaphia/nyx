@@ -172,6 +172,73 @@ describe('KnowledgeBasePage', () => {
     );
   });
 
+  it('rejects a binary upload before calling the API', async () => {
+    renderPage();
+    const file = new File([new Uint8Array([0xff, 0xfe, 0x00, 0x01])], 'blob.md', {
+      type: 'text/markdown',
+    });
+    await userEvent.upload(screen.getByTestId('kb-file-input'), file);
+    expect(mockedService.uploadDocument).not.toHaveBeenCalled();
+    await waitFor(() =>
+      expect(
+        useUiStore.getState().toasts.some((toast) =>
+          toast.message.includes('UTF-8'),
+        ),
+      ).toBe(true),
+    );
+  });
+
+  it('rejects invalid UTF-8 without a NUL byte before calling the API', async () => {
+    renderPage();
+    const file = new File([new Uint8Array([0xc3, 0x28, 0x61])], 'broken.md', {
+      type: 'text/markdown',
+    });
+    await userEvent.upload(screen.getByTestId('kb-file-input'), file);
+    expect(mockedService.uploadDocument).not.toHaveBeenCalled();
+    await waitFor(() =>
+      expect(
+        useUiStore.getState().toasts.some((toast) =>
+          toast.message.includes('UTF-8'),
+        ),
+      ).toBe(true),
+    );
+  });
+
+  it('rejects ASCII-magic binaries such as a renamed PDF before calling the API', async () => {
+    renderPage();
+    const file = new File(['%PDF-1.7 fake pdf body'], 'renamed.pdf.md', {
+      type: 'text/markdown',
+    });
+    await userEvent.upload(screen.getByTestId('kb-file-input'), file);
+    expect(mockedService.uploadDocument).not.toHaveBeenCalled();
+    await waitFor(() =>
+      expect(
+        useUiStore.getState().toasts.some((toast) =>
+          toast.message.includes('UTF-8'),
+        ),
+      ).toBe(true),
+    );
+  });
+
+  it('rejects an empty file before calling the API', async () => {
+    renderPage();
+    const file = new File([], 'empty.md', { type: 'text/markdown' });
+    await userEvent.upload(screen.getByTestId('kb-file-input'), file);
+    expect(mockedService.uploadDocument).not.toHaveBeenCalled();
+    await waitFor(() =>
+      expect(
+        useUiStore.getState().toasts.some((toast) =>
+          toast.message.includes('empty'),
+        ),
+      ).toBe(true),
+    );
+  });
+
+  it('shows the upload constraints', () => {
+    renderPage();
+    expect(screen.getByTestId('kb-upload-hint')).toHaveTextContent('1 MiB');
+  });
+
   it('creates a typed document', async () => {
     mockedService.createTextDocument.mockResolvedValue(document);
     renderPage();

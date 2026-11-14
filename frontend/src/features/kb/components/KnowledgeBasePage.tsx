@@ -167,6 +167,34 @@ const DocumentRow: React.FC<{
 
 const KB_MAX_UPLOAD_BYTES = 1 << 20;
 
+const binaryMagicSignatures: number[][] = [
+  [0x25, 0x50, 0x44, 0x46],
+  [0x47, 0x49, 0x46, 0x38],
+  [0x50, 0x4b, 0x03, 0x04],
+  [0x52, 0x61, 0x72, 0x21],
+  [0x7f, 0x45, 0x4c, 0x46],
+  [0x4d, 0x5a],
+];
+
+const utf8Decoder = new TextDecoder('utf-8', { fatal: true });
+
+const hasBinaryMagic = (bytes: Uint8Array): boolean =>
+  binaryMagicSignatures.some((magic) =>
+    magic.every((byte, index) => bytes[index] === byte),
+  );
+
+const isTextUpload = async (file: File): Promise<boolean> => {
+  try {
+    const bytes = new Uint8Array(await file.arrayBuffer());
+    if (hasBinaryMagic(bytes)) return false;
+    if (bytes.includes(0)) return false;
+    utf8Decoder.decode(bytes);
+    return true;
+  } catch {
+    return false;
+  }
+};
+
 export const KnowledgeBasePage: React.FC = () => {
   const { t } = useTranslation();
   const sourcesQuery = useKbSources();
@@ -219,8 +247,16 @@ export const KnowledgeBasePage: React.FC = () => {
   };
 
   const uploadFile = async (file: File) => {
+    if (file.size === 0) {
+      addToast(t('kb.uploadEmpty'), 'error');
+      return;
+    }
     if (file.size > KB_MAX_UPLOAD_BYTES) {
       addToast(t('kb.uploadTooLarge'), 'error');
+      return;
+    }
+    if (!(await isTextUpload(file))) {
+      addToast(t('kb.uploadNotText'), 'error');
       return;
     }
     try {
@@ -297,7 +333,7 @@ export const KnowledgeBasePage: React.FC = () => {
           ref={fileInput}
           type="file"
           className="hidden"
-          accept=".md,.markdown,text/markdown,text/plain"
+          accept=".md,.markdown,.txt,.csv,.json,.log,.yaml,.yml,.xml,.py,.go,.js,.ts,.jsx,.tsx,.sql,.sh,.html,.css,.java,.c,.h,.cpp,.rs,text/markdown,text/plain"
           data-testid="kb-file-input"
           onChange={(event) => {
             const file = event.target.files?.[0];
@@ -314,6 +350,10 @@ export const KnowledgeBasePage: React.FC = () => {
           {t('kb.newDocument')}
         </Button>
       </div>
+
+      <p className="text-xs text-muted-foreground" data-testid="kb-upload-hint">
+        {t('kb.uploadHint')}
+      </p>
 
       {showNewDocument && (
         <div className="space-y-2 rounded-md border p-3" data-testid="kb-new-form">

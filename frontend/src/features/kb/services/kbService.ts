@@ -7,11 +7,11 @@ import type {
   KbSource,
 } from '../types/kb';
 
-const KB_READ_OPTIONS = { skipErrorToast: true, skipSentry: true };
+const KB_SILENT_OPTIONS = { skipErrorToast: true, skipSentry: true };
 
 export const kbService = {
   async listSources(): Promise<KbSource[]> {
-    const response = await api.get('/kb/sources', KB_READ_OPTIONS);
+    const response = await api.get('/kb/sources', KB_SILENT_OPTIONS);
     return response.data.sources ?? [];
   },
 
@@ -40,17 +40,21 @@ export const kbService = {
     if (filters.limit) params.set('limit', String(filters.limit));
     if (filters.offset) params.set('offset', String(filters.offset));
     const query = params.toString();
-    const response = await api.get(`/kb/documents${query ? `?${query}` : ''}`, KB_READ_OPTIONS);
+    const response = await api.get(`/kb/documents${query ? `?${query}` : ''}`, KB_SILENT_OPTIONS);
     return response.data.documents ?? [];
   },
 
   async getDocument(id: number): Promise<KbDocument> {
-    const response = await api.get(`/kb/documents/${id}`, KB_READ_OPTIONS);
+    const response = await api.get(`/kb/documents/${id}`, KB_SILENT_OPTIONS);
     return response.data;
   },
 
   async createTextDocument(name: string, content: string): Promise<KbDocument> {
-    const response = await api.post('/kb/documents', { name, content });
+    const response = await api.post(
+      '/kb/documents',
+      { name, content },
+      KB_SILENT_OPTIONS,
+    );
     return response.data;
   },
 
@@ -59,6 +63,7 @@ export const kbService = {
     form.append('file', file, file.name);
     const response = await api.post('/kb/documents', form, {
       headers: { 'Content-Type': 'multipart/form-data' },
+      ...KB_SILENT_OPTIONS,
     });
     return response.data;
   },
@@ -78,7 +83,7 @@ export const kbService = {
   },
 
   async getSettings(): Promise<KbSettings> {
-    const response = await api.get('/kb/settings', KB_READ_OPTIONS);
+    const response = await api.get('/kb/settings', KB_SILENT_OPTIONS);
     return response.data;
   },
 };

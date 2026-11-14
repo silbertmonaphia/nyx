@@ -61,7 +61,11 @@ describe('kbService', () => {
     expect(url).toBe('/kb/documents');
     expect(body).toBeInstanceOf(FormData);
     expect((body as FormData).get('file')).toBeInstanceOf(File);
-    expect(config).toEqual({ headers: { 'Content-Type': 'multipart/form-data' } });
+    expect(config).toEqual({
+      headers: { 'Content-Type': 'multipart/form-data' },
+      skipErrorToast: true,
+      skipSentry: true,
+    });
   });
 
   it('creates, updates and deletes documents', async () => {
@@ -70,10 +74,14 @@ describe('kbService', () => {
     mockedApi.delete.mockResolvedValue({ data: {} });
 
     await kbService.createTextDocument('typed', '# typed');
-    expect(mockedApi.post).toHaveBeenCalledWith('/kb/documents', {
-      name: 'typed',
-      content: '# typed',
-    });
+    expect(mockedApi.post).toHaveBeenCalledWith(
+      '/kb/documents',
+      {
+        name: 'typed',
+        content: '# typed',
+      },
+      { skipErrorToast: true, skipSentry: true },
+    );
 
     await kbService.updateDocument(5, 'new');
     expect(mockedApi.put).toHaveBeenCalledWith('/kb/documents/5', { content: 'new' });
