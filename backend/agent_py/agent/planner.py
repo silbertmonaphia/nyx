@@ -31,6 +31,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+from typing import Any, cast
 
 from langchain_core.callbacks import UsageMetadataCallbackHandler
 from langchain_core.exceptions import OutputParserException
@@ -255,7 +256,7 @@ async def plan_node(
                         if hasattr(m, "role")
                         else {"role": m.get("role"), "content": m.get("content")}
                     )
-                    for m in state.get("messages", [])
+                    for m in cast(Any, state.get("messages", []))
                 ]
             },
             metadata={
@@ -373,10 +374,7 @@ def _build_structured_client(
         user_supplied=effective.user_supplied,
         settings=settings,
         temperature=0.0,
-        # Transport field stays `max_tokens` (vLLM-compatible wire);
-        # langchain-openai 1.7 types only the renamed field, so mypy
-        # sees a mismatch that does not exist at runtime.
-        max_tokens=1024,  # type: ignore[call-arg]
+        max_tokens=1024,
     )
     response_format = {
         "type": "json_schema",
@@ -770,10 +768,7 @@ async def _emit_legacy_plan(
         user_supplied=effective.user_supplied,
         settings=settings,
         temperature=0.0,
-        # Transport field stays `max_tokens` (vLLM-compatible wire);
-        # langchain-openai 1.7 types only the renamed field, so mypy
-        # sees a mismatch that does not exist at runtime.
-        max_tokens=1024,  # type: ignore[call-arg]
+        max_tokens=1024,
     )
     with jaeger_span(tracer, "agent.planner.legacy") as span:
         span.set_attribute("structured", False)

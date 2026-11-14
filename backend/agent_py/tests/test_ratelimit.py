@@ -49,6 +49,7 @@ class _StubLlm:
 def _settings(burst: int = 200) -> Settings:
     return Settings(
         _env_file=None,  # hermetic: never read the developer's .env
+        database_url="",
         port=9000,
         metrics_port=9001,
         llm_base_url="http://stub",

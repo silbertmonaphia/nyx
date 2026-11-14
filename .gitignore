@@ -18,6 +18,7 @@ backend/*.test
 backend/*.out
 backend/vendor/
 backend/coverage.html
+backend/agent_py/.coverage
 
 # Python
 __pycache__/

@@ -91,7 +91,7 @@ def _patch_common(monkeypatch):
     monkeypatch.setattr(main_module, "RagClient", lambda *a, **kw: _StubRag())
 
 
-async def _open_run(app, settings, monkeypatch_free=True):
+async def _open_run(app, settings, monkeypatch_free=True, content="hi"):
     """Start a real run generator, consume the opening frames, return
     (gen, run_id). One extra frame is pulled past the opening note so the
     generator is suspended INSIDE the drain loop with the pump task live
@@ -101,7 +101,7 @@ async def _open_run(app, settings, monkeypatch_free=True):
     generator."""
     import agent.main as main_module
 
-    chat_req = ChatRequest(messages=[ChatMessage(role="user", content="hi")])
+    chat_req = ChatRequest(messages=[ChatMessage(role="user", content=content)])
     gen = main_module._stream_agent_run(
         chat_req,
         user_id=42,
@@ -188,7 +188,9 @@ async def _poll_until(check, interval=0.05):
 async def _fetch_row(query, *args):
     import asyncpg
 
-    conn = await asyncpg.connect(dsn=_DSN)
+    conn = await asyncpg.connect(
+        dsn=_DSN, server_settings={"search_path": "agent,langgraph"}
+    )
     try:
         return await conn.fetchrow(query, *args)
     finally:
@@ -768,6 +770,36 @@ async def test_detached_run_completes_and_persists(monkeypatch):
         run_id,
     )
     assert msg is not None, "the detached run must persist its assistant row"
+
+
+@dsn_gated
+async def test_null_content_user_message_persists_as_empty(monkeypatch):
+    """A user message with no content is stored as an empty string."""
+    from agent.budget import BudgetGuard
+    from agent.main import create_app, lifespan
+
+    _patch_common(monkeypatch)
+    await _drop_schemas()
+    settings = _settings()
+    _patch_settings(monkeypatch, settings)
+
+    app = create_app()
+    async with lifespan(app):
+        redis = fakeaioredis.FakeRedis(decode_responses=True)
+        app.state.budget = BudgetGuard(redis=redis, cap=10**9)
+        try:
+            gen, run_id, _last_id = await _open_run(app, settings, content=None)
+            await gen.aclose()
+            await _wait_registry_empty(app, run_id)
+        finally:
+            await redis.aclose()
+
+    row = await _fetch_row(
+        "SELECT content FROM chat_messages WHERE session_id=$1 AND role='user'",
+        run_id,
+    )
+    assert row is not None
+    assert row["content"] == ""
 
 
 @dsn_gated

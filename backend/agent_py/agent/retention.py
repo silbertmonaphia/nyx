@@ -55,7 +55,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 from opentelemetry import trace
 from prometheus_client import Counter
@@ -262,10 +262,11 @@ class RetentionCron:
         try/except inside the span), matching the run-iteration's per-id
         error isolation.
         """
+        chat_store = cast("ChatStore", self._chat_store)
         with _tracer.start_as_current_span("agent.chat.retention") as span:
             # Phase 1: soft-delete. Soft-deletes are not counted.
             try:
-                soft_ids = await self._chat_store.soft_delete_expired(
+                soft_ids = await chat_store.soft_delete_expired(
                     retention_days=self._settings.chat_retention_days
                 )
             except Exception as exc:  # noqa: BLE001
@@ -278,7 +279,7 @@ class RetentionCron:
             # Phase 2: hard-delete. Only the rows that survive both phases
             # count toward the metric.
             try:
-                hard_deleted_ids = await self._chat_store.hard_delete_soft_deleted(
+                hard_deleted_ids = await chat_store.hard_delete_soft_deleted(
                     grace_days=self._settings.chat_retention_grace_days
                 )
             except Exception as exc:  # noqa: BLE001
@@ -383,8 +384,9 @@ class RetentionCron:
         data would have been reaped anyway. The caller (`_run_once`) runs
         this independently of `gdpr_enabled` — see the comment there.
         """
+        audit_log = cast("AuditLog", self._audit_log)
         with _tracer.start_as_current_span("agent.audit.retention") as span:
-            deleted = await self._audit_log.retention_delete(
+            deleted = await audit_log.retention_delete(
                 self._settings.audit_retention_days
             )
             span.set_attribute("deleted_count", deleted)

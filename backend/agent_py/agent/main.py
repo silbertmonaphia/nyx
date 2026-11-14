@@ -33,6 +33,7 @@ import re
 import uuid
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from typing import cast
 
 from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.responses import JSONResponse, StreamingResponse
@@ -50,7 +51,7 @@ from .audit import AuditLog
 from .budget import BudgetGuard
 from .chat_store import ChatStore, ChatStoreUnavailable
 from .config import Settings, get_settings
-from .frames import TRUNCATED, FrameLog, parse_cursor
+from .frames import TRUNCATED, FrameLog, TruncatedType, parse_cursor
 from .graph import build_graph, run_agent_stream
 from .llm_client import build_chat_model
 from .llm_effective import (
@@ -818,7 +819,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                             ).model_dump(),
                         )
                     )
-                if cursor_frames is None or cursor_frames is TRUNCATED:
+                if cursor_frames is None or isinstance(cursor_frames, TruncatedType):
                     for frame in session.replay_frames():
                         yield _sse_encode(frame)
                     if session.pending_confirm is not None:
@@ -829,8 +830,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                             )
                         )
                 else:
-                    for frame in cursor_frames:
-                        yield frame
+                    for raw_frame in cursor_frames:
+                        yield raw_frame
                 async for item in _drain_run_queue(
                     sub, idle_seconds=float(settings.keepalive_seconds)
                 ):
@@ -842,7 +843,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                         continue
                     if isinstance(marker, int) and marker <= watermark:
                         continue
-                    yield payload
+                    yield cast(bytes, payload)
                 yield b"data: [DONE]\n\n"
             finally:
                 session.unsubscribe(sub)
@@ -952,10 +953,10 @@ async def _pump_events(state: AgentState, *, sink: RunSink, **kwargs) -> None:
         await sink.close()
 
 
-async def _drain_run_queue(
-    queue: asyncio.Queue,
+async def _drain_run_queue[QueueItem](
+    queue: asyncio.Queue[QueueItem | None],
     idle_seconds: float = _STREAM_KEEPALIVE_SECONDS,
-) -> AsyncIterator[tuple[str, object] | None]:
+) -> AsyncIterator[QueueItem | tuple[str, str] | None]:
     """Yield the run's sink items in order, with an idle keep-alive.
 
     Items are `("event", Event)`, `("comment", str)`, or `None` (the run's
@@ -1217,19 +1218,20 @@ class _RunSession:
             if kind == "comment":
                 yield None, f": {payload}\n\n".encode()
                 continue
-            self.collect(payload)
-            seq, frame = self.encode_event(payload)
+            self.collect(cast(Event, payload))
+            seq, frame = self.encode_event(cast(Event, payload))
             yield seq, frame
         self.drain_finished = True
         if (
             self.pump_task is not None
             and self.pump_task.done()
             and not self.pump_task.cancelled()
-            and self.pump_task.exception() is not None
         ):
-            raise self.pump_task.exception()
+            pump_error = self.pump_task.exception()
+            if pump_error is not None:
+                raise pump_error
 
-    async def _broadcast(self, item: tuple[str, object] | None) -> None:
+    async def _broadcast(self, item: tuple[int | None, bytes] | None) -> None:
         for sub in list(self._subscribers):
             sub.put_nowait(item)
 
@@ -1666,7 +1668,7 @@ async def _stream_agent_run(
                             run_id,
                             user_id,
                             role="user",
-                            content=msg.content,
+                            content=msg.content or "",
                         )
                     except ChatStoreUnavailable as exc:
                         log.warning(
@@ -1740,7 +1742,7 @@ async def _stream_agent_run(
                     ).model_dump(),
                 )
             )
-        if cursor_frames is None or cursor_frames is TRUNCATED:
+        if cursor_frames is None or isinstance(cursor_frames, TruncatedType):
             for frame in attach_session.replay_frames():
                 yield _sse_encode(frame)
             if attach_session.pending_confirm is not None:
@@ -1751,8 +1753,8 @@ async def _stream_agent_run(
                     )
                 )
         else:
-            for frame in cursor_frames:
-                yield frame
+            for raw_frame in cursor_frames:
+                yield raw_frame
         try:
             async for item in _drain_run_queue(
                 sub, idle_seconds=float(settings.keepalive_seconds)
@@ -1765,7 +1767,7 @@ async def _stream_agent_run(
                     continue
                 if isinstance(marker, int) and marker <= watermark:
                     continue
-                yield payload
+                yield cast(bytes, payload)
             yield b"data: [DONE]\n\n"
         finally:
             attach_session.unsubscribe(sub)
@@ -1912,7 +1914,7 @@ async def _stream_agent_run(
         trace_metadata["langfuse_session_id"] = str(run_id)
         trace_metadata["langfuse_user_id"] = str(user_id)
 
-    session = _RunSession(
+    run_session = _RunSession(
         run_id=run_id,
         user_id=user_id,
         request_id=request_id,
@@ -1931,8 +1933,8 @@ async def _stream_agent_run(
         title_written=title_written,
         persist_run_state=persist_run_state,
     )
-    session.start_heartbeat()
-    session.start_pump(
+    run_session.start_heartbeat()
+    run_session.start_pump(
         graph,
         graph_config,
         rag,
@@ -1942,18 +1944,18 @@ async def _stream_agent_run(
     )
     disconnected = False
     try:
-        async for _seq, frame in session.drain():
-            yield frame
+        async for _seq, raw_frame in run_session.drain():
+            yield raw_frame
     except (GeneratorExit, asyncio.CancelledError):
         disconnected = True
         raise
     finally:
-        if disconnected and settings.stream_detach_enabled and not session.drain_finished:
-            session.hand_off_detached()
+        if disconnected and settings.stream_detach_enabled and not run_session.drain_finished:
+            run_session.hand_off_detached()
         else:
-            await session.stop_background()
+            await run_session.stop_background()
             finalize_task = asyncio.create_task(
-                session.finalize(), name=f"agent-finalize-{run_id}"
+                run_session.finalize(), name=f"agent-finalize-{run_id}"
             )
             _FINALIZE_TASKS.add(finalize_task)
             finalize_task.add_done_callback(_FINALIZE_TASKS.discard)

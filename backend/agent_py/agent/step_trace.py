@@ -31,7 +31,7 @@ trace so the column stays NULL for runs that planned no steps.
 from __future__ import annotations
 
 from collections.abc import Mapping
-from typing import Any
+from typing import Any, TypeGuard
 
 _TERMINAL_STATUSES = frozenset({"ok", "failed"})
 
@@ -176,7 +176,7 @@ class StepTrace:
             entry["status"] = "running"
 
 
-def _valid_step_id(value: Any) -> bool:
+def _valid_step_id(value: Any) -> TypeGuard[str]:
     return isinstance(value, str) and bool(value)
 
 

@@ -9,7 +9,7 @@ paths only), `agent-lint` (ruff + mypy baseline diff + a two-file pytest
 subset + eval unit gate), `frontend-test` (typecheck, lint, arch, OpenAPI
 drift, vitest, build), and two e2e lanes. The agent's `tests/conftest.py`
 requires `TEST_ASYNC_PG_DSN` to name exactly `nyx_test` because its fixtures
-DROP and recreate `agent.*` / `langgraph.*`, and 20 test modules self-skip
+DROP and recreate `agent.*` / `langgraph.*`, and 19 test modules self-skip
 without it. The backend Makefile has no race flags; the agent Makefile encodes
 the mypy baseline mechanism; the frontend has `@vitest/coverage-v8` installed
 but no configuration or threshold.
@@ -18,8 +18,9 @@ Measured facts this design relies on (2026-11-13, this worktree):
 
 - `pytest tests/ --collect-only` → 856 tests; bare run self-skips every
   DB-backed module.
-- Frontend coverage, full `src/**` include: statements 88.62%, branches
-  82.94%, functions 87.04%, lines 91.04% (statements 2369/2673).
+- Frontend coverage, committed config (`src/**` include, `**/*.d.ts` excluded):
+  statements 89.07%, branches 83.53%, functions 87.82%, lines 91.53%
+  (statements 2333/2619).
 - `mypy agent`: 52 errors / 10 files. `--check-untyped-defs`, `--strict-equality`,
   `--warn-redundant-casts`, `--no-implicit-optional` add none; `--warn-unused-ignores`
   adds 2 (54); `--warn-return-any` adds 56 (108); `--strict` yields 251 / 22 files.
@@ -77,7 +78,7 @@ and slows every backend change even when the agent is untouched.
 ### D2 — Anti-vacuity: a DSN-skip guard in the same job
 
 If `TEST_ASYNC_PG_DSN` is renamed, misspelled, or dropped from the job env,
-20 modules still pass by self-skipping — the exact false-green this change
+19 modules still pass by self-skipping — the exact false-green this change
 exists to remove. The suite therefore runs with `-rs`, tees its output, and
 fails the job when the skip summary contains `TEST_ASYNC_PG_DSN not set`.
 Expected skips (`PYTHON_AGENT_LIVE_*` live-network modules) do not match that
@@ -126,7 +127,8 @@ Then fix all 52 errors: 19 `union-attr`, 17 `arg-type`, 8 `misc` (including one
 `import-untyped`, 3 `assignment`, 1 `attr-defined`. The four `import-untyped`
 findings are `asyncpg` (no bundled `py.typed`): add a targeted
 `[[tool.mypy.overrides]]` with `ignore_missing_imports = true` for
-`asyncpg` / `asyncpg.*` rather than adding a stub package dependency. Any
+`asyncpg` rather than adding a stub package dependency (the `asyncpg.*`
+wildcard entry trips `warn_unused_configs` because no submodule is imported). Any
 remaining suppression must be a narrow tool directive (`# type: ignore[code]`)
 on a line that a test proves necessary — the repo's no-comments rule permits
 tool directives, not explanations.
@@ -217,7 +219,7 @@ grandfathered policy for a larger Go tree.
   → only two exist today; remove or narrow them; future cases use targeted
   codes and tests.
 - **The skip guard is string-based** → it keys on the canonical reason text
-  shared by the 20 modules; a future reason rewording must keep the substring
+  shared by the 19 modules; a future reason rewording must keep the substring
   or update the guard in the same change.
 
 ## Migration Plan
