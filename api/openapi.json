@@ -897,7 +897,8 @@
               "invalid_config",
               "width_mismatch",
               "unreachable",
-              "timeout"
+              "timeout",
+              "slow_response"
             ],
             "type": "string"
           }

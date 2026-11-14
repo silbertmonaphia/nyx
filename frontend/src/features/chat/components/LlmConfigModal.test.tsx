@@ -750,6 +750,53 @@ describe('LlmConfigModal slot probe', () => {
     expect(curl).not.toContain('••••abcd');
     expect(screen.getByTestId('llm-probe-chat-copy')).toHaveTextContent('Copied');
   });
+
+  const probeRequestFixture = {
+    probed: true,
+    status: 'ok',
+    request: {
+      method: 'POST',
+      url: 'https://api.deepseek.com/v1/chat/completions',
+      headers: { Authorization: 'Bearer ••••abcd' },
+      body: { model: 'deepseek-chat', messages: [] },
+    },
+  };
+
+  it('falls back to execCommand when the clipboard API is unavailable', async () => {
+    Object.assign(navigator, { clipboard: undefined });
+    const execCopy = vi.fn(() => true);
+    document.execCommand = execCopy as unknown as typeof document.execCommand;
+    mockHook({ status: unconfigured });
+    mockSlotProbes({ chat: { result: probeRequestFixture } });
+    renderModal();
+
+    await userEvent.click(screen.getByTestId('llm-probe-chat-toggle'));
+    await userEvent.click(screen.getByTestId('llm-probe-chat-copy'));
+
+    await vi.waitFor(() => {
+      expect(execCopy).toHaveBeenCalled();
+    });
+    expect(screen.getByTestId('llm-probe-chat-copy')).toHaveTextContent('Copied');
+  });
+
+  it('shows copy failure feedback when every copy path fails', async () => {
+    const writeText = vi.fn().mockRejectedValue(new Error('denied'));
+    Object.assign(navigator, { clipboard: { writeText } });
+    const execCopy = vi.fn(() => false);
+    document.execCommand = execCopy as unknown as typeof document.execCommand;
+    mockHook({ status: unconfigured });
+    mockSlotProbes({ chat: { result: probeRequestFixture } });
+    renderModal();
+
+    await userEvent.click(screen.getByTestId('llm-probe-chat-toggle'));
+    await userEvent.click(screen.getByTestId('llm-probe-chat-copy'));
+
+    await vi.waitFor(() => {
+      expect(screen.getByTestId('llm-probe-chat-copy')).toHaveTextContent('Copy failed');
+    });
+    expect(writeText).toHaveBeenCalledTimes(1);
+    expect(execCopy).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe('LlmConfigModal probe result lifecycle', () => {
@@ -774,6 +821,7 @@ describe('LlmConfigModal probe result lifecycle', () => {
     width_mismatch: /Width mismatch/,
     unreachable: /Unreachable/,
     timeout: /Timed out/,
+    slow_response: /Slow response/,
   };
 
   for (const [status, label] of Object.entries(statusLabels)) {
@@ -785,7 +833,12 @@ describe('LlmConfigModal probe result lifecycle', () => {
       expect(el).toHaveTextContent(label);
       const destructive = el.className.includes('destructive');
       if (status === 'ok') expect(destructive).toBe(false);
-      if (status === 'rate_limited' || status === 'unreachable' || status === 'timeout') {
+      if (
+        status === 'rate_limited' ||
+        status === 'unreachable' ||
+        status === 'timeout' ||
+        status === 'slow_response'
+      ) {
         expect(el.className).toContain('amber');
       } else if (status !== 'ok') {
         expect(destructive).toBe(true);

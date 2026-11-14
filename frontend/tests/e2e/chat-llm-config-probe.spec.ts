@@ -64,6 +64,32 @@ function embedOK(): { status: number; body: unknown } {
   };
 }
 
+async function startStallingChatStub(): Promise<StubHandle> {
+  const requests: { auth: string; bodies: string[] }[] = [];
+  const server = http.createServer((req, res) => {
+    let raw = '';
+    req.on('data', (chunk) => {
+      raw += chunk;
+    });
+    req.on('end', () => {
+      requests.push({ auth: req.headers.authorization ?? '', bodies: [raw] });
+      res.writeHead(200, { 'Content-Type': 'text/event-stream' });
+      res.flushHeaders();
+    });
+  });
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const port = (server.address() as AddressInfo).port;
+  return {
+    url: `http://127.0.0.1:${port}/v1`,
+    requests,
+    close: () =>
+      new Promise<void>((resolve, reject) => {
+        server.closeAllConnections();
+        server.close((err) => (err ? reject(err) : resolve()));
+      }),
+  };
+}
+
 test.describe('BYOK connectivity probe (browser-level)', () => {
   test('a wrong key renders an inline credential failure, saves nothing', async ({
     page,
@@ -182,5 +208,58 @@ test.describe('BYOK connectivity probe (browser-level)', () => {
     const status = page.getByTestId('llm-probe-embedding-status');
     await expect(status).toBeVisible({ timeout: 15_000 });
     expect(await status.textContent()).toContain('Empty section');
+  });
+
+  test.describe('clipboard granted', () => {
+    test.use({ permissions: ['clipboard-read', 'clipboard-write'] });
+
+    test('a stalled stream after HTTP 200 renders slow_response with a copyable curl', async ({
+      page,
+    }) => {
+      test.setTimeout(90_000);
+      const statusBudget = 60_000;
+      const stub = await startStallingChatStub();
+      const user = makeTestUser('e2e_llmprobe_slow');
+      await registerViaUi(page, user);
+      const gate = page.getByRole('dialog', { name: GATE_TITLE });
+      await expect(gate).toBeVisible();
+
+      await page.locator('#llm-base-url').fill(stub.url);
+      await page.locator('#llm-model').fill('e2e-probe-model');
+      await page.locator('#llm-api-key').fill(RIGHT_KEY);
+      await page.getByTestId('llm-probe-chat-button').click();
+
+      const status = page.getByTestId('llm-probe-chat-status');
+      await expect(status).toBeVisible({ timeout: statusBudget });
+
+      if (PRIVATE_DENIED) {
+        expect(await status.textContent()).toContain('Unreachable');
+        expect(stub.requests).toHaveLength(0);
+        await stub.close();
+        return;
+      }
+
+      expect(await status.textContent()).toContain('Slow response');
+      expect(await status.textContent()).toContain('(upstream HTTP 200)');
+      expect(stub.requests).toHaveLength(1);
+      expect(stub.requests[0].auth).toBe(`Bearer ${RIGHT_KEY}`);
+
+      await page.getByTestId('llm-probe-chat-toggle').click();
+      await expect(page.getByTestId('llm-probe-chat-request')).toContainText(
+        'Bearer ••••',
+      );
+      await page.getByTestId('llm-probe-chat-copy').click();
+      await expect(page.getByTestId('llm-probe-chat-copy')).toHaveText(
+        /Copied/,
+        { timeout: 15_000 },
+      );
+      const curl = await page.evaluate(() =>
+        navigator.clipboard.readText(),
+      );
+      expect(curl).toContain(`curl -X POST '${stub.url}/chat/completions'`);
+      expect(curl).toContain('Bearer <your API key>');
+      expect(curl).not.toContain(RIGHT_KEY);
+      await stub.close();
+    });
   });
 });

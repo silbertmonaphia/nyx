@@ -640,7 +640,7 @@ export interface components {
             probed: boolean;
             request?: components["schemas"]["CapturedRequest"];
             /** @enum {string} */
-            status?: "ok" | "auth_failed" | "rate_limited" | "invalid_model" | "invalid_config" | "width_mismatch" | "unreachable" | "timeout";
+            status?: "ok" | "auth_failed" | "rate_limited" | "invalid_model" | "invalid_config" | "width_mismatch" | "unreachable" | "timeout" | "slow_response";
         };
         ValidateSlotsBody: {
             slots: components["schemas"]["ValidateResponseSlots"];

@@ -388,7 +388,7 @@ func setDefaults() {
 	// Router fires; 2s leaves room for the chat itself under a
 	// typical 60s LLM_TIMEOUT.
 	viper.SetDefault("LLM_PROBE_TIMEOUT", "2s")
-	viper.SetDefault("LLM_CONFIG_PROBE_TIMEOUT", "10s")
+	viper.SetDefault("LLM_CONFIG_PROBE_TIMEOUT", "30s")
 	// LLM_SYSTEM_PROMPT is left empty by default — the chat
 	// service falls back to a hard-coded "feed catalog
 	// assistant" prompt when the operator hasn't customised it.

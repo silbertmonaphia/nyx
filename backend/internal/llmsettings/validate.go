@@ -30,9 +30,10 @@ const (
 	ProbeWidthMismatch = "width_mismatch"
 	ProbeUnreachable   = "unreachable"
 	ProbeTimeout       = "timeout"
+	ProbeSlowResponse  = "slow_response"
 
 	probeQueryText            = "nyx connectivity probe"
-	defaultConfigProbeTimeout = 10 * time.Second
+	defaultConfigProbeTimeout = 30 * time.Second
 )
 
 type SlotProbeResult struct {
@@ -188,6 +189,10 @@ func (r *Resolver) probeOpenAISlot(ctx context.Context, tracer trace.Tracer, p o
 		res.HTTPStatus = st
 	} else if last := capture.LastStatus(); last > 0 {
 		res.HTTPStatus = last
+	}
+	if res.Status == ProbeTimeout && res.HTTPStatus > 0 {
+		res.Status = ProbeSlowResponse
+		res.Detail = fmt.Sprintf("no completion within %s", timeout)
 	}
 	res.Request = capture.Captured()
 	span.RecordError(probeErr)

@@ -155,7 +155,7 @@ type validateRequestInput struct {
 
 type validateSlotResponse struct {
 	Probed     bool                 `json:"probed"`
-	Status     string               `json:"status,omitempty" enum:"ok,auth_failed,rate_limited,invalid_model,invalid_config,width_mismatch,unreachable,timeout"`
+	Status     string               `json:"status,omitempty" enum:"ok,auth_failed,rate_limited,invalid_model,invalid_config,width_mismatch,unreachable,timeout,slow_response"`
 	HTTPStatus int                  `json:"http_status,omitempty"`
 	Detail     string               `json:"detail,omitempty"`
 	Request    *llm.CapturedRequest `json:"request,omitempty"`

@@ -164,6 +164,31 @@ func TestValidate_TimeoutIsDistinctFromUnreachable(t *testing.T) {
 	}})
 	require.NoError(t, err)
 	assert.Equal(t, ProbeTimeout, res.Slots.Chat.Status)
+	assert.Zero(t, res.Slots.Chat.HTTPStatus)
+}
+
+func TestValidate_SlowResponseAfterHeaders(t *testing.T) {
+	stall := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		if f, ok := w.(http.Flusher); ok {
+			f.Flush()
+		}
+		<-req.Context().Done()
+	}))
+	t.Cleanup(stall.Close)
+	svc, _, _ := newTestService(t)
+	base := &config.Config{LLMConfigProbeTimeout: "150ms", BYOKAllowPrivateURL: true, EmbeddingDimensions: 1024}
+	r := NewResolver(svc, base, noop.NewTracerProvider())
+
+	res, err := r.Validate(context.Background(), 5, ValidateInput{Values: UpdateInput{
+		LLMBaseURL: stall.URL + "/v1", LLMAPIKey: plantedKey, LLMModel: "m",
+	}})
+	require.NoError(t, err)
+	require.NotNil(t, res.Slots.Chat)
+	assert.Equal(t, ProbeSlowResponse, res.Slots.Chat.Status)
+	assert.Equal(t, http.StatusOK, res.Slots.Chat.HTTPStatus)
+	assert.Contains(t, res.Slots.Chat.Detail, "no completion within")
 }
 
 func TestValidate_BlankKeyResolvesStoredKey(t *testing.T) {

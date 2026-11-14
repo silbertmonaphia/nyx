@@ -269,6 +269,7 @@ export const en: Translation = {
         hideRequest: 'Hide request',
         copy: 'Copy as curl',
         copied: 'Copied',
+        copyFailed: 'Copy failed',
         keyPlaceholder: '<your API key>',
         skipped: 'Empty section — nothing probed',
         httpStatus: '(upstream HTTP {{code}})',
@@ -281,6 +282,8 @@ export const en: Translation = {
           width_mismatch: 'Width mismatch — the returned vector width differs from the deployment requirement',
           unreachable: 'Unreachable — network failure or endpoint down',
           timeout: 'Timed out — the endpoint did not respond in time',
+          slow_response:
+            'Slow response — the endpoint connected but did not finish generating within the time budget',
         },
       },
       errors: {

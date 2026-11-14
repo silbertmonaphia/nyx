@@ -45,7 +45,8 @@ export type LlmSlotProbeStatus =
   | "invalid_config"
   | "width_mismatch"
   | "unreachable"
-  | "timeout";
+  | "timeout"
+  | "slow_response";
 
 export interface LlmSlotProbeRequest {
   method: string;

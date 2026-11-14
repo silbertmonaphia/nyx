@@ -249,6 +249,7 @@ export const zh = {
         hideRequest: '收起请求',
         copy: '复制为 curl',
         copied: '已复制',
+        copyFailed: '复制失败',
         keyPlaceholder: '<你的API密钥>',
         skipped: '该分区为空，未探测',
         httpStatus: '（上游 HTTP {{code}}）',
@@ -261,6 +262,7 @@ export const zh = {
           width_mismatch: '维度不符 — 端点返回的向量宽度与部署要求不一致',
           unreachable: '无法连接 — 网络不通或端点不可达',
           timeout: '超时 — 端点在规定时间内未响应',
+          slow_response: '响应过慢 — 端点已连接，但未在规定时间内完成生成',
         },
       },
       errors: {

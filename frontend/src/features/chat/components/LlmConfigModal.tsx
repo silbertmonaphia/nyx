@@ -328,6 +328,7 @@ function probeStatusClass(status: LlmSlotProbeStatus): string {
     case "rate_limited":
     case "unreachable":
     case "timeout":
+    case "slow_response":
       return "text-amber-600 dark:text-amber-400";
     default:
       return "text-destructive";
@@ -347,6 +348,30 @@ function toCurl(req: LlmSlotProbeRequest, keyPlaceholder: string): string {
   return lines.join(" \\\n");
 }
 
+async function copyTextToClipboard(text: string): Promise<boolean> {
+  if (navigator.clipboard?.writeText) {
+    try {
+      await navigator.clipboard.writeText(text);
+      return true;
+    } catch {}
+  }
+  const helper = document.createElement("textarea");
+  helper.value = text;
+  helper.setAttribute("readonly", "");
+  helper.style.position = "fixed";
+  helper.style.opacity = "0";
+  document.body.appendChild(helper);
+  helper.select();
+  let copied = false;
+  try {
+    copied = document.execCommand("copy");
+  } catch {
+    copied = false;
+  }
+  document.body.removeChild(helper);
+  return copied;
+}
+
 const SlotProbePanel = ({
   slot,
   buildValues,
@@ -356,12 +381,12 @@ const SlotProbePanel = ({
 }) => {
   const { t } = useTranslation();
   const [showRequest, setShowRequest] = useState(false);
-  const [copied, setCopied] = useState(false);
+  const [copyState, setCopyState] = useState<"copied" | "failed" | null>(null);
   const { probeAsync, isPending, result } = useLlmSlotProbe(slot);
   const probed: LlmSlotProbeResult | null = result;
 
   const run = async () => {
-    setCopied(false);
+    setCopyState(null);
     try {
       await probeAsync(buildValues());
     } catch {
@@ -371,14 +396,10 @@ const SlotProbePanel = ({
 
   const copy = async () => {
     if (!probed?.request) return;
-    try {
-      await navigator.clipboard.writeText(
-        toCurl(probed.request, t("llmConfig.probe.keyPlaceholder")),
-      );
-      setCopied(true);
-    } catch {
-      return;
-    }
+    const copied = await copyTextToClipboard(
+      toCurl(probed.request, t("llmConfig.probe.keyPlaceholder")),
+    );
+    setCopyState(copied ? "copied" : "failed");
   };
 
   return (
@@ -449,9 +470,11 @@ const SlotProbePanel = ({
                 onClick={copy}
                 data-testid={`llm-probe-${slot}-copy`}
               >
-                {copied
+                {copyState === "copied"
                   ? t("llmConfig.probe.copied")
-                  : t("llmConfig.probe.copy")}
+                  : copyState === "failed"
+                    ? t("llmConfig.probe.copyFailed")
+                    : t("llmConfig.probe.copy")}
               </Button>
             </div>
           ) : null}

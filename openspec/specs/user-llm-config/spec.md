@@ -246,7 +246,7 @@ The API SHALL expose `POST /api/me/llm-config/validate`, authenticated by Bearer
 
 ### Requirement: Probe results are classified per slot
 
-Each probed slot SHALL return a status from the fixed set `ok`, `auth_failed`, `rate_limited`, `invalid_model`, `invalid_config`, `width_mismatch`, `unreachable`, `timeout`, together with the upstream HTTP status code where the upstream produced one. Upstream `401` and `403` SHALL map to `auth_failed`; `429` SHALL map to `rate_limited`; `404` with a model-shaped cause SHALL map to `invalid_model`, and on a slot without model semantics (Tavily) a `404` SHALL map to `invalid_config` (the endpoint path is wrong); an upstream `400` SHALL map to `invalid_config` (the probe's request shape is fixed, so a schema rejection means the submitted values do not fit the endpoint); a request that never reached the upstream (DNS, dial, TLS) SHALL map to `unreachable`; exceeding the probe timeout SHALL map to `timeout`; and an embedding vector whose width differs from the deployment's embedding width SHALL map to `width_mismatch`. Classification SHALL be derived from a typed carrier of the upstream status, not from parsing error strings. The fixed set and each slot's meaning SHALL be identical across slots.
+Each probed slot SHALL return a status from the fixed set `ok`, `auth_failed`, `rate_limited`, `invalid_model`, `invalid_config`, `width_mismatch`, `unreachable`, `timeout`, `slow_response`, together with the upstream HTTP status code where the upstream produced one. Upstream `401` and `403` SHALL map to `auth_failed`; `429` SHALL map to `rate_limited`; `404` with a model-shaped cause SHALL map to `invalid_model`, and on a slot without model semantics (Tavily) a `404` SHALL map to `invalid_config` (the endpoint path is wrong); an upstream `400` SHALL map to `invalid_config` (the probe's request shape is fixed, so a schema rejection means the submitted values do not fit the endpoint); a request that never reached the upstream (DNS, dial, TLS) SHALL map to `unreachable`; exceeding the probe timeout without the upstream having produced a response SHALL map to `timeout`, and exceeding it after the upstream already returned response headers (the endpoint connected but did not finish the completion) SHALL map to `slow_response` with the captured HTTP status; and an embedding vector whose width differs from the deployment's embedding width SHALL map to `width_mismatch`. Classification SHALL be derived from a typed carrier of the upstream status, not from parsing error strings. The fixed set and each slot's meaning SHALL be identical across slots.
 
 #### Scenario: Upstream status is visible in the result
 
@@ -263,9 +263,14 @@ Each probed slot SHALL return a status from the fixed set `ok`, `auth_failed`, `
 - **WHEN** the upstream accepts the connection but does not respond within the probe timeout
 - **THEN** the slot's result is `timeout`, not `unreachable`
 
+#### Scenario: Slow completion after response headers is slow_response
+
+- **WHEN** the upstream returns response headers but the completion does not finish within the probe timeout
+- **THEN** the slot's result is `slow_response` carrying the captured upstream HTTP status, not the contradictory pairing of `timeout` with a non-zero HTTP status
+
 ### Requirement: Probes are bounded and side-effect free
 
-Each probe request SHALL pass the same SSRF validation and honour `BYOK_ALLOW_PRIVATE_URL` with the same semantics as the runtime path. Probe base URLs SHALL be validated with the same scheme allowlist (http/https) and userinfo rejection the PUT path applies, so a credential embedded in the URL is rejected as `invalid_config` rather than echoed in the disclosure. Each slot's probe SHALL run under a bounded, configured timeout (default 10 seconds, independent of the router probe timeout). The endpoint SHALL be rate limited per user. Probe outcomes SHALL be logged with the slot name and outcome only — never an API key, authorization header, or upstream response body — and probe results SHALL NOT be cached.
+Each probe request SHALL pass the same SSRF validation and honour `BYOK_ALLOW_PRIVATE_URL` with the same semantics as the runtime path. Probe base URLs SHALL be validated with the same scheme allowlist (http/https) and userinfo rejection the PUT path applies, so a credential embedded in the URL is rejected as `invalid_config` rather than echoed in the disclosure. Each slot's probe SHALL run under a bounded, configured timeout (default 30 seconds, independent of the router probe timeout). The endpoint SHALL be rate limited per user. Probe outcomes SHALL be logged with the slot name and outcome only — never an API key, authorization header, or upstream response body — and probe results SHALL NOT be cached.
 
 #### Scenario: Private endpoint follows the runtime gate
 

@@ -91,6 +91,7 @@ start_backend() {
     AGENT_SERVICE_TOKEN="$AGENT_SERVICE_TOKEN" \
     CORS_ALLOWED_ORIGINS="http://localhost:${VITE_PORT},http://127.0.0.1:${VITE_PORT}" \
     BYOK_ALLOW_PRIVATE_URL='true' \
+    LLM_CONFIG_PROBE_TIMEOUT="${LLM_CONFIG_PROBE_TIMEOUT:-3s}" \
       go run ./cmd/api > "$(logfile backend)" 2>&1 &
     echo $! > "$(pidfile backend)"
   )
