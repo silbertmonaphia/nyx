@@ -301,7 +301,7 @@ export const KnowledgeBasePage: React.FC = () => {
 
   return (
     <div className="w-full max-w-3xl mx-auto space-y-4" data-testid="kb-page">
-      <div className="flex items-center gap-2">
+      <div className="flex flex-col items-start gap-2">
         <h2 className="text-lg font-semibold">{t('kb.title')}</h2>
         <Button
           type="button"
