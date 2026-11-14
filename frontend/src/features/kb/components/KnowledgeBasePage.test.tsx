@@ -71,7 +71,6 @@ describe('KnowledgeBasePage', () => {
     mockedService.listDocuments.mockResolvedValue([]);
     mockedService.getSettings.mockResolvedValue({
       enabled: true,
-      private_base: '/srv/kb/users/1',
       embedding_model: 'model-a',
     });
   });

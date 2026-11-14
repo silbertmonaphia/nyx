@@ -61,7 +61,6 @@ describe('useKbAvailability', () => {
   it('becomes true once the settings endpoint reports the corpus enabled', async () => {
     mockedService.getSettings.mockResolvedValue({
       enabled: true,
-      private_base: '/srv/kb/users',
       embedding_model: 'mock-embedding',
     });
     const { result } = renderHook(() => useAvailabilityProbe(), {
@@ -74,7 +73,6 @@ describe('useKbAvailability', () => {
   it('settles false when the settings endpoint reports the corpus disabled', async () => {
     mockedService.getSettings.mockResolvedValue({
       enabled: false,
-      private_base: '',
       embedding_model: '',
     });
     const { result } = renderHook(() => useAvailabilityProbe(), {

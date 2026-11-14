@@ -107,24 +107,6 @@
         },
         "type": "object"
       },
-      "CreateSourceInputBody": {
-        "additionalProperties": false,
-        "properties": {
-          "name": {
-            "maxLength": 200,
-            "type": "string"
-          },
-          "root_path": {
-            "maxLength": 1024,
-            "type": "string"
-          }
-        },
-        "required": [
-          "name",
-          "root_path"
-        ],
-        "type": "object"
-      },
       "DocumentView": {
         "additionalProperties": false,
         "properties": {
@@ -595,14 +577,10 @@
           },
           "enabled": {
             "type": "boolean"
-          },
-          "private_base": {
-            "type": "string"
           }
         },
         "required": [
           "enabled",
-          "private_base",
           "embedding_model"
         ],
         "type": "object"
@@ -1586,50 +1564,6 @@
           }
         ],
         "summary": "List knowledge sources",
-        "tags": [
-          "knowledge"
-        ]
-      },
-      "post": {
-        "operationId": "create-kb-source",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/CreateSourceInputBody"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/SourceView"
-                }
-              }
-            },
-            "description": "OK"
-          },
-          "default": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            },
-            "description": "Error"
-          }
-        },
-        "security": [
-          {
-            "BearerAuth": []
-          }
-        ],
-        "summary": "Register a private knowledge directory",
         "tags": [
           "knowledge"
         ]

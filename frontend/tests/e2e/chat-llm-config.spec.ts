@@ -22,8 +22,10 @@ test.describe('LLM configuration gate (browser-level)', () => {
     const gate = page.getByRole('dialog', { name: GATE_TITLE });
     await expect(gate).toBeVisible();
     await expect(gate.getByRole('button', { name: 'Close' })).toHaveCount(1);
+    await expect(gate.getByTestId('llm-config-save')).toBeVisible();
     await expect(page.getByTestId('chat-form')).not.toBeVisible();
     await expect(page.getByTestId('llm-config-clear')).toHaveCount(0);
+    await expect(gate.getByTestId('kb-private-source')).toHaveCount(0);
   });
 
   test('closing the gate returns to the feed view and stays closed until the agent is reopened', async ({

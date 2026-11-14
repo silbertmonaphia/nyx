@@ -26,16 +26,6 @@ ON CONFLICT (scope, COALESCE(owner_id, 0), name) DO UPDATE SET
     updated_at = CURRENT_TIMESTAMP
 RETURNING *;
 
--- name: UpsertUserDirSource :one
-INSERT INTO kb_sources (scope, owner_id, name, kind, root_path)
-VALUES ('user', $1, $2, 'dir', $3)
-ON CONFLICT (scope, COALESCE(owner_id, 0), name) DO UPDATE SET
-    root_path  = EXCLUDED.root_path,
-    kind       = 'dir',
-    enabled    = TRUE,
-    updated_at = CURRENT_TIMESTAMP
-RETURNING *;
-
 -- name: EnsureInlineSource :one
 INSERT INTO kb_sources (scope, owner_id, name, kind)
 VALUES ('user', $1, 'inline', 'inline')

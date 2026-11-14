@@ -28,7 +28,6 @@ type Store interface {
 	ListAllSources(ctx context.Context) ([]Source, error)
 	ListSourcesByOwner(ctx context.Context, ownerID int64) ([]Source, error)
 	UpsertSharedSource(ctx context.Context, name, rootPath string) (Source, error)
-	UpsertUserDirSource(ctx context.Context, ownerID int64, name, rootPath string) (Source, error)
 	EnsureInlineSource(ctx context.Context, ownerID int64) (Source, error)
 	SetSourceEnabled(ctx context.Context, id, ownerID int64, enabled bool) (Source, error)
 	DeleteUserSource(ctx context.Context, id, ownerID int64) (int64, error)
@@ -113,18 +112,6 @@ func (s *SQLStore) ListSourcesByOwner(ctx context.Context, ownerID int64) ([]Sou
 
 func (s *SQLStore) UpsertSharedSource(ctx context.Context, name, rootPath string) (Source, error) {
 	row, err := s.q.UpsertSharedSource(ctx, kbdb.UpsertSharedSourceParams{Name: name, RootPath: pgText(rootPath)})
-	if err != nil {
-		return Source{}, err
-	}
-	return sourceFromRow(row), nil
-}
-
-func (s *SQLStore) UpsertUserDirSource(ctx context.Context, ownerID int64, name, rootPath string) (Source, error) {
-	row, err := s.q.UpsertUserDirSource(ctx, kbdb.UpsertUserDirSourceParams{
-		OwnerID:  pgInt8(ownerID),
-		Name:     name,
-		RootPath: pgText(rootPath),
-	})
 	if err != nil {
 		return Source{}, err
 	}

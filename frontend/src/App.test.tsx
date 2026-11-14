@@ -19,9 +19,7 @@ vi.mock('./features/kb/components/KnowledgeBasePage', () => ({
 vi.mock('./features/kb/hooks/useKb', () => ({
   useKbAvailability: vi.fn(() => true),
   useKbSettings: vi.fn(() => ({ data: undefined, isLoading: false, isError: false })),
-  useKbMutations: vi.fn(() => ({
-    createSource: { mutateAsync: vi.fn(), isPending: false },
-  })),
+  useKbMutations: vi.fn(() => ({})),
 }));
 vi.mock('./features/chat/components/ChatPanel', () => ({
   ChatPanel: ({

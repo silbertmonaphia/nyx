@@ -3,8 +3,6 @@ package kb
 import (
 	"context"
 	"encoding/json"
-	"os"
-	"path/filepath"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -12,10 +10,9 @@ import (
 	"go.opentelemetry.io/otel/trace/noop"
 )
 
-func testConfig(privateBase string) Config {
+func testConfig() Config {
 	return Config{
 		Enabled:          true,
-		PrivateBase:      privateBase,
 		SharedSourceName: "shared",
 		Chunk:            ChunkOptions{TargetTokens: 100, MaxTokens: 200, MinTokens: 5, OverlapTokens: 0},
 		TopK:             5,
@@ -29,53 +26,10 @@ func newTestService(store *fakeStore, embedder Embedder, cfg Config) *Service {
 	return NewService(store, indexer, cfg, embedder, noop.NewTracerProvider().Tracer("test"))
 }
 
-func TestServiceRegisterSourceAcceptsRootInsideBase(t *testing.T) {
-	base := t.TempDir()
-	root := filepath.Join(base, "alice")
-	require.NoError(t, os.MkdirAll(root, 0o750))
-	store := newFakeStore()
-	service := newTestService(store, &countingEmbedder{}, testConfig(base))
-
-	src, err := service.RegisterSource(context.Background(), 1, "my notes", root)
-	require.NoError(t, err)
-	assert.Equal(t, ScopeUser, src.Scope)
-	assert.Equal(t, int64(1), src.OwnerID)
-	assert.Equal(t, KindDir, src.Kind)
-	assert.Equal(t, root, src.RootPath)
-}
-
-func TestServiceRegisterSourceRefusalsDoNotNamePaths(t *testing.T) {
-	base := t.TempDir()
-	inside := filepath.Join(base, "alice")
-	require.NoError(t, os.MkdirAll(inside, 0o750))
-	outside := t.TempDir()
-	store := newFakeStore()
-	service := newTestService(store, &countingEmbedder{}, testConfig(base))
-
-	cases := []string{outside, filepath.Join(base, "missing"), base}
-	for _, root := range cases {
-		_, err := service.RegisterSource(context.Background(), 1, "mine", root)
-		require.Error(t, err)
-		assert.ErrorIs(t, err, ErrInvalidSourceRoot)
-		assert.NotContains(t, err.Error(), base)
-		assert.NotContains(t, err.Error(), outside)
-		assert.Empty(t, store.sources)
-	}
-}
-
-func TestServiceRegisterSourceRequiresPrivateBase(t *testing.T) {
-	root := t.TempDir()
-	store := newFakeStore()
-	service := newTestService(store, &countingEmbedder{}, testConfig(""))
-
-	_, err := service.RegisterSource(context.Background(), 1, "mine", root)
-	assert.ErrorIs(t, err, ErrPrivateBaseNotSetup)
-}
-
 func TestServiceProvisionSharedIsIdempotent(t *testing.T) {
 	root := t.TempDir()
 	store := newFakeStore()
-	cfg := testConfig("")
+	cfg := testConfig()
 	cfg.Root = root
 	service := newTestService(store, &countingEmbedder{}, cfg)
 
@@ -92,7 +46,7 @@ func TestServiceProvisionSharedIsIdempotent(t *testing.T) {
 
 func TestServiceProvisionInlineHasNoRootPath(t *testing.T) {
 	store := newFakeStore()
-	service := newTestService(store, &countingEmbedder{}, testConfig(""))
+	service := newTestService(store, &countingEmbedder{}, testConfig())
 
 	first, err := service.ProvisionInline(context.Background(), 9)
 	require.NoError(t, err)
@@ -107,25 +61,23 @@ func TestServiceListSourcesReportsVisibleCounts(t *testing.T) {
 	store := newFakeStore()
 	shared, err := store.UpsertSharedSource(context.Background(), "shared", t.TempDir())
 	require.NoError(t, err)
-	private, err := store.UpsertUserDirSource(context.Background(), 1, "mine", t.TempDir())
-	require.NoError(t, err)
-	_, err = store.UpsertUserDirSource(context.Background(), 2, "other", t.TempDir())
+	inline, err := store.EnsureInlineSource(context.Background(), 1)
 	require.NoError(t, err)
 
 	doc, err := store.UpsertFileDocument(context.Background(), Document{
-		SourceID: private.ID, Scope: ScopeUser, OwnerID: 1, Origin: OriginFile,
-		RelPath: "dir/a.md", Title: "a", DocType: DocTypeMarkdown, ContentHash: hashBytes([]byte("a")),
+		SourceID: inline.ID, Scope: ScopeUser, OwnerID: 1, Origin: OriginFile,
+		RelPath: "a.md", Title: "a", DocType: DocTypeMarkdown, ContentHash: hashBytes([]byte("a")),
 	})
 	require.NoError(t, err)
 	_, err = store.InsertChunk(context.Background(), Chunk{
-		DocumentID: doc.ID, Scope: ScopeUser, OwnerID: 1, SourceID: private.ID,
+		DocumentID: doc.ID, Scope: ScopeUser, OwnerID: 1, SourceID: inline.ID,
 		Generation: 1, Ordinal: 0, HeadingPath: []string{"H"}, Content: "body", EmbedText: "e",
 		ContentHash: hashBytes([]byte("body")), EmbeddingModel: "model-x",
 	})
 	require.NoError(t, err)
 	sharedDoc, err := store.UpsertFileDocument(context.Background(), Document{
 		SourceID: shared.ID, Scope: ScopeShared, Origin: OriginFile,
-		RelPath: "public.md", Title: "p", DocType: DocTypeMarkdown, ContentHash: hashBytes([]byte("p")),
+		RelPath: "dir/public.md", Title: "p", DocType: DocTypeMarkdown, ContentHash: hashBytes([]byte("p")),
 	})
 	require.NoError(t, err)
 	_, err = store.InsertChunk(context.Background(), Chunk{
@@ -134,7 +86,7 @@ func TestServiceListSourcesReportsVisibleCounts(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	service := newTestService(store, &countingEmbedder{}, testConfig(""))
+	service := newTestService(store, &countingEmbedder{}, testConfig())
 	infos, err := service.ListSources(context.Background(), 1)
 	require.NoError(t, err)
 	require.Len(t, infos, 2)
@@ -142,32 +94,33 @@ func TestServiceListSourcesReportsVisibleCounts(t *testing.T) {
 	for _, info := range infos {
 		seen[info.Name] = info
 	}
-	assert.Equal(t, int64(1), seen["mine"].Stats.Documents)
-	assert.Equal(t, int64(1), seen["mine"].Stats.Chunks)
-	assert.Equal(t, []string{"dir"}, seen["mine"].TopDirs)
-	assert.Equal(t, []string{"model-x"}, seen["mine"].IndexedModels)
+	assert.Equal(t, int64(1), seen["inline"].Stats.Documents)
+	assert.Equal(t, int64(1), seen["inline"].Stats.Chunks)
+	assert.Empty(t, seen["inline"].TopDirs)
+	assert.Equal(t, []string{"model-x"}, seen["inline"].IndexedModels)
 	assert.Equal(t, int64(1), seen["shared"].Stats.Chunks)
+	assert.Equal(t, []string{"dir"}, seen["shared"].TopDirs)
 }
 
 func TestServiceDeleteSourceCascadesAndProtectsShared(t *testing.T) {
 	store := newFakeStore()
-	private, err := store.UpsertUserDirSource(context.Background(), 1, "mine", t.TempDir())
+	inline, err := store.EnsureInlineSource(context.Background(), 1)
 	require.NoError(t, err)
 	shared, err := store.UpsertSharedSource(context.Background(), "shared", t.TempDir())
 	require.NoError(t, err)
 	doc, err := store.UpsertFileDocument(context.Background(), Document{
-		SourceID: private.ID, Scope: ScopeUser, OwnerID: 1, Origin: OriginFile,
+		SourceID: inline.ID, Scope: ScopeUser, OwnerID: 1, Origin: OriginFile,
 		RelPath: "a.md", Title: "a", DocType: DocTypeMarkdown, ContentHash: hashBytes([]byte("a")),
 	})
 	require.NoError(t, err)
 	_, err = store.InsertChunk(context.Background(), Chunk{
-		DocumentID: doc.ID, Scope: ScopeUser, OwnerID: 1, SourceID: private.ID,
+		DocumentID: doc.ID, Scope: ScopeUser, OwnerID: 1, SourceID: inline.ID,
 		Generation: 1, Content: "body", EmbedText: "e", ContentHash: hashBytes([]byte("body")),
 	})
 	require.NoError(t, err)
 
-	service := newTestService(store, &countingEmbedder{}, testConfig(""))
-	require.NoError(t, service.DeleteSource(context.Background(), 1, private.ID))
+	service := newTestService(store, &countingEmbedder{}, testConfig())
+	require.NoError(t, service.DeleteSource(context.Background(), 1, inline.ID))
 	assert.Empty(t, store.documents)
 	assert.Empty(t, store.chunks)
 
@@ -177,65 +130,35 @@ func TestServiceDeleteSourceCascadesAndProtectsShared(t *testing.T) {
 
 func TestServiceDeleteSourceRefusesAnotherOwner(t *testing.T) {
 	store := newFakeStore()
-	private, err := store.UpsertUserDirSource(context.Background(), 1, "mine", t.TempDir())
+	inline, err := store.EnsureInlineSource(context.Background(), 1)
 	require.NoError(t, err)
-	service := newTestService(store, &countingEmbedder{}, testConfig(""))
+	service := newTestService(store, &countingEmbedder{}, testConfig())
 
-	err = service.DeleteSource(context.Background(), 2, private.ID)
+	err = service.DeleteSource(context.Background(), 2, inline.ID)
 	assert.ErrorIs(t, err, ErrSourceNotFound)
 	assert.NotEmpty(t, store.sources)
 }
 
 func TestServiceIndexVisibleSelectsCallerSources(t *testing.T) {
-	base := t.TempDir()
-	sharedRoot := t.TempDir()
-	writeFile(t, filepath.Join(sharedRoot, "shared.md"), "# Shared\n\nshared body\n")
-	aliceRoot := filepath.Join(base, "alice")
-	bobRoot := filepath.Join(base, "bob")
-	writeFile(t, filepath.Join(aliceRoot, "alice.md"), "# Alice\n\nalice body\n")
-	writeFile(t, filepath.Join(bobRoot, "bob.md"), "# Bob\n\nbob body\n")
-
 	store := newFakeStore()
-	shared, err := store.UpsertSharedSource(context.Background(), "shared", sharedRoot)
+	shared, err := store.UpsertSharedSource(context.Background(), "shared", t.TempDir())
 	require.NoError(t, err)
-	alice, err := store.UpsertUserDirSource(context.Background(), 1, "alice", aliceRoot)
+	mine, err := store.EnsureInlineSource(context.Background(), 1)
 	require.NoError(t, err)
-	bob, err := store.UpsertUserDirSource(context.Background(), 2, "bob", bobRoot)
+	other, err := store.EnsureInlineSource(context.Background(), 2)
 	require.NoError(t, err)
 
-	service := newTestService(store, &countingEmbedder{}, testConfig(base))
+	service := newTestService(store, &countingEmbedder{}, testConfig())
 	report, err := service.IndexVisible(context.Background(), 1)
 	require.NoError(t, err)
-	require.Len(t, report.Sources, 2)
-	ids := []int64{report.Sources[0].SourceID, report.Sources[1].SourceID}
-	assert.ElementsMatch(t, []int64{shared.ID, alice.ID}, ids)
-
-	for _, doc := range store.documents {
-		assert.NotEqual(t, bob.ID, doc.SourceID)
+	ids := map[int64]bool{}
+	for _, entry := range report.Sources {
+		ids[entry.SourceID] = true
 	}
-	assert.Len(t, store.documents, 2)
-}
-
-func TestServiceIndexVisibleRefusesEscapingSourceRoot(t *testing.T) {
-	base := t.TempDir()
-	root := filepath.Join(base, "alice")
-	writeFile(t, filepath.Join(root, "note.md"), "# Note\n\nbody\n")
-	outside := t.TempDir()
-	writeFile(t, filepath.Join(outside, "secret.md"), "# Secret\n\nsecret body\n")
-
-	store := newFakeStore()
-	src, err := store.UpsertUserDirSource(context.Background(), 1, "alice", root)
-	require.NoError(t, err)
-	require.NoError(t, os.RemoveAll(root))
-	require.NoError(t, os.Symlink(outside, root))
-
-	service := newTestService(store, &countingEmbedder{}, testConfig(base))
-	report, err := service.IndexVisible(context.Background(), 1)
-	require.NoError(t, err)
-	require.Len(t, report.Sources, 1)
-	assert.ErrorIs(t, report.Sources[0].Err, ErrInvalidSourceRoot)
-	assert.Empty(t, store.documents)
-	assert.Equal(t, src.ID, report.Sources[0].SourceID)
+	assert.True(t, ids[shared.ID])
+	assert.True(t, ids[mine.ID])
+	assert.False(t, ids[other.ID])
+	assert.Len(t, store.documents, 0)
 }
 
 func pendingInlineDoc(t *testing.T, store *fakeStore, ownerID int64, relPath string) Document {
@@ -264,7 +187,7 @@ func TestServiceCatchUpIsBounded(t *testing.T) {
 	for i := 0; i < 25; i++ {
 		pendingInlineDoc(t, store, 1, "doc-"+string(rune('a'+i))+".md")
 	}
-	service := newTestService(store, &countingEmbedder{}, testConfig(""))
+	service := newTestService(store, &countingEmbedder{}, testConfig())
 	service.CatchUpOnce(context.Background(), 1)
 
 	indexed := 0
@@ -281,7 +204,7 @@ func TestServiceCatchUpFailureLeavesDocumentPending(t *testing.T) {
 	store := newFakeStore()
 	doc := pendingInlineDoc(t, store, 1, "doc.md")
 	embedder := &countingEmbedder{fail: true}
-	service := newTestService(store, embedder, testConfig(""))
+	service := newTestService(store, embedder, testConfig())
 	service.CatchUpOnce(context.Background(), 1)
 
 	stored := store.documents[doc.ID]
@@ -291,7 +214,7 @@ func TestServiceCatchUpFailureLeavesDocumentPending(t *testing.T) {
 func TestServiceInlineCreateResetsConsumedCatchUp(t *testing.T) {
 	store := newFakeStore()
 	embedder := &countingEmbedder{}
-	service := newTestService(store, embedder, testConfig(""))
+	service := newTestService(store, embedder, testConfig())
 	service.CatchUpOnce(context.Background(), 1)
 
 	embedder.fail = true
@@ -307,7 +230,7 @@ func TestServiceInlineCreateResetsConsumedCatchUp(t *testing.T) {
 func TestServiceInlineUpdateResetsConsumedCatchUp(t *testing.T) {
 	store := newFakeStore()
 	embedder := &countingEmbedder{}
-	service := newTestService(store, embedder, testConfig(""))
+	service := newTestService(store, embedder, testConfig())
 	created, err := service.CreateInlineDocument(context.Background(), 1, "notes.md", "# Notes\n\nfirst body\n")
 	require.NoError(t, err)
 	require.Equal(t, StatusIndexed, created.Status)
@@ -325,7 +248,7 @@ func TestServiceInlineUpdateResetsConsumedCatchUp(t *testing.T) {
 
 func TestServiceInlineCreateEditDelete(t *testing.T) {
 	store := newFakeStore()
-	service := newTestService(store, &countingEmbedder{}, testConfig(""))
+	service := newTestService(store, &countingEmbedder{}, testConfig())
 
 	created, err := service.CreateInlineDocument(context.Background(), 1, "notes.md", "# Notes\n\nfirst body\n")
 	require.NoError(t, err)
@@ -357,7 +280,7 @@ func TestServiceInlineCreateEditDelete(t *testing.T) {
 
 func TestServiceInlineEditRejectsFileBackedDocument(t *testing.T) {
 	store := newFakeStore()
-	src, err := store.UpsertUserDirSource(context.Background(), 1, "mine", t.TempDir())
+	src, err := store.EnsureInlineSource(context.Background(), 1)
 	require.NoError(t, err)
 	doc, err := store.UpsertFileDocument(context.Background(), Document{
 		SourceID: src.ID, Scope: ScopeUser, OwnerID: 1, Origin: OriginFile,
@@ -370,7 +293,7 @@ func TestServiceInlineEditRejectsFileBackedDocument(t *testing.T) {
 		Generation: 1, Content: "file body", EmbedText: "e", ContentHash: hashBytes([]byte("file body")),
 	})
 	require.NoError(t, err)
-	service := newTestService(store, &countingEmbedder{}, testConfig(""))
+	service := newTestService(store, &countingEmbedder{}, testConfig())
 
 	_, err = service.UpdateInlineDocument(context.Background(), 1, doc.ID, "new body")
 	assert.ErrorIs(t, err, ErrFileBackedDocument)
@@ -384,7 +307,7 @@ func TestServiceInlineEditRejectsFileBackedDocument(t *testing.T) {
 
 func TestServiceInlineDocumentIsolatedPerOwner(t *testing.T) {
 	store := newFakeStore()
-	service := newTestService(store, &countingEmbedder{}, testConfig(""))
+	service := newTestService(store, &countingEmbedder{}, testConfig())
 	created, err := service.CreateInlineDocument(context.Background(), 1, "notes.md", "# Notes\n\nbody\n")
 	require.NoError(t, err)
 
@@ -418,7 +341,7 @@ func TestServiceOutlineCountsAndNoPaths(t *testing.T) {
 		}
 	}
 
-	service := newTestService(store, &countingEmbedder{}, testConfig(""))
+	service := newTestService(store, &countingEmbedder{}, testConfig())
 	outline, err := service.Outline(context.Background(), 1)
 	require.NoError(t, err)
 	require.Len(t, outline.Sources, 1)
@@ -433,7 +356,7 @@ func TestServiceOutlineCountsAndNoPaths(t *testing.T) {
 
 func TestServiceRetrievePassesScopeAndFilters(t *testing.T) {
 	store := newFakeStore()
-	service := newTestService(store, &countingEmbedder{}, testConfig(""))
+	service := newTestService(store, &countingEmbedder{}, testConfig())
 	sourceID := int64(12)
 	_, err := service.Retrieve(context.Background(), 5, []float32{0.1, 0.2}, "model-y", 7, &sourceID, "B-Sport/")
 	require.NoError(t, err)
@@ -446,12 +369,10 @@ func TestServiceRetrievePassesScopeAndFilters(t *testing.T) {
 	assert.Equal(t, "B-Sport/", store.lastRetrieval.PathPrefix)
 }
 
-func TestServiceSettingsReportsBaseAndIdentity(t *testing.T) {
-	base := t.TempDir()
-	service := newTestService(newFakeStore(), &countingEmbedder{model: "model-z"}, testConfig(base))
+func TestServiceSettingsReportsIdentity(t *testing.T) {
+	service := newTestService(newFakeStore(), &countingEmbedder{model: "model-z"}, testConfig())
 	settings := service.Settings(context.Background(), 3)
 	assert.True(t, settings.Enabled)
-	assert.Equal(t, base, settings.PrivateBase)
 	assert.Equal(t, "model-z", settings.EmbeddingModel)
 }
 
@@ -496,7 +417,7 @@ func TestServiceIndexVisibleAndIndexSourceSharePipeline(t *testing.T) {
 	src, err := store.UpsertSharedSource(context.Background(), "shared", t.TempDir())
 	require.NoError(t, err)
 	ingester := &countingIngester{}
-	service := NewService(store, ingester, testConfig(""), nil, noop.NewTracerProvider().Tracer("test"))
+	service := NewService(store, ingester, testConfig(), nil, noop.NewTracerProvider().Tracer("test"))
 
 	_, err = service.IndexVisible(context.Background(), 1)
 	require.NoError(t, err)

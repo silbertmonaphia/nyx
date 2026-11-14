@@ -53,7 +53,6 @@ type Querier interface {
 	UpsertFileDocument(ctx context.Context, arg UpsertFileDocumentParams) (KbDocument, error)
 	UpsertInlineDocument(ctx context.Context, arg UpsertInlineDocumentParams) (KbDocument, error)
 	UpsertSharedSource(ctx context.Context, arg UpsertSharedSourceParams) (KbSource, error)
-	UpsertUserDirSource(ctx context.Context, arg UpsertUserDirSourceParams) (KbSource, error)
 }
 
 var _ Querier = (*Queries)(nil)

@@ -6,7 +6,6 @@ func ConfigFrom(c *config.Config) Config {
 	return Config{
 		Enabled:          c.KBEnabled,
 		Root:             c.KBRoot,
-		PrivateBase:      c.KBPrivateBase,
 		SharedSourceName: c.KBSharedSourceName,
 		Chunk:            ChunkOptionsFrom(c),
 		TopK:             c.KBTopK,

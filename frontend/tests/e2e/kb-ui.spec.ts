@@ -61,7 +61,6 @@ async function mockKb(page: Page, options: KbMockOptions = {}): Promise<void> {
           settingsStatus === 200
             ? {
                 enabled: true,
-                private_base: '/srv/kb/users/1',
                 embedding_model: 'mock-embedding',
               }
             : { error: 'not found' },

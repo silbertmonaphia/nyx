@@ -354,11 +354,6 @@ export const zh = {
       delete: '删除',
       back: '返回',
       fileBackedNote: '该文档由其源文件管理。请编辑磁盘上的文件，然后重新索引来源。',
-      privateTitle: '私有知识目录',
-      privateHint: '请输入运维配置的根目录（{{base}}）内的目录。',
-      privateSave: '保存目录',
-      privateSaved: '私有目录已保存',
-      privateFailed: '保存私有目录失败',
     },
     time: {
       justNow: '刚刚',

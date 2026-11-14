@@ -96,19 +96,6 @@ func (f *fakeStore) UpsertSharedSource(_ context.Context, name, rootPath string)
 	return f.addSource(Source{Scope: ScopeShared, Name: name, Kind: KindDir, RootPath: rootPath, Enabled: true}), nil
 }
 
-func (f *fakeStore) UpsertUserDirSource(_ context.Context, ownerID int64, name, rootPath string) (Source, error) {
-	for _, src := range f.sources {
-		if src.Scope == ScopeUser && src.OwnerID == ownerID && src.Name == name {
-			src.RootPath = rootPath
-			src.Kind = KindDir
-			src.Enabled = true
-			f.sources[src.ID] = src
-			return src, nil
-		}
-	}
-	return f.addSource(Source{Scope: ScopeUser, OwnerID: ownerID, Name: name, Kind: KindDir, RootPath: rootPath, Enabled: true}), nil
-}
-
 func (f *fakeStore) EnsureInlineSource(_ context.Context, ownerID int64) (Source, error) {
 	for _, src := range f.sources {
 		if src.Scope == ScopeUser && src.OwnerID == ownerID && src.Kind == KindInline {

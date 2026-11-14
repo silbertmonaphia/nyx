@@ -746,7 +746,6 @@ func mountKBStack(cfg *config.Config, db *pgxpool.Pool, deployEmbedder *rag.Embe
 	}
 	log.Info().
 		Str("root", cfg.KBRoot).
-		Str("private_base", cfg.KBPrivateBase).
 		Int("top_k", cfg.KBTopK).
 		Msg("Knowledge base enabled")
 	return service

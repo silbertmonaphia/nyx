@@ -35,15 +35,6 @@ describe('kbService', () => {
     expect(sources).toEqual([{ id: 1, name: 'shared' }]);
   });
 
-  it('creates a private source', async () => {
-    mockedApi.post.mockResolvedValue({ data: { id: 2 } });
-    await kbService.createSource('mine', '/srv/kb/users/1');
-    expect(mockedApi.post).toHaveBeenCalledWith('/kb/sources', {
-      name: 'mine',
-      root_path: '/srv/kb/users/1',
-    });
-  });
-
   it('passes document filters as query parameters', async () => {
     mockedApi.get.mockResolvedValue({ data: { documents: [] } });
     await kbService.listDocuments({ sourceId: 3, origin: 'inline', status: 'indexed', limit: 25, offset: 50 });
@@ -92,13 +83,12 @@ describe('kbService', () => {
 
   it('triggers indexing and reads settings', async () => {
     mockedApi.post.mockResolvedValue({ data: { sources: [] } });
-    mockedApi.get.mockResolvedValue({ data: { enabled: true, private_base: '/srv', embedding_model: 'm' } });
+    mockedApi.get.mockResolvedValue({ data: { enabled: true, embedding_model: 'm' } });
 
     expect(await kbService.indexSources()).toEqual({ sources: [] });
     expect(mockedApi.post).toHaveBeenCalledWith('/kb/index');
     expect(await kbService.getSettings()).toEqual({
       enabled: true,
-      private_base: '/srv',
       embedding_model: 'm',
     });
     expect(mockedApi.get).toHaveBeenCalledWith('/kb/settings', {

@@ -90,27 +90,6 @@ func WalkSource(root string, opts ConnectorOptions) ([]Candidate, []ScanSkip, er
 	return candidates, skipped, nil
 }
 
-func ResolvePrivateRoot(base, root string) (string, error) {
-	if strings.TrimSpace(base) == "" {
-		return "", ErrPrivateBaseNotSetup
-	}
-	if strings.TrimSpace(root) == "" {
-		return "", ErrInvalidSourceRoot
-	}
-	realBase, err := resolveDir(base)
-	if err != nil {
-		return "", ErrPrivateBaseNotSetup
-	}
-	realRoot, err := resolveDir(root)
-	if err != nil {
-		return "", ErrInvalidSourceRoot
-	}
-	if !pathStrictlyWithin(realBase, realRoot) {
-		return "", ErrInvalidSourceRoot
-	}
-	return realRoot, nil
-}
-
 func resolveDir(path string) (string, error) {
 	abs, err := filepath.Abs(path)
 	if err != nil {
@@ -133,14 +112,6 @@ func pathWithin(root, path string) bool {
 		return false
 	}
 	return rel == "." || (rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)))
-}
-
-func pathStrictlyWithin(root, path string) bool {
-	rel, err := filepath.Rel(root, path)
-	if err != nil {
-		return false
-	}
-	return rel != "." && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
 }
 
 func isIgnoredName(name string) bool {

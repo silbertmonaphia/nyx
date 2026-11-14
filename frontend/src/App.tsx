@@ -36,7 +36,6 @@ import { LlmConfigModal } from './features/chat/components/LlmConfigModal';
 import { useLlmConfig } from './features/chat/hooks/useLlmConfig';
 import { useChatStore } from './features/chat/store/chatStore';
 import { KnowledgeBasePage } from './features/kb/components/KnowledgeBasePage';
-import { KbPrivateSourceField } from './features/kb/components/KbPrivateSourceField';
 import { useKbAvailability } from './features/kb/hooks/useKb';
 
 function App() {
@@ -505,7 +504,6 @@ function App() {
           onOpenChange={handleLlmModalChange}
           onDismissed={handleLlmModalDismissed}
           onSaved={handleLlmSaved}
-          kbField={<KbPrivateSourceField />}
         />
       )}
 

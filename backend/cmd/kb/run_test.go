@@ -18,22 +18,9 @@ import (
 )
 
 type fakeIndexService struct {
-	registeredName string
-	registeredRoot string
-	registeredUser int64
-	indexed        int
-	result         kb.ScanResult
-	err            error
-}
-
-func (f *fakeIndexService) RegisterSource(_ context.Context, userID int64, name, root string) (kb.Source, error) {
-	f.registeredUser = userID
-	f.registeredName = name
-	f.registeredRoot = root
-	if f.err != nil {
-		return kb.Source{}, f.err
-	}
-	return kb.Source{ID: 1, Scope: kb.ScopeUser, OwnerID: userID, Name: name, Kind: kb.KindDir, RootPath: root}, nil
+	indexed int
+	result  kb.ScanResult
+	err     error
 }
 
 func (f *fakeIndexService) IndexSource(_ context.Context, src kb.Source) (kb.ScanResult, error) {
@@ -72,31 +59,18 @@ func (f *fakeStatusStore) SourceStats(_ context.Context, id int64) (kb.SourceSta
 }
 
 func TestParseIndexOptions(t *testing.T) {
-	valid, err := parseIndexOptions([]string{"--root", "/tmp/notes", "--shared"})
+	valid, err := parseIndexOptions([]string{"--root", "/tmp/notes"})
 	require.NoError(t, err)
-	assert.True(t, valid.Shared)
 	assert.Equal(t, "/tmp/notes", valid.Root)
 
-	user, err := parseIndexOptions([]string{"--root", "/tmp/notes", "--user", "42"})
-	require.NoError(t, err)
-	assert.Equal(t, int64(42), user.UserID)
-
 	for _, args := range [][]string{
+		{"--root"},
 		{"--shared"},
-		{"--root", "/tmp/notes"},
-		{"--root", "/tmp/notes", "--shared", "--user", "42"},
-		{"--root", "/tmp/notes", "--user", "0"},
+		{"--root", "/tmp/notes", "--user", "42"},
 	} {
 		_, err := parseIndexOptions(args)
 		assert.Error(t, err, strings.Join(args, " "))
 	}
-}
-
-func TestRunIndexRefusesSharedWithoutExplicitFlag(t *testing.T) {
-	_, err := parseIndexOptions([]string{"--root", t.TempDir()})
-	require.Error(t, err)
-	assert.ErrorIs(t, err, errChooseTarget)
-	assert.Contains(t, err.Error(), "--shared")
 }
 
 func TestRunIndexSharedPrintsBeforeCreating(t *testing.T) {
@@ -111,7 +85,7 @@ func TestRunIndexSharedPrintsBeforeCreating(t *testing.T) {
 	}
 
 	err := runIndexWith(context.Background(), indexOptions{
-		Root: root, Shared: true, SourceName: "notes",
+		Root: root, SourceName: "notes",
 	}, &output, service, shared, &stubEmbedder{})
 	require.NoError(t, err)
 	assert.True(t, shared.created)
@@ -121,30 +95,13 @@ func TestRunIndexSharedPrintsBeforeCreating(t *testing.T) {
 	assert.Contains(t, output.String(), "documents=3 chunks=9")
 }
 
-func TestRunIndexUserRegistersPrivateSource(t *testing.T) {
-	root := t.TempDir()
-	service := &fakeIndexService{}
-	shared := &fakeSharedStore{}
-	var output bytes.Buffer
-
-	err := runIndexWith(context.Background(), indexOptions{
-		Root: root, UserID: 42,
-	}, &output, service, shared, &stubEmbedder{})
-	require.NoError(t, err)
-	assert.False(t, shared.created)
-	assert.Equal(t, int64(42), service.registeredUser)
-	assert.Equal(t, "private", service.registeredName)
-	assert.Equal(t, root, service.registeredRoot)
-	assert.Equal(t, 1, service.indexed)
-}
-
 func TestRunIndexWithoutEmbedderRefused(t *testing.T) {
 	service := &fakeIndexService{}
 	shared := &fakeSharedStore{}
 	var output bytes.Buffer
 
 	err := runIndexWith(context.Background(), indexOptions{
-		Root: t.TempDir(), Shared: true, SourceName: "shared",
+		Root: t.TempDir(), SourceName: "shared",
 	}, &output, service, shared, nil)
 	require.Error(t, err)
 	assert.ErrorIs(t, err, errEmbeddingConfig)
@@ -164,7 +121,7 @@ func TestStatusReportsCorpusShape(t *testing.T) {
 	store := &fakeStatusStore{
 		sources: []kb.Source{
 			{ID: 1, Scope: kb.ScopeShared, Name: "shared", Kind: kb.KindDir, Enabled: true},
-			{ID: 2, Scope: kb.ScopeUser, OwnerID: 7, Name: "private", Kind: kb.KindDir, Enabled: true},
+			{ID: 2, Scope: kb.ScopeUser, OwnerID: 7, Name: "inline", Kind: kb.KindInline, Enabled: true},
 		},
 		stats: map[int64]kb.SourceStats{
 			1: {Documents: 12, Chunks: 40, Pending: 1},
@@ -182,7 +139,7 @@ func TestStatusReportsCorpusShape(t *testing.T) {
 	assert.Equal(t, int64(40), report.Sources[0].Chunks)
 	assert.Equal(t, int64(1), report.Sources[0].Pending)
 	assert.Equal(t, "shared", report.Sources[0].Name)
-	assert.Equal(t, "private", report.Sources[1].Name)
+	assert.Equal(t, "inline", report.Sources[1].Name)
 }
 
 func TestResolveRootRequiresDirectory(t *testing.T) {

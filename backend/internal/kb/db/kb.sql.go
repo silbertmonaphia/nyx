@@ -1383,39 +1383,3 @@ func (q *Queries) UpsertSharedSource(ctx context.Context, arg UpsertSharedSource
 	)
 	return i, err
 }
-
-const upsertUserDirSource = `-- name: UpsertUserDirSource :one
-INSERT INTO kb_sources (scope, owner_id, name, kind, root_path)
-VALUES ('user', $1, $2, 'dir', $3)
-ON CONFLICT (scope, COALESCE(owner_id, 0), name) DO UPDATE SET
-    root_path  = EXCLUDED.root_path,
-    kind       = 'dir',
-    enabled    = TRUE,
-    updated_at = CURRENT_TIMESTAMP
-RETURNING id, scope, owner_id, name, kind, root_path, enabled, last_scan_at, last_error, created_at, updated_at
-`
-
-type UpsertUserDirSourceParams struct {
-	OwnerID  pgtype.Int8
-	Name     string
-	RootPath pgtype.Text
-}
-
-func (q *Queries) UpsertUserDirSource(ctx context.Context, arg UpsertUserDirSourceParams) (KbSource, error) {
-	row := q.db.QueryRow(ctx, upsertUserDirSource, arg.OwnerID, arg.Name, arg.RootPath)
-	var i KbSource
-	err := row.Scan(
-		&i.ID,
-		&i.Scope,
-		&i.OwnerID,
-		&i.Name,
-		&i.Kind,
-		&i.RootPath,
-		&i.Enabled,
-		&i.LastScanAt,
-		&i.LastError,
-		&i.CreatedAt,
-		&i.UpdatedAt,
-	)
-	return i, err
-}

@@ -15,14 +15,6 @@ export const kbService = {
     return response.data.sources ?? [];
   },
 
-  async createSource(name: string, rootPath: string): Promise<KbSource> {
-    const response = await api.post('/kb/sources', {
-      name,
-      root_path: rootPath,
-    });
-    return response.data;
-  },
-
   async updateSource(id: number, enabled: boolean): Promise<KbSource> {
     const response = await api.patch(`/kb/sources/${id}`, { enabled });
     return response.data;

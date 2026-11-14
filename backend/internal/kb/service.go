@@ -24,7 +24,6 @@ var inlineIndexLimit = 20 * time.Second
 type Config struct {
 	Enabled          bool
 	Root             string
-	PrivateBase      string
 	SharedSourceName string
 	Chunk            ChunkOptions
 	TopK             int
@@ -34,7 +33,6 @@ type Config struct {
 
 type Settings struct {
 	Enabled        bool   `json:"enabled"`
-	PrivateBase    string `json:"private_base"`
 	EmbeddingModel string `json:"embedding_model"`
 }
 
@@ -91,18 +89,6 @@ func (s *Service) ProvisionShared(ctx context.Context) (Source, error) {
 
 func (s *Service) ProvisionInline(ctx context.Context, userID int64) (Source, error) {
 	return s.store.EnsureInlineSource(ctx, userID)
-}
-
-func (s *Service) RegisterSource(ctx context.Context, userID int64, name, root string) (Source, error) {
-	name = strings.TrimSpace(name)
-	if name == "" || len([]rune(name)) > 200 {
-		return Source{}, ErrInvalidSourceName
-	}
-	resolved, err := ResolvePrivateRoot(s.cfg.PrivateBase, root)
-	if err != nil {
-		return Source{}, err
-	}
-	return s.store.UpsertUserDirSource(ctx, userID, name, resolved)
 }
 
 func (s *Service) ListSources(ctx context.Context, userID int64) ([]SourceInfo, error) {
@@ -336,14 +322,6 @@ func (s *Service) IndexSource(ctx context.Context, src Source) (ScanResult, erro
 	lock := s.sourceLock(src.ID)
 	lock.Lock()
 	defer lock.Unlock()
-	if src.Kind == KindDir && src.Scope == ScopeUser {
-		resolved, resolveErr := ResolvePrivateRoot(s.cfg.PrivateBase, src.RootPath)
-		if resolveErr != nil {
-			_ = s.store.UpdateSourceScan(ctx, src.ID, "source root is outside the configured base")
-			return ScanResult{}, resolveErr
-		}
-		src.RootPath = resolved
-	}
 	return s.indexer.ScanSource(ctx, src)
 }
 
@@ -447,7 +425,6 @@ func (s *Service) Outline(ctx context.Context, userID int64) (Outline, error) {
 func (s *Service) Settings(ctx context.Context, userID int64) Settings {
 	return Settings{
 		Enabled:        s.cfg.Enabled,
-		PrivateBase:    s.cfg.PrivateBase,
 		EmbeddingModel: s.embeddingIdentity(ctx, userID),
 	}
 }

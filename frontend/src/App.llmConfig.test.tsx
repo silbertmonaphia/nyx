@@ -13,15 +13,17 @@ import { i18n } from '~/i18n';
 vi.mock('./features/feeds/hooks/useFeeds');
 vi.mock('./store/authStore');
 vi.mock('./features/chat/hooks/useLlmConfig');
+const kbSettingsMock = vi.hoisted(() => ({
+  data: { enabled: false, embedding_model: '' } as { enabled: boolean; embedding_model: string },
+}));
+
 vi.mock('~/features/kb/hooks/useKb', () => ({
-  useKbAvailability: () => false,
+  useKbAvailability: () => kbSettingsMock.data.enabled === true,
   useKbSettings: () => ({
-    data: { enabled: false, private_base: '', embedding_model: '' },
+    data: kbSettingsMock.data,
     isLoading: false,
   }),
-  useKbMutations: () => ({
-    createSource: { mutateAsync: vi.fn(), isPending: false },
-  }),
+  useKbMutations: () => ({}),
 }));
 vi.mock('./features/chat/components/ChatPanel', () => ({
   ChatPanel: ({
@@ -202,6 +204,20 @@ describe('App LLM config gating', () => {
     ).toBeInTheDocument();
     expect(screen.getByText('Close')).toBeInTheDocument();
     expect(screen.queryByTestId('llm-config-clear')).not.toBeInTheDocument();
+  });
+
+  it('renders no knowledge-directory section in the gate even with the KB enabled', async () => {
+    kbSettingsMock.data = { enabled: true, embedding_model: 'mock-embedding' };
+    authenticate();
+    mockHook({ status: unconfiguredStatus });
+    render(<App />);
+
+    expect(
+      await screen.findByText('LLM configuration required'),
+    ).toBeInTheDocument();
+    expect(screen.getByTestId('llm-config-save')).toBeInTheDocument();
+    expect(screen.queryByTestId('kb-private-source')).not.toBeInTheDocument();
+    kbSettingsMock.data = { enabled: false, embedding_model: '' };
   });
 
   it('closes the gate from the close button and dismisses the chat panel', async () => {

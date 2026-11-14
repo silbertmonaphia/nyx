@@ -99,5 +99,5 @@ The history and design decisions behind the current frontend. For the high-level
 - [x] **Page and tab** — the top-bar view switch (Zustand `uiStore`, no router) swaps the main area between the feeds list and the knowledge base while the chat panel stays mounted. The page lists sources with counts/freshness, documents with status/origin, upload/typed-document controls, an index trigger, and per-source/per-document delete controls with confirmation.
 - [x] **Document view** — inline documents are editable in place and deletable; file-backed documents show their path and heading structure with edit/delete disabled and a pointer at the source file.
 - [x] **Identity explanation** — a source indexed under a different embedding model says so instead of rendering an empty source.
-- [x] **Settings and chat** — the settings modal exposes the private-directory field (operator base shown, server refusal surfaced verbatim), and the chat panel has a persisted knowledge toggle that sends `kb: true`.
+- [x] **Settings and chat** — the settings modal is LLM-configuration only (an earlier private-directory field was removed together with the backend flow), and the chat panel has a persisted knowledge toggle that sends `kb: true`.
 - [x] **i18n** — every new string is registered in both locales; key-set parity and non-empty checks cover the new `kb` section.

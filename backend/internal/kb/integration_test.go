@@ -235,17 +235,13 @@ func TestIntegrationVisibilityIsolationAndDesyncReassertion(t *testing.T) {
 	userA := makeUser("kb_a_")
 	userB := makeUser("kb_b_")
 
-	rootA := t.TempDir()
-	rootB := t.TempDir()
 	sharedRoot := t.TempDir()
-	require.NoError(t, os.WriteFile(filepath.Join(rootA, "a.md"), []byte("# A\n\n紫象 A 的私有内容。\n"), 0o600))
-	require.NoError(t, os.WriteFile(filepath.Join(rootB, "b.md"), []byte("# B\n\n紫象 B 的私有内容。\n"), 0o600))
 	require.NoError(t, os.WriteFile(filepath.Join(sharedRoot, "s.md"), []byte("# S\n\n紫象 共享内容。\n"), 0o600))
 
 	store := NewSQLStore(pool)
-	srcA, err := store.UpsertUserDirSource(ctx, int64(userA), "a", rootA)
+	srcA, err := store.EnsureInlineSource(ctx, int64(userA))
 	require.NoError(t, err)
-	srcB, err := store.UpsertUserDirSource(ctx, int64(userB), "b", rootB)
+	srcB, err := store.EnsureInlineSource(ctx, int64(userB))
 	require.NoError(t, err)
 	srcShared, err := store.UpsertSharedSource(ctx, "integration-shared-"+suffix, sharedRoot)
 	require.NoError(t, err)
@@ -256,10 +252,32 @@ func TestIntegrationVisibilityIsolationAndDesyncReassertion(t *testing.T) {
 
 	embedder := &keywordEmbedder{keyword: "紫象"}
 	indexer := integrationIndexer(store, embedder)
-	for _, src := range []Source{srcA, srcB, srcShared} {
-		_, scanErr := indexer.ScanSource(ctx, src)
-		require.NoError(t, scanErr)
+	_, scanErr := indexer.ScanSource(ctx, srcShared)
+	require.NoError(t, scanErr)
+
+	seedInlineDoc := func(owner int, relPath, body string) {
+		t.Helper()
+		src, srcErr := store.EnsureInlineSource(ctx, int64(owner))
+		require.NoError(t, srcErr)
+		doc, docErr := store.UpsertInlineDocument(ctx, Document{
+			SourceID: src.ID, Scope: ScopeUser, OwnerID: int64(owner), Origin: OriginInline,
+			RelPath: relPath, Title: relPath, DocType: DocTypeMarkdown,
+			ContentHash: hashBytes([]byte(body)), ByteSize: int64(len(body)), Content: body,
+		})
+		require.NoError(t, docErr)
+		chunkID, insertErr := store.InsertChunk(ctx, Chunk{
+			DocumentID: doc.ID, Scope: ScopeUser, OwnerID: int64(owner), SourceID: src.ID,
+			Generation: 1, Ordinal: 0, HeadingPath: []string{"Doc"}, Content: body,
+			EmbedText: relPath + "\n\n" + body, ContentHash: hashBytes([]byte(body)),
+			EmbeddingModel: embedder.Model(), TokenCount: 10,
+		})
+		require.NoError(t, insertErr)
+		_, advErr := store.AdvanceDocumentGeneration(ctx, doc.ID, 1)
+		require.NoError(t, advErr)
+		require.NoError(t, store.SetChunkEmbedding(ctx, chunkID, integrationQuery(), embedder.Model()))
 	}
+	seedInlineDoc(userA, "a.md", "# A\n\n紫象 A 的私有内容。\n")
+	seedInlineDoc(userB, "b.md", "# B\n\n紫象 B 的私有内容。\n")
 
 	passagesA, err := store.RetrievePassages(ctx, RetrievalParams{
 		Embedding: integrationQuery(), EmbeddingModel: embedder.Model(), UserID: int64(userA), Limit: 20,

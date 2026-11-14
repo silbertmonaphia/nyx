@@ -117,10 +117,7 @@ func multipartUpload(t *testing.T, filename string, content []byte) (io.Reader, 
 }
 
 func TestHandlerSourceLifecycle(t *testing.T) {
-	base := t.TempDir()
-	root := filepath.Join(base, "alice")
-	require.NoError(t, os.MkdirAll(root, 0o750))
-	env := setupHandler(t, testConfig(base), &countingEmbedder{})
+	env := setupHandler(t, testConfig(), &countingEmbedder{})
 
 	resp := env.jsonRequest(t, http.MethodGet, "/api/kb/sources", env.tokenA, nil)
 	require.Equal(t, http.StatusOK, resp.StatusCode)
@@ -129,14 +126,20 @@ func TestHandlerSourceLifecycle(t *testing.T) {
 	}](t, resp)
 	assert.Empty(t, list.Sources)
 
-	resp = env.jsonRequest(t, http.MethodPost, "/api/kb/sources", env.tokenA, map[string]string{
-		"name": "mine", "root_path": root,
+	resp = env.jsonRequest(t, http.MethodPost, "/api/kb/documents", env.tokenA, map[string]string{
+		"name": "notes.md", "content": "# Notes\n\nbody\n",
 	})
 	require.Equal(t, http.StatusCreated, resp.StatusCode)
-	created := decodeBody[SourceView](t, resp)
-	assert.Equal(t, "mine", created.Name)
+
+	resp = env.jsonRequest(t, http.MethodGet, "/api/kb/sources", env.tokenA, nil)
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+	list = decodeBody[struct {
+		Sources []SourceView `json:"sources"`
+	}](t, resp)
+	require.Len(t, list.Sources, 1)
+	created := list.Sources[0]
 	assert.Equal(t, ScopeUser, created.Scope)
-	assert.Equal(t, KindDir, created.Kind)
+	assert.Equal(t, KindInline, created.Kind)
 
 	resp = env.jsonRequest(t, http.MethodPatch, "/api/kb/sources/"+itoa(created.ID), env.tokenA, map[string]bool{"enabled": false})
 	require.Equal(t, http.StatusOK, resp.StatusCode)
@@ -154,22 +157,8 @@ func TestHandlerSourceLifecycle(t *testing.T) {
 	assert.Empty(t, after.Sources)
 }
 
-func TestHandlerSourceRefusalHidesPaths(t *testing.T) {
-	base := t.TempDir()
-	outside := t.TempDir()
-	env := setupHandler(t, testConfig(base), &countingEmbedder{})
-
-	resp := env.jsonRequest(t, http.MethodPost, "/api/kb/sources", env.tokenA, map[string]string{
-		"name": "mine", "root_path": outside,
-	})
-	require.Equal(t, http.StatusBadRequest, resp.StatusCode)
-	raw := bodyString(t, resp)
-	assert.NotContains(t, raw, outside)
-	assert.NotContains(t, raw, base)
-}
-
 func TestHandlerRequiresAuthentication(t *testing.T) {
-	env := setupHandler(t, testConfig(""), &countingEmbedder{})
+	env := setupHandler(t, testConfig(), &countingEmbedder{})
 	resp := env.jsonRequest(t, http.MethodGet, "/api/kb/sources", "", nil)
 	assert.Equal(t, http.StatusUnauthorized, resp.StatusCode)
 
@@ -180,7 +169,7 @@ func TestHandlerRequiresAuthentication(t *testing.T) {
 func TestHandlerMultipartUploadAndCrossUserIsolation(t *testing.T) {
 	tmp := t.TempDir()
 	t.Setenv("TMPDIR", tmp)
-	env := setupHandler(t, testConfig(""), &countingEmbedder{})
+	env := setupHandler(t, testConfig(), &countingEmbedder{})
 	content := []byte("# Notes\n\nuploaded body\n")
 	body, contentType := multipartUpload(t, "notes.md", content)
 
@@ -207,7 +196,7 @@ func TestHandlerMultipartUploadAndCrossUserIsolation(t *testing.T) {
 }
 
 func TestHandlerRefusesBinaryUpload(t *testing.T) {
-	env := setupHandler(t, testConfig(""), &countingEmbedder{})
+	env := setupHandler(t, testConfig(), &countingEmbedder{})
 	body, contentType := multipartUpload(t, "image.png", []byte{0x89, 0x50, 0x4e, 0x47, 0x00, 0x01})
 
 	resp := env.request(t, http.MethodPost, "/api/kb/documents", env.tokenA, body, contentType)
@@ -218,7 +207,7 @@ func TestHandlerRefusesBinaryUpload(t *testing.T) {
 }
 
 func TestHandlerCreatesJSONDocument(t *testing.T) {
-	env := setupHandler(t, testConfig(""), &countingEmbedder{})
+	env := setupHandler(t, testConfig(), &countingEmbedder{})
 	resp := env.jsonRequest(t, http.MethodPost, "/api/kb/documents", env.tokenA, map[string]string{
 		"name": "typed", "content": "# Typed\n\ntyped body\n",
 	})
@@ -250,7 +239,7 @@ func TestHandlerUploadTimeoutLeavesDocumentPending(t *testing.T) {
 	inlineIndexLimit = 50 * time.Millisecond
 	t.Cleanup(func() { inlineIndexLimit = previous })
 
-	env := setupHandler(t, testConfig(""), blockingEmbedder{})
+	env := setupHandler(t, testConfig(), blockingEmbedder{})
 	resp := env.jsonRequest(t, http.MethodPost, "/api/kb/documents", env.tokenA, map[string]string{
 		"name": "slow", "content": "# Slow\n\nslow body\n",
 	})
@@ -260,8 +249,8 @@ func TestHandlerUploadTimeoutLeavesDocumentPending(t *testing.T) {
 }
 
 func TestHandlerUpdateSourceRequiresEnabled(t *testing.T) {
-	env := setupHandler(t, testConfig(""), &countingEmbedder{})
-	src, err := env.store.UpsertUserDirSource(context.Background(), 1, "mine", t.TempDir())
+	env := setupHandler(t, testConfig(), &countingEmbedder{})
+	src, err := env.store.EnsureInlineSource(context.Background(), 1)
 	require.NoError(t, err)
 
 	_, err = NewHandler(env.service).UpdateSource(
@@ -273,7 +262,7 @@ func TestHandlerUpdateSourceRequiresEnabled(t *testing.T) {
 }
 
 func TestHandlerUpdateInlineDocumentKeepsIdentity(t *testing.T) {
-	env := setupHandler(t, testConfig(""), &countingEmbedder{})
+	env := setupHandler(t, testConfig(), &countingEmbedder{})
 	resp := env.jsonRequest(t, http.MethodPost, "/api/kb/documents", env.tokenA, map[string]string{
 		"name": "notes", "content": "# Notes\n\nfirst body\n",
 	})
@@ -294,9 +283,8 @@ func TestHandlerUpdateInlineDocumentKeepsIdentity(t *testing.T) {
 }
 
 func TestHandlerRefusesFileBackedEditAndDelete(t *testing.T) {
-	base := t.TempDir()
-	env := setupHandler(t, testConfig(base), &countingEmbedder{})
-	src, err := env.store.UpsertUserDirSource(context.Background(), 1, "mine", base)
+	env := setupHandler(t, testConfig(), &countingEmbedder{})
+	src, err := env.store.EnsureInlineSource(context.Background(), 1)
 	require.NoError(t, err)
 	doc, err := env.store.UpsertFileDocument(context.Background(), Document{
 		SourceID: src.ID, Scope: ScopeUser, OwnerID: 1, Origin: OriginFile,
@@ -307,8 +295,6 @@ func TestHandlerRefusesFileBackedEditAndDelete(t *testing.T) {
 
 	resp := env.jsonRequest(t, http.MethodPut, "/api/kb/documents/"+itoa(doc.ID), env.tokenA, map[string]string{"content": "new"})
 	require.Equal(t, http.StatusConflict, resp.StatusCode)
-	raw := bodyString(t, resp)
-	assert.NotContains(t, raw, base)
 	assert.Equal(t, OriginFile, env.store.documents[doc.ID].Origin)
 
 	resp = env.jsonRequest(t, http.MethodDelete, "/api/kb/documents/"+itoa(doc.ID), env.tokenA, nil)
@@ -318,7 +304,7 @@ func TestHandlerRefusesFileBackedEditAndDelete(t *testing.T) {
 }
 
 func TestHandlerDeleteInlineDocumentRemovesChunks(t *testing.T) {
-	env := setupHandler(t, testConfig(""), &countingEmbedder{})
+	env := setupHandler(t, testConfig(), &countingEmbedder{})
 	resp := env.jsonRequest(t, http.MethodPost, "/api/kb/documents", env.tokenA, map[string]string{
 		"name": "gone", "content": "# Gone\n\nbody\n",
 	})
@@ -335,11 +321,10 @@ func TestHandlerDeleteInlineDocumentRemovesChunks(t *testing.T) {
 }
 
 func TestHandlerIndexReportsVisibleSources(t *testing.T) {
-	base := t.TempDir()
-	root := filepath.Join(base, "alice")
+	root := t.TempDir()
 	writeFile(t, filepath.Join(root, "note.md"), "# Note\n\nbody\n")
-	env := setupHandler(t, testConfig(base), &countingEmbedder{})
-	_, err := env.store.UpsertUserDirSource(context.Background(), 1, "mine", root)
+	env := setupHandler(t, testConfig(), &countingEmbedder{})
+	_, err := env.store.UpsertSharedSource(context.Background(), "shared", root)
 	require.NoError(t, err)
 
 	resp := env.jsonRequest(t, http.MethodPost, "/api/kb/index", env.tokenA, nil)
@@ -352,13 +337,11 @@ func TestHandlerIndexReportsVisibleSources(t *testing.T) {
 }
 
 func TestHandlerSettings(t *testing.T) {
-	base := t.TempDir()
-	env := setupHandler(t, testConfig(base), &countingEmbedder{model: "model-q"})
+	env := setupHandler(t, testConfig(), &countingEmbedder{model: "model-q"})
 	resp := env.jsonRequest(t, http.MethodGet, "/api/kb/settings", env.tokenA, nil)
 	require.Equal(t, http.StatusOK, resp.StatusCode)
 	settings := decodeBody[Settings](t, resp)
 	assert.True(t, settings.Enabled)
-	assert.Equal(t, base, settings.PrivateBase)
 	assert.Equal(t, "model-q", settings.EmbeddingModel)
 }
 
@@ -381,7 +364,7 @@ func TestOutlineHandlerListsVisibleCorpus(t *testing.T) {
 		Generation: 1, Content: "secret body", EmbedText: "e", ContentHash: hashBytes([]byte("secret body")),
 	})
 	require.NoError(t, err)
-	service := newTestService(store, &countingEmbedder{}, testConfig(""))
+	service := newTestService(store, &countingEmbedder{}, testConfig())
 	handler := OutlineHandler(service)
 
 	req := httptest.NewRequest(http.MethodGet, "/internal/rag/outline", nil)
@@ -406,7 +389,7 @@ func TestOutlineHandlerListsVisibleCorpus(t *testing.T) {
 
 func TestOpenAPIDoesNotAdvertiseInternalRoutes(t *testing.T) {
 	store := newFakeStore()
-	service := newTestService(store, &countingEmbedder{}, testConfig(""))
+	service := newTestService(store, &countingEmbedder{}, testConfig())
 	tokens, err := auth.NewTokenService([]byte("0123456789abcdef0123456789abcdef"), 15*time.Minute)
 	require.NoError(t, err)
 

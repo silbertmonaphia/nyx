@@ -503,7 +503,6 @@ interface LlmConfigModalProps {
   onDismissed?: () => void;
   blocking?: boolean;
   onSaved?: () => void;
-  kbField?: React.ReactNode;
 }
 
 export const LlmConfigModal = ({
@@ -512,7 +511,6 @@ export const LlmConfigModal = ({
   onDismissed,
   blocking = false,
   onSaved,
-  kbField,
 }: LlmConfigModalProps) => {
   const { t } = useTranslation();
   const addToast = useUiStore((state) => state.addToast);
@@ -840,8 +838,6 @@ export const LlmConfigModal = ({
               </div>
             ) : null}
           </fieldset>
-
-          {kbField}
 
           <p className="text-xs text-muted-foreground">
             {t("llmConfig.sections.agentNote")}

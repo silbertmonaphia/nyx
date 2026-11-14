@@ -19,19 +19,15 @@ import (
 
 var (
 	errRootRequired    = errors.New("--root is required")
-	errChooseTarget    = errors.New("choose exactly one of --shared or --user <id>")
 	errEmbeddingConfig = errors.New("embedding configuration missing: set LLM_ENABLED=true with LLM_BASE_URL and LLM_MODEL, or LLM_EMBEDDING_BASE_URL and LLM_EMBEDDING_MODEL")
 )
 
 type indexOptions struct {
 	Root       string
-	Shared     bool
-	UserID     int64
 	SourceName string
 }
 
 type indexService interface {
-	RegisterSource(ctx context.Context, userID int64, name, root string) (kb.Source, error)
 	IndexSource(ctx context.Context, src kb.Source) (kb.ScanResult, error)
 }
 
@@ -64,21 +60,13 @@ func parseIndexOptions(args []string) (indexOptions, error) {
 	flags := flag.NewFlagSet("kb index", flag.ContinueOnError)
 	flags.SetOutput(io.Discard)
 	root := flags.String("root", "", "")
-	shared := flags.Bool("shared", false, "")
-	user := flags.Int64("user", 0, "")
 	if err := flags.Parse(args); err != nil {
 		return indexOptions{}, err
 	}
 	if *root == "" {
 		return indexOptions{}, errRootRequired
 	}
-	if *shared && *user > 0 {
-		return indexOptions{}, errChooseTarget
-	}
-	if !*shared && *user <= 0 {
-		return indexOptions{}, errChooseTarget
-	}
-	return indexOptions{Root: *root, Shared: *shared, UserID: *user}, nil
+	return indexOptions{Root: *root}, nil
 }
 
 func deploymentEmbedder(cfg *config.Config, tracerProvider trace.TracerProvider) (*rag.Embedder, error) {
@@ -98,16 +86,12 @@ func runIndexWith(ctx context.Context, opts indexOptions, out io.Writer, svc ind
 		return err
 	}
 	var src kb.Source
-	if opts.Shared {
-		name := opts.SourceName
-		if name == "" {
-			name = "shared"
-		}
-		_, _ = fmt.Fprintf(out, "about to make %s visible to every user as shared source %q\n", root, name)
-		src, err = shared.UpsertSharedSource(ctx, name, root)
-	} else {
-		src, err = svc.RegisterSource(ctx, opts.UserID, "private", root)
+	name := opts.SourceName
+	if name == "" {
+		name = "shared"
 	}
+	_, _ = fmt.Fprintf(out, "about to make %s visible to every user as shared source %q\n", root, name)
+	src, err = shared.UpsertSharedSource(ctx, name, root)
 	if err != nil {
 		return err
 	}

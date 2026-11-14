@@ -107,16 +107,6 @@ func RegisterKBOpsTest(api huma.API, h *Handler, tokens auth.TokenService, withA
 	}, h.ListSources)
 
 	huma.Register(api, huma.Operation{
-		OperationID: "create-kb-source",
-		Method:      http.MethodPost,
-		Path:        "/api/kb/sources",
-		Summary:     "Register a private knowledge directory",
-		Tags:        []string{"knowledge"},
-		Security:    []map[string][]string{{"BearerAuth": {}}},
-		Middlewares: middlewares,
-	}, h.CreateSource)
-
-	huma.Register(api, huma.Operation{
 		OperationID: "update-kb-source",
 		Method:      http.MethodPatch,
 		Path:        "/api/kb/sources/{id}",
@@ -229,20 +219,8 @@ type listSourcesOutput struct {
 	}
 }
 
-type createSourceInput struct {
-	Body struct {
-		Name     string `json:"name" required:"true" maxLength:"200"`
-		RootPath string `json:"root_path" required:"true" maxLength:"1024"`
-	}
-}
-
 type sourceOutput struct {
 	Body SourceView
-}
-
-type createSourceOutput struct {
-	Status int `status:"201"`
-	Body   SourceView
 }
 
 type sourcePathInput struct {
@@ -310,17 +288,6 @@ func (h *Handler) ListSources(ctx context.Context, _ *struct{}) (*listSourcesOut
 		out.Body.Sources = append(out.Body.Sources, sourceView(info))
 	}
 	return out, nil
-}
-
-//nolint:revive // unexported-return is huma's idiomatic op pattern
-func (h *Handler) CreateSource(ctx context.Context, in *createSourceInput) (*createSourceOutput, error) {
-	userID := reqctx.UserIDFromContext(ctx)
-	src, err := h.service.RegisterSource(ctx, int64(userID), in.Body.Name, in.Body.RootPath)
-	if err != nil {
-		return nil, api.MapError(ctx, err, "Failed to register knowledge source")
-	}
-	info := SourceInfo{Source: src, EmbedModel: h.service.EmbeddingIdentity(ctx, int64(userID))}
-	return &createSourceOutput{Status: http.StatusCreated, Body: sourceView(info)}, nil
 }
 
 //nolint:revive // unexported-return is huma's idiomatic op pattern
@@ -609,8 +576,6 @@ func staticScanError(err error) string {
 		return ""
 	case errors.Is(err, ErrInvalidSourceRoot):
 		return "Invalid knowledge source directory"
-	case errors.Is(err, ErrPrivateBaseNotSetup):
-		return "Private knowledge directory is not configured"
 	default:
 		return "Source scan failed"
 	}

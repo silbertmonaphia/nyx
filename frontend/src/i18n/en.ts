@@ -380,12 +380,6 @@ export const en: Translation = {
       back: 'Back',
       fileBackedNote:
         'This document is managed by its source file. Edit the file on disk, then index the source again.',
-      privateTitle: 'Private knowledge directory',
-      privateHint:
-        'Enter a directory inside the operator-configured base ({{base}}).',
-      privateSave: 'Save directory',
-      privateSaved: 'Private directory saved',
-      privateFailed: 'Could not save the private directory',
     },
     time: {
       justNow: 'just now',

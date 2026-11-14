@@ -6,10 +6,9 @@ not modified and `rag: true` still means "my feeds".
 
 ## What it does
 
-- **Sources.** One operator-managed *shared* directory readable by every user,
-  plus per-user *private* directories confined to an operator-configured base
-  (`KB_PRIVATE_BASE`). Each user also gets an `inline` source holding documents
-  uploaded or typed into the app.
+- **Sources.** One operator-managed *shared* directory readable by every user.
+  Each user also gets an `inline` source holding documents uploaded or typed
+  into the app.
 - **Chunking.** Markdown is parsed into a heading-aware block sequence. A chunk
   never spans two heading paths; tables and fenced code blocks are never split;
   every embedded text starts with `relative/path › heading / path` while the
@@ -36,16 +35,15 @@ not modified and `rag: true` still means "my feeds".
 | Method | Path | Purpose |
 |---|---|---|
 | `GET` | `/api/kb/sources` | Visible sources with counts, freshness, and indexed embedding identities |
-| `POST` | `/api/kb/sources` | Register a private directory (`{name, root_path}`) |
-| `PATCH` | `/api/kb/sources/{id}` | Enable or disable a private source |
-| `DELETE` | `/api/kb/sources/{id}` | Remove a private source and everything indexed from it |
+| `PATCH` | `/api/kb/sources/{id}` | Enable or disable the caller's inline source |
+| `DELETE` | `/api/kb/sources/{id}` | Remove the caller's inline source and everything indexed from it |
 | `GET` | `/api/kb/documents` | List documents (`source_id`, `origin`, `status`, `limit`, `offset`) |
 | `POST` | `/api/kb/documents` | Create a document: multipart (`file`) or JSON (`{name, content}`) |
 | `GET` | `/api/kb/documents/{id}` | Document detail, content and heading paths |
 | `PUT` | `/api/kb/documents/{id}` | Replace an inline document's content and re-index it |
 | `DELETE` | `/api/kb/documents/{id}` | Delete an inline document and its chunks |
 | `POST` | `/api/kb/index` | Index the caller's visible sources and fill pending documents |
-| `GET` | `/api/kb/settings` | Private base and the caller's embedding identity |
+| `GET` | `/api/kb/settings` | Corpus switch and the caller's embedding identity |
 | `GET` | `/internal/rag/outline` | Service-to-service outline (JWT bearer; not in OpenAPI) |
 
 `GET /internal/rag/retrieve` (the agent bridge) accepts `corpus=feeds|kb|both`,
@@ -61,8 +59,7 @@ top-level directory names for the planner; it carries no document content.
 | Var | Default | Purpose |
 |---|---|---|
 | `KB_ENABLED` | `false` | Master switch. Off means no scan, no KB write, no KB route |
-| `KB_ROOT` | empty | Shared directory; the source row is provisioned at boot, content is imported by `kb index --shared` or the Index button |
-| `KB_PRIVATE_BASE` | empty | Confinement root for user-supplied private directories |
+| `KB_ROOT` | empty | Shared directory; the source row is provisioned at boot, content is imported by `kb index` or the Index button |
 | `KB_SHARED_SOURCE_NAME` | `shared` | Display name of the shared source |
 | `KB_MAX_FILE_BYTES` | `2097152` | Per-file scan limit |
 | `KB_MAX_FILES` / `KB_MAX_DEPTH` | `10000` / `20` | Per-scan bounds |
@@ -74,12 +71,6 @@ top-level directory names for the planner; it carries no document content.
 The numeric knobs are validated at boot: positive, bounded, and
 `KB_CHUNK_MAX_TOKENS >= KB_CHUNK_TARGET_TOKENS > KB_CHUNK_OVERLAP_TOKENS`.
 
-`KB_PRIVATE_BASE` is one filesystem boundary shared by every user. The API
-enforces "inside the base", not "owned by this user": the backend reads files as
-its own OS user and cannot infer which human owns a directory. On a multi-tenant
-deployment, give each user a subdirectory and rely on operator separation (a
-per-tenant base or OS permissions); the base is the trust boundary.
-
 ## Operator import
 
 Bulk-import an existing corpus with the operator command. It shares the API
@@ -87,17 +78,17 @@ trigger's ingest pipeline and indexes under the deployment's embedding identity.
 
 ```bash
 cd backend
-KB_ENABLED=true KB_ROOT=/srv/nyx/kb/shared KB_PRIVATE_BASE=/srv/nyx/kb/users \
-  go run ./cmd/kb index --root /srv/nyx/kb/shared --shared
+KB_ENABLED=true KB_ROOT=/srv/nyx/kb/shared \
+  go run ./cmd/kb index --root /srv/nyx/kb/shared
 
 go run ./cmd/kb status
 ```
 
-`--shared` is never the default: creating a shared source makes the directory
-readable by every user, so the command prints what it is about to expose before
-doing it. Without an embedding configuration the command refuses to index with a
-message naming the missing keys. `kb status` prints sources, document/chunk
-counts, pending counts, and the deployment embedding identity as JSON.
+`kb index` creates a shared source, which makes the directory readable by every
+user, so the command prints what it is about to expose before doing it. Without
+an embedding configuration the command refuses to index with a message naming
+the missing keys. `kb status` prints sources, document/chunk counts, pending
+counts, and the deployment embedding identity as JSON.
 
 ## Recall baseline
 
@@ -140,8 +131,8 @@ route is absent, so a deployment with the corpus off never renders the page.
 Feed citations gain the additive `kind: "feed"` discriminator required by the
 bridge delta. No KB table is written unless the operator explicitly runs
 `cmd/kb index` (an opt-in import). Enabling requires `LLM_ENABLED=true` (the KB
-indexer shares the feed embedder); `KB_ROOT` and `KB_PRIVATE_BASE` are needed for
-shared and private directory sources respectively.
+indexer shares the feed embedder); `KB_ROOT` is needed for the shared directory
+source.
 
 The chat panel's knowledge toggle applies to the non-agent chat path, the same
 way the `rag` flag does. Under `AGENT_ENABLED=true` the Python planner decides

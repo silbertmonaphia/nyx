@@ -188,7 +188,6 @@ type Config struct {
 
 	KBEnabled            bool   `mapstructure:"KB_ENABLED"`
 	KBRoot               string `mapstructure:"KB_ROOT"`
-	KBPrivateBase        string `mapstructure:"KB_PRIVATE_BASE"`
 	KBSharedSourceName   string `mapstructure:"KB_SHARED_SOURCE_NAME"`
 	KBMaxFileBytes       int64  `mapstructure:"KB_MAX_FILE_BYTES"`
 	KBMaxFiles           int    `mapstructure:"KB_MAX_FILES"`
@@ -418,7 +417,6 @@ func setDefaults() {
 
 	viper.SetDefault("KB_ENABLED", false)
 	viper.SetDefault("KB_ROOT", "")
-	viper.SetDefault("KB_PRIVATE_BASE", "")
 	viper.SetDefault("KB_SHARED_SOURCE_NAME", "shared")
 	viper.SetDefault("KB_MAX_FILE_BYTES", 2<<20)
 	viper.SetDefault("KB_MAX_FILES", 10000)
@@ -484,7 +482,7 @@ func bindEnvVars() {
 		"LLM_EMBEDDING_API_KEY", "LLM_EMBEDDING_ALLOW_PRIVATE_URL",
 		"EMBEDDING_DIMENSIONS",
 		"RAG_TOP_K", "RAG_MAX_CONTEXT_CHARS", "RAG_MAX_BACKFILL_PER_REQUEST",
-		"KB_ENABLED", "KB_ROOT", "KB_PRIVATE_BASE", "KB_SHARED_SOURCE_NAME",
+		"KB_ENABLED", "KB_ROOT", "KB_SHARED_SOURCE_NAME",
 		"KB_MAX_FILE_BYTES", "KB_MAX_FILES", "KB_MAX_DEPTH",
 		"KB_CHUNK_TARGET_TOKENS", "KB_CHUNK_MAX_TOKENS", "KB_CHUNK_MIN_TOKENS",
 		"KB_CHUNK_OVERLAP_TOKENS", "KB_TOP_K", "KB_MAX_CONTEXT_CHARS",

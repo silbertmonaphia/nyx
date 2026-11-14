@@ -156,8 +156,7 @@ export interface paths {
         /** List knowledge sources */
         get: operations["list-kb-sources"];
         put?: never;
-        /** Register a private knowledge directory */
-        post: operations["create-kb-source"];
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -408,10 +407,6 @@ export interface components {
             /** @description Optional search provider group. When omitted the agent does not plan web searches. */
             tavily?: components["schemas"]["TavilyInput"];
         };
-        CreateSourceInputBody: {
-            name: string;
-            root_path: string;
-        };
         DocumentView: {
             /** Format: int64 */
             byte_size: number;
@@ -554,7 +549,6 @@ export interface components {
         Settings: {
             embedding_model: string;
             enabled: boolean;
-            private_base: string;
         };
         SourceScanView: {
             /** Format: int64 */
@@ -1054,39 +1048,6 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ListSourcesOutputBody"];
-                };
-            };
-            /** @description Error */
-            default: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorResponse"];
-                };
-            };
-        };
-    };
-    "create-kb-source": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["CreateSourceInputBody"];
-            };
-        };
-        responses: {
-            /** @description OK */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["SourceView"];
                 };
             };
             /** @description Error */

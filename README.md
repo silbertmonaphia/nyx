@@ -80,8 +80,8 @@ off by default. Full production topology → [`README_FULL.md` § Architecture](
 - **Accounts** — JWT access tokens plus rotated refresh tokens with reuse detection.
 - **Your feed** — create, edit, delete, search, paginate; every query scoped to your account.
 - **Knowledge base** — a second corpus of long Markdown documents beside your feeds: an
-  operator-managed shared directory plus your own private directory (confined to an
-  operator-configured base), indexed into heading-aware chunks and cited by path. Upload or write
+  operator-managed shared directory plus your own uploaded and typed documents,
+  indexed into heading-aware chunks and cited by path. Upload or write
   inline documents in the app; file-backed documents stay read-only. Default off
   (`KB_ENABLED=false`); see [`docs/knowledge-base.md`](docs/knowledge-base.md).
 - **Light / dark theme** — the navbar toggle sits beside the `Nyx` brand; until you use it the app

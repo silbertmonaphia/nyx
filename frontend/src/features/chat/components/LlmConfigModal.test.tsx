@@ -10,12 +10,10 @@ import type { LlmConfigStatus, LlmConfigUpdateInput } from '../types/llmConfig';
 vi.mock('../hooks/useLlmConfig');
 vi.mock('~/features/kb/hooks/useKb', () => ({
   useKbSettings: () => ({
-    data: { enabled: false, private_base: '', embedding_model: '' },
+    data: { enabled: false, embedding_model: '' },
     isLoading: false,
   }),
-  useKbMutations: () => ({
-    createSource: { mutateAsync: vi.fn(), isPending: false },
-  }),
+  useKbMutations: () => ({}),
 }));
 
 const mockedUseLlmConfig = useLlmConfig as unknown as ReturnType<typeof vi.fn>;

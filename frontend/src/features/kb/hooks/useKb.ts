@@ -64,11 +64,6 @@ export const useKbDocument = (id: number | null) => {
 
 export const useKbMutations = () => {
   const queryClient = useQueryClient();
-  const createSource = useMutation({
-    mutationFn: ({ name, rootPath }: { name: string; rootPath: string }) =>
-      kbService.createSource(name, rootPath),
-    onSuccess: () => invalidateSourcesAndDocuments(queryClient),
-  });
   const updateSource = useMutation({
     mutationFn: ({ id, enabled }: { id: number; enabled: boolean }) =>
       kbService.updateSource(id, enabled),
@@ -101,7 +96,6 @@ export const useKbMutations = () => {
     onSuccess: () => invalidateSourcesAndDocuments(queryClient),
   });
   return {
-    createSource,
     updateSource,
     deleteSource,
     uploadDocument,

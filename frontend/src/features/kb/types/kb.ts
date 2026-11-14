@@ -38,7 +38,6 @@ export interface KbDocument {
 
 export interface KbSettings {
   enabled: boolean;
-  private_base: string;
   embedding_model: string;
 }
 

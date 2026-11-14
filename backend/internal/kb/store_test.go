@@ -93,11 +93,6 @@ func TestSQLStoreSourceAndDocumentMethods(t *testing.T) {
 	_, err = store.UpsertSharedSource(ctx, "shared", "/srv/kb/shared")
 	require.NoError(t, err)
 
-	mock.ExpectQuery(`INSERT INTO kb_sources`).WithArgs(anyArgs(3)...).
-		WillReturnRows(pgxmock.NewRows(sourceColumns).AddRow(sourceRow()...))
-	_, err = store.UpsertUserDirSource(ctx, 1, "mine", "/srv/kb/users/1")
-	require.NoError(t, err)
-
 	mock.ExpectQuery(`INSERT INTO kb_sources`).WithArgs(anyArgs(1)...).
 		WillReturnRows(pgxmock.NewRows(sourceColumns).AddRow(sourceRow()...))
 	_, err = store.EnsureInlineSource(ctx, 1)

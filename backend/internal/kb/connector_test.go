@@ -98,36 +98,3 @@ func TestWalkSourceAssignsDocType(t *testing.T) {
 	assert.Equal(t, DocTypeMarkdown, candidates[0].DocType)
 	assert.Equal(t, "", candidates[1].DocType)
 }
-
-func TestResolvePrivateRoot(t *testing.T) {
-	base := t.TempDir()
-	inside := filepath.Join(base, "user-a")
-	require.NoError(t, os.MkdirAll(inside, 0o750))
-	outside := t.TempDir()
-
-	resolved, err := ResolvePrivateRoot(base, inside)
-	require.NoError(t, err)
-	assert.Equal(t, inside, resolved)
-
-	_, err = ResolvePrivateRoot(base, base)
-	assert.ErrorIs(t, err, ErrInvalidSourceRoot)
-
-	_, err = ResolvePrivateRoot(base, outside)
-	assert.ErrorIs(t, err, ErrInvalidSourceRoot)
-
-	_, err = ResolvePrivateRoot(base, filepath.Join(base, "missing"))
-	assert.ErrorIs(t, err, ErrInvalidSourceRoot)
-
-	_, err = ResolvePrivateRoot("", inside)
-	assert.ErrorIs(t, err, ErrPrivateBaseNotSetup)
-}
-
-func TestResolvePrivateRootRefusesSymlinkEscape(t *testing.T) {
-	base := t.TempDir()
-	outside := t.TempDir()
-	link := filepath.Join(base, "user-a")
-	require.NoError(t, os.Symlink(outside, link))
-
-	_, err := ResolvePrivateRoot(base, link)
-	assert.ErrorIs(t, err, ErrInvalidSourceRoot)
-}

@@ -1,7 +1,7 @@
 # kb-sources Specification
 
 ## Purpose
-The registry of where knowledge content comes from and who may see it. A source is one place content is read from — an operator-managed shared directory, a per-user private directory, or a per-user inline store of application-created documents — together with the visibility rule that governs everything indexed from it. The registry is the trust boundary for path handling: a user's private root is operator-confined, and no document from one user's private source is ever visible to another.
+The registry of where knowledge content comes from and who may see it. A source is one place content is read from — an operator-managed shared directory or a per-user inline store of application-created documents — together with the visibility rule that governs everything indexed from it. No document from one user's source is ever visible to another user.
 
 ## Requirements
 
@@ -14,14 +14,14 @@ Every knowledge source SHALL record a scope, an owner, a display name, a kind, a
 - **WHEN** a deployment configures one shared source and two different users retrieve knowledge
 - **THEN** both users' retrievals include documents indexed from that shared source
 
-#### Scenario: Private source is readable only by its owner
+#### Scenario: A user-owned source is readable only by its owner
 
-- **WHEN** user A registers a private source and user B retrieves knowledge
-- **THEN** user B's retrieval contains no document from user A's private source, while user A's retrieval does
+- **WHEN** user A owns a user-scope source and user B retrieves knowledge
+- **THEN** user B's retrieval contains no document from user A's source, while user A's retrieval does
 
 ### Requirement: A source's kind and enabled flag decide its contribution
 
-A source's kind SHALL be `dir` — a scanned directory carrying a root path — or `inline` — application-created documents with no root path. A disabled source SHALL contribute no documents to retrieval and SHALL be skipped by scans.
+A source's kind SHALL be `dir` — an operator-managed scanned directory carrying a root path — or `inline` — application-created documents with no root path. A disabled source SHALL contribute no documents to retrieval and SHALL be skipped by scans.
 
 #### Scenario: Disabled source contributes nothing
 
@@ -32,34 +32,6 @@ A source's kind SHALL be `dir` — a scanned directory carrying a root path — 
 
 - **WHEN** a user's inline source is listed
 - **THEN** it carries no root path and no directory scan is scheduled for it
-
-### Requirement: A private root is validated when saved
-
-A user-supplied private root SHALL be accepted only when its fully resolved real path lies strictly inside the operator-configured private base directory. A root that does not exist, is not a directory, or resolves outside the base SHALL be refused with a static, non-leaking message that discloses no path or filesystem detail.
-
-#### Scenario: Root inside the base is accepted
-
-- **WHEN** a user saves a private root that resolves inside the operator-configured private base
-- **THEN** the source is stored and appears in the user's source list
-
-#### Scenario: Root outside the base is refused
-
-- **WHEN** a user saves a private root that resolves outside the operator-configured private base
-- **THEN** the save is refused with a static message that names no path, and no source is created
-
-#### Scenario: Missing root is refused
-
-- **WHEN** a user saves a private root that does not exist or is not a directory
-- **THEN** the save is refused and no source is created
-
-### Requirement: A private root is re-validated at scan time
-
-The confinement check SHALL be applied again when the source is scanned, so a root replaced by a symlink after saving is refused at scan time and the refusal is recorded on the source.
-
-#### Scenario: Symlink escape is refused at scan time
-
-- **WHEN** a saved private root is replaced by a symlink that points outside the private base
-- **THEN** the scan refuses that root, records the failure on the source, and indexes nothing from it
 
 ### Requirement: A source reports its freshness and content counts
 
@@ -120,9 +92,9 @@ An inline document SHALL be readable only by the user who owns it.
 
 A caller SHALL be able to remove one of their own sources. Removing a source SHALL remove every document indexed from it and every chunk of those documents, and the source SHALL stop appearing in the caller's source list. A caller SHALL NOT be able to remove a shared source through the caller-facing API; the shared source is operator-managed and is removed only through the operator's own tooling.
 
-#### Scenario: Removing a private source removes its documents
+#### Scenario: Removing a user-owned source removes its documents
 
-- **WHEN** a caller removes their private source
+- **WHEN** a caller removes their user-scope source
 - **THEN** the source, its documents and their chunks are gone, and a retrieval returns nothing from them
 
 #### Scenario: Removing an inline source removes its documents
