@@ -32,11 +32,12 @@ from agent.planner import (
     _latest_user_message,
     _parse_and_validate,
     _PlanError,
+    _previous_assistant_message,
     _state_change_intents,
     plan_node,
 )
 from agent.state import new_state
-from agent.types import Plan, PlanStep, StepKind
+from agent.types import ChatMessage, Plan, PlanStep, StepKind
 
 
 def test_parse_valid_plan():
@@ -1078,8 +1079,13 @@ def _composed_create_plan():
     )
 
 
-def _guard(plan, message):
-    return _enforce_plan_shape(plan, max_steps=10, latest_user_message=message)
+def _guard(plan, message, previous_assistant=None):
+    return _enforce_plan_shape(
+        plan,
+        max_steps=10,
+        latest_user_message=message,
+        previous_assistant_message=previous_assistant,
+    )
 
 
 def test_guard_prompt_reconciles_unsure_rule_with_write_mandate():
@@ -1455,3 +1461,252 @@ def test_guard_rejection_exhaustion_returns_plan_invalid(monkeypatch, scripted_s
     assert plan_or_error.code == "plan_invalid"
     assert "create_feed" in plan_or_error.reason
     assert client._call_count == 2
+
+
+_FAILED_CREATE_ANSWER = (
+    "The `create_feed` tool was not executed: the approval request expired."
+)
+
+
+def test_previous_assistant_message_precedes_the_latest_user_turn():
+    messages = [
+        {"role": "user", "content": "帮我总结我最近的feed"},
+        {"role": "assistant", "content": "你最近发了三条 feed。"},
+        {"role": "user", "content": "再试试"},
+    ]
+
+    assert _previous_assistant_message(messages) == "你最近发了三条 feed。"
+
+
+def test_previous_assistant_message_is_empty_without_prior_assistant_text():
+    assert _previous_assistant_message([{"role": "user", "content": "再试试"}]) == ""
+
+
+def test_previous_assistant_message_ignores_text_after_latest_user_turn():
+    messages = [
+        {"role": "user", "content": "再试试"},
+        {"role": "assistant", "content": _FAILED_CREATE_ANSWER},
+    ]
+
+    assert _previous_assistant_message(messages) == ""
+
+
+def test_previous_assistant_message_reads_chat_message_models():
+    messages = [
+        ChatMessage(role="assistant", content=_FAILED_CREATE_ANSWER),
+        ChatMessage(role="user", content="再试试"),
+    ]
+
+    assert _previous_assistant_message(messages) == _FAILED_CREATE_ANSWER
+
+
+def test_previous_assistant_message_stops_at_adjacent_user_messages():
+    messages = [
+        {"role": "assistant", "content": _FAILED_CREATE_ANSWER},
+        {"role": "user", "content": "今天天气如何？"},
+        {"role": "user", "content": "再试试"},
+    ]
+
+    assert _previous_assistant_message(messages) == ""
+
+
+@pytest.mark.parametrize(
+    "message", ["再试试", "再试一次", "重试", "重新试", "再试下", "再来一次", "继续"]
+)
+def test_retry_guard_fires_for_every_cue_after_reported_write_failure(message):
+    plan = Plan(steps=[_llm_step("llm_1", "好的，我再试一次。")])
+
+    out = _guard(plan, message, previous_assistant=_FAILED_CREATE_ANSWER)
+
+    assert isinstance(out, _PlanError)
+    assert out.code == "plan_invalid"
+    assert out.detail == "Plan is invalid"
+    assert "create_feed" in out.reason
+
+
+@pytest.mark.parametrize(
+    ("assistant", "tool"),
+    [
+        (_FAILED_CREATE_ANSWER, "create_feed"),
+        ("The `update_feed` tool was not executed.", "update_feed"),
+        ("The `update_feeds` tool was not executed.", "update_feeds"),
+        ("The `delete_feed` tool was not executed.", "delete_feed"),
+        ("The `delete_feeds` tool was not executed.", "delete_feeds"),
+        ("发布没有执行：`create_feed` 被拒绝。", "create_feed"),
+    ],
+)
+def test_retry_guard_names_the_reported_write_tool(assistant, tool):
+    plan = Plan(steps=[_llm_step("llm_1", "好的。")])
+
+    out = _guard(plan, "再试试", previous_assistant=assistant)
+
+    assert isinstance(out, _PlanError)
+    assert out.code == "plan_invalid"
+    assert tool in out.reason
+
+
+def test_retry_guard_anchors_the_write_tool_to_the_not_executed_clause():
+    assistant = (
+        "The `update_feed` tool was not executed. `create_feed` was not needed."
+    )
+    plan = Plan(steps=[_llm_step("llm_1", "好的。")])
+
+    out = _guard(plan, "再试试", previous_assistant=assistant)
+
+    assert isinstance(out, _PlanError)
+    assert "update_feed" in out.reason
+    assert "create_feed" not in out.reason
+
+
+def test_retry_guard_ignores_a_write_tool_far_from_the_not_executed_marker():
+    assistant = "`create_feed` " + ("x" * 200) + " was not executed."
+    plan = Plan(steps=[_llm_step("llm_1", "好的。")])
+
+    out = _guard(plan, "再试试", previous_assistant=assistant)
+
+    assert isinstance(out, Plan)
+
+
+@pytest.mark.parametrize("tool", ["update_feed", "delete_feed"])
+def test_retry_guard_passes_with_the_named_mutation_tool(tool):
+    plan = Plan(
+        steps=[
+            _write_step(tool=tool, args={"feed_ids": [1]}),
+            _llm_step("llm_2", "已完成。"),
+        ]
+    )
+
+    out = _guard(
+        plan, "再试试", previous_assistant=f"The `{tool}` tool was not executed."
+    )
+
+    assert isinstance(out, Plan)
+
+
+def test_retry_guard_requires_a_compose_step_for_create_feed():
+    plan = Plan(
+        steps=[
+            _write_step(args={"title": "拉面", "description": "今天的拉面"}),
+            _llm_step("llm_2", "已发布。"),
+        ]
+    )
+
+    out = _guard(plan, "再试试", previous_assistant=_FAILED_CREATE_ANSWER)
+
+    assert isinstance(out, _PlanError)
+    assert out.code == "plan_invalid"
+    assert "preceded by an llm step" in out.reason
+
+
+def test_retry_guard_accepts_composed_create_feed_retry():
+    out = _guard(
+        _composed_create_plan(), "再试试", previous_assistant=_FAILED_CREATE_ANSWER
+    )
+
+    assert isinstance(out, Plan)
+    assert out.steps[2].args["description"] == "{{step:llm_1}}"
+
+
+@pytest.mark.parametrize(
+    ("message", "previous_assistant"),
+    [
+        ("继续", "你最近发了三条 feed。"),
+        ("再试试", "你好！今天过得怎么样？"),
+        ("再试试", "The `list_feeds` tool was not executed."),
+        (
+            "再试试",
+            "The `create_feed` tool executed successfully and the feed is published.",
+        ),
+        ("你好呀", _FAILED_CREATE_ANSWER),
+        ("帮我查最近我发了什么", _FAILED_CREATE_ANSWER),
+        ("先不要重试", _FAILED_CREATE_ANSWER),
+        ("别重试了", _FAILED_CREATE_ANSWER),
+        ("不要重试", _FAILED_CREATE_ANSWER),
+        ("别再试", _FAILED_CREATE_ANSWER),
+    ],
+)
+def test_retry_guard_does_not_fire_without_both_signals(message, previous_assistant):
+    plan = Plan(
+        steps=[
+            PlanStep(id="rag_1", kind=StepKind.rag, query="recent feeds"),
+            _llm_step("llm_1", "你最近发了三条 feed。"),
+        ]
+    )
+
+    out = _guard(plan, message, previous_assistant=previous_assistant)
+
+    assert isinstance(out, Plan)
+
+
+def test_retry_guard_does_not_fire_without_previous_assistant_text():
+    plan = Plan(steps=[_llm_step("llm_1", "好的。")])
+
+    out = _guard(plan, "再试试")
+
+    assert isinstance(out, Plan)
+
+
+@pytest.mark.parametrize("message", ["帮我发布一篇新的feed", "再试试，发布出去"])
+def test_explicit_state_change_keeps_the_existing_mandate(message):
+    plan = Plan(
+        steps=[
+            PlanStep(id="rag_1", kind=StepKind.rag, query="recent feeds"),
+            _llm_step(),
+        ]
+    )
+
+    out = _guard(plan, message, previous_assistant=_FAILED_CREATE_ANSWER)
+
+    assert isinstance(out, _PlanError)
+    assert "the user asked to create a feed" in out.reason
+    assert "was not executed" not in out.reason
+
+
+def test_retry_guard_threads_previous_assistant_text_from_state(
+    monkeypatch, scripted_settings
+):
+    bad = Plan(steps=[_llm_step("llm_1", "我再试一次。")])
+    good = Plan(
+        steps=[
+            _llm_step("llm_1", "撰写一篇关于今天拉面的 feed"),
+            _write_step(
+                args={"title": "拉面", "description": "{{step:llm_1}}"}
+            ),
+            _llm_step("llm_2", "已重新发布。"),
+        ]
+    )
+    client = _ScriptedStructuredClient(script=["ok", "ok"], successes=[bad, good])
+    monkeypatch.setattr(
+        "agent.planner._build_structured_client",
+        lambda _s, _state, _secrets=None: client,
+    )
+
+    state = new_state(
+        user_id=1,
+        run_id="r1",
+        model="test-model",
+        messages=[
+            {"role": "assistant", "content": _FAILED_CREATE_ANSWER},
+            {"role": "user", "content": "再试试"},
+        ],
+    )
+    plan_or_error = await_call(
+        _emit_structured_plan(state, scripted_settings, _NoopTracer())
+    )
+
+    assert isinstance(plan_or_error, Plan)
+    assert client._call_count == 2
+    assert any(s.tool == "create_feed" for s in plan_or_error.steps)
+    retry_prompt = client._captured_messages[1][-1].content
+    assert PREVIOUS_ATTEMPT_FAILED_HEADER in retry_prompt
+    assert "create_feed" in retry_prompt
+
+
+def test_prompt_documents_retry_after_reported_write_failure():
+    assert "retry instruction" in PLANNER_SYSTEM_PROMPT
+    assert "not executed" in PLANNER_SYSTEM_PROMPT
+    assert "never answer a retried failed write with text only" in PLANNER_SYSTEM_PROMPT
+    assert "a retried `create_feed` follows the compose-before-write rule" in (
+        PLANNER_SYSTEM_PROMPT
+    )
+    assert "再试试" in PLANNER_SYSTEM_PROMPT
