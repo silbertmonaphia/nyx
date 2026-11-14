@@ -707,7 +707,7 @@ jobs:
   #     via scripts/bump-version.sh
   #   - tags (e.g. backend@0.4.1) and publishes GitHub Releases
   release:
-    needs: [e2e-test, e2e-test-redis, govulncheck, npm-audit]
+    needs: [e2e-test, e2e-test-redis, agent-test, agent-lint, agent-alembic-check, no-new-comments]
     if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/mvp')
     runs-on: ubuntu-latest
     timeout-minutes: 15
