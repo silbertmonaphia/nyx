@@ -318,17 +318,22 @@ export const KnowledgeBasePage: React.FC = () => {
           )}
           {t('kb.index')}
         </Button>
-        <Button
-          type="button"
-          size="sm"
-          variant="outline"
-          onClick={() => fileInput.current?.click()}
-          disabled={mutations.uploadDocument.isPending}
-          data-testid="kb-upload"
-        >
-          <Upload className="h-4 w-4" />
-          {t('kb.upload')}
-        </Button>
+        <div className="flex flex-col items-start gap-1">
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            onClick={() => fileInput.current?.click()}
+            disabled={mutations.uploadDocument.isPending}
+            data-testid="kb-upload"
+          >
+            <Upload className="h-4 w-4" />
+            {t('kb.upload')}
+          </Button>
+          <p className="text-xs text-muted-foreground" data-testid="kb-upload-hint">
+            {t('kb.uploadHint')}
+          </p>
+        </div>
         <input
           ref={fileInput}
           type="file"
@@ -350,10 +355,6 @@ export const KnowledgeBasePage: React.FC = () => {
           {t('kb.newDocument')}
         </Button>
       </div>
-
-      <p className="text-xs text-muted-foreground" data-testid="kb-upload-hint">
-        {t('kb.uploadHint')}
-      </p>
 
       {showNewDocument && (
         <div className="space-y-2 rounded-md border p-3" data-testid="kb-new-form">

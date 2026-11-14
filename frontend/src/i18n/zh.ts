@@ -297,7 +297,7 @@ export const zh = {
       uploadEmpty: '文件为空',
       uploadTooLarge: '文件过大（最大 1 MiB）',
       uploadNotText: '仅支持 UTF-8 文本文件，二进制文件无法索引',
-      uploadHint: '仅支持 UTF-8 文本文件（.md、.txt、.csv、.json、代码等），单个最大 1 MiB',
+      uploadHint: '上传文件仅支持 UTF-8 文本（.md、.txt、.csv、.json、代码等），单个最大 1 MiB',
       newDocument: '新建文档',
       namePlaceholder: '文档名称（可选）',
       contentPlaceholder: '用 Markdown 编写文档…',
