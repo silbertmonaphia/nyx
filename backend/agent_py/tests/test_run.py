@@ -676,3 +676,113 @@ def test_should_refine_title_truth_table() -> None:
     assert not _should_refine_title(
         saw_done=True, title_written=True, chat_store=None
     ), "no store => no refinement (nothing could be written)"
+
+
+class _ExpiredApprovalAnswerLlm:
+    """Planner stub: [tool create_feed, llm answer]. The answering call
+    returns a failure-reporting sentence only when its prompt carries the
+    failed-step section and the static instruction; otherwise it claims
+    success, so the delta assertion fails if the context never arrives."""
+
+    _PLAN: ClassVar[dict[str, Any]] = {
+        "steps": [
+            {
+                "id": "tool_1",
+                "kind": "tool",
+                "tool": "create_feed",
+                "args": {"name": "x"},
+            },
+            {"id": "llm_2", "kind": "llm", "prompt": "Report the outcome."},
+        ]
+    }
+    call_count = 0
+    saw_failure_context = False
+
+    def __init__(self, *args, **kwargs):
+        pass
+
+    async def ainvoke(self, messages, config=None):
+        from langchain_core.messages import AIMessage
+
+        type(self).call_count += 1
+        if type(self).call_count == 1:
+            return AIMessage(content=json.dumps(self._PLAN))
+        prompt = "\n".join(str(getattr(m, "content", "") or "") for m in messages)
+        if (
+            "[tool_1 — tool create_feed failed]" in prompt
+            and "was not executed" in prompt
+            and "Report that failure plainly" in prompt
+        ):
+            type(self).saw_failure_context = True
+            return AIMessage(
+                content=(
+                    "The create_feed tool was not executed: the approval "
+                    "request expired before a decision."
+                )
+            )
+        return AIMessage(content="The feed was created successfully.")
+
+    def bind(self, **kwargs):
+        type(self).call_count += 1
+        return _StubStructuredChain(self._PLAN)
+
+
+@pytest.mark.asyncio
+async def test_expired_approval_failure_reaches_the_final_answer(app_and_state):
+    from agent.approvals import DECISION_EXPIRED, denial_text_for
+
+    app = app_and_state
+    _set_lm(app_and_state, _ExpiredApprovalAnswerLlm)
+    _ExpiredApprovalAnswerLlm.saw_failure_context = False
+
+    resp = await _post_chat(
+        app,
+        ChatRequest(messages=[ChatMessage(role="user", content="hi")]).model_dump(),
+    )
+    assert resp.status_code == 200
+    frames = _parsed_frames(resp.text)
+
+    denials = [
+        f
+        for f in frames
+        if isinstance(f, dict)
+        and f.get("step_id") == "tool_1"
+        and f.get("ok") is False
+    ]
+    assert denials, f"expected a failed tool_result; got: {frames}"
+    assert denials[0]["error"] == denial_text_for(DECISION_EXPIRED, "create_feed")
+
+    step_ends = [
+        f
+        for f in frames
+        if isinstance(f, dict)
+        and f.get("step_id") == "tool_1"
+        and f.get("status") == "failed"
+    ]
+    assert step_ends, f"expected step_end(failed) for tool_1; got: {frames}"
+
+    deltas = [f["delta"] for f in frames if isinstance(f, dict) and "delta" in f]
+    assert deltas, f"expected a delta frame; got: {frames}"
+    assert "was not executed" in deltas[-1]
+    assert _ExpiredApprovalAnswerLlm.saw_failure_context
+
+    kinds = [
+        line.removeprefix("event: ")
+        for line in resp.text.splitlines()
+        if line.startswith("event: ")
+    ]
+    assert kinds == [
+        "run_id",
+        "note",
+        "plan",
+        "step_start",
+        "confirm_request",
+        "tool_result",
+        "step_end",
+        "step_start",
+        "note",
+        "delta",
+        "step_end",
+        "done",
+        "terminator",
+    ], f"unexpected frame sequence: {kinds}"

@@ -20,6 +20,7 @@ from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanE
 from prometheus_client import REGISTRY
 
 from agent import executor as executor_module
+from agent.approvals import DECISION_EXPIRED, denial_text_for
 from agent.config import Settings
 from agent.executor import (
     _collect_failed_steps,
@@ -1567,3 +1568,303 @@ async def test_executor_node_threads_prefs_from_the_factory(kind, tracer):
     )
     await default_node(_state([step], {}))
     assert _CapturingLlm.captured[0][0].content == "Answer."
+
+
+class _GatedTools(_ScriptedTools):
+    async def confirmation_required(self, name):
+        return True
+
+
+class _ExpiringApprovals:
+    async def request_confirmation(self, state, *, step_id, tool_name, args):
+        return DECISION_EXPIRED
+
+
+class _FailFirstLlm:
+    captured: ClassVar[list] = []
+    calls = 0
+
+    def __init__(self, *args, **kwargs):
+        pass
+
+    async def ainvoke(self, messages):
+        type(self).calls += 1
+        if type(self).calls == 1:
+            raise RuntimeError("provider exploded")
+        type(self).captured.append(list(messages))
+        return AIMessage(content="stub answer")
+
+
+async def _run_plan(state, tracer, *, tools=None, approvals=None):
+    await executor_module.executor_node(
+        state,
+        settings=_settings(),
+        tracer=tracer,
+        budget=_StubBudget(),
+        rag=None,
+        tools=tools if tools is not None else _StubTools(),
+        approvals=approvals,
+    )
+
+
+@pytest.mark.asyncio
+async def test_approval_expiry_error_reaches_answering_llm_step(tracer):
+    steps = [
+        PlanStep(id="tool_1", kind="tool", tool="create_feed", args={"name": "x"}),
+        PlanStep(id="llm_2", kind="llm", prompt="Answer."),
+    ]
+    state = _state(steps, {})
+
+    await _run_plan(
+        state,
+        tracer,
+        tools=_GatedTools([{"ok": True}]),
+        approvals=_ExpiringApprovals(),
+    )
+
+    denial = denial_text_for(DECISION_EXPIRED, "create_feed")
+    msgs = _CapturingLlm.captured[0]
+    assert any(m.type == "system" and denial in m.content for m in msgs)
+    assert any(
+        m.type == "system" and "[tool_1 — tool create_feed failed]" in m.content
+        for m in msgs
+    )
+    assert any(m.type == "system" and "was not executed" in m.content for m in msgs)
+    assert any(
+        m.type == "system" and "Report that failure plainly" in m.content
+        for m in msgs
+    )
+    assert any(
+        m.type == "system" and "quote that sentence verbatim" in m.content
+        for m in msgs
+    )
+    step_ends = [e for e in state["events_so_far"] if e.kind == "step_end"]
+    assert [e.payload["status"] for e in step_ends] == ["failed", "ok"]
+
+
+@pytest.mark.asyncio
+async def test_llm_failure_section_is_static_and_leaks_no_exception(
+    tracer, monkeypatch
+):
+    monkeypatch.setattr(executor_module, "ChatOpenAI", _FailFirstLlm)
+    _FailFirstLlm.calls = 0
+    _FailFirstLlm.captured = []
+    steps = [
+        PlanStep(id="llm_1", kind="llm", prompt="First."),
+        PlanStep(id="llm_2", kind="llm", prompt="Answer."),
+    ]
+    state = _state(steps, {})
+
+    await _run_plan(state, tracer)
+
+    contents = "\n".join(m.content for m in _FailFirstLlm.captured[0])
+    assert "[llm_1 — llm step failed]" in contents
+    assert "This step did not complete." in contents
+    assert "Report that failure plainly" in contents
+    assert "RuntimeError" not in contents
+    assert "provider exploded" not in contents
+    step_ends = [e for e in state["events_so_far"] if e.kind == "step_end"]
+    assert step_ends[0].payload["reason"] == "llm: RuntimeError"
+
+
+def test_two_failed_steps_are_rendered_in_plan_order():
+    from agent.executor import _render_prior_data
+
+    steps = [
+        PlanStep(id="tool_1", kind="tool", tool="create_feed", args={}),
+        PlanStep(id="llm_2", kind="llm", prompt="second"),
+        PlanStep(id="answer", kind="llm", prompt="Answer."),
+    ]
+    state = _state(steps, {})
+    state["events_so_far"].extend(
+        [
+            Event(
+                kind="tool_result",
+                payload=ToolResultEvent(
+                    step_id="tool_1", call_id="c1", ok=False, error="first error"
+                ).model_dump(),
+            ),
+            Event(
+                kind="step_end",
+                payload=StepEndEvent(
+                    step_id="tool_1", status="failed", reason="tool: first error"
+                ).model_dump(),
+            ),
+            Event(
+                kind="step_end",
+                payload=StepEndEvent(
+                    step_id="llm_2", status="failed", reason="llm: RuntimeError"
+                ).model_dump(),
+            ),
+        ]
+    )
+
+    block = _render_prior_data(state, "answer")
+
+    tool_idx = block.index("[tool_1 — tool create_feed failed]")
+    llm_idx = block.index("[llm_2 — llm step failed]")
+    assert tool_idx < llm_idx
+    assert "first error" in block
+    assert block[llm_idx:].startswith(
+        "[llm_2 — llm step failed]\nThis step did not complete."
+    )
+    assert "RuntimeError" not in block
+
+
+@pytest.mark.asyncio
+async def test_recovered_retry_produces_no_failure_context(tracer):
+    steps = [
+        PlanStep(id="tool_1", kind="tool", tool="list_feeds", args={}),
+        PlanStep(id="llm_2", kind="llm", prompt="Answer."),
+    ]
+    state = _state(steps, {})
+    tools = _ScriptedTools([ToolUnavailableError("timeout"), {"items": []}])
+
+    await _run_plan(state, tracer, tools=tools)
+
+    msgs = _CapturingLlm.captured[0]
+    contents = "\n".join(m.content for m in msgs)
+    assert "earlier steps in this plan failed" not in contents
+    assert "[tool_1 — tool list_feeds failed]" not in contents
+    assert "This step did not complete." not in contents
+    assert len(msgs) == 3
+    assert msgs[0].content == "Answer."
+    assert msgs[1].type == "system"
+    assert "tool result from list_feeds" in msgs[1].content
+    assert msgs[2].type == "human"
+    step_ends = [e for e in state["events_so_far"] if e.kind == "step_end"]
+    assert [e.payload["status"] for e in step_ends] == ["ok", "ok"]
+
+
+@pytest.mark.asyncio
+async def test_react_step_after_failure_receives_failure_context(tracer):
+    steps = [
+        PlanStep(id="tool_1", kind="tool", tool="create_feed", args={"name": "x"}),
+        PlanStep(
+            id="react_2",
+            kind="react",
+            prompt="Answer using what you know.",
+            max_iterations=1,
+        ),
+    ]
+    state = _state(steps, {})
+
+    await _run_plan(
+        state,
+        tracer,
+        tools=_GatedTools([{"ok": True}]),
+        approvals=_ExpiringApprovals(),
+    )
+
+    denial = denial_text_for(DECISION_EXPIRED, "create_feed")
+    msgs = _CapturingLlm.captured[0]
+    assert any(m.type == "system" and denial in m.content for m in msgs)
+    assert any(
+        m.type == "system" and "[tool_1 — tool create_feed failed]" in m.content
+        for m in msgs
+    )
+    assert any(
+        m.type == "system" and "Report that failure plainly" in m.content
+        for m in msgs
+    )
+
+
+@pytest.mark.asyncio
+async def test_instruction_survives_prior_data_total_cap(tracer):
+    from agent.executor import PRIOR_DATA_PER_SECTION_MAX_CHARS
+
+    big = "x" * PRIOR_DATA_PER_SECTION_MAX_CHARS
+    steps = [
+        PlanStep(id="fail_1", kind="tool", tool="create_feed", args={}),
+        PlanStep(id="data_1", kind="tool", tool="web_search", args={}),
+        PlanStep(id="answer", kind="llm", prompt="Answer."),
+    ]
+    state = _state(steps, {"data_1": {"results": [{"title": big}]}})
+    state["events_so_far"].extend(
+        [
+            Event(
+                kind="tool_result",
+                payload=ToolResultEvent(
+                    step_id="fail_1",
+                    call_id="c1",
+                    ok=False,
+                    error="the create_feed tool was not executed. " + "y" * 4000,
+                ).model_dump(),
+            ),
+            Event(
+                kind="step_end",
+                payload=StepEndEvent(
+                    step_id="fail_1", status="failed", reason="tool: not executed"
+                ).model_dump(),
+            ),
+        ]
+    )
+
+    with tracer.start_as_current_span("x") as span:
+        await _run_llm(state, steps[-1], _settings(), tracer, _StubBudget(), span)
+
+    msgs = _CapturingLlm.captured[0]
+    context = next(
+        m.content
+        for m in msgs
+        if m.type == "system"
+        and m.content.startswith("Data gathered by earlier steps")
+    )
+    assert "data_1" in context
+    assert "fail_1" not in context
+    assert any(
+        m.type == "system" and "Report that failure plainly" in m.content
+        for m in msgs
+    )
+
+
+@pytest.mark.asyncio
+async def test_rerun_success_suppresses_stale_failed_step_end(tracer):
+    from agent.executor import _render_prior_data
+
+    steps = [
+        PlanStep(id="tool_1", kind="tool", tool="list_feeds", args={}),
+        PlanStep(id="answer", kind="llm", prompt="Answer."),
+    ]
+    state = _state(steps, {"tool_1": {"items": ["a", "b"]}})
+    state["events_so_far"].extend(
+        [
+            Event(
+                kind="tool_result",
+                payload=ToolResultEvent(
+                    step_id="tool_1", call_id="c1", ok=False, error="tool unavailable"
+                ).model_dump(),
+            ),
+            Event(
+                kind="step_end",
+                payload=StepEndEvent(
+                    step_id="tool_1", status="failed", reason="tool: tool unavailable"
+                ).model_dump(),
+            ),
+            Event(
+                kind="tool_result",
+                payload=ToolResultEvent(
+                    step_id="tool_1",
+                    call_id="c2",
+                    ok=True,
+                    result={"items": ["a", "b"]},
+                ).model_dump(),
+            ),
+            Event(
+                kind="step_end",
+                payload=StepEndEvent(step_id="tool_1", status="ok").model_dump(),
+            ),
+        ]
+    )
+
+    block = _render_prior_data(state, "answer")
+    assert "[tool_1 — tool result from list_feeds]" in block
+    assert '"items"' in block
+    assert "tool_1 — tool list_feeds failed" not in block
+
+    with tracer.start_as_current_span("x") as span:
+        await _run_llm(state, steps[-1], _settings(), tracer, _StubBudget(), span)
+
+    contents = "\n".join(m.content for m in _CapturingLlm.captured[0])
+    assert "earlier steps in this plan failed" not in contents
+    assert "This step did not complete." not in contents

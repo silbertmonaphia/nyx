@@ -372,6 +372,9 @@ async def _run_llm(
     context = _render_prior_data(state, step.id)
     if context:
         msgs.append(SystemMessage(content=context))
+    failure_instruction = _failed_step_instruction(state, step.id)
+    if failure_instruction:
+        msgs.append(SystemMessage(content=failure_instruction))
     msgs.extend(_state_messages_to_lc(state.get("messages", [])))
 
     try:
@@ -432,6 +435,9 @@ async def _run_react(
     context = _render_prior_data(state, step.id)
     if context:
         messages.append(SystemMessage(content=context))
+    failure_instruction = _failed_step_instruction(state, step.id)
+    if failure_instruction:
+        messages.append(SystemMessage(content=failure_instruction))
     messages.extend(_state_messages_to_lc(state.get("messages", [])))
 
     for i in range(max_iters):
@@ -736,15 +742,87 @@ def _resolve_tool_args(state: AgentState, step) -> dict:
     return _substitute_args(raw, (), by_path, outputs)
 
 
+_FAILED_STEP_STATIC_DETAIL = "This step did not complete."
+
+_FAILED_STEP_INSTRUCTION = (
+    "One or more earlier steps in this plan failed. Report that failure plainly "
+    "in your answer: state that the action did not complete, and do not present "
+    "the failed action as successful. If a failure message states that a tool was "
+    "not executed, quote that sentence verbatim."
+)
+
+
+def _terminal_failed_step_ids(state: AgentState) -> set[str]:
+    status_by_step: dict[str, Any] = {}
+    for ev in state.get("events_so_far", []):
+        payload = ev.payload or {}
+        if ev.kind != "step_end":
+            continue
+        step_id = payload.get("step_id")
+        if step_id:
+            status_by_step[step_id] = payload.get("status")
+    return {sid for sid, status in status_by_step.items() if status == "failed"}
+
+
+def _failed_step_sections(
+    state: AgentState, current_step_id: str
+) -> list[tuple[str, str]]:
+    plan = state.get("plan")
+    if plan is None:
+        return []
+    failed = _terminal_failed_step_ids(state)
+    if not failed:
+        return []
+    outputs = state.get("step_outputs") or {}
+    events = state.get("events_so_far", [])
+    sections: list[tuple[str, str]] = []
+    for s in plan.steps:
+        if s.id == current_step_id:
+            break
+        if s.id not in failed or s.id in outputs:
+            continue
+        if s.kind.value == "tool":
+            error_text: str | None = None
+            for ev in events:
+                payload = ev.payload or {}
+                if (
+                    ev.kind == "tool_result"
+                    and payload.get("step_id") == s.id
+                    and payload.get("ok") is False
+                ):
+                    error_text = payload.get("error")
+            body = error_text or _FAILED_STEP_STATIC_DETAIL
+            sections.append(
+                (s.id, f"[{s.id} — tool {s.tool or 'unknown'} failed]\n{body}")
+            )
+        else:
+            sections.append(
+                (
+                    s.id,
+                    f"[{s.id} — {s.kind.value} step failed]\n{_FAILED_STEP_STATIC_DETAIL}",
+                )
+            )
+    return sections
+
+
+def _failed_step_instruction(state: AgentState, current_step_id: str) -> str:
+    if not _failed_step_sections(state, current_step_id):
+        return ""
+    return _FAILED_STEP_INSTRUCTION
+
+
 def _render_prior_data(state: AgentState, current_step_id: str) -> str:
     """Render earlier data-step outputs (rag context / tool results) as a context block.
 
     Only `rag` and `tool` outputs are carried forward — they are the data
     producers. `llm`/`react` steps produce user-visible text (the deltas
     the client already renders); feeding them forward would only
-    duplicate answers. Returns "" when no earlier data step produced
-    anything, so data-free plans (e.g. a greeting) keep their exact
-    prior prompt shape.
+    duplicate answers. A step whose terminal `step_end` is `failed`
+    contributes a failure section instead, carrying the wire-safe
+    `tool_result.error` text for tool steps and a static sentence for
+    every other kind. Returns "" when no earlier step produced data or
+    failed, so clean plans (e.g. a greeting) keep their exact prior
+    prompt shape.
 
     The block is bounded by `PRIOR_DATA_MAX_CHARS` total (most recent
     step first; older sections are dropped when the cap is hit) and by
@@ -768,12 +846,17 @@ def _render_prior_data(state: AgentState, current_step_id: str) -> str:
     outputs = state.get("step_outputs") or {}
     if plan is None:
         return ""
+    failures = dict(_failed_step_sections(state, current_step_id))
     # Build sections in plan order first, then reverse so the most
     # recent data step wins when the total cap drops older sections.
     plan_sections: list[tuple[str, str]] = []
     for s in plan.steps:
         if s.id == current_step_id:
             break
+        failure = failures.get(s.id)
+        if failure is not None:
+            plan_sections.append((s.id, failure))
+            continue
         out = outputs.get(s.id)
         if out is None:
             continue
