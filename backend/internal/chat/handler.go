@@ -325,12 +325,12 @@ func streamLegacy(fw *flushingWriter, r *http.Request, req ChatRequest, svc *Ser
 //  2. Write SSE headers (Content-Type, Cache-Control, Connection,
 //     X-Accel-Buffering). Status 200 because the SSE envelope is
 //     opened regardless of upstream outcome.
-//  3. Call AgentProxy.Run with the verified user id (forwarded
-//     as X-Nyx-User-Id) and the user's Authorization header
-//     (passthrough to /mcp + /internal/rag/retrieve). On
-//     ErrAgentUnavailable → emit error{code:"agent_unavailable"}
-//     + done + terminator and return. On HTTP non-5xx → forward
-//     body verbatim.
+//  3. Mint a per-run delegated access token and call AgentProxy.Run
+//     with the verified user id (forwarded as X-Nyx-User-Id) and
+//     that token (passthrough to /mcp + /internal/rag/retrieve). On
+//     a mint failure or ErrAgentUnavailable → emit
+//     error{code:"agent_unavailable"} + done + terminator and
+//     return. On HTTP non-5xx → forward body verbatim.
 //  4. Read resp.Body in a loop, copy bytes straight to fw with
 //     Flush after each chunk. Client disconnect surfaces as a
 //     write error which we log + abandon.
@@ -368,12 +368,13 @@ func (h *Handler) streamProxy(w http.ResponseWriter, r *http.Request, req ChatRe
 
 	fw := &flushingWriter{w: w}
 
-	// Forward the user's Authorization header verbatim as a
-	// passthrough to /mcp + /internal/rag/retrieve (Go re-verifies
-	// on those endpoints). The Python agent itself does NOT verify
-	// it — the shared service token authenticates this hop. The
-	// Go proxy MUST NOT re-validate or log either credential value.
-	bearer := r.Header.Get("Authorization")
+	runToken, tokenErr := h.service.AgentRunToken(r.Context())
+	if tokenErr != nil {
+		api.ClassifyAndLog(r.Context(), tokenErr, "Failed to mint agent run token")
+		emitAgentUnavailable(fw, r.Context())
+		return
+	}
+	bearer := "Bearer " + runToken
 
 	// Wall-clock bound on the upstream stream — the same
 	// LLM_MAX_STREAM_DURATION cap the legacy path applies inside

@@ -121,7 +121,7 @@ func newProxyHarnessWithResolver(t *testing.T, proxy *AgentProxy, resolver LLMRe
 		LLMMaxMessageChars:    50,
 		LLMMaxTokens:          100,
 	}
-	svc := NewServiceWithProxy(&countingProvider{}, cfg, noop.NewTracerProvider().Tracer("test"), proxy)
+	svc := NewServiceWithProxy(&countingProvider{}, cfg, noop.NewTracerProvider().Tracer("test"), proxy, newRunTokenService(t))
 	svc.SetResolver(resolver)
 	return buildRouter(t, svc, nil)
 }

@@ -46,10 +46,10 @@ import (
 //   - X-Nyx-Service-Token: the shared credential; Python rejects
 //     requests without it, so X-Nyx-User-Id is only trusted behind
 //     this hop. The id from reqctx keys the budget guard + scope.
-//   - Authorization: the user's original bearer token, forwarded as
-//     a passthrough to Go's /mcp + /internal/rag/retrieve (re-verified
-//     there). Never log either credential; TokenFingerprint is the
-//     user-token tag.
+//   - Authorization: the per-run delegated bearer token minted by
+//     the chat handler, forwarded as a passthrough to Go's /mcp +
+//     /internal/rag/retrieve (re-verified there). Never log either
+//     credential; TokenFingerprint is the run-token tag.
 //
 // Thread-safety: AgentProxy has no mutable state; the underlying
 // *http.Client is safe for concurrent use. The constructor does
@@ -128,10 +128,10 @@ func NewAgentProxy(baseURL, serviceToken string, httpClient *http.Client) (*Agen
 // per-user budget counter and per-owner scoping on tool calls.
 //
 // bearerToken is the full Authorization header value (typically
-// "Bearer <access_token>"). It is forwarded as a passthrough so
-// Python can present it to Go's /mcp and /internal/rag/retrieve
-// endpoints, which re-verify the JWT themselves. The proxy never
-// logs the token value.
+// "Bearer <delegated access token>"), minted per run by the chat
+// handler. It is forwarded as a passthrough so Python can present
+// it to Go's /mcp and /internal/rag/retrieve endpoints, which
+// re-verify the JWT themselves. The proxy never logs the value.
 //
 // Returns ErrAgentUnavailable when the upstream is unreachable
 // (network error) or returns HTTP 5xx. On ErrAgentUnavailable

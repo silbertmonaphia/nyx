@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -91,7 +92,7 @@ func newProxyHarness(t *testing.T, proxy *AgentProxy) (http.Handler, auth.TokenS
 		LLMMaxTokens:          100,
 	}
 	tracer := noop.NewTracerProvider().Tracer("test")
-	svc := NewServiceWithProxy(&llmProviderUnused{}, cfg, tracer, proxy)
+	svc := NewServiceWithProxy(&llmProviderUnused{}, cfg, tracer, proxy, newRunTokenService(t))
 	h := NewHandler(svc)
 	router, t2 := buildRouter(t, svc, nil)
 	_ = h
@@ -140,11 +141,25 @@ func TestAgentProxy_Integration_HandlerForwardsPythonBytesByteForByte(t *testing
 	assert.Equal(t, cannedPythonSSEBytes, string(body),
 		"chat handler must forward Python bytes verbatim — no rewriting, no wrapping")
 
-	// The Authorization header the upstream saw must equal what
-	// the client sent (the proxy MUST NOT mint a new token, MUST
-	// NOT strip the Bearer prefix, MUST NOT log the value).
-	assert.Equal(t, "Bearer "+bearerToken(t, tokens), *lastAuth,
-		"Authorization header forwarded verbatim from chat request to Python service")
+	clientToken := strings.TrimPrefix(req.Header.Get("Authorization"), "Bearer ")
+	upstreamAuth := *lastAuth
+	require.True(t, strings.HasPrefix(upstreamAuth, "Bearer "),
+		"upstream Authorization = %q, want a Bearer value", upstreamAuth)
+	upstreamToken := strings.TrimPrefix(upstreamAuth, "Bearer ")
+	assert.NotEqual(t, clientToken, upstreamToken,
+		"handler must mint a per-run token, not forward the caller's access token")
+
+	runClaims, err := tokens.ValidateToken(upstreamToken)
+	require.NoError(t, err, "minted run token must validate with the deployment secret")
+	assert.Equal(t, 1, runClaims.UserID)
+	assert.Equal(t, "tester", runClaims.Username)
+
+	clientClaims, err := tokens.ValidateToken(clientToken)
+	require.NoError(t, err)
+	require.NotNil(t, runClaims.ExpiresAt)
+	require.NotNil(t, clientClaims.ExpiresAt)
+	assert.Greater(t, runClaims.ExpiresAt.Time.Sub(clientClaims.ExpiresAt.Time), 40*time.Minute,
+		"run token must outlive the caller's 15m access token by the configured margin")
 
 	// X-Nyx-User-Id is set from the JWT-verified user id (the
 	// Python service reads this header directly and does not decode
@@ -364,7 +379,7 @@ func TestAgentProxy_Integration_StreamCapCutEmitsTypedTerminalFrames(t *testing.
 		LLMMaxStreamDuration:  "200ms",
 	}
 	tracer := noop.NewTracerProvider().Tracer("test")
-	svc := NewServiceWithProxy(&llmProviderUnused{}, cfg, tracer, proxy)
+	svc := NewServiceWithProxy(&llmProviderUnused{}, cfg, tracer, proxy, newRunTokenService(t))
 	harness, tokens := buildRouter(t, svc, nil)
 	server := httptest.NewServer(harness)
 	defer server.Close()
@@ -457,7 +472,7 @@ func TestAgentProxy_Integration_StreamCapAfterUpstreamTerminalEmitsNothing(t *te
 		LLMMaxStreamDuration:  "200ms",
 	}
 	tracer := noop.NewTracerProvider().Tracer("test")
-	svc := NewServiceWithProxy(&llmProviderUnused{}, cfg, tracer, proxy)
+	svc := NewServiceWithProxy(&llmProviderUnused{}, cfg, tracer, proxy, newRunTokenService(t))
 	harness, tokens := buildRouter(t, svc, nil)
 	server := httptest.NewServer(harness)
 	defer server.Close()
@@ -478,6 +493,96 @@ func TestAgentProxy_Integration_StreamCapAfterUpstreamTerminalEmitsNothing(t *te
 		"nothing may be appended after the upstream's own terminal frames")
 	assert.NotContains(t, string(body), "stream_timeout",
 		"a run that closed its own stream is not a timeout")
+}
+
+func TestAgentProxy_Integration_MintFailureFailsClosedWithoutUpstreamCall(t *testing.T) {
+	var calls atomic.Int64
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls.Add(1)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	proxy, err := NewAgentProxy(srv.URL, testServiceToken, nil)
+	require.NoError(t, err)
+
+	cfg := &config.Config{LLMMaxHistoryMessages: 5, LLMMaxMessageChars: 50, LLMMaxTokens: 100}
+	tracer := noop.NewTracerProvider().Tracer("test")
+	svc := NewServiceWithProxy(&llmProviderUnused{}, cfg, tracer, proxy, failingRunTokenMinter{})
+	harness, tokens := buildRouter(t, svc, nil)
+	server := httptest.NewServer(harness)
+	defer server.Close()
+
+	req, err := http.NewRequest(http.MethodPost, server.URL+"/api/chat",
+		bytes.NewReader(chatRequest(Message{Role: RoleUser, Content: "hi"})))
+	require.NoError(t, err)
+	req.Header.Set("Authorization", "Bearer "+bearerToken(t, tokens))
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := server.Client().Do(req)
+	require.NoError(t, err)
+	defer func() { _ = resp.Body.Close() }()
+
+	assert.Equal(t, http.StatusOK, resp.StatusCode)
+	frames := readSSEFrames(t, resp.Body)
+
+	var errFrame *sseFrame
+	for i := range frames {
+		if frames[i].event == eventNameError {
+			errFrame = &frames[i]
+			break
+		}
+	}
+	require.NotNil(t, errFrame, "mint failure must emit an error frame; got %+v", frames)
+	assert.Contains(t, errFrame.data, `"code":"agent_unavailable"`)
+	assert.Equal(t, int64(0), calls.Load(),
+		"the Python service must not be called when the run token cannot be minted")
+}
+
+func TestAgentProxy_Integration_RunTokenNeverLogged(t *testing.T) {
+	buf := captureApprovalLogs(t)
+
+	const sentinelRunToken = "sentinel-run-token-must-never-be-logged"
+	var seenAuth atomic.Value
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		seenAuth.Store(r.Header.Get("Authorization"))
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer srv.Close()
+
+	proxy, err := NewAgentProxy(srv.URL, testServiceToken, nil)
+	require.NoError(t, err)
+
+	cfg := &config.Config{LLMMaxHistoryMessages: 5, LLMMaxMessageChars: 50, LLMMaxTokens: 100}
+	tracer := noop.NewTracerProvider().Tracer("test")
+	svc := NewServiceWithProxy(&llmProviderUnused{}, cfg, tracer, proxy, stubRunTokenMinter{token: sentinelRunToken})
+	harness, tokens := buildRouter(t, svc, nil)
+	server := httptest.NewServer(harness)
+	defer server.Close()
+
+	clientToken := bearerToken(t, tokens)
+	req, err := http.NewRequest(http.MethodPost, server.URL+"/api/chat",
+		bytes.NewReader(chatRequest(Message{Role: RoleUser, Content: "hi"})))
+	require.NoError(t, err)
+	req.Header.Set("Authorization", "Bearer "+clientToken)
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := server.Client().Do(req)
+	require.NoError(t, err)
+	defer func() { _ = resp.Body.Close() }()
+	_, _ = io.ReadAll(resp.Body)
+
+	got, _ := seenAuth.Load().(string)
+	assert.Equal(t, "Bearer "+sentinelRunToken, got,
+		"delivery marker: the upstream must have received the delegated token")
+
+	logged := buf.String()
+	assert.Contains(t, logged, "python agent service is unavailable",
+		"sanity: the 5xx path logged, so the absence assertions below are meaningful")
+	for _, secret := range []string{sentinelRunToken, clientToken} {
+		assert.NotContains(t, logged, secret,
+			"neither the delegated run token nor the caller token may appear in a log line")
+	}
 }
 
 // llmProviderUnused is a stand-in llm.Provider used because

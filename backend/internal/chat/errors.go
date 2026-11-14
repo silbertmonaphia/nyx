@@ -23,3 +23,5 @@ import "errors"
 // failures from the operator and from the user's AGENT_ENABLED=true
 // expectation.
 var ErrAgentUnavailable = errors.New("chat: python agent service is unavailable")
+
+var ErrAgentRunToken = errors.New("chat: agent run token unavailable")

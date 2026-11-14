@@ -140,6 +140,140 @@ func TestLoadRejectsNonPositiveFeedIndexTimeout(t *testing.T) {
 	}
 }
 
+func TestLoad_AgentRunTokenTTLDefault(t *testing.T) {
+	t.Setenv("DB_URL", "postgres://x")
+	t.Setenv("JWT_SECRET", auth.TestSecret)
+	t.Setenv("AGENT_RUN_TOKEN_TTL", "")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg.AgentRunTokenTTL != "1h" {
+		t.Errorf("AgentRunTokenTTL default = %q, want %q", cfg.AgentRunTokenTTL, "1h")
+	}
+}
+
+func TestLoad_AgentRunTokenTTLFromEnv(t *testing.T) {
+	t.Setenv("DB_URL", "postgres://x")
+	t.Setenv("JWT_SECRET", auth.TestSecret)
+	t.Setenv("AGENT_RUN_TOKEN_TTL", "45m")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg.AgentRunTokenTTL != "45m" {
+		t.Errorf("AgentRunTokenTTL = %q, want %q", cfg.AgentRunTokenTTL, "45m")
+	}
+}
+
+func TestLoad_RejectsInvalidAgentRunTokenTTL(t *testing.T) {
+	t.Setenv("DB_URL", "postgres://x")
+	t.Setenv("JWT_SECRET", auth.TestSecret)
+	t.Setenv("AGENT_RUN_TOKEN_TTL", "not-a-duration")
+
+	_, err := Load()
+	if err == nil {
+		t.Fatal("Load() error = nil, want AGENT_RUN_TOKEN_TTL parse error")
+	}
+	if !strings.Contains(err.Error(), "AGENT_RUN_TOKEN_TTL") {
+		t.Errorf("Load() error = %v, want it to mention AGENT_RUN_TOKEN_TTL", err)
+	}
+}
+
+func TestLoad_RejectsNonPositiveAgentRunTokenTTL(t *testing.T) {
+	t.Setenv("DB_URL", "postgres://x")
+	t.Setenv("JWT_SECRET", auth.TestSecret)
+	t.Setenv("AGENT_RUN_TOKEN_TTL", "0s")
+
+	_, err := Load()
+	if err == nil {
+		t.Fatal("Load() error = nil, want positive-duration error")
+	}
+	if !strings.Contains(err.Error(), "AGENT_RUN_TOKEN_TTL") {
+		t.Errorf("Load() error = %v, want it to mention AGENT_RUN_TOKEN_TTL", err)
+	}
+}
+
+func TestLoad_RejectsAgentRunTokenTTLBelowStreamDuration(t *testing.T) {
+	t.Setenv("DB_URL", "postgres://x")
+	t.Setenv("JWT_SECRET", auth.TestSecret)
+	t.Setenv("LLM_ENABLED", "true")
+	t.Setenv("USER_LLM_ENCRYPTION_KEY", "nyx-user-llm-encryption-key-0123456789abcdef")
+	t.Setenv("LLM_BASE_URL", "https://api.openai.com/v1")
+	t.Setenv("LLM_API_KEY", "sk-prod-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+	t.Setenv("LLM_MODEL", "gpt-4o-mini")
+	t.Setenv("LLM_MAX_STREAM_DURATION", "30m")
+	t.Setenv("AGENT_ENABLED", "true")
+	t.Setenv("AGENT_RUN_TOKEN_TTL", "20m")
+
+	_, err := Load()
+	if err == nil {
+		t.Fatal("Load() error = nil, want detached-envelope rejection")
+	}
+	if !strings.Contains(err.Error(), "AGENT_RUN_TOKEN_TTL") {
+		t.Errorf("Load() error = %v, want it to mention AGENT_RUN_TOKEN_TTL", err)
+	}
+}
+
+func TestLoad_RejectsAgentRunTokenTTLEqualToEnvelopeFloor(t *testing.T) {
+	t.Setenv("DB_URL", "postgres://x")
+	t.Setenv("JWT_SECRET", auth.TestSecret)
+	t.Setenv("JWT_ACCESS_TTL", "5m")
+	t.Setenv("LLM_ENABLED", "true")
+	t.Setenv("USER_LLM_ENCRYPTION_KEY", "nyx-user-llm-encryption-key-0123456789abcdef")
+	t.Setenv("LLM_BASE_URL", "https://api.openai.com/v1")
+	t.Setenv("LLM_API_KEY", "sk-prod-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+	t.Setenv("LLM_MODEL", "gpt-4o-mini")
+	t.Setenv("LLM_MAX_STREAM_DURATION", "5m")
+	t.Setenv("AGENT_ENABLED", "true")
+	t.Setenv("AGENT_RUN_TOKEN_TTL", "15m")
+
+	_, err := Load()
+	if err == nil {
+		t.Fatal("Load() error = nil, want equal-to-floor rejection")
+	}
+	if !strings.Contains(err.Error(), "AGENT_RUN_TOKEN_TTL") {
+		t.Errorf("Load() error = %v, want it to mention AGENT_RUN_TOKEN_TTL", err)
+	}
+}
+
+func TestLoad_RejectsAgentRunTokenTTLNotGreaterThanAccessTTL(t *testing.T) {
+	t.Setenv("DB_URL", "postgres://x")
+	t.Setenv("JWT_SECRET", auth.TestSecret)
+	t.Setenv("JWT_ACCESS_TTL", "2h")
+	t.Setenv("AGENT_RUN_TOKEN_TTL", "1h")
+
+	_, err := Load()
+	if err == nil {
+		t.Fatal("Load() error = nil, want run token <= access TTL rejection")
+	}
+	if !strings.Contains(err.Error(), "AGENT_RUN_TOKEN_TTL") {
+		t.Errorf("Load() error = %v, want it to mention AGENT_RUN_TOKEN_TTL", err)
+	}
+}
+
+func TestLoad_AcceptsAgentRunTokenTTLWhenAgentDisabled(t *testing.T) {
+	t.Setenv("DB_URL", "postgres://x")
+	t.Setenv("JWT_SECRET", auth.TestSecret)
+	t.Setenv("LLM_ENABLED", "true")
+	t.Setenv("USER_LLM_ENCRYPTION_KEY", "nyx-user-llm-encryption-key-0123456789abcdef")
+	t.Setenv("LLM_BASE_URL", "https://api.openai.com/v1")
+	t.Setenv("LLM_API_KEY", "sk-prod-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+	t.Setenv("LLM_MODEL", "gpt-4o-mini")
+	t.Setenv("LLM_MAX_STREAM_DURATION", "30m")
+	t.Setenv("AGENT_RUN_TOKEN_TTL", "20m")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v, want nil when the agent path is disabled", err)
+	}
+	if cfg.AgentRunTokenTTL != "20m" {
+		t.Errorf("AgentRunTokenTTL = %q, want %q", cfg.AgentRunTokenTTL, "20m")
+	}
+}
+
 func TestLoadRejectsOutOfRangeRAGMaxBackfillPerRequest(t *testing.T) {
 	for _, value := range []string{"0", "-1", "100000"} {
 		t.Setenv("DB_URL", "postgres://x")

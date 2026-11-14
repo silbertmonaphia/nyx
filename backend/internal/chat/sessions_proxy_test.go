@@ -121,7 +121,7 @@ func newSessionsHarness(t *testing.T, proxy *AgentProxy, limiter *UserRateLimite
 		LLMMaxTokens:          100,
 	}
 	tracer := noop.NewTracerProvider().Tracer("test")
-	svc := NewServiceWithProxy(&llmProviderUnused{}, cfg, tracer, proxy)
+	svc := NewServiceWithProxy(&llmProviderUnused{}, cfg, tracer, proxy, newRunTokenService(t))
 	return buildRouter(t, svc, limiter)
 }
 

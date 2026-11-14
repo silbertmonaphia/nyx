@@ -109,7 +109,7 @@ func newRunsHarness(t *testing.T, proxy *AgentProxy, streamCap time.Duration, li
 		cfg.LLMMaxStreamDuration = streamCap.String()
 	}
 	tracer := noop.NewTracerProvider().Tracer("test")
-	svc := NewServiceWithProxy(&llmProviderUnused{}, cfg, tracer, proxy)
+	svc := NewServiceWithProxy(&llmProviderUnused{}, cfg, tracer, proxy, newRunTokenService(t))
 	return buildRouter(t, svc, limiter)
 }
 

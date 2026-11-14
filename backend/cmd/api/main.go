@@ -399,6 +399,19 @@ func setupTracing(cfg *config.Config) *observability.Tracing {
 	return tracing
 }
 
+func newAgentRunTokenService(cfg *config.Config) auth.TokenService {
+	runTTL, err := time.ParseDuration(cfg.AgentRunTokenTTL)
+	if err != nil {
+		log.Fatal().Err(err).Msg("invalid AGENT_RUN_TOKEN_TTL")
+	}
+	runTokens, err := auth.NewTokenService([]byte(cfg.JWTSecret), runTTL)
+	if err != nil {
+		log.Fatal().Err(err).Msg("failed to construct agent run token service")
+	}
+	log.Info().Str("run_token_ttl", runTTL.String()).Msg("Agent run token service ready")
+	return runTokens
+}
+
 // mountChatRoute wires the optional /api/chat SSE endpoint when
 // LLM_ENABLED=true. When LLM_ENABLED=false no route is mounted and
 // no provider client is constructed, so deployments without an LLM
@@ -549,7 +562,7 @@ func mountChatRoute(router chi.Router, cfg *config.Config, db *pgxpool.Pool, fee
 			if perr != nil {
 				log.Fatal().Err(perr).Msg("failed to construct AgentProxy")
 			}
-			chatService = chat.NewServiceWithProxy(llmClient, cfg, tracerProvider.Tracer("nyx.chat"), proxy)
+			chatService = chat.NewServiceWithProxy(llmClient, cfg, tracerProvider.Tracer("nyx.chat"), proxy, newAgentRunTokenService(cfg))
 			log.Info().
 				Str("python_agent_url", cfg.PythonAgentURL).
 				Msg("Agent path enabled (Go handler is SSE proxy to Python LangGraph)")

@@ -1,6 +1,7 @@
 package config
 
 import (
+	"errors"
 	"fmt"
 	"net"
 	"net/url"
@@ -235,6 +236,7 @@ type Config struct {
 	PythonAgentURL       string `mapstructure:"PYTHON_AGENT_URL"`
 	AgentServiceToken    string `mapstructure:"AGENT_SERVICE_TOKEN"`
 	AgentAllowPrivateURL bool   `mapstructure:"AGENT_ALLOW_PRIVATE_URL"`
+	AgentRunTokenTTL     string `mapstructure:"AGENT_RUN_TOKEN_TTL"`
 }
 
 func Load() (*Config, error) {
@@ -455,6 +457,7 @@ func setDefaults() {
 	viper.SetDefault("PYTHON_AGENT_URL", "")
 	viper.SetDefault("AGENT_SERVICE_TOKEN", "")
 	viper.SetDefault("AGENT_ALLOW_PRIVATE_URL", false)
+	viper.SetDefault("AGENT_RUN_TOKEN_TTL", "1h")
 }
 
 // bindEnvVars explicitly wires every env-sourced viper key. See Load
@@ -488,7 +491,7 @@ func bindEnvVars() {
 		"KB_INDEX_CONCURRENCY",
 		"MCP_ENABLED", "MCP_PATH", "MCP_MAX_BODY_BYTES",
 		"AGENT_ENABLED", "PYTHON_AGENT_URL", "AGENT_SERVICE_TOKEN",
-		"AGENT_ALLOW_PRIVATE_URL",
+		"AGENT_ALLOW_PRIVATE_URL", "AGENT_RUN_TOKEN_TTL",
 		"USER_LLM_ENCRYPTION_KEY",
 	} {
 		_ = viper.BindEnv(key)
@@ -552,7 +555,40 @@ func validateDurations(cfg *Config) error {
 	if feedIndexTimeout <= 0 {
 		return fmt.Errorf("FEED_INDEX_TIMEOUT must be positive, got %v", feedIndexTimeout)
 	}
-	return validateRAGBackfillSize(cfg)
+	return errors.Join(validateAgentRunTokenTTL(cfg), validateRAGBackfillSize(cfg))
+}
+
+const agentRunDetachedEnvelope = 10 * time.Minute
+
+func validateAgentRunTokenTTL(cfg *Config) error {
+	runTokenTTL, err := time.ParseDuration(cfg.AgentRunTokenTTL)
+	if err != nil {
+		return fmt.Errorf("invalid AGENT_RUN_TOKEN_TTL: %w", err)
+	}
+	if runTokenTTL <= 0 {
+		return fmt.Errorf("AGENT_RUN_TOKEN_TTL must be positive, got %v", runTokenTTL)
+	}
+	accessDur, accessErr := time.ParseDuration(cfg.JWTAccessTTL)
+	if accessErr == nil && runTokenTTL <= accessDur {
+		return fmt.Errorf(
+			"AGENT_RUN_TOKEN_TTL (%v) must be greater than JWT_ACCESS_TTL (%v)",
+			runTokenTTL, accessDur,
+		)
+	}
+	if !cfg.LLMEnabled || !cfg.AgentEnabled {
+		return nil
+	}
+	streamDur, streamErr := time.ParseDuration(cfg.LLMMaxStreamDuration)
+	if streamErr != nil {
+		return nil
+	}
+	if runTokenTTL <= streamDur+agentRunDetachedEnvelope {
+		return fmt.Errorf(
+			"AGENT_RUN_TOKEN_TTL (%v) must exceed LLM_MAX_STREAM_DURATION (%v) plus the %v detached-run envelope",
+			runTokenTTL, streamDur, agentRunDetachedEnvelope,
+		)
+	}
+	return nil
 }
 
 func validateRAGBackfillSize(cfg *Config) error {

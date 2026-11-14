@@ -22,6 +22,10 @@
 # (Playwright's webServer block reuses the operator's vite on :5173 and
 # is harmless; the baseURL override is what routes the browser to :5273.)
 #
+# E2E_JWT_ACCESS_TTL overrides JWT_ACCESS_TTL for the side backend only
+# (e.g. 90s) so specs can drive a run across the access token's expiry.
+# Unset → backend/.env's value is used unchanged.
+#
 # Logs/PIDs: /tmp/nyx-e2e-<name>${E2E_STACK_SUFFIX}.{log,pid} — set
 # E2E_STACK_SUFFIX (e.g. -ab) to run several side stacks concurrently
 # without clobbering each other's files; empty keeps the original names.
@@ -81,7 +85,12 @@ start_backend() {
     # PORT/PYTHON_AGENT_URL/CORS/DB_URL/REDIS_URL are env overrides on top
     # of backend/.env (viper: env > file), so JWT_SECRET and the other
     # operator settings carry over while the side ports don't collide.
+    access_ttl_env=()
+    if [[ -n "${E2E_JWT_ACCESS_TTL:-}" ]]; then
+      access_ttl_env=("JWT_ACCESS_TTL=$E2E_JWT_ACCESS_TTL")
+    fi
     setsid env \
+    ${access_ttl_env[@]+"${access_ttl_env[@]}"} \
     PORT="$GO_PORT" \
     DB_URL="$DB_URL_SIDE" \
     REDIS_URL='redis://localhost:6380' \

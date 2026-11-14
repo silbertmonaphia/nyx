@@ -44,7 +44,7 @@ func newApprovalsHarness(t *testing.T, proxy *AgentProxy, approvalsLimiter *User
 		LLMMaxTokens:          100,
 	}
 	tracer := noop.NewTracerProvider().Tracer("test")
-	svc := NewServiceWithProxy(&llmProviderUnused{}, cfg, tracer, proxy)
+	svc := NewServiceWithProxy(&llmProviderUnused{}, cfg, tracer, proxy, newRunTokenService(t))
 
 	tokens, err := auth.NewTokenService([]byte(auth.TestSecret), 15*time.Minute)
 	require.NoError(t, err)

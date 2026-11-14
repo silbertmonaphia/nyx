@@ -74,6 +74,7 @@ type Service struct {
 	proxy              *AgentProxy
 	agentMisconfigured bool
 	resolver           LLMResolver
+	runTokenMinter     RunTokenMinter
 }
 
 // NewService builds a Service from config. cfg supplies the per-
@@ -126,9 +127,10 @@ func NewService(p llm.Provider, cfg *config.Config, ragSvc *rag.Service, tracer 
 // The legacy fields (provider, systemPrompt, etc.) are populated
 // from cfg so a future fall-back path can reuse the same Service
 // instance without reconstructing it.
-func NewServiceWithProxy(p llm.Provider, cfg *config.Config, tracer trace.Tracer, proxy *AgentProxy) *Service {
+func NewServiceWithProxy(p llm.Provider, cfg *config.Config, tracer trace.Tracer, proxy *AgentProxy, minter RunTokenMinter) *Service {
 	s := NewService(p, cfg, nil, tracer)
 	s.proxy = proxy
+	s.runTokenMinter = minter
 	return s
 }
 

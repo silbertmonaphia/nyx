@@ -103,6 +103,13 @@ func bearerToken(t *testing.T, tokens auth.TokenService) string {
 	return tok
 }
 
+func newRunTokenService(t *testing.T) auth.TokenService {
+	t.Helper()
+	tokens, err := auth.NewTokenService([]byte(auth.TestSecret), time.Hour)
+	require.NoError(t, err)
+	return tokens
+}
+
 // chatRequest builds a minimal valid chat body as JSON.
 func chatRequest(msgs ...Message) []byte {
 	body, err := json.Marshal(ChatRequest{Messages: msgs})
