@@ -32,7 +32,7 @@ Constraints:
 
 ### D1. Derive failure context from terminal `step_end` events, not a new state channel
 
-`step_end{status: "failed"}` is emitted only from `executor_node`'s exception path — a retry that recovers inside a step never reaches it. Event data is already checkpointed, so resumed runs carry it without new compatibility work. A dedicated `state["step_failures"]` channel was considered and rejected: it duplicates event data, adds a checkpoint surface that must be maintained on resume, and risks being mistaken for the `step_outputs` completion marker used by the resume-skip check.
+`step_end{status: "failed"}` is emitted only from `executor_node`'s exception path — a retry that recovers inside a step never reaches it. A step's last `step_end` wins: a step that failed in an interrupted run and succeeded when re-run on resume carries both events, and only the terminal status counts. Event data is already checkpointed, so resumed runs carry it without new compatibility work. A dedicated `state["step_failures"]` channel was considered and rejected: it duplicates event data, adds a checkpoint surface that must be maintained on resume, and risks being mistaken for the `step_outputs` completion marker used by the resume-skip check.
 
 A small helper renders sections from `state["plan"]` and `state["events_so_far"]`, limited to steps ordered before the current step. It is separate from `_collect_failed_steps` (which stays the banner's single source of truth and additionally applies the retry-allowance fallback); the two answer different questions and must not be merged.
 
@@ -57,7 +57,7 @@ Alternative considered: always reserve a fixed portion of the total cap for fail
 - the immediately preceding assistant message names a write tool (`create_feed` / `update_feed` / `delete_feed`) and carries a not-executed marker (未执行 / 没有执行 / not executed);
 - no draft or negation qualifier is present in the latest message (reusing the existing negation markers plus retry negations such as 别重试 / 不要重试 / 先不要重试).
 
-When it fires, the plan must contain that named write tool before the answering step, and the existing compose-before-write and content-limit rules apply. When any condition is absent, planning is unchanged. The blast radius of a false positive is bounded: the plan only schedules a write, and dispatch still requires a fresh confirmation.
+When it fires, the plan must contain that named write tool before the answering step, and the existing compose-before-write and content-limit rules apply — a `create_feed` retry still needs a composing `llm` step, so a placeholder body cannot be published through the retry path. The tool name is anchored to the not-executed clause rather than found anywhere in the answer, so a sentence that mentions another write tool is not misread. The guard runs on the structured planner path, matching where the existing state-change mandate runs; the legacy free-text path relies on its prompt. When any condition is absent, planning is unchanged. The blast radius of a false positive is bounded: the plan only schedules a write, and dispatch still requires a fresh confirmation.
 
 Structured history (reading `chat_store` steps at run start) was considered as the deterministic alternative and deferred: it adds a run-start read, tenant/session authorization, and a new prompt channel for a case the text route already covers when the answer step follows the instruction.
 

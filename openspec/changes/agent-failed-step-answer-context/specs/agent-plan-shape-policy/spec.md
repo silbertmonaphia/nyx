@@ -4,14 +4,14 @@
 
 ### Requirement: Retry instruction after a reported write failure re-plans the write
 
-When the most recent user message is a retry instruction from a fixed lexical cue set, and the immediately preceding assistant message reports that a specific feed write tool (`create_feed`, `update_feed`, or `delete_feed`) was not executed, the emitted plan SHALL contain a `tool` step invoking that named tool before the answering step. The retried write SHALL follow the same rules as an explicit state-change request: compose-before-write when the body must be produced, the existing content limit, and a new confirmation request before dispatch — a previously expired or denied approval MUST NOT be reused.
+When the most recent user message is a retry instruction from a fixed lexical cue set, and the immediately preceding assistant message reports that a specific feed write tool (`create_feed`, `update_feed`, or `delete_feed`) was not executed, the emitted plan SHALL contain a `tool` step invoking that named tool before the answering step. The named tool SHALL be the write tool the not-executed statement refers to. The retried write SHALL follow the same rules as an explicit state-change request: the existing compose-before-write rule (a `create_feed` retry must be preceded by an `llm` step whose output the write's arguments reference), the existing content limit, and a new confirmation request before dispatch — a previously expired or denied approval MUST NOT be reused.
 
-Both signals are required. The guard MUST NOT fire when the latest message carries no retry cue, when the preceding assistant text names no write tool as not executed, when a negation or deferral qualifier is present (for example 别重试, 不要重试, 先不要重试), or when the preceding assistant text reports success. The cue set ships Chinese phrasing only, matching the existing state-change cue scope; English retry phrasing relies on the planner prompt rather than the deterministic guard.
+Both signals are required. The guard MUST NOT fire when the latest message carries no retry cue, when the immediately preceding assistant text names no write tool as not executed, when a negation or deferral qualifier is present (for example 别重试, 不要重试, 先不要重试), or when the preceding assistant text reports success. The cue set ships Chinese phrasing only, matching the existing state-change cue scope; English retry phrasing relies on the planner prompt rather than the deterministic guard. The deterministic guard applies to the structured planner path, matching where the existing state-change mandate runs; the legacy free-text planner path relies on its prompt.
 
 #### Scenario: Retry after an expired confirmation re-plans the write
 
 - **WHEN** the preceding assistant message reports that `create_feed` was not executed because the approval request expired, and the latest user message is 再试试
-- **THEN** the plan contains a `create_feed` `tool` step before the answering step, with a composing `llm` step when the body must be produced, and dispatch raises a fresh confirmation request
+- **THEN** the plan contains a `create_feed` `tool` step before the answering step, preceded by the composing `llm` step whose output the write's arguments reference, and dispatch raises a fresh confirmation request
 
 #### Scenario: Retry cue without a named failed write is not guard-triggered
 

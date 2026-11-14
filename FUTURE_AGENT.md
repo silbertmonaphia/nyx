@@ -127,6 +127,12 @@ Recommendation: the second. Each step has a stable `id` so SSE frames can be cor
 - [x] **Per-run planner path** — a `deepseek` host in the override base URL selects the legacy free-text planner path for that run; otherwise the global structured-output flag applies.
 - [x] **Tavily override** — `web_search` reads endpoint and key from the run's override; a per-run local registry is built only when an override is present, leaving the shared startup registry untouched.
 
+### 1.5 Failed-step answer context — `openspec/changes/agent-failed-step-answer-context/` (in progress)
+
+- [ ] **Failed steps reach the answering model** — every `llm` / `react` step that follows a failed step receives a bounded, plan-ordered failed-steps section derived from the terminal `step_end{status: "failed"}` event: the safe `tool_result{ok: false}.error` text for a `tool` step, a static description (never exception class names, provider text, or `step_end.reason`) for any other kind. A separate static system message tells the model to report the failure plainly, not present the failed action as successful, and quote a "tool was not executed" error verbatim. Existing prior-data caps apply, and a clean run's prompt stays byte-identical. Spec delta: `openspec/changes/agent-failed-step-answer-context/specs/agent-partial-failure/spec.md`.
+- [ ] **Retry instruction re-plans a reported write** — a bare retry cue (再试试 / 重试 / 继续 …) whose immediately preceding assistant message names `create_feed` / `update_feed` / `delete_feed` as not executed re-plans that tool before the answering step under the existing write-planning rules (compose-before-write only when the body must be produced), with a fresh confirmation and no reused decision; without both signals (or with a negation such as 别重试) planning is unchanged. Spec delta: `openspec/changes/agent-failed-step-answer-context/specs/agent-plan-shape-policy/spec.md`.
+- **Scope**: code-only for the Python agent (`executor.py`, `planner.py`); no SSE frame, request-shape, or history-schema change, and the partial-failure banner is unchanged.
+
 ---
 
 ## P2 — Advanced autonomy

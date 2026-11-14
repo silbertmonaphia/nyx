@@ -291,7 +291,8 @@ loopback and private service names. The transport is the existing
 `text/event-stream`; the frame kinds are `run_id` (opens every fresh run — echo it to resume),
 `plan`, `step_start`, `tool_call`, `tool_result`, `step_end`, `delta`, `done`, `note`, `error`,
 and `terminator`. The SPA chat panel renders the intermediate steps plus a partial-failure
-banner when a tool fails for good.
+banner when a tool fails for good, and the final answer text itself reports the failed step
+rather than claiming success.
 
 Tools:
 
