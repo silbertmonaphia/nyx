@@ -1,4 +1,4 @@
-.PHONY: sqlc sqlc-diff sqlc-version openapi openapi-diff coverage coverage-check coverage-html migration-check stream-budget-check lint help
+.PHONY: sqlc sqlc-diff sqlc-version openapi openapi-diff test coverage coverage-check coverage-html migration-check stream-budget-check lint help
 
 # COVERAGE_MIN is the per-package floor that `make coverage-check`
 # enforces. Each package's coverage must be at or above this number;
@@ -44,6 +44,8 @@ COVERAGE_IGNORE ?= nyx/internal/platform/database nyx/internal/platform/cache ny
 SHELL := /bin/bash
 .SHELLFLAGS := -eo pipefail -c
 
+RACE ?= -race
+
 # sqlc is a code generator that turns the queries/*.sql files into
 # type-safe Go code under internal/{movie,user}/db/. Run it after any
 # schema or query change, and commit the regenerated files.
@@ -74,6 +76,9 @@ openapi-diff:
 		{ diff -u ../api/openapi.json "$$tmp" \
 			|| { echo "openapi.json is out of date - run 'make openapi' and commit the result"; rm -f "$$tmp"; exit 1; }; } && \
 		rm -f "$$tmp"
+
+test:
+	go test $(RACE) -count=1 ./...
 
 # Run the unit test suite and print per-package coverage as a table.
 # Sets SKIP_CONTAINERS=true so local runs don't need a live Postgres
@@ -128,6 +133,7 @@ help:
 	@echo "  make openapi-diff     - regenerate and fail if the committed spec is stale"
 	@echo "  make migration-check  - fail on single-step destructive migrations"
 	@echo "  make stream-budget-check - fail when the stream cap is shorter than one approval wait"
+	@echo "  make test             - run the suite with the race detector (RACE= to opt out)"
 	@echo "  make coverage         - print per-package coverage as a table"
 	@echo "  make coverage-check   - fail if any package drops below $(COVERAGE_MIN)%"
 	@echo "  make coverage-html    - write backend/coverage.html for browser viewing"

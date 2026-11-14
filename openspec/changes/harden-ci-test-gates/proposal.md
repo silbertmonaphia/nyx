@@ -31,8 +31,8 @@ ships real regressions.
   `warn_unused_ignores`, `no_implicit_optional`, `strict_equality`). Full
   `--strict` (measured: 251 errors) is explicitly out of scope.
 - **Coverage floors for the two runtimes that lack one.** Frontend vitest gains
-  configured coverage thresholds (today's measured baseline: lines 91.33%,
-  statements 88.89%, branches 83%, functions 86.88%); the agent gains
+  configured coverage thresholds (today's measured baseline: lines 91.53%,
+  statements 89.07%, branches 83.53%, functions 87.82%); the agent gains
   `pytest-cov` with a floor recorded in its Makefile. Both are enforced in
   their existing/new CI jobs.
 - **Docs and comments reconciled** with the new gates, including the stale

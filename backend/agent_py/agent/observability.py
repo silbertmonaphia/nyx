@@ -17,14 +17,14 @@ import re
 from collections.abc import Iterator
 from contextlib import contextmanager
 from contextvars import ContextVar
-from typing import Any
+from typing import Any, cast
 
 import requests
 from opentelemetry import trace
 from opentelemetry.context import Context
 from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
 from opentelemetry.sdk.resources import Resource
-from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.sdk.trace import ReadableSpan, TracerProvider
 from opentelemetry.sdk.trace.export import BatchSpanProcessor, SpanExporter
 from prometheus_client import Counter
 
@@ -395,9 +395,9 @@ def jaeger_span(tracer: trace.Tracer, name: str) -> Iterator[trace.Span]:
         if hasattr(current, "instrumentation_scope"):
             from langfuse import is_langfuse_span
 
-            if is_langfuse_span(current):
+            if is_langfuse_span(cast(ReadableSpan, current)):
                 ctx = Context()
-    kwargs = {"context": ctx} if ctx is not None else {}
+    kwargs: dict[str, Any] = {"context": ctx} if ctx is not None else {}
     with tracer.start_as_current_span(name, **kwargs) as span:
         token = _jaeger_parent.set(span)
         try:

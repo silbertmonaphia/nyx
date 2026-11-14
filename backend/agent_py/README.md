@@ -127,8 +127,33 @@ root) already does this.
 ## Tests
 
 ```bash
-cd backend/agent_py && pytest tests/ -v
+cd backend/agent_py
+make test
+TEST_ASYNC_PG_DSN=postgresql://postgres:postgres@localhost:5433/nyx_test \
+  PYTHON_AGENT_DATABASE_URL=postgresql://postgres:postgres@localhost:5433/nyx_test \
+  make test-cov
 ```
+
+`make test` runs the full pytest suite; DB-backed tests self-skip when `TEST_ASYNC_PG_DSN` is unset.
+`make test-cov` runs the same suite under `pytest-cov` and fails below `COVERAGE_MIN` (recorded in the
+Makefile); it refuses to run without `TEST_ASYNC_PG_DSN` because the floor is measured with the
+DB-backed tests executing. Both DSNs must name a disposable `nyx_test` database — the fixtures DROP and
+recreate the `agent.*` / `langgraph.*` schemas — and `PYTHON_AGENT_DATABASE_URL` (or
+`backend/agent_py/.env`) is the DSN those fixtures hand to alembic for their inline upgrade.
+
+`fakeredis` + `httpx.MockTransport` — no live network needed.
+
+## Lint and type checking
+
+```bash
+cd backend/agent_py
+make lint          # ruff + mypy, both hard gates
+make lint-ruff     # ruff only
+make lint-mypy     # mypy only
+```
+
+`mypy agent` must exit with zero errors: there is no baseline file and no regeneration target. The
+configuration lives in `[tool.mypy]` in `pyproject.toml`.
 
 ## Dependency audit
 

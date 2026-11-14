@@ -79,10 +79,32 @@ python -m agent.main        # 或：uvicorn agent.main:app --port 9000 --reload
 ## 测试
 
 ```bash
-cd backend/agent_py && pytest tests/ -v
+cd backend/agent_py
+make test
+TEST_ASYNC_PG_DSN=postgresql://postgres:postgres@localhost:5433/nyx_test \
+  PYTHON_AGENT_DATABASE_URL=postgresql://postgres:postgres@localhost:5433/nyx_test \
+  make test-cov
 ```
 
+`make test` 跑全量 pytest 套件；未设置 `TEST_ASYNC_PG_DSN` 时 DB 相关测试自动跳过。`make test-cov`
+在同一套件上启用 `pytest-cov`，低于 Makefile 中记录的 `COVERAGE_MIN` 时失败；未设置
+`TEST_ASYNC_PG_DSN` 时直接失败，因为覆盖率下限只在 DB 测试真实执行时才有意义。两个 DSN 都必须指向
+一次性的 `nyx_test` 数据库（fixtures 会 DROP 并重建 `agent.*` / `langgraph.*` schema），
+`PYTHON_AGENT_DATABASE_URL`（或 `backend/agent_py/.env`）是 fixtures 内联 alembic upgrade 使用的 DSN。
+
 用 `fakeredis` + `httpx.MockTransport`，不需要真实网络。
+
+## Lint 与类型检查
+
+```bash
+cd backend/agent_py
+make lint          # ruff + mypy，均为硬门禁
+make lint-ruff     # 仅 ruff
+make lint-mypy     # 仅 mypy
+```
+
+`mypy agent` 必须零错误退出：不存在 baseline 文件，也没有重新生成 baseline 的目标。配置位于
+`pyproject.toml` 的 `[tool.mypy]`。
 
 ## 关键环境变量
 

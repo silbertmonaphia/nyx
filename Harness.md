@@ -11,9 +11,9 @@ This document is based on the 6 categories in `doc/AI-Harness.md` + supplementar
 - Entry security: `.claude/settings` allow/deny + `gitleaks` pre-commit; CI defaults to least-privilege (workflow-level `permissions: contents: read`; only the `release` job explicitly widens to tags/releases/PR write).
 - AI context filtering: `.gitignore` (Grep and `@` completion honor it) + `Read(...)` deny in `.claude/settings.json`; `.claudeignore` has no effect on Claude Code and has been removed + migrated.
 - Process: `CLAUDE.md` mandates Plan mode + an explicit `test-reviewer` sub-agent.
-- Quality gates: `golangci-lint` / `vitest` / coverage gate (`make coverage-check`) / sqlc drift (`make sqlc-diff`) / OpenAPI drift (backend `make openapi-diff`, frontend `npm run openapi:check`) / commitlint / Conventional Commits.
+- Quality gates: `golangci-lint` / `vitest` / coverage gates (backend `make coverage-check`, frontend `npm run test:coverage`, agent `make test-cov`) / Go race detector (`make test`) / agent full pytest suite + hard-gate mypy / sqlc drift (`make sqlc-diff`) / OpenAPI drift (backend `make openapi-diff`, frontend `npm run openapi:check`) / commitlint / Conventional Commits.
 - Pre-commit: husky + lint-staged (eslint --fix + vitest related + gitleaks).
-- CI: semantic-release monorepo, GitHub Actions, `make sqlc-diff`, `make openapi-diff`, `make coverage-check`.
+- CI: semantic-release monorepo, GitHub Actions, `make sqlc-diff`, `make openapi-diff`, `make coverage-check`, backend `-race`, the agent test/coverage job, and frontend coverage thresholds.
 - Runtime observability: backend OTel → Jaeger, frontend Sentry.
 
 ---

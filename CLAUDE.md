@@ -14,6 +14,7 @@ Backend (from repo root):
 - Toolchain: `backend/go.mod` requires Go 1.26.11; align a local machine with `gvm install go1.26.11 && gvm use go1.26.11 --default`
 - Unit tests (no Docker): `cd backend && SKIP_CONTAINERS=true go test ./...`
 - Full tests (needs Docker/testcontainers): `cd backend && go test ./...`
+- Race-enabled full tests (CI default): `cd backend && make test` — defaults to `-race`; `RACE=` opts out
 - Lint: `cd backend && golangci-lint run --timeout=5m`
 - Regenerate sqlc (after `queries/*.sql` or migrations change): `cd backend && make sqlc`
 - Verify sqlc output is in sync (CI does this): `cd backend && make sqlc-diff`
@@ -26,9 +27,14 @@ Frontend:
 - Node 24 is the required major (root `.nvmrc`; run `nvm use` first)
 - Dev: `cd frontend && npm run dev` → http://localhost:5173
 - Build / lint / unit tests: `npm run build` / `npm run lint` / `npm test`
+- Coverage gate (CI runs this): `npm run test:coverage` — thresholds live in `vite.config.ts`
 - E2E: `npm run test:e2e` (agent-free specs only — the `@live` tests need the live stack + vLLM and are excluded; CI runs this) / `npm run test:e2e:live` (the `@live` set; serial `--workers=1` against a side stack)
 - Install: `cd frontend && npm ci --workspaces=false` for clean, lockfile-exact installs; `npm install --workspaces=false` only when adding/changing dependencies (then commit `frontend/package-lock.json`)
 - Adding a dep? Run `cd frontend && npm install --workspaces=false --package-lock-only` and commit `frontend/package-lock.json` alongside `package.json`. The pre-commit lint-staged hook does this automatically when it sees `frontend/package.json` staged; the `--workspaces=false` flag is required because `frontend` is declared as a workspace at the monorepo root.
+
+Agent (Python, from repo root):
+- Lint/type gate: `make -C backend/agent_py lint` (ruff + hard-gate mypy)
+- Tests: `make -C backend/agent_py test`; coverage gate: `make -C backend/agent_py test-cov` (requires `TEST_ASYNC_PG_DSN` + `PYTHON_AGENT_DATABASE_URL` pointing at a disposable `nyx_test`; CI runs this)
 
 Full stack: `cp .env.example .env && cp backend/.env.example backend/.env && cp frontend/.env.example frontend/.env && sudo docker compose up --build -d` boots `db` + `redis` + `jaeger`; backend and frontend run locally. To bring the app containers up via compose instead, use `sudo docker compose --profile app up --build -d` (combine with `--profile vllm` to add the LLM). DB host port is **5433** (mapped from container 5432). The three `.env` files split infra (root), backend (`backend/.env`), and frontend (`frontend/.env`) so each service can be developed independently.
 

@@ -11,9 +11,9 @@ English version: [Harness.md](Harness.md)
 - 入口安全：`.claude/settings` allow/deny + `gitleaks` pre-commit；CI 默认最小权限（workflow 级 `permissions: contents: read`，仅 `release` job 显式加宽到 tags/releases/PR 写）
 - AI 上下文过滤：`.gitignore`（Grep 与 @ 补全尊重它）+ `.claude/settings.json` 的 `Read(...)` deny；`.claudeignore` 对 Claude Code 无效，已移除并迁移
 - 流程：`CLAUDE.md` 强制 Plan 模式 + 显式 review 子 agent
-- 质量门：golangci-lint / vitest / coverage gate（`make coverage-check`）/ sqlc drift（`make sqlc-diff`）/ OpenAPI drift（后端 `make openapi-diff`，前端 `npm run openapi:check`）/ commitlint / Conventional Commits
+- 质量门：golangci-lint / vitest / 覆盖率门禁（后端 `make coverage-check`、前端 `npm run test:coverage`、agent `make test-cov`）/ Go race detector（`make test`）/ agent 全量 pytest + mypy 硬门禁 / sqlc drift（`make sqlc-diff`）/ OpenAPI drift（后端 `make openapi-diff`，前端 `npm run openapi:check`）/ commitlint / Conventional Commits
 - Pre-commit：husky + lint-staged（eslint --fix + vitest related + gitleaks）
-- CI：semantic-release monorepo、GitHub Actions、`make sqlc-diff`、`make openapi-diff`、`make coverage-check`
+- CI：semantic-release monorepo、GitHub Actions、`make sqlc-diff`、`make openapi-diff`、`make coverage-check`、后端 `-race`、agent 测试/覆盖率 job、前端覆盖率阈值
 - 运行时观测：后端 OTel→Jaeger，前端 Sentry
 
 ---

@@ -20,7 +20,13 @@ import re
 import uuid
 from typing import Any
 
-from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
+from langchain_core.messages import (
+    AIMessage,
+    AnyMessage,
+    HumanMessage,
+    SystemMessage,
+    ToolMessage,
+)
 from langchain_openai import ChatOpenAI
 from opentelemetry import trace
 from pydantic import SecretStr
@@ -422,7 +428,7 @@ async def _run_react(
     else:
         client = base_client
 
-    messages = [SystemMessage(content=_react_instruction(step) + (prefs_text or ""))]
+    messages: list[AnyMessage] = [SystemMessage(content=_react_instruction(step) + (prefs_text or ""))]
     context = _render_prior_data(state, step.id)
     if context:
         messages.append(SystemMessage(content=context))
@@ -559,7 +565,7 @@ def _unresolved_reference(reason: str) -> _UnresolvedReferenceError:
 
 
 def _state_messages_to_lc(messages) -> list:
-    out = []
+    out: list[AnyMessage] = []
     for m in messages:
         role = m.role if hasattr(m, "role") else m.get("role", "user")
         content = m.content if hasattr(m, "content") else m.get("content", "")
@@ -1067,9 +1073,8 @@ async def _dispatch_tool_with_retries(
                 update_observation(lf_tool, output={"status": "ok"})
 
         if attempt_error is not None:
-            exc = attempt_error
-            failure_class = _classify_tool_failure(exc)
-            last_error_text = _safe_tool_error_text(exc)
+            failure_class = _classify_tool_failure(attempt_error)
+            last_error_text = _safe_tool_error_text(attempt_error)
             agent_tool_calls_total.labels(current_name, "false").inc()
             # One failure frame per attempt. Intermediate retries carry the
             # retries made *so far* (0 for the first-attempt failure); the
