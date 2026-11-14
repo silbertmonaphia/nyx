@@ -14,6 +14,7 @@ vi.mock('./features/feeds/hooks/useFeeds');
 vi.mock('./store/authStore');
 vi.mock('./features/chat/hooks/useLlmConfig');
 vi.mock('~/features/kb/hooks/useKb', () => ({
+  useKbAvailability: () => false,
   useKbSettings: () => ({
     data: { enabled: false, private_base: '', embedding_model: '' },
     isLoading: false,

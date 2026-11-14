@@ -6,6 +6,8 @@ import { useFeeds } from './features/feeds/hooks/useFeeds';
 import { useAuthStore } from './store/authStore';
 import { useFeedUiStore } from './features/feeds/store/feedUiStore';
 import { useLlmConfig } from './features/chat/hooks/useLlmConfig';
+import { useKbAvailability } from './features/kb/hooks/useKb';
+import { useUiStore } from './store/uiStore';
 import { i18n } from '~/i18n';
 
 vi.mock('./features/feeds/hooks/useFeeds');
@@ -13,6 +15,13 @@ vi.mock('./store/authStore');
 vi.mock('./features/chat/hooks/useLlmConfig');
 vi.mock('./features/kb/components/KnowledgeBasePage', () => ({
   KnowledgeBasePage: () => <div data-testid="kb-page-mock" />,
+}));
+vi.mock('./features/kb/hooks/useKb', () => ({
+  useKbAvailability: vi.fn(() => true),
+  useKbSettings: vi.fn(() => ({ data: undefined, isLoading: false, isError: false })),
+  useKbMutations: vi.fn(() => ({
+    createSource: { mutateAsync: vi.fn(), isPending: false },
+  })),
 }));
 vi.mock('./features/chat/components/ChatPanel', () => ({
   ChatPanel: ({
@@ -34,6 +43,7 @@ vi.mock('./features/chat/components/ChatPanel', () => ({
 const mockUseFeeds = useFeeds as any;
 const mockUseAuthStore = useAuthStore as any;
 const mockUseLlmConfig = useLlmConfig as any;
+const mockUseKbAvailability = useKbAvailability as any;
 
 const baseFeeds = {
   feeds: [],
@@ -50,6 +60,8 @@ const baseFeeds = {
 
 describe('App', () => {
   beforeEach(() => {
+    mockUseKbAvailability.mockReturnValue(true);
+    useUiStore.setState({ activeView: 'feeds' });
     mockUseFeeds.mockReturnValue({ ...baseFeeds });
     mockUseLlmConfig.mockReturnValue({
       status: { configured: true, llm: null, embedding: null, tavily: null, fallback: null },
@@ -109,6 +121,43 @@ describe('App', () => {
     await userEvent.click(screen.getByTestId('view-tab-feeds'));
     expect(screen.queryByTestId('kb-page-mock')).not.toBeInTheDocument();
     expect(screen.getByTestId('chat-panel-mock')).toBeInTheDocument();
+  });
+
+  it('hides the knowledge tabs when the backend has KB disabled', () => {
+    mockUseKbAvailability.mockReturnValue(false);
+    const authed = {
+      isAuthenticated: true,
+      user: { id: 1, username: 'alice', created_at: '', updated_at: '' },
+      logout: vi.fn(),
+      logoutAll: vi.fn(),
+    };
+    mockUseAuthStore.mockReturnValue(authed);
+    mockUseAuthStore.getState = vi.fn().mockReturnValue(authed);
+
+    render(<App />);
+
+    expect(screen.queryByTestId('view-tab-knowledge')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('view-tab-knowledge-mobile')).not.toBeInTheDocument();
+    expect(screen.getByTestId('view-tab-feeds')).toBeInTheDocument();
+  });
+
+  it('does not render the knowledge page when KB is unavailable', () => {
+    mockUseKbAvailability.mockReturnValue(false);
+    const authed = {
+      isAuthenticated: true,
+      user: { id: 1, username: 'alice', created_at: '', updated_at: '' },
+      logout: vi.fn(),
+      logoutAll: vi.fn(),
+    };
+    mockUseAuthStore.mockReturnValue(authed);
+    mockUseAuthStore.getState = vi.fn().mockReturnValue(authed);
+
+    render(<App />);
+    act(() => {
+      useUiStore.setState({ activeView: 'knowledge' });
+    });
+
+    expect(screen.queryByTestId('kb-page-mock')).not.toBeInTheDocument();
   });
 
   it('gates the app behind a non-dismissable auth dialog while logged out', async () => {

@@ -3,12 +3,13 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { TestProviders, renderHook } from '~/test/test-utils';
 import { useAuthStore } from '~/store/authStore';
 import { kbService } from '../services/kbService';
-import { useKbSources } from './useKb';
+import { useKbAvailability, useKbSettings, useKbSources } from './useKb';
 
 vi.mock('../services/kbService');
 
 const mockedService = kbService as unknown as {
   listSources: ReturnType<typeof vi.fn>;
+  getSettings: ReturnType<typeof vi.fn>;
 };
 
 const user = (id: number) => ({
@@ -43,5 +44,59 @@ describe('useKbSources identity scoping', () => {
     useAuthStore.setState({ user: null, isAuthenticated: false });
     renderHook(() => useKbSources(), { wrapper: TestProviders });
     expect(mockedService.listSources).not.toHaveBeenCalled();
+  });
+});
+
+const useAvailabilityProbe = () => ({
+  status: useKbSettings().status,
+  available: useKbAvailability(),
+});
+
+describe('useKbAvailability', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    useAuthStore.setState({ user: user(1), isAuthenticated: true });
+  });
+
+  it('becomes true once the settings endpoint reports the corpus enabled', async () => {
+    mockedService.getSettings.mockResolvedValue({
+      enabled: true,
+      private_base: '/srv/kb/users',
+      embedding_model: 'mock-embedding',
+    });
+    const { result } = renderHook(() => useAvailabilityProbe(), {
+      wrapper: TestProviders,
+    });
+    await waitFor(() => expect(result.current.status).toBe('success'));
+    expect(result.current.available).toBe(true);
+  });
+
+  it('settles false when the settings endpoint reports the corpus disabled', async () => {
+    mockedService.getSettings.mockResolvedValue({
+      enabled: false,
+      private_base: '',
+      embedding_model: '',
+    });
+    const { result } = renderHook(() => useAvailabilityProbe(), {
+      wrapper: TestProviders,
+    });
+    await waitFor(() => expect(result.current.status).toBe('success'));
+    expect(result.current.available).toBe(false);
+  });
+
+  it('settles false when the settings endpoint 404s without retrying', async () => {
+    mockedService.getSettings.mockRejectedValue({ response: { status: 404 } });
+    const { result } = renderHook(() => useAvailabilityProbe(), {
+      wrapper: TestProviders,
+    });
+    await waitFor(() => expect(result.current.status).toBe('error'));
+    expect(result.current.available).toBe(false);
+    expect(mockedService.getSettings).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not fetch without an authenticated user', () => {
+    useAuthStore.setState({ user: null, isAuthenticated: false });
+    renderHook(() => useKbAvailability(), { wrapper: TestProviders });
+    expect(mockedService.getSettings).not.toHaveBeenCalled();
   });
 });

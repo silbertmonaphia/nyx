@@ -135,6 +135,8 @@ npm run test:e2e:live -- tests/e2e/kb-rag.spec.ts
 
 With `KB_ENABLED` unset: no KB route is mounted, no source is scanned, and the
 feed retrieval passages, ordering, and context block are identical to before.
+The SPA probes `GET /api/kb/settings` and hides the Knowledge tab when the
+route is absent, so a deployment with the corpus off never renders the page.
 Feed citations gain the additive `kind: "feed"` discriminator required by the
 bridge delta. No KB table is written unless the operator explicitly runs
 `cmd/kb index` (an opt-in import). Enabling requires `LLM_ENABLED=true` (the KB
