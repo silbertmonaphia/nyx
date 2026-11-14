@@ -57,11 +57,15 @@ async function mockKb(page: Page, options: KbMockOptions = {}): Promise<void> {
       await route.fulfill({
         status: settingsStatus,
         contentType: 'application/json',
-        body: JSON.stringify({
-          enabled: true,
-          private_base: '/srv/kb/users/1',
-          embedding_model: 'mock-embedding',
-        }),
+        body: JSON.stringify(
+          settingsStatus === 200
+            ? {
+                enabled: true,
+                private_base: '/srv/kb/users/1',
+                embedding_model: 'mock-embedding',
+              }
+            : { error: 'not found' },
+        ),
       });
       return;
     }
@@ -117,26 +121,50 @@ async function mockKb(page: Page, options: KbMockOptions = {}): Promise<void> {
   });
 }
 
+async function dismissBlockingDialog(page: Page): Promise<void> {
+  const dialog = page.getByRole('dialog');
+  for (let attempt = 0; attempt < 3; attempt++) {
+    if ((await dialog.count()) === 0) return;
+    await page.keyboard.press('Escape');
+    await page.waitForTimeout(300);
+  }
+  await expect(dialog).toHaveCount(0);
+}
+
 async function openKb(page: Page): Promise<void> {
+  await dismissBlockingDialog(page);
   await closeChatPanel(page);
   await page.getByTestId('view-tab-knowledge').click();
   await expect(page.getByTestId('kb-page')).toBeVisible();
 }
 
+async function registerWithKb(page: Page, options: KbMockOptions = {}): Promise<void> {
+  await mockKb(page, options);
+  await registerViaUi(page, makeTestUser('e2e_kb_ui'));
+}
+
 test.describe('Knowledge base UI (agent-free)', () => {
-  test.beforeEach(async ({ page }) => {
+  test('hides the knowledge tabs when the backend has KB disabled', async ({ page }) => {
+    await mockKb(page, { settingsStatus: 404 });
+    const settingsResponse = page.waitForResponse((response) =>
+      new URL(response.url()).pathname.endsWith('/kb/settings'),
+    );
     await registerViaUi(page, makeTestUser('e2e_kb_ui'));
+    await settingsResponse;
+    await expect(page.getByTestId('view-tab-feeds')).toBeVisible();
+    await expect(page.getByTestId('view-tab-knowledge')).toHaveCount(0);
+    await expect(page.getByTestId('view-tab-knowledge-mobile')).toHaveCount(0);
   });
 
   test('shows the empty knowledge base', async ({ page }) => {
-    await mockKb(page, { sources: [], documents: [] });
+    await registerWithKb(page, { sources: [], documents: [] });
     await openKb(page);
     await expect(page.getByTestId('kb-empty')).toBeVisible();
     await expect(page.getByTestId('kb-documents-empty')).toBeVisible();
   });
 
   test('shows the sources error without a global error toast', async ({ page }) => {
-    await mockKb(page, { sourcesStatus: 500 });
+    await registerWithKb(page, { sourcesStatus: 500 });
     await openKb(page);
     await expect(page.getByTestId('kb-error')).toBeVisible();
     await expect(
@@ -145,7 +173,7 @@ test.describe('Knowledge base UI (agent-free)', () => {
   });
 
   test('creates, edits and deletes an inline document', async ({ page }) => {
-    await mockKb(page);
+    await registerWithKb(page);
     await openKb(page);
 
     await page.getByTestId('kb-new-document').click();

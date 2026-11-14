@@ -205,7 +205,7 @@ export const zh = {
           urlConvention:
             '需为 OpenAI 兼容端点：路径需携带服务商的版本前缀（以 /v1 结尾），如 http://localhost:8000/v1。',
           dimensionNote:
-            '部署要求 1024 维向量，例如 Qwen/Qwen3-Embedding-0.6B。维度不符的模型会在查询时被拒绝，而不是保存时。保持同一模型时，更换端点或 API 密钥不会影响已存向量。',
+            '部署要求 1024 维向量，例如 Qwen/Qwen3-Embedding-0.6B。维度不符的模型会被保存时探测拒绝；运行时守卫也会在存储前丢弃不符向量。保持同一模型时，更换端点或 API 密钥不会影响已存向量。',
           modelRequirement:
             '必须输出 1024 维向量 —— 即部署的向量列宽度。保存时会探测模型：宽度不符将被拒绝。',
           removeHint:
@@ -241,6 +241,27 @@ export const zh = {
         apiKey: 'API 密钥',
         keyPlaceholder: '你的 API 密钥',
         keySaved: '已保存 {{masked}}，留空保持不变',
+      },
+      probe: {
+        button: '测试连接',
+        probing: '正在探测…',
+        viewRequest: '查看请求',
+        hideRequest: '收起请求',
+        copy: '复制为 curl',
+        copied: '已复制',
+        keyPlaceholder: '<你的API密钥>',
+        skipped: '该分区为空，未探测',
+        httpStatus: '（上游 HTTP {{code}}）',
+        status: {
+          ok: '连接成功',
+          auth_failed: '认证失败 — API 密钥被端点拒绝',
+          rate_limited: '触发限流 — 端点可达但被限流，稍后重试',
+          invalid_model: '模型不存在 — 端点上找不到该模型',
+          invalid_config: '配置不完整 — 请核对 URL、模型与密钥',
+          width_mismatch: '维度不符 — 端点返回的向量宽度与部署要求不一致',
+          unreachable: '无法连接 — 网络不通或端点不可达',
+          timeout: '超时 — 端点在规定时间内未响应',
+        },
       },
       errors: {
         required: '必填项',

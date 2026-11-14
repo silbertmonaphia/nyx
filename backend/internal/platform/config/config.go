@@ -147,6 +147,8 @@ type Config struct {
 	LLMFallbackModel   string `mapstructure:"LLM_FALLBACK_MODEL"`
 	LLMProbeTimeout    string `mapstructure:"LLM_PROBE_TIMEOUT"`
 
+	LLMConfigProbeTimeout string `mapstructure:"LLM_CONFIG_PROBE_TIMEOUT"`
+
 	// Embeddings + RAG over feeds. LLM_EMBEDDING_MODEL is the model
 	// the rag package sends to /v1/embeddings; default empty means
 	// fall back to LLM_MODEL (single-model deployments reuse the
@@ -386,6 +388,7 @@ func setDefaults() {
 	// Router fires; 2s leaves room for the chat itself under a
 	// typical 60s LLM_TIMEOUT.
 	viper.SetDefault("LLM_PROBE_TIMEOUT", "2s")
+	viper.SetDefault("LLM_CONFIG_PROBE_TIMEOUT", "10s")
 	// LLM_SYSTEM_PROMPT is left empty by default — the chat
 	// service falls back to a hard-coded "feed catalog
 	// assistant" prompt when the operator hasn't customised it.
@@ -473,7 +476,7 @@ func bindEnvVars() {
 		"LLM_MAX_STREAM_DURATION", "LLM_ALLOW_PRIVATE_URL",
 		"BYOK_ALLOW_PRIVATE_URL",
 		"LLM_FALLBACK_BASE_URL", "LLM_FALLBACK_API_KEY", "LLM_FALLBACK_MODEL",
-		"LLM_PROBE_TIMEOUT",
+		"LLM_PROBE_TIMEOUT", "LLM_CONFIG_PROBE_TIMEOUT",
 		"LLM_EMBEDDING_MODEL", "LLM_EMBEDDING_PROVIDER", "LLM_EMBEDDING_BASE_URL",
 		"LLM_EMBEDDING_API_KEY", "LLM_EMBEDDING_ALLOW_PRIVATE_URL",
 		"EMBEDDING_DIMENSIONS",

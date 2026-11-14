@@ -207,3 +207,110 @@ describe('llmConfigService', () => {
     });
   });
 });
+
+vi.spyOn(api, 'post');
+const mockedPost = api.post as unknown as ReturnType<typeof vi.fn>;
+
+const capturedFromGoHandler = {
+  slots: {
+    chat: {
+      probed: true,
+      status: 'ok',
+      http_status: 200,
+      request: {
+        method: 'POST',
+        url: 'https://upstream.example/v1/chat/completions',
+        headers: {
+          Accept: 'text/event-stream',
+          Authorization: 'Bearer ••••9876',
+          'Cache-Control': 'no-cache',
+          Connection: 'keep-alive',
+          'Content-Type': 'application/json',
+        },
+        body: {
+          model: 'm',
+          messages: [{ role: 'user', content: 'nyx connectivity probe' }],
+          max_completion_tokens: 1,
+          stream: true,
+          stream_options: { include_usage: true },
+        },
+      },
+    },
+    embedding: {
+      probed: true,
+      status: 'auth_failed',
+      http_status: 401,
+      request: {
+        method: 'POST',
+        url: 'https://upstream.example/v1/embeddings',
+        headers: { Authorization: 'Bearer ••••9876', 'Content-Type': 'application/json' },
+        body: { model: 'e', input: ['nyx connectivity probe'] },
+      },
+    },
+    fallback: { probed: false },
+    tavily: null,
+  },
+};
+
+describe('llmConfigService.validate', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('round-trips the Go handler fixture through the TS consumer', async () => {
+    mockedPost.mockResolvedValueOnce({ data: capturedFromGoHandler });
+    const out = await llmConfigService.validate({ slots: ['chat', 'embedding'] });
+    expect(mockedPost).toHaveBeenCalledWith(
+      '/me/llm-config/validate',
+      { slots: ['chat', 'embedding'] },
+      { skipSentry: true, skipErrorToast: false },
+    );
+    expect(out.slots.chat?.probed).toBe(true);
+    expect(out.slots.chat?.status).toBe('ok');
+    expect(out.slots.chat?.http_status).toBe(200);
+    expect(out.slots.chat?.request?.method).toBe('POST');
+    expect(out.slots.chat?.request?.headers.Authorization).toBe('Bearer ••••9876');
+    expect(out.slots.chat?.request?.body).toMatchObject({ model: 'm', stream: true });
+    expect(out.slots.embedding?.status).toBe('auth_failed');
+    expect(out.slots.embedding?.http_status).toBe(401);
+    expect(out.slots.fallback?.probed).toBe(false);
+    expect(out.slots.tavily).toBeNull();
+  });
+
+  it('renders a width mismatch that still carries its upstream 200', async () => {
+    const widthMismatch = {
+      slots: {
+        chat: null,
+        embedding: {
+          probed: true,
+          status: 'width_mismatch',
+          http_status: 200,
+          detail: 'expected 1024 dims, got 3',
+          request: {
+            method: 'POST',
+            url: 'https://upstream.example/v1/embeddings',
+            headers: { Authorization: 'Bearer ••••9876' },
+            body: { model: 'e', input: ['nyx connectivity probe'] },
+          },
+        },
+        fallback: null,
+        tavily: null,
+      },
+    };
+    mockedPost.mockResolvedValueOnce({ data: widthMismatch });
+    const out = await llmConfigService.validate({ slots: ['embedding'] });
+    expect(out.slots.embedding?.status).toBe('width_mismatch');
+    expect(out.slots.embedding?.http_status).toBe(200);
+    expect(out.slots.embedding?.detail).toContain('expected 1024 dims');
+  });
+
+  it('never lets a plaintext key through the parsed result', async () => {
+    const withSecret = JSON.parse(JSON.stringify(capturedFromGoHandler));
+    withSecret.slots.chat.request.headers.Authorization = 'Bearer ••••9876';
+    mockedPost.mockResolvedValueOnce({ data: withSecret });
+    const out = await llmConfigService.validate({});
+    const wire = JSON.stringify(out);
+    expect(wire).toContain('••••9876');
+    expect(wire).not.toMatch(/sk-[a-z0-9-]{8,}/i);
+  });
+});

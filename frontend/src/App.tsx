@@ -37,6 +37,7 @@ import { useLlmConfig } from './features/chat/hooks/useLlmConfig';
 import { useChatStore } from './features/chat/store/chatStore';
 import { KnowledgeBasePage } from './features/kb/components/KnowledgeBasePage';
 import { KbPrivateSourceField } from './features/kb/components/KbPrivateSourceField';
+import { useKbAvailability } from './features/kb/hooks/useKb';
 
 function App() {
   const { t } = useTranslation();
@@ -55,6 +56,7 @@ function App() {
   const { isAuthenticated, user, logout, logoutAll } = useAuthStore();
   const activeView = useUiStore((state) => state.activeView);
   const setActiveView = useUiStore((state) => state.setActiveView);
+  const kbAvailable = useKbAvailability();
   const [confirmDeleteId, setConfirmDeleteId] = useState<number | null>(null);
   const [chatDismissed, setChatDismissed] = useState(false);
   const chatOpen = isAuthenticated && !chatDismissed;
@@ -116,7 +118,7 @@ function App() {
   useEffect(() => {
     resetFeedStateForNewUser();
     resetLlmConfigStateForNewUser(user?.id ?? null);
-    resetKbStateForNewUser();
+    resetKbStateForNewUser(user?.id ?? null);
   }, [user?.id]);
 
   // The input stays fully controlled by `searchTerm` (instant typing),
@@ -237,14 +239,16 @@ function App() {
               >
                 {t('nav.feeds')}
               </Button>
-              <Button
-                variant={activeView === 'knowledge' ? 'default' : 'ghost'}
-                size="sm"
-                onClick={() => setActiveView('knowledge')}
-                data-testid="view-tab-knowledge"
-              >
-                {t('nav.knowledge')}
-              </Button>
+              {isAuthenticated && kbAvailable && (
+                <Button
+                  variant={activeView === 'knowledge' ? 'default' : 'ghost'}
+                  size="sm"
+                  onClick={() => setActiveView('knowledge')}
+                  data-testid="view-tab-knowledge"
+                >
+                  {t('nav.knowledge')}
+                </Button>
+              )}
             </div>
           </div>
           <div className="relative w-full max-w-3xl">
@@ -325,14 +329,16 @@ function App() {
           >
             {t('nav.feeds')}
           </Button>
-          <Button
-            variant={activeView === 'knowledge' ? 'default' : 'ghost'}
-            size="sm"
-            onClick={() => setActiveView('knowledge')}
-            data-testid="view-tab-knowledge-mobile"
-          >
-            {t('nav.knowledge')}
-          </Button>
+          {isAuthenticated && kbAvailable && (
+            <Button
+              variant={activeView === 'knowledge' ? 'default' : 'ghost'}
+              size="sm"
+              onClick={() => setActiveView('knowledge')}
+              data-testid="view-tab-knowledge-mobile"
+            >
+              {t('nav.knowledge')}
+            </Button>
+          )}
         </div>
         {activeView === 'feeds' ? (
         <div className="w-full max-w-2xl mx-auto flex flex-1 min-h-0 flex-col items-center">
@@ -414,7 +420,7 @@ function App() {
             )}
           </div>
         </div>
-        ) : isAuthenticated ? (
+        ) : isAuthenticated && kbAvailable ? (
           <KnowledgeBasePage key={user?.id} />
         ) : null}
       </section>

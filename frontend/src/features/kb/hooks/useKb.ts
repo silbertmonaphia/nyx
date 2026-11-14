@@ -21,6 +21,11 @@ export const useKbSources = () => {
   });
 };
 
+const isUnavailableError = (error: unknown): boolean => {
+  const status = (error as { response?: { status?: number } })?.response?.status;
+  return status === 404 || status === 501;
+};
+
 export const useKbSettings = () => {
   const userId = useKbUserId();
   return useQuery({
@@ -28,7 +33,14 @@ export const useKbSettings = () => {
     queryFn: kbService.getSettings,
     enabled: userId !== undefined,
     staleTime: 60_000,
+    refetchOnWindowFocus: true,
+    retry: (failureCount, error) => !isUnavailableError(error) && failureCount < 1,
   });
+};
+
+export const useKbAvailability = (): boolean => {
+  const settings = useKbSettings();
+  return settings.data?.enabled === true;
 };
 
 export const useKbDocuments = (filters: KbDocumentFilters = {}) => {

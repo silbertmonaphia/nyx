@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, vi, type Mock } from 'vite
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { LlmConfigModal } from './LlmConfigModal';
-import { useLlmConfig } from '../hooks/useLlmConfig';
+import { useLlmConfig, useLlmSlotProbe } from '../hooks/useLlmConfig';
 import { useAuthStore } from '~/store/authStore';
 import { useUiStore } from '~/store/uiStore';
 import type { LlmConfigStatus, LlmConfigUpdateInput } from '../types/llmConfig';
@@ -19,6 +19,26 @@ vi.mock('~/features/kb/hooks/useKb', () => ({
 }));
 
 const mockedUseLlmConfig = useLlmConfig as unknown as ReturnType<typeof vi.fn>;
+const mockedUseLlmSlotProbe = useLlmSlotProbe as unknown as ReturnType<typeof vi.fn>;
+
+function slotProbeFixture(slot: string, overrides: Record<string, unknown> = {}) {
+  return {
+    probe: vi.fn(),
+    probeAsync: vi.fn().mockResolvedValue(undefined),
+    isPending: false,
+    result: null,
+    reset: vi.fn(),
+    ...overrides,
+  };
+}
+
+function mockSlotProbes(
+  fixtures: Record<string, Record<string, unknown>> = {},
+) {
+  mockedUseLlmSlotProbe.mockImplementation((slot: string) =>
+    slotProbeFixture(slot, fixtures[slot]),
+  );
+}
 
 function makeUser(id: number) {
   return {
@@ -77,6 +97,7 @@ function mockHook(overrides: HookOverrides = {}) {
   const remove: MutationMock =
     overrides.remove ??
     { mutateAsync: vi.fn().mockResolvedValue(undefined), isPending: false };
+  const clearProbeResults = vi.fn();
   mockedUseLlmConfig.mockReturnValue({
     userId: overrides.userId !== undefined ? overrides.userId : 1,
     status,
@@ -86,8 +107,9 @@ function mockHook(overrides: HookOverrides = {}) {
     refetch: vi.fn(),
     save,
     remove,
+    clearProbeResults,
   });
-  return { save, remove };
+  return { save, remove, clearProbeResults };
 }
 
 const input = (id: string) =>
@@ -120,6 +142,7 @@ const renderModal = (props: Record<string, unknown> = {}) =>
 describe('LlmConfigModal', () => {
   beforeEach(() => {
     mockedUseLlmConfig.mockReset();
+    mockSlotProbes();
     useUiStore.setState({ toasts: [] });
     useAuthStore.setState({ user: makeUser(1), isAuthenticated: true });
     document.body.innerHTML = '';
@@ -595,5 +618,188 @@ describe('LlmConfigModal', () => {
       expect(input('llm-api-key').value).toBe('');
     });
     expect(input('llm-base-url').value).toBe('https://llm.example.test/v1');
+  });
+});
+
+describe('LlmConfigModal slot probe', () => {
+  beforeEach(() => {
+    mockedUseLlmConfig.mockReset();
+    mockSlotProbes();
+    useUiStore.setState({ toasts: [] });
+    useAuthStore.setState({ user: makeUser(1), isAuthenticated: true });
+    document.body.innerHTML = '';
+  });
+
+  afterEach(() => {
+    useAuthStore.setState({ user: null, isAuthenticated: false });
+  });
+
+  it('probes only the clicked section with its current form values', async () => {
+    mockHook({ status: unconfigured });
+    const probeAsync = vi.fn().mockResolvedValue(undefined);
+    mockSlotProbes({ chat: { probeAsync } });
+    renderModal();
+
+    await userEvent.type(input('llm-base-url'), 'https://api.deepseek.com/v1');
+    await userEvent.type(input('llm-api-key'), 'sk-llm-plain');
+    await userEvent.type(input('llm-model'), 'deepseek-chat');
+    await userEvent.click(screen.getByTestId('llm-probe-chat-button'));
+
+    await vi.waitFor(() => {
+      expect(probeAsync).toHaveBeenCalledTimes(1);
+    });
+    expect(probeAsync).toHaveBeenCalledWith({
+      llm: {
+        base_url: 'https://api.deepseek.com/v1',
+        api_key: 'sk-llm-plain',
+        model: 'deepseek-chat',
+      },
+    });
+  });
+
+  it('renders a credential failure with the upstream status and masked disclosure', async () => {
+    mockHook({ status: unconfigured });
+    mockSlotProbes({
+      embedding: {
+        result: {
+          probed: true,
+          status: 'auth_failed',
+          http_status: 401,
+          request: {
+            method: 'POST',
+            url: 'https://api.siliconflow.cn/v1/embeddings',
+            headers: { Authorization: 'Bearer ••••9876', 'Content-Type': 'application/json' },
+            body: { model: 'Qwen/Qwen3-Embedding-0.6B', input: ['nyx connectivity probe'] },
+          },
+        },
+      },
+    });
+    renderModal();
+
+    await userEvent.click(screen.getByTestId('llm-embedding-toggle'));
+    const status = screen.getByTestId('llm-probe-embedding-status');
+    expect(status).toHaveTextContent(/Authentication failed/);
+    expect(status).toHaveTextContent('401');
+
+    await userEvent.click(screen.getByTestId('llm-probe-embedding-toggle'));
+    const disclosure = screen.getByTestId('llm-probe-embedding-request');
+    expect(disclosure).toHaveTextContent('Bearer ••••9876');
+    expect(disclosure).not.toHaveTextContent('sk-validate-planted-key-9876');
+  });
+
+  it('keeps other sections usable while one section probes', async () => {
+    mockHook({ status: unconfigured });
+    mockSlotProbes({
+      embedding: { isPending: true },
+    });
+    renderModal();
+
+    await userEvent.click(screen.getByTestId('llm-embedding-toggle'));
+    const embeddingButton = screen.getByTestId('llm-probe-embedding-button');
+    const chatButton = screen.getByTestId('llm-probe-chat-button');
+    expect(embeddingButton).toBeDisabled();
+    expect(embeddingButton).toHaveTextContent('Probing');
+    expect(chatButton).toBeEnabled();
+  });
+
+  it('renders a skipped section as neutral, not failure', async () => {
+    mockHook({ status: unconfigured });
+    mockSlotProbes({
+      tavily: { result: { probed: false } },
+    });
+    renderModal();
+
+    await userEvent.click(screen.getByTestId('llm-tavily-toggle'));
+    expect(screen.getByTestId('llm-probe-tavily-status')).toHaveTextContent(
+      /Empty section/,
+    );
+    expect(screen.getByTestId('llm-probe-tavily-status').className).not.toContain(
+      'destructive',
+    );
+  });
+
+  it('copies a replayable curl with a key placeholder', async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.assign(navigator, { clipboard: { writeText } });
+    mockHook({ status: unconfigured });
+    mockSlotProbes({
+      chat: {
+        result: {
+          probed: true,
+          status: 'ok',
+          request: {
+            method: 'POST',
+            url: 'https://api.deepseek.com/v1/chat/completions',
+            headers: { Authorization: 'Bearer ••••abcd', 'Content-Type': 'application/json' },
+            body: { model: 'deepseek-chat', messages: [] },
+          },
+        },
+      },
+    });
+    renderModal();
+
+    await userEvent.click(screen.getByTestId('llm-probe-chat-toggle'));
+    await userEvent.click(screen.getByTestId('llm-probe-chat-copy'));
+
+    await vi.waitFor(() => {
+      expect(writeText).toHaveBeenCalledTimes(1);
+    });
+    const curl = writeText.mock.calls[0][0] as string;
+    expect(curl).toContain("curl -X POST 'https://api.deepseek.com/v1/chat/completions'");
+    expect(curl).toContain('Authorization: Bearer <your API key>');
+    expect(curl).not.toContain('••••abcd');
+    expect(screen.getByTestId('llm-probe-chat-copy')).toHaveTextContent('Copied');
+  });
+});
+
+describe('LlmConfigModal probe result lifecycle', () => {
+  beforeEach(() => {
+    mockedUseLlmConfig.mockReset();
+    mockSlotProbes();
+    useUiStore.setState({ toasts: [] });
+    useAuthStore.setState({ user: makeUser(1), isAuthenticated: true });
+    document.body.innerHTML = '';
+  });
+
+  afterEach(() => {
+    useAuthStore.setState({ user: null, isAuthenticated: false });
+  });
+
+  const statusLabels: Record<string, RegExp> = {
+    ok: /Connected/,
+    auth_failed: /Authentication failed/,
+    rate_limited: /Rate limited/,
+    invalid_model: /Model not found/,
+    invalid_config: /Incomplete configuration/,
+    width_mismatch: /Width mismatch/,
+    unreachable: /Unreachable/,
+    timeout: /Timed out/,
+  };
+
+  for (const [status, label] of Object.entries(statusLabels)) {
+    it(`renders the ${status} status class`, async () => {
+      mockHook({ status: unconfigured });
+      mockSlotProbes({ chat: { result: { probed: true, status } } });
+      renderModal();
+      const el = screen.getByTestId('llm-probe-chat-status');
+      expect(el).toHaveTextContent(label);
+      const destructive = el.className.includes('destructive');
+      if (status === 'ok') expect(destructive).toBe(false);
+      if (status === 'rate_limited' || status === 'unreachable' || status === 'timeout') {
+        expect(el.className).toContain('amber');
+      } else if (status !== 'ok') {
+        expect(destructive).toBe(true);
+      }
+    });
+  }
+
+  it('clears probe results when the modal closes', async () => {
+    const { clearProbeResults } = mockHook({ status: unconfigured });
+    const { rerender } = render(<LlmConfigModal open onOpenChange={vi.fn()} />);
+    expect(clearProbeResults).not.toHaveBeenCalled();
+    rerender(<LlmConfigModal open={false} onOpenChange={vi.fn()} />);
+    await vi.waitFor(() => {
+      expect(clearProbeResults).toHaveBeenCalled();
+    });
   });
 });
