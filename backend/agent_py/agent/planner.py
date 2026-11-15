@@ -103,6 +103,7 @@ Rules:
 - use `kb` when the request is about the user's knowledge base, notes, or documents; a `kb` step MUST set `query` to the search text; set `source` only to a source id named in KNOWLEDGE_OUTLINE and `path` only to a directory listed there — never invent a document filename or a path
 - for weather, current events, or any external information, use the available web tools when they are enabled; never use `rag` or `kb` for those requests
 - when the user explicitly asks to change their feeds — create or publish (发布 / 发出去 / 创建), update (更新 / 修改), or delete (删除 / 删掉) — the plan MUST contain a `tool` step calling the matching write tool (`create_feed` / `update_feed` / `delete_feed`) before the answering `llm` step; an `llm` step composes text and never performs the write
+- when the most recent user message is a retry instruction (再试试 / 再试一次 / 重试 / 重新试 / 再试下 / 再来一次 / 继续) and the immediately preceding assistant message reports that a feed write tool (`create_feed` / `update_feed` / `delete_feed`) was not executed (未执行 / 没有执行 / not executed), the plan MUST contain that same write tool step before the answering `llm` step — never answer a retried failed write with text only; a retried `create_feed` follows the compose-before-write rule exactly like an explicit create request
 - do NOT plan a write tool when the user asks to compose, draft, review, suggest, or preview content, when the message says not to publish yet (草稿 / 先别发 / 不要发布 / 仅供预览), or when an ambiguous request could be either composing or publishing — such requests are draft-and-report
 - when the write's content must be composed from earlier results, plan the composing `llm` step BEFORE the write step and make the write's content argument reference that step's output; never pass a plan-time placeholder as the created or updated content
 - when a plan composes a feed body for `create_feed` / `update_feed`, the composing `llm` prompt MUST tell the model to keep the body under 300 Chinese characters (about 900 bytes); both write tools reject a description over 1000 bytes
@@ -156,11 +157,23 @@ _DRAFT_OR_NEGATION_MARKERS = (
     "仅预览",
     "预览",
 )
+_RETRY_CUE_MARKERS = ("再试试", "再试一次", "重试", "重新试", "再试下", "再来一次", "继续")
+_RETRY_NEGATION_MARKERS = ("别重试", "不要重试", "先不要重试", "别再试")
+_NOT_EXECUTED_MARKERS = ("未执行", "没有执行", "not executed")
+_RETRY_TOOL_WINDOW_CHARS = 120
+_RETRY_TOOL_CLAUSE_RE = re.compile(r"[。！？!?.;\n]+")
 _WRITE_TOOLS_BY_INTENT = {
     "create": ("create_feed",),
     "update": ("update_feed", "update_feeds"),
     "delete": ("delete_feed", "delete_feeds"),
 }
+_WRITE_TOOL_NAMES = tuple(
+    sorted(
+        (tool for tools in _WRITE_TOOLS_BY_INTENT.values() for tool in tools),
+        key=len,
+        reverse=True,
+    )
+)
 _COMPOSITION_MARKERS = (
     "撰写",
     "编写",
@@ -573,6 +586,7 @@ async def _emit_structured_plan(
 
     messages = _initial_messages(state, settings, prefs_text, registry_block, outline_block)
     latest_user_message = _latest_user_message(state.get("messages", []))
+    previous_assistant_message = _previous_assistant_message(state.get("messages", []))
     had_validation_failure = False
 
     for attempt in range(settings.planner_retry_max + 1):
@@ -647,6 +661,7 @@ async def _emit_structured_plan(
                 plan_obj,
                 settings.plan_max_steps,
                 latest_user_message=latest_user_message,
+                previous_assistant_message=previous_assistant_message,
                 outline_sources=outline_sources,
             )
             if isinstance(enriched, _PlanError):
@@ -688,6 +703,27 @@ def _messages_to_prompt(messages: list) -> str:
     return "\n".join(parts) or "(no prior messages)"
 
 
+def _message_role(message) -> str:
+    return message.role if hasattr(message, "role") else message.get("role", "user")
+
+
+def _message_text(message) -> str:
+    content = (
+        message.content if hasattr(message, "content") else message.get("content", "")
+    )
+    return content if isinstance(content, str) else ""
+
+
+def _last_user_index(messages: list) -> int:
+    for index in range(len(messages or []) - 1, -1, -1):
+        if (
+            _message_role(messages[index]) == "user"
+            and _message_text(messages[index]).strip()
+        ):
+            return index
+    return -1
+
+
 def _latest_user_message(messages: list) -> str:
     """The most recent raw user message, never the flattened conversation.
 
@@ -695,12 +731,22 @@ def _latest_user_message(messages: list) -> str:
     turn that asked to publish must not trigger a rejection for a later
     read/greeting turn.
     """
-    for m in reversed(messages or []):
-        role = m.role if hasattr(m, "role") else m.get("role", "user")
-        content = m.content if hasattr(m, "content") else m.get("content", "")
-        if role == "user" and isinstance(content, str) and content.strip():
-            return content
-    return ""
+    index = _last_user_index(messages)
+    return _message_text(messages[index]) if index >= 0 else ""
+
+
+def _previous_assistant_message(messages: list) -> str:
+    """The assistant text immediately before the most recent user message.
+
+    Only the single slot before the latest user turn is inspected: a user
+    message in between belongs to an adjacent turn, whose answer is not the
+    one a retry instruction refers to.
+    """
+    index = _last_user_index(messages)
+    if index <= 0 or _message_role(messages[index - 1]) != "assistant":
+        return ""
+    text = _message_text(messages[index - 1])
+    return text if text.strip() else ""
 
 
 def _extract_text(resp) -> str:
@@ -1027,8 +1073,74 @@ def _enforce_compose_before_write(steps: list[PlanStep]) -> _PlanError | None:
     return None
 
 
+def _named_write_tool(text: str) -> str | None:
+    """The write tool named by a not-executed clause, if any.
+
+    A name counts only when it sits in the same clause as a not-executed
+    marker and within a bounded window of it: a write tool merely
+    mentioned elsewhere in the answer is not the failed write.
+    """
+    best_tool: str | None = None
+    best_gap = _RETRY_TOOL_WINDOW_CHARS + 1
+    for clause in _RETRY_TOOL_CLAUSE_RE.split(text):
+        marker_spans: list[tuple[int, int]] = []
+        for marker in _NOT_EXECUTED_MARKERS:
+            marker_at = clause.find(marker)
+            while marker_at >= 0:
+                marker_spans.append((marker_at, marker_at + len(marker)))
+                marker_at = clause.find(marker, marker_at + 1)
+        for tool in _WRITE_TOOL_NAMES:
+            tool_at = clause.find(tool)
+            while tool_at >= 0:
+                tool_end = tool_at + len(tool)
+                for marker_start, marker_end in marker_spans:
+                    gap = max(tool_at - marker_end, marker_start - tool_end, 0)
+                    if gap < best_gap:
+                        best_gap = gap
+                        best_tool = tool
+                tool_at = clause.find(tool, tool_at + 1)
+    return best_tool
+
+
+def _enforce_retry_write(
+    steps: list[PlanStep], message: str, previous_assistant_message: str | None
+) -> _PlanError | None:
+    """Reject a plan that drops the write a retry instruction refers to.
+
+    Fires only when all four signals line up: a retry cue, no retry
+    negation, a not-executed marker, and a write tool anchored to that
+    clause. A retried `create_feed` then follows the same
+    compose-before-write rule as an explicit create request.
+    """
+    if any(marker in message for marker in _RETRY_NEGATION_MARKERS):
+        return None
+    if not any(marker in message for marker in _RETRY_CUE_MARKERS):
+        return None
+    previous = (previous_assistant_message or "").strip()
+    if not any(marker in previous for marker in _NOT_EXECUTED_MARKERS):
+        return None
+    tool = _named_write_tool(previous)
+    if tool is None:
+        return None
+    if not any(s.kind == StepKind.tool and s.tool == tool for s in steps):
+        return _PlanError(
+            "plan_invalid",
+            "Plan is invalid",
+            (
+                f"the previous answer reported that {tool} was not executed, "
+                f"but the plan has no {tool} tool step; add the missing {tool} "
+                "step before the final llm step"
+            ),
+        )
+    if tool == "create_feed":
+        return _enforce_compose_before_write(steps)
+    return None
+
+
 def _enforce_write_routing(
-    steps: list[PlanStep], latest_user_message: str | None
+    steps: list[PlanStep],
+    latest_user_message: str | None,
+    previous_assistant_message: str | None = None,
 ) -> _PlanError | None:
     message = (latest_user_message or "").strip()
     if not message:
@@ -1037,7 +1149,7 @@ def _enforce_write_routing(
         return None
     intents = _state_change_intents(message)
     if not intents:
-        return None
+        return _enforce_retry_write(steps, message, previous_assistant_message)
     tools = {s.tool for s in steps if s.kind == StepKind.tool and s.tool}
     missing = [
         intent
@@ -1066,6 +1178,7 @@ def _enforce_plan_shape(
     max_steps: int,
     *,
     latest_user_message: str | None = None,
+    previous_assistant_message: str | None = None,
     outline_sources: list[dict] | None = None,
 ) -> Plan | _PlanError:
     """Same enrichment as the legacy parser, on a typed `Plan` instance.
@@ -1087,6 +1200,11 @@ def _enforce_plan_shape(
     requests, greetings, refusals, and web lookups therefore pass through
     unchanged. A `create_feed` plan must also compose before it writes:
     an earlier `llm` step whose output the write's args reference.
+
+    A retry instruction whose immediately preceding assistant message
+    reports a named write tool as not executed is the third branch: the
+    plan must contain that tool, and a retried `create_feed` follows the
+    same compose-before-write rule as an explicit create request.
     """
     steps = list(plan.steps)
     if not steps:
@@ -1136,7 +1254,9 @@ def _enforce_plan_shape(
                 prompt=_AUTO_ANSWER_PROMPT,
             )
         )
-    guard_error = _enforce_write_routing(steps, latest_user_message)
+    guard_error = _enforce_write_routing(
+        steps, latest_user_message, previous_assistant_message
+    )
     if guard_error is not None:
         return guard_error
     return Plan(steps=steps)

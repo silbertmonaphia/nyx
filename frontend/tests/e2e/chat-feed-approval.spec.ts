@@ -40,6 +40,11 @@ const FEED_NAME = 'E2E Feed';
 const DENIAL_TEXT =
   'Confirmation required: the user denied this call. The `create_feed` tool was not executed.';
 
+const EXPIRY_TEXT =
+  'Confirmation required: the approval request expired before a decision. The `create_feed` tool was not executed.';
+
+const EXPIRY_ANSWER = `I could not create the feed. ${EXPIRY_TEXT}`;
+
 function frame(kind: string, payload: unknown): string {
   return `event: ${kind}\ndata: ${JSON.stringify(payload)}\n\n`;
 }
@@ -107,10 +112,36 @@ function denyContinuation(): string {
   );
 }
 
+function expiryContinuation(): string {
+  return (
+    frame('tool_result', {
+      step_id: 'step_1',
+      call_id: 'call_expired',
+      ok: false,
+      result: null,
+      error: EXPIRY_TEXT,
+      retry_count: 0,
+    }) +
+    frame('step_end', {
+      step_id: 'step_1',
+      status: 'failed',
+      reason: EXPIRY_TEXT,
+    }) +
+    epilogue(EXPIRY_ANSWER, ['step_1'])
+  );
+}
+
 /** Final answering step + terminal frames. */
-function epilogue(text: string): string {
+function epilogue(text: string, failedSteps?: string[]): string {
   return (
     frame('step_start', { step_id: 'step_2', kind: 'llm' }) +
+    (failedSteps
+      ? frame('note', {
+          text: 'Run diverged from the plan',
+          kind: 'partial_failure',
+          failed_steps: failedSteps,
+        })
+      : '') +
     frame('delta', { delta: text }) +
     frame('step_end', { step_id: 'step_2', status: 'ok', reason: null }) +
     frame('done', {
@@ -399,6 +430,44 @@ test.describe('Feed-tool approval flow (browser-level)', () => {
     );
     await expect(page.getByTestId('chat-confirm-approve')).toHaveCount(0);
     await expect(page.getByTestId('chat-confirm-deny')).toHaveCount(0);
+    expect(mock.approvals).toHaveLength(0);
+    mock.stop();
+  });
+
+  test('expiry: the answering step reports the failure and the banner stays up', async ({
+    page,
+  }) => {
+    const mock = await startMock({
+      stream: preamble(1) + expiryContinuation(),
+    });
+    await routeToMock(page, mock.base);
+
+    await sendMessage(page, `create a feed called ${FEED_NAME}`);
+
+    const card = page.getByTestId('chat-confirm-card');
+    await expect(card).toBeVisible({ timeout: 10000 });
+    await expect(card).toHaveAttribute('data-decision', 'expired', {
+      timeout: 15000,
+    });
+    await expect(page.getByTestId('chat-confirm-status')).toContainText(
+      'expired before a decision',
+    );
+    await expect(page.getByTestId('chat-confirm-approve')).toHaveCount(0);
+    await expect(page.getByTestId('chat-confirm-deny')).toHaveCount(0);
+
+    const banner = page.getByTestId('chat-partial-failure-banner');
+    await expect(banner).toBeVisible();
+    await expect(banner).toHaveAttribute('data-failed-steps', 'step_1');
+
+    await expect(
+      page
+        .getByTestId('chat-message-assistant')
+        .last()
+        .getByTestId('chat-message-content'),
+    ).toContainText(EXPIRY_ANSWER, { timeout: 10000 });
+    await expect(page.getByTestId('chat-cancel')).toHaveCount(0);
+    await expect(page.getByTestId('chat-error')).toHaveCount(0);
+
     expect(mock.approvals).toHaveLength(0);
     mock.stop();
   });

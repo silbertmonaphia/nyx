@@ -10,7 +10,7 @@ The section SHALL respect the existing prior-data bounds: per-section cap, total
 
 #### Scenario: Approval expiry reaches the answering step
 
-- **WHEN** a `create_feed` `tool` step fails because its confirmation expired, its terminal `tool_result{ok: false}` carries `Confirmation required: the approval request expired before a decision. The create_feed tool was not executed.`, and the plan continues to an answering `llm` step
+- **WHEN** a `create_feed` `tool` step fails because its confirmation expired, its terminal `tool_result{ok: false}` carries `Confirmation required: the approval request expired before a decision. The `create_feed` tool was not executed.`, and the plan continues to an answering `llm` step
 - **THEN** the answering step's model input contains that safe error text and the static no-false-success instruction, so the answer can state the write did not happen
 
 #### Scenario: Recovered retry contributes no failure context
