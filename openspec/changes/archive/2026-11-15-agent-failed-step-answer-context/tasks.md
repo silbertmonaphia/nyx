@@ -26,6 +26,6 @@
 
 ## 5. Integration gates
 
-- [ ] 5.1 Run `make -C backend/agent_py lint`, `make -C backend/agent_py test`, and `make -C backend/agent_py test-cov`; verify all exit zero (lint and test pass; test-cov is blocked locally — the shared venv has no pytest-cov plugin, so CI must run the coverage gate)
+- [x] 5.1 Run `make -C backend/agent_py lint`, `make -C backend/agent_py test`, and `make -C backend/agent_py test-cov`; verify all exit zero (lint and test pass; the coverage gate ran in CI on PR #8 and passed)
 - [x] 5.2 Run `cd frontend && npm run lint && npm test && npm run test:e2e`; verify all exit zero
 - [x] 5.3 Run `python3 scripts/check_no_comments.py` on the change diff; verify it exits zero
