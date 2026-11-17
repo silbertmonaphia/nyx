@@ -2,19 +2,24 @@
 
 ## ADDED Requirements
 
-### Requirement: Idempotency-key property survives schema normalization
+### Requirement: Idempotency-key property is served but hidden from the model
 
-When a registry tool's served `inputSchema` declares an optional `idempotency_key` property, normalization SHALL preserve that property in the bindable function schema and in the argument-schema text composed for retry re-prompts, so the shared dispatch funnel can identify which tools accept a key. The property MUST remain optional. Its presence MUST NOT change planner-catalog rendering, the confirmation policy, or retry classification.
+When a registry tool's served `inputSchema` declares an optional `idempotency_key` property, the MCP `tools/list` surface SHALL expose it with a description telling clients to derive one deterministic key per logical operation, reuse it for identical retries, use a new key for a new operation, and omit it to opt out of deduplication. The agent's normalization SHALL exclude the property from the model-bound function schema and from the argument-schema text composed for retry re-prompts, so the model is never asked to produce or correct it. The dispatch funnel SHALL determine that a tool accepts a key from the raw served schema, not from the model-bound schema. The property MUST remain optional, and its presence MUST NOT change planner-catalog rendering, the confirmation policy, or retry classification.
 
-#### Scenario: Bound schema preserves the property
+#### Scenario: Served schema advertises the key with guidance
 
-- **WHEN** MCP `tools/list` serves `create_feed` with an optional `idempotency_key` property
-- **THEN** the function the model is bound to exposes `idempotency_key` as an optional parameter, alongside the existing required fields
+- **WHEN** MCP `tools/list` returns `create_feed`
+- **THEN** its `inputSchema` includes an optional `idempotency_key` property whose description states the reuse-on-retry and new-key-per-operation semantics
 
-#### Scenario: Retry re-prompt schema carries the property
+#### Scenario: Model-bound schema excludes the property
+
+- **WHEN** the agent normalizes `create_feed` into the function schema bound to the model
+- **THEN** that schema does not contain `idempotency_key`, and the model's call arguments omit it
+
+#### Scenario: Retry re-prompt schema excludes the property
 
 - **WHEN** a `create_feed` call is rejected and the executor composes the argument-schema text for the re-prompt
-- **THEN** that text includes the optional `idempotency_key` property rather than a schema missing it
+- **THEN** that text does not include `idempotency_key`, while the next dispatch still injects the derived key
 
 #### Scenario: Confirmation policy is unchanged
 
