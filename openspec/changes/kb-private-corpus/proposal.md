@@ -12,6 +12,7 @@ The knowledge base's shared corpus is deployment-owned: it is the only KB path t
 - The KB never constructs or falls back to a deployment embedder; indexing and retrieval require the user's own embedding settings.
 - `GET /api/kb/sources` lists all of the caller's sources, including disabled ones (so a source can be re-enabled); scans, the agent outline, and retrieval exclude disabled sources.
 - The SPA drops the scope badge and the `scope === 'user'` control gate; enable/disable and delete are available for every source. The agent planner outline no longer carries or prints a scope.
+- The KB page drops the "Index now" action: the SPA exposes only content authoring (upload a file, create a typed document, edit/delete inline documents). Directory registration and rescanning are operator-CLI territory; `POST /api/kb/index` remains available to non-SPA callers.
 - The CLI `kb status` reports `owner_id` instead of `scope`; it no longer reports a deployment embedding model.
 
 ## Capabilities
@@ -30,7 +31,7 @@ _None._
 ## Impact
 
 - **Code**: `backend/queries/kb.sql` + sqlc output, `backend/internal/kb/*`, a new migration `000020`, `backend/cmd/kb/*`, `backend/cmd/api/main.go`, `backend/internal/rag/deployment.go` + wire-contract test, `backend/internal/platform/config/config.go`, `backend/agent_py/agent/planner.py`, the KB page/types/i18n and regenerated OpenAPI types, and operator docs.
-- **API**: breaking removal of the `scope` field from the KB source list and the internal outline. No new endpoints.
+- **API**: breaking removal of the `scope` field from the KB source list and the internal outline. No new endpoints; `POST /api/kb/index` stays but is no longer surfaced by the SPA.
 - **Data**: existing shared documents and their vectors are deleted; operators re-register the directory against a user and re-index. The down migration restores schema only.
 - **Operations**: `KB_ROOT`/`KB_SHARED_SOURCE_NAME` disappear; `kb index --user` needs `USER_LLM_ENCRYPTION_KEY` and a saved BYOK embedding configuration for the target user.
 - **Rollout gates**: none — the KB is default-off and every task is completable in the dev/CI environment, so no sibling `<change>-rollout` change is created.

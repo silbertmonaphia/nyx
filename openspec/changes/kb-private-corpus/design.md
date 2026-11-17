@@ -47,6 +47,8 @@ Constraints that shape the approach:
 
 **D10 — Sources are listed/retrieved by owner directly; no shared requirement survives.** Because the shared corpus is removed, the spec deltas use `REMOVED Requirements` + `ADDED` replacements for the four requirement blocks whose scenarios are inherently shared-only (the archive guard cannot drop a scenario under `MODIFIED`), and `MODIFIED` for blocks whose scenario names survive.
 
+**D11 — The SPA drops the "Index now" action.** The KB page becomes a content-authoring surface only: upload a file, create a typed document, edit/delete inline documents. Directory sources are registered and rescanned by the operator CLI; the SPA cannot create or repoint them, so a scan button would expose a trigger whose input the user does not control from the UI. `POST /api/kb/index` remains mounted for operator/native callers and keeps the ingestion spec's "explicit trigger" requirement satisfied; upload/create/edit still index immediately, and the bounded catch-up still repairs pending work without the button.
+
 ## Risks / Trade-offs
 
 - **Destructive migration** → shared rows and their vectors are unrecoverable; down restores schema only. Documented in the proposal and migration annotation; KB is default-off.
@@ -55,6 +57,7 @@ Constraints that shape the approach:
 - **Disabled-source visibility change** → `GET /api/kb/sources` now returns disabled sources; every consumer must keep excluding them from scans/retrieval. Mitigation: filters live in `IndexVisible`/`Outline` and the retrieval SQL is unchanged in that respect; covered by tests.
 - **Inline-name collision** → guarded in SQL and the CLI (D7); a direct-SQL-created dir named `inline` cannot receive inline documents.
 - **Coverage** → removing shared branches and their tests can lower the `internal/kb` package below the gate. Mitigation: replace them with owner-isolation, dir-upsert-conflict, disabled-filtering, and no-resolver tests.
+- **No SPA rescan** → after directory contents change, the user cannot trigger a rescan from the KB page; they rely on the operator re-running `kb index` (or the API). Mitigation: documented in the operator docs; uploads/edits still index immediately and the catch-up still fills pending work.
 
 ## Migration Plan
 

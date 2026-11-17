@@ -16,7 +16,7 @@
 - [ ] 2.4 Update `backend/internal/kb/handler.go` (`SourceView`/`sourceView` drop `scope`, index summary wording), `errors.go` (remove `ErrSharedSourceLocked`, add `ErrSourceNameConflict` mapped to 409), and `config.go`; verify `handler_test.go` passes.
 - [ ] 2.5 Update `backend/internal/kb/integration_test.go` and `recall_integration_test.go` to create per-user directory sources instead of shared sources and to assert owner-only retrieval/isolation; verify with a pgvector Postgres (`DB_URL=... go test ./internal/kb -run 'Integration|Recall'`).
 - [ ] 2.6 Update `backend/internal/kb/retriever_test.go` to pin owner-only predicates across chunk/document/source; verify `SKIP_CONTAINERS=true go test ./internal/kb/`.
-- [ ] 2.7 Update `docs/knowledge-base.md` (sources, visibility, endpoints, operator import), `README.md`, and `FUTURE_BACKEND.md` §12 to the per-user-only model; verify no remaining `scope`/shared-corpus wording with `grep -rn "shared" docs/knowledge-base.md README.md FUTURE_BACKEND.md`.
+- [ ] 2.7 Update `docs/knowledge-base.md` (sources, visibility, endpoint table — `POST /api/kb/index` remains but is not surfaced by the SPA — and operator import), `README.md`, and `FUTURE_BACKEND.md` §12 to the per-user-only model; verify no remaining `scope`/shared-corpus wording with `grep -rn "shared" docs/knowledge-base.md README.md FUTURE_BACKEND.md`.
 
 ## 3. API wiring and configuration
 
@@ -30,7 +30,7 @@
 - [ ] 4.1 Redesign `backend/cmd/kb/run.go`: `--user` required, `--root` required, `--name` optional with basename default and reserved `inline` rejection, `UpsertDirSource` instead of shared upsert, per-user embedder resolution via `llmsettings`, and a status report carrying `owner_id`/`kind` with no scope or deployment model; verify `go build ./...`.
 - [ ] 4.2 Rewire `backend/cmd/kb/main.go` to construct the cipher/settings resolver for `index` and to stop building a deployment embedder; verify `go run ./cmd/kb` prints the usage and exits non-zero.
 - [ ] 4.3 Rewrite `backend/cmd/kb/run_test.go` for the new options, default naming, reserved name, resolver failure paths, upsert arguments, and status shape; verify `go test ./cmd/kb/`.
-- [ ] 4.4 Update `docs/deployment.md` KB section, `backend/.env.example`, and the `docker-compose.yml` KB mount comment to the `kb index --user <id> --root <dir>` flow and the BYOK-embedding/`USER_LLM_ENCRYPTION_KEY` requirement; verify the documented command matches `go run ./cmd/kb index -h` behavior.
+- [ ] 4.4 Update `docs/deployment.md` KB section, `backend/.env.example`, and the `docker-compose.yml` KB mount comment to the `kb index --user <id> --root <dir>` flow and the BYOK-embedding/`USER_LLM_ENCRYPTION_KEY` requirement; state that the SPA no longer offers an index button, so directory resync is a CLI (or API) action. Verify the documented command matches `go run ./cmd/kb index -h` behavior.
 
 ## 5. Python agent and cross-runtime contract
 
@@ -42,9 +42,10 @@
 
 - [ ] 6.1 Remove `KbScope` and the `scope` field from `frontend/src/features/kb/types/kb.ts`; verify `npm run typecheck` (after the generated types are regenerated in 6.4).
 - [ ] 6.2 Remove the scope badge and the `scope === 'user'` gate in `KnowledgeBasePage.tsx` so toggle/delete render for every source, and delete the `kb.scope` i18n blocks; verify `npm test -- KnowledgeBasePage`.
-- [ ] 6.3 Update KB unit/e2e fixtures (`KnowledgeBasePage.test.tsx`, `kbService.test.ts`, `useKb.test.ts`, `frontend/tests/e2e/kb-ui.spec.ts`) and add a dir-source control-visibility case; verify `npm test` and `npm run test:e2e -- tests/e2e/kb-ui.spec.ts`.
-- [ ] 6.4 Regenerate `api/openapi.json` and `frontend/src/api/openapi/schema.d.ts` (`make openapi`, `npm run openapi:gen`); verify `make openapi-diff` and `npm run openapi:check`.
-- [ ] 6.5 Update `FUTURE_FRONTEND.md` §12 (scope badge removed, controls always available); verify the section no longer mentions a scope badge.
+- [ ] 6.3 Remove the KB page "Index now" action: drop the button, the scan-report toast aggregation, `useKbMutations.indexSources`, `kbService.indexSources`, the `KbIndexReport`/scan-report types, and the `kb.index*` i18n keys; verify `npm run typecheck` and no remaining `kb-index` test id.
+- [ ] 6.4 Update KB unit/e2e fixtures (`KnowledgeBasePage.test.tsx`, `kbService.test.ts`, `useKb.test.ts`, `frontend/tests/e2e/kb-ui.spec.ts`), remove the upload-then-index test, and add a dir-source control-visibility case; verify `npm test` and `npm run test:e2e -- tests/e2e/kb-ui.spec.ts`.
+- [ ] 6.5 Regenerate `api/openapi.json` and `frontend/src/api/openapi/schema.d.ts` (`make openapi`, `npm run openapi:gen`); verify `make openapi-diff` and `npm run openapi:check`.
+- [ ] 6.6 Update `FUTURE_FRONTEND.md` §12 (scope badge and index action removed; the page exposes upload/create/edit/delete only); verify the section no longer mentions a scope badge or an index button.
 
 ## 7. Integration verification
 
