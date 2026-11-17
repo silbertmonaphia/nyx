@@ -104,6 +104,22 @@ describe('KnowledgeBasePage', () => {
     expect(screen.getByTestId('kb-document-status')).toHaveTextContent('Indexed');
   });
 
+  it('labels a disabled source and its documents as excluded from search', async () => {
+    mockedService.listSources.mockResolvedValue([{ ...source, enabled: false }]);
+    mockedService.listDocuments.mockResolvedValue([document]);
+    renderPage();
+
+    expect(await screen.findByTestId('kb-source-disabled-hint')).toHaveTextContent(
+      "won't search this source",
+    );
+    expect(screen.getByTestId('kb-source-toggle')).toHaveTextContent(
+      'Include in search',
+    );
+    expect(screen.getByTestId('kb-document-source-disabled')).toHaveTextContent(
+      `${source.name} · excluded from search`,
+    );
+  });
+
   it('explains an embedding identity mismatch', async () => {
     mockedService.listSources.mockResolvedValue([
       { ...source, indexed_models: ['model-b'] },

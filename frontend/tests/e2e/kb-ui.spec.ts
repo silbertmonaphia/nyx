@@ -170,6 +170,21 @@ test.describe('Knowledge base UI (agent-free)', () => {
     ).toHaveCount(0);
   });
 
+  test('labels a disabled source and its documents as excluded from search', async ({ page }) => {
+    await registerWithKb(page, {
+      sources: [{ ...source, enabled: false }],
+    });
+    await openKb(page);
+
+    await expect(page.getByTestId('kb-source-toggle')).toHaveText('Include in search');
+    await expect(page.getByTestId('kb-source-disabled-hint')).toContainText(
+      "won't search this source",
+    );
+    await expect(page.getByTestId('kb-document-source-disabled')).toHaveText(
+      'inline · excluded from search',
+    );
+  });
+
   test('creates, edits and deletes an inline document', async ({ page }) => {
     await registerWithKb(page);
     await openKb(page);

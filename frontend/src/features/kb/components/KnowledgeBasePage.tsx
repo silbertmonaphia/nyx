@@ -109,15 +109,21 @@ const SourceCard: React.FC<{
           {t('kb.identityMismatch')}
         </p>
       )}
+      {!source.enabled && (
+        <p className="text-xs text-muted-foreground" data-testid="kb-source-disabled-hint">
+          {t('kb.disabledHint')}
+        </p>
+      )}
     </li>
   );
 };
 
 const DocumentRow: React.FC<{
   document: KbDocument;
+  source?: KbSource;
   onOpen: () => void;
   onDelete: () => void;
-}> = ({ document, onOpen, onDelete }) => {
+}> = ({ document, source, onOpen, onDelete }) => {
   const { t } = useTranslation();
   return (
     <li
@@ -134,6 +140,14 @@ const DocumentRow: React.FC<{
         <span className="text-sm font-medium">{document.title || document.rel_path}</span>
         <p className="text-xs text-muted-foreground">{document.rel_path}</p>
       </button>
+      {source && !source.enabled && (
+        <span
+          className="text-[10px] uppercase tracking-wide rounded bg-muted px-1.5 py-0.5"
+          data-testid="kb-document-source-disabled"
+        >
+          {t('kb.documentSourceDisabled', { name: source.name })}
+        </span>
+      )}
       <span className="text-[10px] uppercase tracking-wide rounded bg-muted px-1.5 py-0.5">
         {t(`kb.origin.${document.origin}`)}
       </span>
@@ -215,6 +229,7 @@ export const KnowledgeBasePage: React.FC = () => {
   }
 
   const sources = sourcesQuery.data ?? [];
+  const sourcesById = new Map(sources.map((source) => [source.id, source]));
   const documents = [...(documentsQuery.data ?? [])].sort(newestFirst);
 
   const uploadFile = async (file: File) => {
@@ -425,6 +440,7 @@ export const KnowledgeBasePage: React.FC = () => {
               <DocumentRow
                 key={document.id}
                 document={document}
+                source={sourcesById.get(document.source_id)}
                 onOpen={() => setEditingDocument(document.id)}
                 onDelete={() =>
                   setPendingDelete({
