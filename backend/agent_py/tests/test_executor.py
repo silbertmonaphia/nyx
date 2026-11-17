@@ -9,6 +9,7 @@ context_block because `step_outputs` was write-only.
 
 from __future__ import annotations
 
+import asyncio
 from typing import ClassVar
 
 import pytest
@@ -20,7 +21,7 @@ from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanE
 from prometheus_client import REGISTRY
 
 from agent import executor as executor_module
-from agent.approvals import DECISION_EXPIRED, denial_text_for
+from agent.approvals import DECISION_EXPIRED, RunSink, denial_text_for
 from agent.config import Settings
 from agent.executor import (
     _collect_failed_steps,
@@ -30,6 +31,7 @@ from agent.executor import (
     _run_react,
     _run_tool,
 )
+from agent.graph import build_graph, run_agent_stream
 from agent.main import _sse_encode
 from agent.state import new_state
 from agent.tools_client import ToolError, ToolRejectedError, ToolUnavailableError
@@ -99,6 +101,43 @@ def _state(plan_steps, step_outputs):
     state["plan"] = Plan(steps=plan_steps)
     state["step_outputs"] = step_outputs
     return state
+
+
+async def _drive_executor(
+    state, tracer, *, settings=None, rag=None, tools=None, approvals=None
+):
+    settings = settings or _settings()
+    tools = tools if tools is not None else _StubTools()
+    while (
+        state.get("terminal_status", "ok") == "ok"
+        and state.get("step_cursor", 0) < len(state["plan"].steps)
+    ):
+        await executor_module.executor_node(
+            state,
+            settings=settings,
+            tracer=tracer,
+            budget=_StubBudget(),
+            rag=rag,
+            tools=tools,
+            approvals=approvals,
+        )
+    return state
+
+
+def test_step_cursor_defaults_to_zero_for_new_and_legacy_state():
+    state = new_state(
+        user_id=1,
+        run_id="r",
+        messages=[ChatMessage(role="user", content="hi")],
+        model=None,
+    )
+    assert state["step_cursor"] == 0
+
+    del state["step_cursor"]
+    assert executor_module.step_cursor(state) == 0
+
+    state["step_cursor"] = None  # type: ignore[typeddict-item]
+    assert executor_module.step_cursor(state) == 0
 
 
 @pytest.fixture(autouse=True)
@@ -189,6 +228,410 @@ async def test_executor_rejects_non_plan_state(tracer):
             rag=None,  # type: ignore[arg-type] — unused: assert fires first
             tools=None,  # type: ignore[arg-type]
         )
+
+
+@pytest.mark.asyncio
+async def test_executor_runs_at_most_one_step_per_invocation(tracer):
+    steps = [PlanStep(id=f"llm_{i}", kind="llm", prompt=f"p{i}") for i in range(3)]
+    state = _state(steps, {})
+
+    await executor_module.executor_node(
+        state,
+        settings=_settings(),
+        tracer=tracer,
+        budget=_StubBudget(),
+        rag=None,  # type: ignore[arg-type]
+        tools=_StubTools(),
+    )
+
+    assert [e.kind for e in state["events_so_far"]] == [
+        "step_start",
+        "delta",
+        "step_end",
+    ]
+    assert state["step_cursor"] == 1
+    assert set(state["step_outputs"]) == {"llm_0"}
+
+    await executor_module.executor_node(
+        state,
+        settings=_settings(),
+        tracer=tracer,
+        budget=_StubBudget(),
+        rag=None,  # type: ignore[arg-type]
+        tools=_StubTools(),
+    )
+    assert state["step_cursor"] == 2
+    assert set(state["step_outputs"]) == {"llm_0", "llm_1"}
+
+
+@pytest.mark.asyncio
+async def test_executor_advances_cursor_on_failed_step(tracer, monkeypatch):
+    monkeypatch.setattr(executor_module, "ChatOpenAI", _FailFirstLlm)
+    _FailFirstLlm.calls = 0
+    _FailFirstLlm.captured = []
+
+    steps = [
+        PlanStep(id="llm_0", kind="llm", prompt="p0"),
+        PlanStep(id="llm_1", kind="llm", prompt="p1"),
+    ]
+    state = _state(steps, {})
+
+    await executor_module.executor_node(
+        state,
+        settings=_settings(),
+        tracer=tracer,
+        budget=_StubBudget(),
+        rag=None,  # type: ignore[arg-type]
+        tools=_StubTools(),
+    )
+    ends = [e for e in state["events_so_far"] if e.kind == "step_end"]
+    assert [e.payload["status"] for e in ends] == ["failed"]
+    assert state["step_cursor"] == 1
+
+    await executor_module.executor_node(
+        state,
+        settings=_settings(),
+        tracer=tracer,
+        budget=_StubBudget(),
+        rag=None,  # type: ignore[arg-type]
+        tools=_StubTools(),
+    )
+    assert state["step_cursor"] == 2
+    assert "llm_1" in state["step_outputs"]
+
+
+@pytest.mark.asyncio
+async def test_executor_advances_cursor_past_checkpointed_step_output(tracer):
+    steps = [
+        PlanStep(id="tool_1", kind="tool", tool="list_feeds", args={}),
+        PlanStep(id="llm_2", kind="llm", prompt="Summarize."),
+    ]
+    state = _state(steps, {"tool_1": {"items": ["a"]}})
+    tools = _ScriptedTools([{"unexpected": True}])
+
+    await executor_module.executor_node(
+        state,
+        settings=_settings(),
+        tracer=tracer,
+        budget=_StubBudget(),
+        rag=None,  # type: ignore[arg-type]
+        tools=tools,
+    )
+    assert state["step_cursor"] == 1
+    assert tools.calls == []
+    assert not any(
+        e.kind == "step_start" and e.payload.get("step_id") == "tool_1"
+        for e in state["events_so_far"]
+    )
+
+    await executor_module.executor_node(
+        state,
+        settings=_settings(),
+        tracer=tracer,
+        budget=_StubBudget(),
+        rag=None,  # type: ignore[arg-type]
+        tools=tools,
+    )
+    assert state["step_cursor"] == 2
+    assert "llm_2" in state["step_outputs"]
+
+
+class _GraphPlanChain:
+    def __init__(self, payload):
+        self._payload = payload
+
+    def __or__(self, other):
+        return self
+
+    async def ainvoke(self, messages, config=None):
+        return Plan.model_validate(self._payload)
+
+
+class _GraphPlanLlm:
+    plan: ClassVar[dict] = {"steps": []}
+    binds = 0
+    answers = 0
+
+    def __init__(self, *args, **kwargs):
+        pass
+
+    def bind(self, **kwargs):
+        type(self).binds += 1
+        return _GraphPlanChain(type(self).plan)
+
+    async def ainvoke(self, messages, config=None):
+        type(self).answers += 1
+        return AIMessage(content="stub answer")
+
+
+def _patch_graph_llm(monkeypatch, plan):
+    import agent.planner as planner_module
+
+    _GraphPlanLlm.plan = plan
+    _GraphPlanLlm.binds = 0
+    _GraphPlanLlm.answers = 0
+    monkeypatch.setattr(planner_module, "ChatOpenAI", _GraphPlanLlm)
+    monkeypatch.setattr(executor_module, "ChatOpenAI", _GraphPlanLlm)
+
+
+@pytest.mark.asyncio
+async def test_graph_runs_one_executor_superstep_per_step(tracer, monkeypatch):
+    _patch_graph_llm(
+        monkeypatch,
+        {"steps": [{"id": f"llm_{i}", "kind": "llm", "prompt": f"p{i}"} for i in range(3)]},
+    )
+    graph = build_graph(
+        _settings(), _StubBudget(), None, _StubTools(), tracer=tracer  # type: ignore[arg-type]
+    )
+    state = _state([], {})
+
+    chunks = [c async for c in graph.astream(state, stream_mode="values")]
+
+    assert _GraphPlanLlm.answers == 3
+    assert chunks[-1]["step_cursor"] == 3
+    assert [c.get("step_cursor") for c in chunks][-4:] == [0, 1, 2, 3]
+
+
+class _ExceededBudget:
+    class _D:
+        decision = "exceeded"
+
+    async def check_and_increment(self, user_id, tokens, tracer):
+        return self._D()
+
+
+@pytest.mark.asyncio
+async def test_graph_stops_the_step_loop_on_budget_termination(tracer, monkeypatch):
+    _patch_graph_llm(
+        monkeypatch,
+        {"steps": [{"id": f"llm_{i}", "kind": "llm", "prompt": "p"} for i in range(3)]},
+    )
+    graph = build_graph(
+        _settings(), _ExceededBudget(), None, _StubTools(), tracer=tracer  # type: ignore[arg-type]
+    )
+    state = _state([], {})
+
+    chunks = [c async for c in graph.astream(state, stream_mode="values")]
+
+    assert chunks[-1]["terminal_status"] == "budget_exceeded"
+    assert chunks[-1]["step_cursor"] == 0
+    assert _GraphPlanLlm.answers == 0
+
+
+class _FakeStreamGraph:
+    def __init__(self, checkpointer):
+        self.checkpointer = checkpointer
+        self.kwargs = None
+
+    async def astream(self, stream_input, **kwargs):
+        self.kwargs = kwargs
+        yield {"events_so_far": [], "terminal_status": "failed"}
+
+
+async def _drain_stream(state, **kwargs):
+    async for _ in run_agent_stream(state, **kwargs):
+        pass
+
+
+@pytest.mark.asyncio
+async def test_run_agent_stream_uses_sync_durability_with_checkpointer(tracer):
+    state = _state([], {})
+
+    with_checkpointer = _FakeStreamGraph(object())
+    await _drain_stream(
+        state,
+        settings=_settings(),
+        tracer=tracer,
+        budget=_StubBudget(),
+        rag=None,
+        tools=_StubTools(),
+        graph=with_checkpointer,
+        graph_config={"configurable": {"thread_id": "t"}},
+    )
+    assert with_checkpointer.kwargs["durability"] == "sync"
+
+    without_checkpointer = _FakeStreamGraph(None)
+    await _drain_stream(
+        state,
+        settings=_settings(),
+        tracer=tracer,
+        budget=_StubBudget(),
+        rag=None,
+        tools=_StubTools(),
+        graph=without_checkpointer,
+        graph_config={"configurable": {"thread_id": "t"}},
+    )
+    assert "durability" not in without_checkpointer.kwargs
+
+
+class _FakeResumeGraph:
+    class _Snapshot:
+        def __init__(self, values):
+            self.values = values
+
+    def __init__(self, values):
+        self.checkpointer = None
+        self._values = values
+        self.received = "unset"
+
+    async def aget_state(self, config):
+        return self._Snapshot(self._values)
+
+    async def astream(self, stream_input, **kwargs):
+        self.received = stream_input
+        yield {"events_so_far": [], "terminal_status": "failed"}
+
+
+@pytest.mark.asyncio
+async def test_run_agent_stream_resume_gate_uses_none_only_with_checkpoint_values(
+    tracer,
+):
+    state = _state([], {})
+    config = {"configurable": {"thread_id": "t"}}
+
+    checkpointed = _FakeResumeGraph({"plan": None})
+    await _drain_stream(
+        state,
+        settings=_settings(),
+        tracer=tracer,
+        budget=_StubBudget(),
+        rag=None,
+        tools=_StubTools(),
+        graph=checkpointed,
+        graph_config=config,
+        resumed=True,
+    )
+    assert checkpointed.received is None
+
+    empty = _FakeResumeGraph({})
+    await _drain_stream(
+        state,
+        settings=_settings(),
+        tracer=tracer,
+        budget=_StubBudget(),
+        rag=None,
+        tools=_StubTools(),
+        graph=empty,
+        graph_config=config,
+        resumed=True,
+    )
+    assert empty.received is state
+
+
+class _AnswerThenFailChain:
+    def __init__(self, payload):
+        self._payload = payload
+
+    def __or__(self, other):
+        return self
+
+    async def ainvoke(self, messages, config=None):
+        return Plan.model_validate(self._payload)
+
+
+class _AnswerThenFailLlm:
+    plan: ClassVar[dict] = {}
+    calls = 0
+
+    def __init__(self, *args, **kwargs):
+        pass
+
+    def bind(self, **kwargs):
+        return _AnswerThenFailChain(type(self).plan)
+
+    async def ainvoke(self, messages, config=None):
+        type(self).calls += 1
+        if type(self).calls == 1:
+            return AIMessage(content="stub answer")
+        raise RuntimeError("provider exploded")
+
+
+async def _failure_after_answer_events(monkeypatch, tracer, *, sink: bool):
+    import agent.planner as planner_module
+
+    _AnswerThenFailLlm.plan = {
+        "steps": [
+            {"id": "llm_1", "kind": "llm", "prompt": "Answer."},
+            {"id": "llm_2", "kind": "llm", "prompt": "Summarise."},
+        ]
+    }
+    _AnswerThenFailLlm.calls = 0
+    monkeypatch.setattr(planner_module, "ChatOpenAI", _AnswerThenFailLlm)
+    monkeypatch.setattr(executor_module, "ChatOpenAI", _AnswerThenFailLlm)
+
+    settings = Settings(
+        llm_base_url="http://stub",
+        metrics_port=0,
+        tool_retry_max=0,
+        tool_retry_backoff_base_ms=0,
+    )
+    tools = _ScriptedTools([{"unused": True}])
+    graph = build_graph(settings, _StubBudget(), None, tools, tracer=tracer)
+    state = _state([], {})
+
+    kwargs = {
+        "settings": settings,
+        "tracer": tracer,
+        "budget": _StubBudget(),
+        "rag": None,
+        "tools": tools,
+        "graph": graph,
+    }
+    if not sink:
+        return [ev async for ev in run_agent_stream(state, **kwargs)]
+
+    queue: asyncio.Queue = asyncio.Queue()
+    run_sink = RunSink(queue)
+    async for _ in run_agent_stream(state, sink=run_sink, **kwargs):
+        pass
+    await run_sink.close()
+    delivered = []
+    while not queue.empty():
+        item = queue.get_nowait()
+        if item is None:
+            break
+        if item[0] == "event":
+            delivered.append(item[1])
+    return delivered
+
+
+def _assert_note_follows_streamed_deltas_once(events):
+    ids = [id(ev) for ev in events]
+    assert len(ids) == len(set(ids)), "every frame must be delivered exactly once"
+
+    notes = [
+        i
+        for i, ev in enumerate(events)
+        if ev.kind == "note" and (ev.payload or {}).get("kind") == "partial_failure"
+    ]
+    assert len(notes) == 1
+    assert events[notes[0]].payload["failed_steps"] == ["llm_2"]
+
+    last_delta = max(i for i, ev in enumerate(events) if ev.kind == "delta")
+    assert notes[0] > last_delta
+
+    failed_starts = [
+        ev
+        for ev in events
+        if ev.kind == "step_start" and ev.payload.get("step_id") == "llm_2"
+    ]
+    assert len(failed_starts) == 1
+
+
+@pytest.mark.asyncio
+async def test_note_after_streamed_answer_deltas_delivered_once_without_sink(
+    tracer, monkeypatch
+):
+    events = await _failure_after_answer_events(monkeypatch, tracer, sink=False)
+    _assert_note_follows_streamed_deltas_once(events)
+
+
+@pytest.mark.asyncio
+async def test_note_after_streamed_answer_deltas_delivered_once_with_sink(
+    tracer, monkeypatch
+):
+    events = await _failure_after_answer_events(monkeypatch, tracer, sink=True)
+    _assert_note_follows_streamed_deltas_once(events)
 
 
 @pytest.mark.asyncio
@@ -422,14 +865,7 @@ async def test_per_step_budget_isolates_retry_state(tracer, monkeypatch):
     _use_llm(monkeypatch, [_tool_call(args={"limit": 5})])
 
     before = _retry_counter("list_feeds", "tool_arg_invalid")
-    await executor_module.executor_node(
-        state,
-        settings=_settings(),
-        tracer=tracer,
-        budget=_StubBudget(),
-        rag=None,  # type: ignore[arg-type] — no rag steps in this plan
-        tools=tools,
-    )
+    await _drive_executor(state, tracer, tools=tools)
 
     assert _retry_counter("list_feeds", "tool_arg_invalid") - before == 4  # 2 × 2
     assert len(tools.calls) == 6  # 3 attempts per step
@@ -766,14 +1202,7 @@ async def test_partial_failure_emitted_for_tool_retry_exhaustion(tracer, monkeyp
         ],
     )
 
-    await executor_module.executor_node(
-        state,
-        settings=_settings(),
-        tracer=tracer,
-        budget=_StubBudget(),
-        rag=None,  # type: ignore[arg-type] — no rag steps
-        tools=tools,
-    )
+    await _drive_executor(state, tracer, tools=tools)
 
     events = state["events_so_far"]
     note_idx = [i for i, e in enumerate(events) if e.kind == "note"]
@@ -822,14 +1251,7 @@ async def test_banner_aggregates_two_failed_steps_in_plan_order(tracer, monkeypa
         [_tool_call(args={"limit": 5})] * 4 + [AIMessage(content="final answer")],
     )
 
-    await executor_module.executor_node(
-        state,
-        settings=_settings(),
-        tracer=tracer,
-        budget=_StubBudget(),
-        rag=None,  # type: ignore[arg-type]
-        tools=tools,
-    )
+    await _drive_executor(state, tracer, tools=tools)
 
     notes = [e for e in state["events_so_far"] if e.kind == "note"]
     assert len(notes) == 1
@@ -1290,13 +1712,8 @@ async def _build_web_tools_stream(tracer) -> bytes:
     try:
         plan = _web_tools_plan()
         state = _state(plan.steps, {})
-        await executor_module.executor_node(
-            state,
-            settings=_settings(),
-            tracer=tracer,
-            budget=_StubBudget(),
-            rag=None,  # type: ignore[arg-type]
-            tools=_WebScriptedTools(_web_tool_results()),
+        await _drive_executor(
+            state, tracer, tools=_WebScriptedTools(_web_tool_results())
         )
     finally:
         executor_module.uuid.uuid4 = original_uuid4
@@ -1596,15 +2013,7 @@ class _FailFirstLlm:
 
 
 async def _run_plan(state, tracer, *, tools=None, approvals=None):
-    await executor_module.executor_node(
-        state,
-        settings=_settings(),
-        tracer=tracer,
-        budget=_StubBudget(),
-        rag=None,
-        tools=tools if tools is not None else _StubTools(),
-        approvals=approvals,
-    )
+    await _drive_executor(state, tracer, tools=tools, approvals=approvals)
 
 
 @pytest.mark.asyncio

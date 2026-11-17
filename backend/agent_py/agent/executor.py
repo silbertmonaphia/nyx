@@ -58,7 +58,7 @@ from .observability import (
     update_observation,
 )
 from .rag_client import RagAuthError, RagClient, RagUnavailableError
-from .state import AgentState, accumulate_usage
+from .state import AgentState, accumulate_usage, step_cursor
 from .tool_dispatch import ToolDispatcher
 from .tools_client import (
     ToolAuthError,
@@ -75,6 +75,7 @@ from .types import (
     Event,
     NoteEvent,
     Plan,
+    PlanStep,
     StepEndEvent,
     StepStartEvent,
     TerminatorEvent,
@@ -121,148 +122,169 @@ async def executor_node(
     # without the executor-side machinery being updated to match.
     assert isinstance(plan, Plan), f"executor expected Plan, got {type(plan).__name__}"  # noqa: S101 — defensive type check guarded by structured-output migration
 
-    for step in plan.steps:
-        # Resume-aware skip (absorbed into agent-stale-run-sweeper,
-        # 2026-10-14 user-approved): a step whose output already exists in
-        # the checkpointed state completed in a prior phase — re-running it
-        # would double-spend tokens and re-invoke tools. Per the resume
-        # contract its frames were emitted in the prior phase, so nothing
-        # new is emitted for it here.
-        if step.id in (state.get("step_outputs") or {}):
-            continue
-        with (
-            # Langfuse twin of the OTel step span (agent-langfuse-tracing
-            # 3.4): no-op when tracing is disabled or the client fails to
-            # open the observation. Entered BEFORE the Jaeger span —
-            # see the ordering note in planner.plan_node.
-            trace_observation(
-                f"agent.step.{step.kind.value}",
-                input={
-                    "step_id": step.id,
-                    "kind": step.kind.value,
-                    "name": step.tool,
-                    "args": step.args,
-                    "prompt": step.prompt,
-                    "query": step.query,
-                },
-                metadata={
-                    "step_id": step.id,
-                    "kind": step.kind.value,
-                    "tool": step.tool,
-                },
-            ) as lf_step,
-            jaeger_span(tracer, f"agent.step.{step.kind.value}") as span,
-        ):
-            span.set_attribute("step_id", step.id)
-            span.set_attribute("kind", step.kind.value)
-            span.set_attribute("iteration", 0)
-            if step.tool:
-                span.set_attribute("name", step.tool)
-
-            state["events_so_far"].append(
-                Event(
-                    kind="step_start",
-                    payload=StepStartEvent(step_id=step.id, kind=step.kind).model_dump(),
-                )
+    cursor = step_cursor(state)
+    if cursor < len(plan.steps):
+        step = plan.steps[cursor]
+        if step.id not in (state.get("step_outputs") or {}):
+            terminated = await _execute_step(
+                state,
+                step,
+                settings=settings,
+                tracer=tracer,
+                budget=budget,
+                rag=rag,
+                tools=tools,
+                approvals=approvals,
+                prefs_text=prefs_text,
+                secrets=secrets,
             )
+            if terminated is not None:
+                return terminated
+        state["step_cursor"] = cursor + 1
 
-            ok = True
-            reason = ""
-            try:
-                if step.kind.value == "rag":
-                    await _run_rag(state, step, rag, span)
-                elif step.kind.value == "kb":
-                    await _run_kb(state, step, rag, span)
-                elif step.kind.value == "tool":
-                    await _run_tool(
-                        state,
-                        step,
-                        settings=settings,
-                        tracer=tracer,
-                        budget=budget,
-                        tools=tools,
-                        approvals=approvals,
-                        span=span,
-                        secrets=secrets,
-                    )
-                elif step.kind.value == "llm":
-                    await _run_llm(
-                        state,
-                        step,
-                        settings,
-                        tracer,
-                        budget,
-                        span,
-                        prefs_text=prefs_text,
-                        secrets=secrets,
-                    )
-                elif step.kind.value == "react":
-                    await _run_react(
-                        state,
-                        step,
-                        settings,
-                        tracer,
-                        budget,
-                        tools,
-                        span,
-                        approvals=approvals,
-                        prefs_text=prefs_text,
-                        secrets=secrets,
-                    )
-                else:
-                    raise ValueError(f"unsupported step kind: {step.kind}")
-            except _BudgetExceededError:
-                state["events_so_far"].append(
-                    Event(
-                        kind="step_end",
-                        payload=StepEndEvent(step_id=step.id, status="failed", reason="budget_exceeded").model_dump(),
-                    )
-                )
-                agent_steps_total.labels(step.kind.value, "budget_exceeded").inc()
-                return _terminate_with_error(state, "budget_exceeded", "Per-user budget exhausted", settings)
-            except _BudgetUnavailableError:
-                state["events_so_far"].append(
-                    Event(
-                        kind="step_end",
-                        payload=StepEndEvent(step_id=step.id, status="failed", reason="budget_unavailable").model_dump(),
-                    )
-                )
-                agent_steps_total.labels(step.kind.value, "budget_unavailable").inc()
-                return _terminate_with_error(state, "budget_unavailable", "Budget guard unavailable", settings)
-            except Exception as exc:  # noqa: BLE001
-                ok = False
-                reason = (
-                    str(exc)
-                    if isinstance(exc, _StepRuntimeError)
-                    else type(exc).__name__
-                )
-                span.record_exception(exc)
-                log.warning(
-                    "agent step failed: step_id=%s kind=%s err=%r",
-                    step.id,
-                    step.kind.value,
-                    exc,
-                )
+    if step_cursor(state) >= len(plan.steps):
+        _maybe_emit_partial_failure(state, settings)
 
+    return state
+
+
+async def _execute_step(
+    state: AgentState,
+    step: PlanStep,
+    *,
+    settings: Settings,
+    tracer: trace.Tracer,
+    budget: BudgetGuard,
+    rag: RagClient,
+    tools: ToolDispatcher,
+    approvals: ApprovalGate | None = None,
+    prefs_text: str = "",
+    secrets: OverrideSecrets | None = None,
+) -> AgentState | None:
+    with (
+        trace_observation(
+            f"agent.step.{step.kind.value}",
+            input={
+                "step_id": step.id,
+                "kind": step.kind.value,
+                "name": step.tool,
+                "args": step.args,
+                "prompt": step.prompt,
+                "query": step.query,
+            },
+            metadata={
+                "step_id": step.id,
+                "kind": step.kind.value,
+                "tool": step.tool,
+            },
+        ) as lf_step,
+        jaeger_span(tracer, f"agent.step.{step.kind.value}") as span,
+    ):
+        span.set_attribute("step_id", step.id)
+        span.set_attribute("kind", step.kind.value)
+        span.set_attribute("iteration", 0)
+        if step.tool:
+            span.set_attribute("name", step.tool)
+
+        state["events_so_far"].append(
+            Event(
+                kind="step_start",
+                payload=StepStartEvent(step_id=step.id, kind=step.kind).model_dump(),
+            )
+        )
+
+        ok = True
+        reason = ""
+        try:
+            if step.kind.value == "rag":
+                await _run_rag(state, step, rag, span)
+            elif step.kind.value == "kb":
+                await _run_kb(state, step, rag, span)
+            elif step.kind.value == "tool":
+                await _run_tool(
+                    state,
+                    step,
+                    settings=settings,
+                    tracer=tracer,
+                    budget=budget,
+                    tools=tools,
+                    approvals=approvals,
+                    span=span,
+                    secrets=secrets,
+                )
+            elif step.kind.value == "llm":
+                await _run_llm(
+                    state,
+                    step,
+                    settings,
+                    tracer,
+                    budget,
+                    span,
+                    prefs_text=prefs_text,
+                    secrets=secrets,
+                )
+            elif step.kind.value == "react":
+                await _run_react(
+                    state,
+                    step,
+                    settings,
+                    tracer,
+                    budget,
+                    tools,
+                    span,
+                    approvals=approvals,
+                    prefs_text=prefs_text,
+                    secrets=secrets,
+                )
+            else:
+                raise ValueError(f"unsupported step kind: {step.kind}")
+        except _BudgetExceededError:
             state["events_so_far"].append(
                 Event(
                     kind="step_end",
-                    payload=StepEndEvent(step_id=step.id, status="ok" if ok else "failed", reason=reason or None).model_dump(),
+                    payload=StepEndEvent(step_id=step.id, status="failed", reason="budget_exceeded").model_dump(),
                 )
             )
-            agent_steps_total.labels(step.kind.value, "ok" if ok else "failed").inc()
-            update_observation(
-                lf_step,
-                output={"status": "ok" if ok else "failed", "reason": reason or None},
-                level="ERROR" if not ok else "DEFAULT",
+            agent_steps_total.labels(step.kind.value, "budget_exceeded").inc()
+            return _terminate_with_error(state, "budget_exceeded", "Per-user budget exhausted", settings)
+        except _BudgetUnavailableError:
+            state["events_so_far"].append(
+                Event(
+                    kind="step_end",
+                    payload=StepEndEvent(step_id=step.id, status="failed", reason="budget_unavailable").model_dump(),
+                )
+            )
+            agent_steps_total.labels(step.kind.value, "budget_unavailable").inc()
+            return _terminate_with_error(state, "budget_unavailable", "Budget guard unavailable", settings)
+        except Exception as exc:  # noqa: BLE001
+            ok = False
+            reason = (
+                str(exc)
+                if isinstance(exc, _StepRuntimeError)
+                else type(exc).__name__
+            )
+            span.record_exception(exc)
+            log.warning(
+                "agent step failed: step_id=%s kind=%s err=%r",
+                step.id,
+                step.kind.value,
+                exc,
             )
 
-    # Every step has run: surface a partial-failure note before the final
-    # answer's deltas when the run diverged from the plan (spec:
-    # agent-partial-failure). No-op on clean runs.
-    _maybe_emit_partial_failure(state, settings)
+        state["events_so_far"].append(
+            Event(
+                kind="step_end",
+                payload=StepEndEvent(step_id=step.id, status="ok" if ok else "failed", reason=reason or None).model_dump(),
+            )
+        )
+        agent_steps_total.labels(step.kind.value, "ok" if ok else "failed").inc()
+        update_observation(
+            lf_step,
+            output={"status": "ok" if ok else "failed", "reason": reason or None},
+            level="ERROR" if not ok else "DEFAULT",
+        )
 
-    return state
+    return None
 
 
 # --- handlers ------------------------------------------------------------

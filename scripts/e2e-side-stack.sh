@@ -12,9 +12,10 @@
 # (`make dev-vllm-main`) — this script starts NOTHING in docker.
 #
 # Usage:
-#   ./scripts/e2e-side-stack.sh up      # start all three, wait for health
-#   ./scripts/e2e-side-stack.sh stop    # kill what `up` started
-#   ./scripts/e2e-side-stack.sh status  # ports + pids
+#   ./scripts/e2e-side-stack.sh up            # start all three, wait for health
+#   ./scripts/e2e-side-stack.sh stop          # kill what `up` started
+#   ./scripts/e2e-side-stack.sh restart-agent # restart only the agent (crash-resume specs)
+#   ./scripts/e2e-side-stack.sh status        # ports + pids
 #
 # Then drive Playwright against it:
 #   PLAYWRIGHT_BASE_URL=http://localhost:5273 \
@@ -186,6 +187,31 @@ cmd_stop() {
   done
 }
 
+cmd_restart_agent() {
+  local pidf pid
+  pidf="$(pidfile agent)"
+  if [[ -f "$pidf" ]]; then
+    pid="$(cat "$pidf")"
+    if [[ -r "/proc/$pid/cmdline" ]] && tr '\0' ' ' < "/proc/$pid/cmdline" | grep -q 'agent\.main'; then
+      kill -- "-$pid" 2>/dev/null || kill "$pid" 2>/dev/null || true
+      echo "stopped agent (pgid $pid)"
+    else
+      echo "refusing to kill pid $pid: not the side agent" >&2
+    fi
+    rm -f "$pidf"
+  fi
+  # shellcheck disable=SC1091
+  . "$ROOT/scripts/lib/agent-token.sh"
+  AGENT_TOKEN_ROOT="$ROOT"
+  export AGENT_TOKEN_ROOT
+  if ! export_agent_service_token; then
+    echo "failed to resolve AGENT_SERVICE_TOKEN" >&2
+    return 1
+  fi
+  start_agent
+  wait_health "http://localhost:${AGENT_PORT}/healthz" "agent" 60
+}
+
 cmd_status() {
   for port in "$GO_PORT" "$AGENT_PORT" "$AGENT_METRICS_PORT" "$VITE_PORT"; do
     printf "  :%-5s " "$port"
@@ -201,6 +227,7 @@ cmd_status() {
 case "${1:-up}" in
   up) cmd_up ;;
   stop) cmd_stop ;;
+  restart-agent) cmd_restart_agent ;;
   status) cmd_status ;;
-  *) echo "usage: $0 [up|stop|status]" >&2; exit 2 ;;
+  *) echo "usage: $0 [up|stop|restart-agent|status]" >&2; exit 2 ;;
 esac

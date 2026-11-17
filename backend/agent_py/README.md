@@ -52,7 +52,8 @@ flowchart TB
   step instead of guessing.
 - **Robust by default** — bounded retries on both tool-dispatch failure classes (validator
   re-prompt / transient backoff), per-user Redis token budget (fail-closed), per-IP rate limit,
-  run state in Postgres with resume-by-`run_id`, stale-run sweeper + retention GC.
+  run state in Postgres with resume-by-`run_id` and a checkpoint at every plan-step boundary,
+  stale-run sweeper + retention GC.
 - **Observable** — Prometheus counters (:9001), OpenTelemetry spans (Jaeger), optional
   Langfuse LLM tracing, and process logging configured at boot (root at WARNING, the
   agent's own loggers — the `agent` package and the `nyx.agent.*` runtime tree — at INFO,
@@ -100,6 +101,35 @@ OpenSpec change `mcp-tool-call-idempotency`.
 - **Test fault seam** — `PYTHON_AGENT_TEST_LOSE_TOOL_RESULT_ONCE=true` makes the executor drop the
   first mutating-tool result per run after the server committed it, forcing the transient retry
   path. Test environments only; never enable in a deployed environment.
+
+### Per-step checkpoints and resume
+
+OpenSpec change `agent-per-step-executor-checkpoints`.
+
+- **One plan step per graph superstep** — the `executor` node runs at most one step per invocation
+  and a conditional edge loops back to it until the plan is exhausted. Each return is a checkpoint
+  boundary, so an N-step plan yields N executor checkpoints after the planner checkpoint.
+- **Explicit cursor** — `AgentState.step_cursor` is the index of the first unfinished step, advanced
+  exactly once per invocation (including failed and legacy-skipped steps). Checkpoints written by
+  the old two-node graph have no cursor and read as 0; their captured `step_outputs` still skip
+  already-completed steps.
+- **Durable before the next step** — `run_agent_stream` passes `durability="sync"` whenever the
+  graph carries a checkpointer, so a completed step's output and cursor are committed before the
+  next step is scheduled.
+- **Resume semantics** — a crash re-runs at most the in-flight step; the planner and every completed
+  step are restored from the checkpoint and never re-invoked. Frame replay still replays the
+  checkpointed frames; the in-flight step re-emits its own frames. A re-run approval pause mints a
+  fresh `approval_id`; a decision on the stale one does not resolve it and expires at the API
+  boundary.
+- **Idempotency still applies to the in-flight step** — checkpointing cannot dedupe a step that was
+  mid-execution, so mutating tool calls keep their deterministic `idempotency_key` across the
+  re-run.
+- **Live verification** — `frontend/tests/e2e/chat-step-checkpoint-resume.spec.ts` (`@live`, serial)
+  SIGKILLs the side-stack agent through `/tmp/nyx-e2e-agent<suffix>.pid`, restarts it with
+  `scripts/e2e-side-stack.sh restart-agent`, lets the SPA recovery ladder re-POST the echoed
+  `run_id`, and asserts `agent_tool_calls_total{tool="list_feeds",ok="true"}` is 0 in the restarted
+  process (the completed step did not re-execute). It needs a side stack whose agent it may kill —
+  never the operator's dev agent.
 
 ## Endpoints
 

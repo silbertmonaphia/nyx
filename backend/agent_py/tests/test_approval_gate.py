@@ -14,7 +14,9 @@ import time
 from typing import ClassVar
 
 import fakeredis.aioredis
+import httpx
 import pytest
+from fastapi import FastAPI
 from langchain_core.messages import AIMessage
 from opentelemetry import trace
 
@@ -29,12 +31,14 @@ from agent.approvals import (
     RunSink,
     denial_text_for,
 )
+from agent.approvals_api import router as approvals_router
 from agent.config import Settings
 from agent.executor import _dispatch_tool_with_retries, _run_react
 from agent.state import new_state
 from agent.tool_dispatch import LocalToolRegistry, ToolDispatcher
 from agent.tools_client import ToolError, ToolUnavailableError
 from agent.types import Event, Plan, PlanStep, StepKind, StepStartEvent
+from tests.service_auth_fixtures import SERVICE_AUTH_HEADERS
 
 STEP = "s1"
 
@@ -552,3 +556,94 @@ async def test_sink_survives_mid_list_insert_without_duplicates_or_loss():
     # Exactly the two new events — nothing re-emitted, nothing lost.
     assert [item[1].kind for item in drained] == ["note", "done"]
     assert len(sink._delivered) == 4
+
+
+class _OwnsEveryRun:
+    async def get_run(self, run_id, user_id):
+        return object()
+
+
+async def test_resume_mid_approval_reemits_confirm_and_expires_stale(tracer):
+    """A crash while step 1 waits on a confirmation leaves the step in
+    flight. The re-run re-emits `confirm_request` with a fresh approval id;
+    a decision on the stale id does not resolve the new wait, and the stale
+    id is rejected as expired at the API boundary."""
+    redis = fakeredis.aioredis.FakeRedis(decode_responses=True)
+    store = ApprovalStore(redis)
+    mcp = _StubMcp()
+    state = _state(run_id="approval-resume")
+    state["plan"] = Plan(
+        steps=[
+            PlanStep(id="tool_1", kind="tool", tool="create_feed", args={"name": "x"}),
+            PlanStep(id="llm_2", kind="llm", prompt="Answer."),
+        ]
+    )
+
+    async def _run_step(gate):
+        return await executor_module.executor_node(
+            state,
+            settings=_settings(),
+            tracer=tracer,
+            budget=_StubBudget(),
+            rag=None,
+            tools=_dispatcher(mcp),
+            approvals=gate,
+        )
+
+    gate1 = ApprovalGate(store=store, ttl_seconds=300)
+    task1 = asyncio.create_task(_run_step(gate1))
+    for _ in range(200):
+        if _frames(state, "confirm_request"):
+            break
+        await asyncio.sleep(0.01)
+    confirms = _frames(state, "confirm_request")
+    assert len(confirms) == 1
+    stale_id = confirms[0].payload["approval_id"]
+    task1.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task1
+    assert state.get("step_cursor", 0) == 0
+    assert mcp.calls == []
+
+    gate2 = ApprovalGate(store=store, ttl_seconds=300)
+    task2 = asyncio.create_task(_run_step(gate2))
+    for _ in range(200):
+        if len(_frames(state, "confirm_request")) == 2:
+            break
+        await asyncio.sleep(0.01)
+    confirms = _frames(state, "confirm_request")
+    assert len(confirms) == 2
+    fresh_id = confirms[1].payload["approval_id"]
+    assert fresh_id != stale_id
+
+    await store.record_decision(state["run_id"], stale_id, DECISION_DENY)
+    await asyncio.sleep(0.05)
+    assert not task2.done()
+
+    await store.record_decision(state["run_id"], fresh_id, DECISION_APPROVE)
+    await asyncio.wait_for(task2, timeout=5)
+    assert state["step_cursor"] == 1
+    assert mcp.calls == [("create_feed", {"name": "x"})]
+
+    await store.put_intent(state["run_id"], stale_id, time.time() - 1)
+    app = FastAPI()
+    app.include_router(approvals_router)
+    app.state.redis = redis
+    app.state.run_metadata = _OwnsEveryRun()
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app),
+        base_url="http://test",
+        headers=SERVICE_AUTH_HEADERS,
+    ) as client:
+        stale = await client.post(
+            "/agent/approvals",
+            json={
+                "run_id": state["run_id"],
+                "approval_id": stale_id,
+                "decision": "approve",
+            },
+            headers={"X-Nyx-User-Id": "1"},
+        )
+    assert stale.status_code == 404
+
+    await redis.aclose()

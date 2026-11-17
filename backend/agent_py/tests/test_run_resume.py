@@ -124,6 +124,7 @@ class _StubTools:
 
     async def call(self, name, arguments):
         type(self).call_count += 1
+        await asyncio.sleep(0.01)
         return {"items": [1, 2, 3]}
 
 
@@ -283,7 +284,7 @@ async def test_planner_does_not_rerun_on_resume(monkeypatch):
         _StubLlm.llm_gate = asyncio.Event()
 
         graph_task = asyncio.create_task(
-            _drain(graph1, state, config)
+            _drain(graph1, state, config, durability="sync")
         )
         # Wait until the executor's llm call is in flight.
         for _ in range(100):
@@ -344,7 +345,9 @@ async def test_planner_does_not_rerun_on_resume(monkeypatch):
         # plan/step_outputs and re-run the planner + completed steps (the
         # resume double-spend bug fixed 2026-10-14 in `run_agent_stream`;
         # this test drives the graph directly).
-        async for _ in graph2.astream(None, config=config, stream_mode="values"):
+        async for _ in graph2.astream(
+            None, config=config, stream_mode="values", durability="sync"
+        ):
             pass
 
         # call_count == 3 means: phase 1 used 2 (planner + executor llm
@@ -364,21 +367,130 @@ async def test_planner_does_not_rerun_on_resume(monkeypatch):
     await _drop_schemas()
 
 
-async def _drain(graph, state, config):
+async def test_legacy_two_node_checkpoint_resumes_without_rerunning_captured_steps(
+    monkeypatch,
+):
+    """A checkpoint written by the pre-split two-node graph has pending
+    `executor`, no `step_cursor` channel, and possibly partial
+    `step_outputs` captured by the old async writer. The per-step executor
+    must read the cursor as 0, skip the captured step, and run only the
+    remaining one."""
+    from langgraph.graph import END, START, StateGraph
+
+    from agent.graph import build_graph
+    from agent.state import AgentState
+    from agent.types import ChatMessage, Plan, PlanStep
+
+    _patch_common(monkeypatch)
+    await _drop_schemas()
+    settings = _settings()
+    _patch_settings(monkeypatch, settings)
+
+    plan = Plan(
+        steps=[
+            PlanStep(id="step_1", kind="tool", tool="list_feeds", args={}),
+            PlanStep(id="step_2", kind="llm", prompt="summarise"),
+        ]
+    )
+
+    async def _legacy_planner(state):
+        state["plan"] = plan
+        state["step_outputs"] = {"step_1": {"items": ["cached"]}}
+        return state
+
+    async def _legacy_executor(state):
+        raise AssertionError("the interrupted legacy executor must never run")
+
+    from agent.main import create_app, lifespan
+
+    app1 = create_app()
+    async with lifespan(app1):
+        legacy = StateGraph(AgentState)
+        legacy.add_node("planner", _legacy_planner)
+        legacy.add_node("executor", _legacy_executor)
+        legacy.add_edge(START, "planner")
+        legacy.add_edge("planner", "executor")
+        legacy.add_edge("executor", END)
+        legacy_graph = legacy.compile(
+            checkpointer=app1.state.checkpointer, interrupt_before=["executor"]
+        )
+
+        run_id = f"legacy-{uuid.uuid4()}"
+        config = {"configurable": {"thread_id": run_id}}
+        await legacy_graph.ainvoke(
+            {
+                "user_id": 1,
+                "run_id": run_id,
+                "turn_id": "legacy-turn",
+                "messages": [ChatMessage(role="user", content="hi")],
+                "model": "stub-model",
+                "plan": None,
+                "step_outputs": {},
+                "events_so_far": [],
+                "cumulative_tokens": 0,
+                "cumulative_prompt_tokens": 0,
+                "cumulative_completion_tokens": 0,
+                "tool_retry_used": {},
+                "tool_terminal_failures": {},
+                "terminal_status": "ok",
+                "terminal_reason": None,
+            },
+            config=config,
+            durability="sync",
+        )
+
+        snapshot = await legacy_graph.aget_state(config)
+        assert "step_cursor" not in snapshot.values
+        assert snapshot.values["step_outputs"] == {"step_1": {"items": ["cached"]}}
+
+        _StubTools.call_count = 0
+        _StubLlm.call_count = 0
+
+    from agent.main import create_app as create_app2
+    from agent.main import lifespan as lifespan2
+
+    _patch_settings(monkeypatch, settings)
+    app2 = create_app2()
+    async with lifespan2(app2):
+        graph2 = build_graph(
+            settings=app2.state.settings,
+            budget=_StubBudget(),
+            rag=_StubRag(),
+            tools=_StubTools(),
+            checkpointer=app2.state.checkpointer,
+        )
+        async for _ in graph2.astream(
+            None, config=config, stream_mode="values", durability="sync"
+        ):
+            pass
+
+        assert _StubTools.call_count == 0
+        assert _StubLlm.call_count == 1
+        resumed = await graph2.aget_state(config)
+        assert resumed.values["step_cursor"] == 2
+        assert set(resumed.values["step_outputs"]) == {"step_1", "step_2"}
+
+    await _drop_schemas()
+
+
+async def _drain(graph, state, config, *, durability=None):
     """Helper: drain a graph into a list. Lets the test cancel the task."""
-    return [chunk async for chunk in graph.astream(state, config=config, stream_mode="values")]
+    kwargs = {"config": config, "stream_mode": "values"}
+    if durability is not None:
+        kwargs["durability"] = durability
+    return [chunk async for chunk in graph.astream(state, **kwargs)]
 
 
 async def test_executor_skips_completed_steps_on_resume(monkeypatch):
     """Spec contract: 'prior steps are not re-executed (token usage
     confirms no double-spend)'.
 
-    Pin the executor's behavior on resume: when the executor node is
-    re-invoked against a thread_id whose checkpoint already has
-    `step_outputs[step_1]`, the executor MUST NOT re-call the tool
-    for step_1. Verified by tracking _StubTools.call_count across
-    phases; phase 1's tool call increments it once, phase 2 must
-    leave it at zero.
+    Step 1 (tool) performs a real await before writing its output, then
+    the graph is cancelled during step 2's llm call. With sync durability
+    step 1's checkpoint was committed before step 2 started, so the
+    resumed graph must restore step 1's output and cursor and re-run only
+    step 2. Verified by the pre-resume snapshot (cursor=1, step_1 output
+    present) and _StubTools.call_count staying at zero in phase 2.
     """
     import asyncio
 
@@ -390,6 +502,7 @@ async def test_executor_skips_completed_steps_on_resume(monkeypatch):
     await _drop_schemas()
     settings = _settings()
     _patch_settings(monkeypatch, settings)
+    _StubTools.call_count = 0
 
     from agent.main import create_app, lifespan
 
@@ -414,7 +527,9 @@ async def test_executor_skips_completed_steps_on_resume(monkeypatch):
 
         # Park the executor's llm step on an Event; cancel mid-step.
         _StubLlm.llm_gate = asyncio.Event()
-        graph_task = asyncio.create_task(_drain(graph1, state, config))
+        graph_task = asyncio.create_task(
+            _drain(graph1, state, config, durability="sync")
+        )
         for _ in range(100):
             if _StubLlm.call_count == 2:
                 break
@@ -425,8 +540,14 @@ async def test_executor_skips_completed_steps_on_resume(monkeypatch):
             await graph_task
         _StubLlm.llm_gate = None
 
-        # step_1 (tool) is in step_outputs; step_2 (llm) was never run.
-        # Reset the tools counter for phase 2.
+        assert _StubTools.call_count == 1
+        snapshot = await graph1.aget_state(config)
+        assert snapshot.values["step_cursor"] == 1, (
+            "step 1's checkpoint must be committed before step 2 starts"
+        )
+        assert "step_1" in snapshot.values["step_outputs"]
+        assert snapshot.next == ("executor",)
+
         _StubTools.call_count = 0
 
     from agent.main import create_app as create_app2
@@ -450,19 +571,18 @@ async def test_executor_skips_completed_steps_on_resume(monkeypatch):
 
         # `None` input — resume must read state from the checkpoint, not
         # from a clobbering `new_state()` input (see test 1's note).
-        async for _ in graph2.astream(None, config=config, stream_mode="values"):
+        async for _ in graph2.astream(
+            None, config=config, stream_mode="values", durability="sync"
+        ):
             pass
 
-        # EXPECTED (per spec): step_1 is skipped because step_outputs
-        # already has it; the tools stub is NOT called again.
-        # ACTUAL (current bug): the executor's loop iterates plan.steps
-        # from the top; the tools stub is called again. This assertion
-        # fails until the executor grows a resume-aware loop.
         assert _StubTools.call_count == 0, (
             f"executor re-ran the tool step on resume; expected 0 calls "
-            f"(step_1 already in step_outputs), got {_StubTools.call_count}. "
-            f"The executor needs to skip steps with populated step_outputs."
+            f"(step_1 already in step_outputs), got {_StubTools.call_count}."
         )
+        resumed = await graph2.aget_state(config)
+        assert resumed.values["step_cursor"] == 2
+        assert set(resumed.values["step_outputs"]) == {"step_1", "step_2"}
 
     await _drop_schemas()
 
@@ -515,7 +635,9 @@ async def test_idempotency_key_survives_checkpoint_resume(monkeypatch):
             messages=[ChatMessage(role="user", content="hi")],
             model="stub-model",
         )
-        graph_task = asyncio.create_task(_drain(graph1, state, config))
+        graph_task = asyncio.create_task(
+            _drain(graph1, state, config, durability="sync")
+        )
         for _ in range(200):
             if _IdempotentStubTools.calls:
                 break
@@ -541,7 +663,9 @@ async def test_idempotency_key_survives_checkpoint_resume(monkeypatch):
             tools=_IdempotentStubTools(),
             checkpointer=app2.state.checkpointer,
         )
-        async for _ in graph2.astream(None, config=config, stream_mode="values"):
+        async for _ in graph2.astream(
+            None, config=config, stream_mode="values", durability="sync"
+        ):
             pass
         assert len(_IdempotentStubTools.calls) >= 2
         assert _IdempotentStubTools.calls[-1]["idempotency_key"] == phase1_key

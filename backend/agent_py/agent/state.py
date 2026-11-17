@@ -29,6 +29,7 @@ class AgentState(TypedDict, total=False):
     # --- Plan + per-step output (filled by planner + executor) ---
     plan: Plan | None
     step_outputs: dict[str, Any]
+    step_cursor: int
     cumulative_tokens: int
     cumulative_prompt_tokens: int
     cumulative_completion_tokens: int
@@ -83,6 +84,7 @@ def new_state(
         tavily_override=tavily_override,
         plan=None,
         step_outputs={},
+        step_cursor=0,
         cumulative_tokens=0,
         cumulative_prompt_tokens=0,
         cumulative_completion_tokens=0,
@@ -96,6 +98,10 @@ def new_state(
 
 def _int_or_zero(value: Any) -> int:
     return value if isinstance(value, int) and not isinstance(value, bool) else 0
+
+
+def step_cursor(state: AgentState) -> int:
+    return _int_or_zero(state.get("step_cursor"))
 
 
 def _add_usage(

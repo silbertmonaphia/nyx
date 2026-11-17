@@ -249,10 +249,9 @@ async def test_node_transitions_land_checkpoint_rows(app_with_checkpointer):
         pass
 
     rows = await _count_checkpoints(run_id)
-    assert rows >= 1, (
-        f"expected at least one checkpoint row for thread_id={run_id}, got {rows}; "
-        "the saver didn't write — either the checkpointer isn't actually wired "
-        "or setup() didn't land the tables"
+    assert rows >= 3, (
+        f"expected planner + one checkpoint per plan step for thread_id={run_id}, "
+        f"got {rows}; the executor must checkpoint at every step boundary"
     )
 
 
@@ -295,6 +294,9 @@ async def test_get_state_round_trips_after_run(app_with_checkpointer):
     assert snapshot is not None, "get_state must return a snapshot after a run"
     values = snapshot.values
     assert values["run_id"] == run_id, "snapshot must echo the run_id we ran with"
+    assert values["step_cursor"] == 2, (
+        "the completed 2-step plan must checkpoint the cursor at the plan length"
+    )
     events = values.get("events_so_far", [])
     assert events, "snapshot's events_so_far must not be empty after a run"
     # The planner emits a `plan` frame first; the executor emits at least

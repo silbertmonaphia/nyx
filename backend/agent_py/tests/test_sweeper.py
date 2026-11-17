@@ -568,6 +568,8 @@ async def test_resume_inside_window_still_resumes(app_ctx, monkeypatch):
     assert frames[0]["run_id"] == thread_id, "the echoed run_id must be reused"
     assert "resumed" in kinds, f"expected note{{kind:'resumed'}}; kinds={kinds}"
     assert "fresh_run" not in kinds
+    resumed_note = next(f for f in frames if f.get("kind") == "resumed")
+    assert resumed_note["last_step_id"] is None
 
     # Regression pin for the graph.py pure-resume fix (test-review
     # 2026-10-14): reverting `stream_input = None` re-runs the planner, and

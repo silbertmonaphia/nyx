@@ -413,6 +413,7 @@ async def test_done_frame_carries_real_usage(tracer, monkeypatch):
 
     async def fake_executor_node(state, *args, **kwargs):
         state["events_so_far"].append(Event(kind="delta", payload={"delta": "answer"}))
+        state["step_cursor"] = len(state["plan"].steps)
         return state
 
     monkeypatch.setattr("agent.graph.plan_node", fake_plan_node)

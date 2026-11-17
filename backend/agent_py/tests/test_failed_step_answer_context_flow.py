@@ -103,15 +103,16 @@ async def test_expired_write_answer_then_retry_instruction_replans_the_write():
     )
     state["plan"] = Plan(steps=steps)
 
-    await executor_node(
-        state,
-        settings=_settings(),
-        tracer=trace.get_tracer("test-flow"),
-        budget=_StubBudget(),
-        rag=None,
-        tools=_GatedTools(),
-        approvals=ApprovalGate(store=_ExpiredApprovals(), ttl_seconds=1),
-    )
+    while state.get("step_cursor", 0) < len(steps):
+        await executor_node(
+            state,
+            settings=_settings(),
+            tracer=trace.get_tracer("test-flow"),
+            budget=_StubBudget(),
+            rag=None,
+            tools=_GatedTools(),
+            approvals=ApprovalGate(store=_ExpiredApprovals(), ttl_seconds=1),
+        )
 
     events = state["events_so_far"]
     assert any(

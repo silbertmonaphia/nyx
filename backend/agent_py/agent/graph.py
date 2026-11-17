@@ -30,7 +30,7 @@ from .llm_effective import OverrideSecrets
 from .observability import agent_runs_total
 from .planner import plan_node
 from .rag_client import RagClient
-from .state import AgentState
+from .state import AgentState, step_cursor
 from .tool_dispatch import ToolDispatcher
 from .types import DoneEvent, DoneUsage, ErrorEvent, Event, TerminatorEvent
 
@@ -113,6 +113,17 @@ def _planner_step_factory(
     return _planner_step
 
 
+def _route_after_executor(state: AgentState) -> str:
+    if state.get("terminal_status", "ok") != "ok":
+        return END
+    plan = state.get("plan")
+    if plan is None:
+        return END
+    if step_cursor(state) < len(plan.steps):
+        return "executor"
+    return END
+
+
 def build_graph(
     settings: Settings,
     budget: BudgetGuard,
@@ -167,7 +178,9 @@ def build_graph(
     )
     builder.add_edge(START, "planner")
     builder.add_edge("planner", "executor")
-    builder.add_edge("executor", END)
+    builder.add_conditional_edges(
+        "executor", _route_after_executor, {"executor": "executor", END: END}
+    )
     if checkpointer is not None:
         return builder.compile(checkpointer=checkpointer)
     return builder.compile()
@@ -260,11 +273,13 @@ async def run_agent_stream(
     if graph is None:
         graph = build_graph(settings, budget, rag, tools, tracer=tracer, secrets=secrets)
 
-    last_len = len(state.get("events_so_far", []))
+    delivered: set[int] = {id(ev) for ev in state.get("events_so_far", [])}
 
     astream_kwargs: dict = {"stream_mode": "values"}
     if graph_config is not None:
         astream_kwargs["config"] = graph_config
+    if getattr(graph, "checkpointer", None) is not None:
+        astream_kwargs["durability"] = "sync"
 
     # Resume-safety (found 2026-10-14 while landing agent-stale-run-sweeper):
     # langgraph treats a non-None `astream` input as a state UPDATE — passing
@@ -292,9 +307,11 @@ async def run_agent_stream(
             # nothing is delivered twice).
             await sink.flush(current_events)
         else:
-            for ev in current_events[last_len:]:
+            for ev in current_events:
+                if id(ev) in delivered:
+                    continue
+                delivered.add(id(ev))
                 yield ev
-        last_len = len(current_events)
 
     # After the graph finishes, render terminal frames if not already present.
     final = chunk if "chunk" in locals() else state  # last seen
