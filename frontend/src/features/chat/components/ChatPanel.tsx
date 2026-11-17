@@ -194,6 +194,8 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
   );
   const knowledgeEnabled = useChat((s) => s.knowledgeEnabled);
   const setKnowledgeEnabled = useChat((s) => s.setKnowledgeEnabled);
+  const feedsEnabled = useChat((s) => s.feedsEnabled);
+  const setFeedsEnabled = useChat((s) => s.setFeedsEnabled);
   const isLoadingReplay = useChat((s) => s.isLoadingReplay);
   const replayHasMore = useChat((s) => s.replayHasMore);
   const isFetchingOlder = useChat((s) => s.isFetchingOlder);
@@ -566,15 +568,26 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
                 </p>
               )}
               {!agentMode && (
-                <label className="flex items-center gap-2 text-xs text-muted-foreground">
-                  <input
-                    type="checkbox"
-                    checked={knowledgeEnabled}
-                    onChange={(e) => setKnowledgeEnabled(e.target.checked)}
-                    data-testid="chat-kb-toggle"
-                  />
-                  {t("chat.knowledgeToggle")}
-                </label>
+                <div className="flex flex-wrap items-center gap-4 text-xs text-muted-foreground">
+                  <label className="flex items-center gap-2">
+                    <input
+                      type="checkbox"
+                      checked={knowledgeEnabled}
+                      onChange={(e) => setKnowledgeEnabled(e.target.checked)}
+                      data-testid="chat-kb-toggle"
+                    />
+                    {t("chat.knowledgeToggle")}
+                  </label>
+                  <label className="flex items-center gap-2">
+                    <input
+                      type="checkbox"
+                      checked={feedsEnabled}
+                      onChange={(e) => setFeedsEnabled(e.target.checked)}
+                      data-testid="chat-feeds-toggle"
+                    />
+                    {t("chat.feedsToggle")}
+                  </label>
+                </div>
               )}
               <Textarea
                 value={draft}

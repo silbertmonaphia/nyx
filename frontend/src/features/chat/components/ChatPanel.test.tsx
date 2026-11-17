@@ -1247,3 +1247,19 @@ describe('ChatPanel knowledge toggle', () => {
     expect(screen.queryByTestId('chat-kb-toggle')).toBeNull();
   });
 });
+
+describe('ChatPanel feeds toggle', () => {
+  beforeEach(() => {
+    resetStore();
+  });
+
+  it('renders the feeds toggle when the chat runs without the agent', () => {
+    render(<ChatPanel open={true} onOpenChange={vi.fn()} />);
+    expect(screen.getByTestId('chat-feeds-toggle')).toBeInTheDocument();
+  });
+
+  it('hides the feeds toggle when the agent plans retrieval itself', () => {
+    render(<ChatPanel open={true} onOpenChange={vi.fn()} agentMode={true} />);
+    expect(screen.queryByTestId('chat-feeds-toggle')).toBeNull();
+  });
+});

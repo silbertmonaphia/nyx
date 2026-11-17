@@ -124,6 +124,7 @@ export const en: Translation = {
       emptyState: 'No messages yet — type below to start.',
       placeholder: 'Type a message…',
       knowledgeToggle: 'Search my knowledge base',
+      feedsToggle: 'Search my feeds',
       send: 'Send',
       busyHint:
         'The agent is still working on this conversation — you can reply when it finishes.',

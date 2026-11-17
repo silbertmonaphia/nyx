@@ -112,6 +112,7 @@ export const zh = {
       emptyState: '还没有消息 — 在下方输入即可开始。',
       placeholder: '输入消息…',
       knowledgeToggle: '搜索我的知识库',
+      feedsToggle: '搜索我的知识碎片',
       send: '发送',
       busyHint: '助手仍在处理这轮对话 — 完成后即可回复。',
       showHistory: '显示聊天记录',

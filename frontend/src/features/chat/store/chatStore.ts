@@ -61,6 +61,8 @@ interface ChatState {
   setLlmGateOpen: (open: boolean) => void;
   knowledgeEnabled: boolean;
   setKnowledgeEnabled: (enabled: boolean) => void;
+  feedsEnabled: boolean;
+  setFeedsEnabled: (enabled: boolean) => void;
   /**
    * Send a user message and stream the assistant response. Appends
    * the user message immediately, opens the stream, and patches a
@@ -548,6 +550,7 @@ interface LadderContext {
   isLive: () => boolean;
   onRunId: (id: string) => void;
   kb: boolean;
+  rag: boolean;
 }
 
 function isAbortError(err: unknown): boolean {
@@ -917,6 +920,7 @@ async function runRecoveryLadder(ctx: LadderContext): Promise<LadderOutcome> {
             runId: ctx.runId,
             onRunId: ctx.onRunId,
             kb: ctx.kb,
+            rag: ctx.rag,
           }),
           true,
         );
@@ -950,6 +954,7 @@ async function runRecoveryLadder(ctx: LadderContext): Promise<LadderOutcome> {
  *    worth the migration story yet.
  */
 const KNOWLEDGE_STORAGE_KEY = 'nyx.chat.knowledge';
+const FEEDS_STORAGE_KEY = 'nyx.chat.feeds';
 
 const knowledgeStorageKey = (userId: number): string =>
   `${KNOWLEDGE_STORAGE_KEY}.${userId}`;
@@ -958,6 +963,18 @@ const readKnowledgeEnabled = (userId: number | null): boolean => {
   if (userId === null) return false;
   try {
     return window.localStorage.getItem(knowledgeStorageKey(userId)) === 'true';
+  } catch {
+    return false;
+  }
+};
+
+const feedsStorageKey = (userId: number): string =>
+  `${FEEDS_STORAGE_KEY}.${userId}`;
+
+const readFeedsEnabled = (userId: number | null): boolean => {
+  if (userId === null) return false;
+  try {
+    return window.localStorage.getItem(feedsStorageKey(userId)) === 'true';
   } catch {
     return false;
   }
@@ -983,6 +1000,16 @@ export const useChatStore = create<ChatState>((set, get) => ({
       } catch {}
     }
     set({ knowledgeEnabled: enabled });
+  },
+  feedsEnabled: false,
+  setFeedsEnabled: (enabled) => {
+    const owner = get().ownerUserId;
+    if (owner !== null && owner !== undefined) {
+      try {
+        window.localStorage.setItem(feedsStorageKey(owner), String(enabled));
+      } catch {}
+    }
+    set({ feedsEnabled: enabled });
   },
   currentSessionId: readPersistedSessionId(),
   ownerUserId: undefined,
@@ -1120,6 +1147,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
           runId: sentSessionId,
           onRunId: handleRunId,
           kb: get().knowledgeEnabled,
+          rag: get().feedsEnabled,
         },
       );
       while (true) {
@@ -1178,6 +1206,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
             isLive,
             onRunId: handleRunId,
             kb: get().knowledgeEnabled,
+            rag: get().feedsEnabled,
           });
           if (outcome === "finished") {
             turnEndedClean = true;
@@ -1693,11 +1722,19 @@ export const useChatStore = create<ChatState>((set, get) => ({
   resetForUser: (userId) => {
     const owner = get().ownerUserId;
     if (owner === undefined) {
-      set({ ownerUserId: userId, knowledgeEnabled: readKnowledgeEnabled(userId) });
+      set({
+        ownerUserId: userId,
+        knowledgeEnabled: readKnowledgeEnabled(userId),
+        feedsEnabled: readFeedsEnabled(userId),
+      });
       return;
     }
     if (owner === userId) return;
-    set({ ownerUserId: userId, knowledgeEnabled: readKnowledgeEnabled(userId) });
+    set({
+      ownerUserId: userId,
+      knowledgeEnabled: readKnowledgeEnabled(userId),
+      feedsEnabled: readFeedsEnabled(userId),
+    });
     abortLiveStream();
     cancelRecoveryLadder();
     activeRunId = null;

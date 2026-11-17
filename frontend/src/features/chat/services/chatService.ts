@@ -630,6 +630,7 @@ export const chatService = {
        */
       onRunId?: (id: string) => void;
       kb?: boolean;
+      rag?: boolean;
     } = {},
   ): AsyncGenerator<ChatEvent> {
     const body: ChatRequest = { messages };
@@ -638,6 +639,9 @@ export const chatService = {
     }
     if (opts.kb) {
       body.kb = true;
+    }
+    if (opts.rag) {
+      body.rag = true;
     }
     // `model` is intentionally omitted — the backend ignores it for
     // v1 and the brief explicitly forbids a model picker in the UI.

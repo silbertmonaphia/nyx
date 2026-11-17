@@ -423,21 +423,28 @@ describe('chatService.streamMessage', () => {
     expect(omitted).not.toHaveProperty('kb');
   });
 
-  it('omits the rag field from the request body', async () => {
-    const sse =
-      'event: done\ndata: {"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}}\n\n' +
-      'data: [DONE]\n\n';
+  it('sends the rag flag only when feed search is enabled', async () => {
+    const sse = 'data: [DONE]\n\n';
     fetchMock.mockResolvedValueOnce(sseResponse([sse]));
+    for await (const e of chatService.streamMessage(
+      [{ role: 'user', content: 'hi' }],
+      new AbortController().signal,
+      { rag: true },
+    )) {
+      void e;
+    }
+    const body = JSON.parse(fetchMock.mock.calls[0][1].body as string);
+    expect(body.rag).toBe(true);
 
+    fetchMock.mockResolvedValueOnce(sseResponse([sse]));
     for await (const e of chatService.streamMessage(
       [{ role: 'user', content: 'hi' }],
       new AbortController().signal,
     )) {
       void e;
     }
-
-    const body = JSON.parse(fetchMock.mock.calls[0][1].body as string);
-    expect(body).toEqual({ messages: [{ role: 'user', content: 'hi' }] });
+    const omitted = JSON.parse(fetchMock.mock.calls[1][1].body as string);
+    expect(omitted).not.toHaveProperty('rag');
   });
 
   // ---- Agent-loop SSE kinds (openspec/changes/agent-loop) ----

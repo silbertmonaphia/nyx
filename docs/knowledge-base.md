@@ -134,7 +134,8 @@ bridge delta. No KB table is written unless the operator explicitly runs
 indexer shares the feed embedder); `KB_ROOT` is needed for the shared directory
 source.
 
-The chat panel's knowledge toggle applies to the non-agent chat path, the same
-way the `rag` flag does. Under `AGENT_ENABLED=true` the SPA hides the toggle
-(the authenticated `GET /api/features` probe reports `agent_enabled`) and the
-Python planner decides when to emit a `kb` step, using the knowledge outline.
+The chat panel's knowledge toggle applies to the non-agent chat path, and its
+sibling feeds toggle sends `rag: true` on that same path. Under
+`AGENT_ENABLED=true` the SPA hides both toggles (the authenticated
+`GET /api/features` probe reports `agent_enabled`) and the Python planner
+decides when to emit a `kb` or `rag` step; `kb` steps use the knowledge outline.

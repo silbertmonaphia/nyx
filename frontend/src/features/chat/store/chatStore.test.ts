@@ -632,7 +632,7 @@ describe('useChatStore', () => {
   });
 
   describe('send options and session adoption', () => {
-    it('does not send a rag field on the stream request', async () => {
+    it('does not enable rag on the stream request by default', async () => {
       mockedService.streamMessage.mockImplementationOnce(
         (messages: unknown, signal: AbortSignal) =>
           makeStream(
@@ -658,7 +658,7 @@ describe('useChatStore', () => {
         expect(mockedService.streamMessage).toHaveBeenCalled();
       });
       const call = mockedService.streamMessage.mock.calls[0];
-      expect(call[2]).not.toHaveProperty('rag');
+      expect(call[2].rag).toBe(false);
       // No active session in this suite's reset state → no run_id echo.
       expect(call[2].runId).toBeNull();
 
@@ -3288,6 +3288,7 @@ describe('useChatStore', () => {
     });
 
     it('a missing transcript row falls through to the resume re-POST which replaces the partial content', async () => {
+      useChatStore.setState({ knowledgeEnabled: true, feedsEnabled: true });
       mockedService.streamMessage
         .mockImplementationOnce(
           streamOf(
@@ -3316,8 +3317,12 @@ describe('useChatStore', () => {
       expect(mockedService.streamMessage).toHaveBeenCalledTimes(2);
       const resumeOpts = mockedService.streamMessage.mock.calls[1][2] as {
         runId?: string | null;
+        kb?: boolean;
+        rag?: boolean;
       };
       expect(resumeOpts.runId).toBe('run-1');
+      expect(resumeOpts.kb).toBe(true);
+      expect(resumeOpts.rag).toBe(true);
       const state = useChatStore.getState();
       expect(state.messages).toHaveLength(2);
       expect(state.messages[1]?.content).toBe('fresh');
