@@ -1,0 +1,6 @@
+# Allowlist consumed by scripts/ci/npm_audit_with_allowlist.py: one [[advisories]] table per deferred advisory, carrying id, date (YYYY-MM-DD) and rationale; entries older than 90 days expire and fail the gate.
+
+[[advisories]]
+id = "GHSA-fc5q-39xc-vjpf"
+date = "2026-11-18"
+rationale = "picomatch has no patched release yet: registry latest 4.0.7 is the advisory's vulnerable ceiling, so npm's only suggested fixes are downgrades of Vite 8, lint-staged 17 and dependency-cruiser 18. The affected globs are build/dev-tooling constants, not user input. Remove this entry when picomatch > 4.0.7 ships."

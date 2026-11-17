@@ -650,12 +650,12 @@ jobs:
       - name: Install dependencies
         run: cd frontend && npm ci --workspaces=false
       - name: Audit
-        # --audit-level=high fails on high/critical only; moderate vulns
-        # are reported in the log but don't gate the merge. Pin to a
-        # specific audit-signatures version is not possible — npm pulls
-        # the registry data fresh; CI just records what npm saw at run
-        # time.
-        run: cd frontend && npm audit --workspaces=false --audit-level=high
+        # High/critical only, filtered through the dated allowlist
+        # (frontend/.npm-audit-allowlist.toml). npm pulls registry data
+        # fresh, so an unfixed advisory can surface between runs; the
+        # wrapper defers one GHSA at a time with a rationale + 90-day
+        # expiry and fails on any other high/critical advisory.
+        run: python3 scripts/ci/npm_audit_with_allowlist.py
 
   # Python dependency audit for the agent service. Mirrors the
   # govulncheck shape: a wrapper script applies a dated, rationale-
