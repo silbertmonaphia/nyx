@@ -93,8 +93,7 @@ func runPythonWire(t *testing.T, script string, input []byte) []byte {
 func TestWireContractOutlineGoBytesParseInPython(t *testing.T) {
 	outline := kb.Outline{Sources: []kb.OutlineSource{{
 		ID:          7,
-		Name:        "shared",
-		Scope:       "shared",
+		Name:        "posts",
 		Documents:   12,
 		Chunks:      43,
 		Directories: []string{"B-Cook", "B-Sport"},
@@ -107,8 +106,8 @@ func TestWireContractOutlineGoBytesParseInPython(t *testing.T) {
 	require.NoError(t, json.Unmarshal(output, &sources))
 	require.Len(t, sources, 1)
 	assert.Equal(t, float64(7), sources[0]["id"])
-	assert.Equal(t, "shared", sources[0]["name"])
-	assert.Equal(t, "shared", sources[0]["scope"])
+	assert.Equal(t, "posts", sources[0]["name"])
+	assert.NotContains(t, sources[0], "scope")
 	assert.Equal(t, float64(12), sources[0]["document_count"])
 	assert.Equal(t, float64(43), sources[0]["chunk_count"])
 	assert.Equal(t, []any{"B-Cook", "B-Sport"}, sources[0]["directories"])

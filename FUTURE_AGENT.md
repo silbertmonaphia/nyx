@@ -237,5 +237,5 @@ Patterns the next agent change should follow, learned the hard way in the `agent
 ## Knowledge retrieval step
 
 - [x] **`kb` step kind** — vector retrieval over the caller's knowledge corpus, carrying a query and optional `source`/`path`; the executor calls the Go bridge with `corpus=kb`, records an empty result on unavailability, and never surfaces an internal error to the model.
-- [x] **Planner outline** — `GET /internal/rag/outline` supplies source names, scopes, counts, and top-level directories (no document content) so the planner can narrow a knowledge search instead of guessing.
+- [x] **Planner outline** — `GET /internal/rag/outline` supplies source names, counts, and top-level directories (no document content, no scope) so the planner can narrow a knowledge search instead of guessing.
 - [x] **Unchanged SSE surface** — a `kb` step emits the existing `step_start`/`step_end` frames; no new frame kinds.

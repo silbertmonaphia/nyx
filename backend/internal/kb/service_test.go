@@ -13,7 +13,6 @@ import (
 func testConfig() Config {
 	return Config{
 		Enabled:          true,
-		SharedSourceName: "shared",
 		Chunk:            ChunkOptions{TargetTokens: 100, MaxTokens: 200, MinTokens: 5, OverlapTokens: 0},
 		TopK:             5,
 		MaxContextChars:  4000,
@@ -23,73 +22,52 @@ func testConfig() Config {
 
 func newTestService(store *fakeStore, embedder Embedder, cfg Config) *Service {
 	indexer := newTestIndexer(store, embedder)
-	return NewService(store, indexer, cfg, embedder, noop.NewTracerProvider().Tracer("test"))
+	service := NewService(store, indexer, cfg, noop.NewTracerProvider().Tracer("test"))
+	service.SetEmbedderResolver(func(context.Context, int64) (Embedder, error) {
+		return embedder, nil
+	})
+	return service
 }
 
-func TestServiceProvisionSharedIsIdempotent(t *testing.T) {
-	root := t.TempDir()
+func TestServiceListSourcesReportsCounts(t *testing.T) {
 	store := newFakeStore()
-	cfg := testConfig()
-	cfg.Root = root
-	service := newTestService(store, &countingEmbedder{}, cfg)
-
-	first, err := service.ProvisionShared(context.Background())
-	require.NoError(t, err)
-	second, err := service.ProvisionShared(context.Background())
-	require.NoError(t, err)
-	assert.Equal(t, first.ID, second.ID)
-	assert.Len(t, store.sources, 1)
-	assert.Equal(t, ScopeShared, second.Scope)
-	assert.Equal(t, int64(0), second.OwnerID)
-	assert.Equal(t, KindDir, second.Kind)
-}
-
-func TestServiceProvisionInlineHasNoRootPath(t *testing.T) {
-	store := newFakeStore()
-	service := newTestService(store, &countingEmbedder{}, testConfig())
-
-	first, err := service.ProvisionInline(context.Background(), 9)
-	require.NoError(t, err)
-	second, err := service.ProvisionInline(context.Background(), 9)
-	require.NoError(t, err)
-	assert.Equal(t, first.ID, second.ID)
-	assert.Equal(t, KindInline, second.Kind)
-	assert.Empty(t, second.RootPath)
-}
-
-func TestServiceListSourcesReportsVisibleCounts(t *testing.T) {
-	store := newFakeStore()
-	shared, err := store.UpsertSharedSource(context.Background(), "shared", t.TempDir())
+	dir, err := store.UpsertDirSource(context.Background(), 1, "posts", t.TempDir())
 	require.NoError(t, err)
 	inline, err := store.EnsureInlineSource(context.Background(), 1)
 	require.NoError(t, err)
+	other, err := store.UpsertDirSource(context.Background(), 2, "private", t.TempDir())
+	require.NoError(t, err)
+	paused, err := store.UpsertDirSource(context.Background(), 1, "paused", t.TempDir())
+	require.NoError(t, err)
+	_, err = store.SetSourceEnabled(context.Background(), paused.ID, 1, false)
+	require.NoError(t, err)
 
 	doc, err := store.UpsertFileDocument(context.Background(), Document{
-		SourceID: inline.ID, Scope: ScopeUser, OwnerID: 1, Origin: OriginFile,
+		SourceID: inline.ID, OwnerID: 1, Origin: OriginFile,
 		RelPath: "a.md", Title: "a", DocType: DocTypeMarkdown, ContentHash: hashBytes([]byte("a")),
 	})
 	require.NoError(t, err)
 	_, err = store.InsertChunk(context.Background(), Chunk{
-		DocumentID: doc.ID, Scope: ScopeUser, OwnerID: 1, SourceID: inline.ID,
+		DocumentID: doc.ID, OwnerID: 1, SourceID: inline.ID,
 		Generation: 1, Ordinal: 0, HeadingPath: []string{"H"}, Content: "body", EmbedText: "e",
 		ContentHash: hashBytes([]byte("body")), EmbeddingModel: "model-x",
 	})
 	require.NoError(t, err)
-	sharedDoc, err := store.UpsertFileDocument(context.Background(), Document{
-		SourceID: shared.ID, Scope: ScopeShared, Origin: OriginFile,
+	dirDoc, err := store.UpsertFileDocument(context.Background(), Document{
+		SourceID: dir.ID, OwnerID: 1, Origin: OriginFile,
 		RelPath: "dir/public.md", Title: "p", DocType: DocTypeMarkdown, ContentHash: hashBytes([]byte("p")),
 	})
 	require.NoError(t, err)
 	_, err = store.InsertChunk(context.Background(), Chunk{
-		DocumentID: sharedDoc.ID, Scope: ScopeShared, SourceID: shared.ID,
-		Generation: 1, Content: "shared", EmbedText: "s", ContentHash: hashBytes([]byte("s")),
+		DocumentID: dirDoc.ID, OwnerID: 1, SourceID: dir.ID,
+		Generation: 1, Content: "body", EmbedText: "s", ContentHash: hashBytes([]byte("s")),
 	})
 	require.NoError(t, err)
 
 	service := newTestService(store, &countingEmbedder{}, testConfig())
 	infos, err := service.ListSources(context.Background(), 1)
 	require.NoError(t, err)
-	require.Len(t, infos, 2)
+	require.Len(t, infos, 3)
 	seen := map[string]SourceInfo{}
 	for _, info := range infos {
 		seen[info.Name] = info
@@ -98,23 +76,23 @@ func TestServiceListSourcesReportsVisibleCounts(t *testing.T) {
 	assert.Equal(t, int64(1), seen["inline"].Stats.Chunks)
 	assert.Empty(t, seen["inline"].TopDirs)
 	assert.Equal(t, []string{"model-x"}, seen["inline"].IndexedModels)
-	assert.Equal(t, int64(1), seen["shared"].Stats.Chunks)
-	assert.Equal(t, []string{"dir"}, seen["shared"].TopDirs)
+	assert.Equal(t, int64(1), seen["posts"].Stats.Chunks)
+	assert.Equal(t, []string{"dir"}, seen["posts"].TopDirs)
+	assert.False(t, seen["paused"].Enabled, "a disabled source must stay listed so it can be re-enabled")
+	assert.NotContains(t, seen, other.Name)
 }
 
-func TestServiceDeleteSourceCascadesAndProtectsShared(t *testing.T) {
+func TestServiceDeleteSourceCascades(t *testing.T) {
 	store := newFakeStore()
 	inline, err := store.EnsureInlineSource(context.Background(), 1)
 	require.NoError(t, err)
-	shared, err := store.UpsertSharedSource(context.Background(), "shared", t.TempDir())
-	require.NoError(t, err)
 	doc, err := store.UpsertFileDocument(context.Background(), Document{
-		SourceID: inline.ID, Scope: ScopeUser, OwnerID: 1, Origin: OriginFile,
+		SourceID: inline.ID, OwnerID: 1, Origin: OriginFile,
 		RelPath: "a.md", Title: "a", DocType: DocTypeMarkdown, ContentHash: hashBytes([]byte("a")),
 	})
 	require.NoError(t, err)
 	_, err = store.InsertChunk(context.Background(), Chunk{
-		DocumentID: doc.ID, Scope: ScopeUser, OwnerID: 1, SourceID: inline.ID,
+		DocumentID: doc.ID, OwnerID: 1, SourceID: inline.ID,
 		Generation: 1, Content: "body", EmbedText: "e", ContentHash: hashBytes([]byte("body")),
 	})
 	require.NoError(t, err)
@@ -123,9 +101,7 @@ func TestServiceDeleteSourceCascadesAndProtectsShared(t *testing.T) {
 	require.NoError(t, service.DeleteSource(context.Background(), 1, inline.ID))
 	assert.Empty(t, store.documents)
 	assert.Empty(t, store.chunks)
-
-	assert.ErrorIs(t, service.DeleteSource(context.Background(), 1, shared.ID), ErrSharedSourceLocked)
-	assert.NotEmpty(t, store.sources)
+	assert.Empty(t, store.sources)
 }
 
 func TestServiceDeleteSourceRefusesAnotherOwner(t *testing.T) {
@@ -141,11 +117,15 @@ func TestServiceDeleteSourceRefusesAnotherOwner(t *testing.T) {
 
 func TestServiceIndexVisibleSelectsCallerSources(t *testing.T) {
 	store := newFakeStore()
-	shared, err := store.UpsertSharedSource(context.Background(), "shared", t.TempDir())
+	dir, err := store.UpsertDirSource(context.Background(), 1, "posts", t.TempDir())
 	require.NoError(t, err)
 	mine, err := store.EnsureInlineSource(context.Background(), 1)
 	require.NoError(t, err)
 	other, err := store.EnsureInlineSource(context.Background(), 2)
+	require.NoError(t, err)
+	disabled, err := store.UpsertDirSource(context.Background(), 1, "paused", t.TempDir())
+	require.NoError(t, err)
+	_, err = store.SetSourceEnabled(context.Background(), disabled.ID, 1, false)
 	require.NoError(t, err)
 
 	service := newTestService(store, &countingEmbedder{}, testConfig())
@@ -155,9 +135,10 @@ func TestServiceIndexVisibleSelectsCallerSources(t *testing.T) {
 	for _, entry := range report.Sources {
 		ids[entry.SourceID] = true
 	}
-	assert.True(t, ids[shared.ID])
+	assert.True(t, ids[dir.ID])
 	assert.True(t, ids[mine.ID])
 	assert.False(t, ids[other.ID])
+	assert.False(t, ids[disabled.ID])
 	assert.Len(t, store.documents, 0)
 }
 
@@ -167,13 +148,13 @@ func pendingInlineDoc(t *testing.T, store *fakeStore, ownerID int64, relPath str
 	require.NoError(t, err)
 	body := "# Doc\n\n" + relPath + " body\n"
 	doc, err := store.UpsertInlineDocument(context.Background(), Document{
-		SourceID: src.ID, Scope: ScopeUser, OwnerID: ownerID, Origin: OriginInline,
+		SourceID: src.ID, OwnerID: ownerID, Origin: OriginInline,
 		RelPath: relPath, Title: relPath, DocType: DocTypeMarkdown,
 		ContentHash: hashBytes([]byte(body)), ByteSize: int64(len(body)), Content: body,
 	})
 	require.NoError(t, err)
 	_, err = store.InsertChunk(context.Background(), Chunk{
-		DocumentID: doc.ID, Scope: ScopeUser, OwnerID: ownerID, SourceID: src.ID,
+		DocumentID: doc.ID, OwnerID: ownerID, SourceID: src.ID,
 		Generation: 1, Ordinal: 0, HeadingPath: []string{"Doc"}, Content: body,
 		EmbedText: relPath + "\n\n" + body, ContentHash: hashBytes([]byte(body)),
 		EmbeddingModel: "stub-model", TokenCount: 10,
@@ -303,13 +284,13 @@ func TestServiceInlineEditRejectsFileBackedDocument(t *testing.T) {
 	src, err := store.EnsureInlineSource(context.Background(), 1)
 	require.NoError(t, err)
 	doc, err := store.UpsertFileDocument(context.Background(), Document{
-		SourceID: src.ID, Scope: ScopeUser, OwnerID: 1, Origin: OriginFile,
+		SourceID: src.ID, OwnerID: 1, Origin: OriginFile,
 		RelPath: "disk.md", Title: "disk", DocType: DocTypeMarkdown,
 		ContentHash: hashBytes([]byte("# Disk\n\nfile body\n")),
 	})
 	require.NoError(t, err)
 	_, err = store.InsertChunk(context.Background(), Chunk{
-		DocumentID: doc.ID, Scope: ScopeUser, OwnerID: 1, SourceID: src.ID,
+		DocumentID: doc.ID, OwnerID: 1, SourceID: src.ID,
 		Generation: 1, Content: "file body", EmbedText: "e", ContentHash: hashBytes([]byte("file body")),
 	})
 	require.NoError(t, err)
@@ -342,39 +323,47 @@ func TestServiceInlineDocumentIsolatedPerOwner(t *testing.T) {
 
 func TestServiceOutlineCountsAndNoPaths(t *testing.T) {
 	store := newFakeStore()
-	sharedRoot := t.TempDir()
-	shared, err := store.UpsertSharedSource(context.Background(), "shared", sharedRoot)
+	dirRoot := t.TempDir()
+	dir, err := store.UpsertDirSource(context.Background(), 1, "posts", dirRoot)
 	require.NoError(t, err)
 	for _, path := range []string{"B-Cook/a.md", "B-Sport/b.md", "top.md"} {
 		doc, upsertErr := store.UpsertFileDocument(context.Background(), Document{
-			SourceID: shared.ID, Scope: ScopeShared, Origin: OriginFile,
+			SourceID: dir.ID, OwnerID: 1, Origin: OriginFile,
 			RelPath: path, Title: path, DocType: DocTypeMarkdown,
 			ContentHash: hashBytes([]byte(path)),
 		})
 		require.NoError(t, upsertErr)
 		if path != "top.md" {
 			_, chunkErr := store.InsertChunk(context.Background(), Chunk{
-				DocumentID: doc.ID, Scope: ScopeShared, SourceID: shared.ID,
+				DocumentID: doc.ID, OwnerID: 1, SourceID: dir.ID,
 				Generation: 1, Content: "body", EmbedText: "e", ContentHash: hashBytes([]byte("body")),
 			})
 			require.NoError(t, chunkErr)
 		}
 	}
+	_, err = store.UpsertDirSource(context.Background(), 2, "other", t.TempDir())
+	require.NoError(t, err)
+	paused, err := store.UpsertDirSource(context.Background(), 1, "paused", t.TempDir())
+	require.NoError(t, err)
+	_, err = store.SetSourceEnabled(context.Background(), paused.ID, 1, false)
+	require.NoError(t, err)
 
 	service := newTestService(store, &countingEmbedder{}, testConfig())
 	outline, err := service.Outline(context.Background(), 1)
 	require.NoError(t, err)
 	require.Len(t, outline.Sources, 1)
+	assert.NotEqual(t, "paused", outline.Sources[0].Name)
 	assert.Equal(t, int64(3), outline.Sources[0].Documents)
 	assert.Equal(t, int64(2), outline.Sources[0].Chunks)
 	assert.Equal(t, []string{"B-Cook", "B-Sport"}, outline.Sources[0].Directories)
 
 	raw, err := json.Marshal(outline)
 	require.NoError(t, err)
-	assert.NotContains(t, string(raw), sharedRoot)
+	assert.NotContains(t, string(raw), dirRoot)
+	assert.NotContains(t, string(raw), "scope")
 }
 
-func TestServiceRetrievePassesScopeAndFilters(t *testing.T) {
+func TestServiceRetrievePassesFilters(t *testing.T) {
 	store := newFakeStore()
 	service := newTestService(store, &countingEmbedder{}, testConfig())
 	sourceID := int64(12)
@@ -434,10 +423,10 @@ func (c *countingIngester) FillDocument(_ context.Context, _ Document) (int, err
 
 func TestServiceIndexVisibleAndIndexSourceSharePipeline(t *testing.T) {
 	store := newFakeStore()
-	src, err := store.UpsertSharedSource(context.Background(), "shared", t.TempDir())
+	src, err := store.UpsertDirSource(context.Background(), 1, "posts", t.TempDir())
 	require.NoError(t, err)
 	ingester := &countingIngester{}
-	service := NewService(store, ingester, testConfig(), nil, noop.NewTracerProvider().Tracer("test"))
+	service := NewService(store, ingester, testConfig(), noop.NewTracerProvider().Tracer("test"))
 
 	_, err = service.IndexVisible(context.Background(), 1)
 	require.NoError(t, err)

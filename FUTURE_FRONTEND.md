@@ -95,8 +95,8 @@ The history and design decisions behind the current frontend. For the high-level
 
 ## 12. Knowledge base page
 
-- [x] **Feature slice** — `frontend/src/features/kb/` with axios services, TanStack Query hooks, and typed models for sources, documents, settings, and the index report.
-- [x] **Page and tab** — the top-bar view switch (Zustand `uiStore`, no router) swaps the main area between the feeds list and the knowledge base while the chat panel stays mounted. The page lists sources with counts/freshness, documents with status/origin, upload/typed-document controls, an index trigger, and per-source/per-document delete controls with confirmation.
+- [x] **Feature slice** — `frontend/src/features/kb/` with axios services, TanStack Query hooks, and typed models for sources, documents, and settings.
+- [x] **Page and tab** — the top-bar view switch (Zustand `uiStore`, no router) swaps the main area between the feeds list and the knowledge base while the chat panel stays mounted. The page lists the caller's sources with counts/freshness (kind badge, no scope badge), documents with status/origin, upload/typed-document controls, per-source enable/disable and delete (always available — every source is owner-private), and per-document delete with confirmation. Directory resync is an operator CLI action; the page has no index button.
 - [x] **Document view** — inline documents are editable in place and deletable; file-backed documents show their path and heading structure with edit/delete disabled and a pointer at the source file.
 - [x] **Identity explanation** — a source indexed under a different embedding model says so instead of rendering an empty source.
 - [x] **Settings and chat** — the settings modal is LLM-configuration only (an earlier private-directory field was removed together with the backend flow), and the chat panel has persisted knowledge and feeds toggles that send `kb: true` and `rag: true` respectively (both hidden when `GET /api/features` reports `agent_enabled`, since the planner owns retrieval there).

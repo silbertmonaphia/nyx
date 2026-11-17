@@ -20,18 +20,16 @@ type EmbedderResolver func(ctx context.Context, userID int64) (Embedder, error)
 type Indexer struct {
 	store         Store
 	normalizers   []Normalizer
-	embedder      Embedder
 	resolver      EmbedderResolver
 	chunkOpts     ChunkOptions
 	connectorOpts ConnectorOptions
 	batchSize     int32
 }
 
-func NewIndexer(store Store, embedder Embedder, chunkOpts ChunkOptions, connectorOpts ConnectorOptions) *Indexer {
+func NewIndexer(store Store, chunkOpts ChunkOptions, connectorOpts ConnectorOptions) *Indexer {
 	return &Indexer{
 		store:         store,
 		normalizers:   []Normalizer{NewMarkdownNormalizer()},
-		embedder:      embedder,
 		chunkOpts:     chunkOpts,
 		connectorOpts: connectorOpts,
 		batchSize:     16,
@@ -66,7 +64,7 @@ func (i *Indexer) ScanSource(ctx context.Context, src Source) (ScanResult, error
 	for _, doc := range existing {
 		byPath[doc.RelPath] = doc
 	}
-	embedder := i.embedderFor(ctx, src.Scope, src.OwnerID)
+	embedder := i.embedderFor(ctx, src.OwnerID)
 	keep := make([]string, 0, len(candidates)+len(skipped))
 	countLimited := false
 	for _, skip := range skipped {
@@ -109,7 +107,6 @@ func (i *Indexer) ScanSource(ctx context.Context, src Source) (ScanResult, error
 		}
 		stored, upsertErr := i.store.UpsertFileDocument(ctx, Document{
 			SourceID:    src.ID,
-			Scope:       src.Scope,
 			OwnerID:     src.OwnerID,
 			Origin:      OriginFile,
 			RelPath:     candidate.RelPath,
@@ -144,7 +141,7 @@ func (i *Indexer) IndexInline(ctx context.Context, doc Document) (int, error) {
 	if doc.Origin != OriginInline {
 		return 0, ErrFileBackedDocument
 	}
-	embedder := i.embedderFor(ctx, doc.Scope, doc.OwnerID)
+	embedder := i.embedderFor(ctx, doc.OwnerID)
 	return i.indexParsed(ctx, doc, []byte(doc.Content), embedder)
 }
 
@@ -157,7 +154,7 @@ func (i *Indexer) FillDocument(ctx context.Context, doc Document) (int, error) {
 	if count == 0 {
 		return 0, nil
 	}
-	embedder := i.embedderFor(ctx, doc.Scope, doc.OwnerID)
+	embedder := i.embedderFor(ctx, doc.OwnerID)
 	return i.fillGeneration(ctx, doc, generation, embedder)
 }
 
@@ -168,7 +165,7 @@ func (i *Indexer) indexParsed(ctx context.Context, doc Document, raw []byte, emb
 		return 0, nil
 	}
 	normalized, err := normalizer.Normalize(ctx, raw, Source{
-		ID: doc.SourceID, Scope: doc.Scope, OwnerID: doc.OwnerID,
+		ID: doc.SourceID, OwnerID: doc.OwnerID,
 	})
 	if err != nil {
 		_ = i.store.MarkDocumentStatus(ctx, doc.ID, StatusFailed, "document could not be parsed")
@@ -189,7 +186,6 @@ func (i *Indexer) indexParsed(ctx context.Context, doc Document, raw []byte, emb
 	for _, spec := range specs {
 		if _, err := i.store.InsertChunk(ctx, Chunk{
 			DocumentID:     doc.ID,
-			Scope:          doc.Scope,
 			OwnerID:        doc.OwnerID,
 			SourceID:       doc.SourceID,
 			Generation:     generation,
@@ -307,18 +303,16 @@ func (i *Indexer) allDocuments(ctx context.Context, sourceID int64) ([]Document,
 	}
 }
 
-func (i *Indexer) embedderFor(ctx context.Context, scope string, ownerID int64) Embedder {
-	if scope == ScopeUser && i.resolver != nil {
-		embedder, err := i.resolver(ctx, ownerID)
-		if err != nil {
-			log.Warn().Err(err).Int64("user_id", ownerID).Msg("kb per-user embedder unavailable")
-			return nil
-		}
-		if embedder != nil {
-			return embedder
-		}
+func (i *Indexer) embedderFor(ctx context.Context, ownerID int64) Embedder {
+	if i.resolver == nil {
+		return nil
 	}
-	return i.embedder
+	embedder, err := i.resolver(ctx, ownerID)
+	if err != nil {
+		log.Warn().Err(err).Int64("user_id", ownerID).Msg("kb per-user embedder unavailable")
+		return nil
+	}
+	return embedder
 }
 
 func (i *Indexer) normalizerFor(docType string) Normalizer {

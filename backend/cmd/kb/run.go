@@ -9,30 +9,41 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strconv"
+	"strings"
 
-	"go.opentelemetry.io/otel/trace"
+	"go.opentelemetry.io/otel/trace/noop"
 
 	"nyx/internal/kb"
+	"nyx/internal/llmsettings"
 	"nyx/internal/platform/config"
 	"nyx/internal/rag"
 )
 
 var (
+	errUserRequired    = errors.New("--user is required")
 	errRootRequired    = errors.New("--root is required")
-	errEmbeddingConfig = errors.New("embedding configuration missing: set LLM_ENABLED=true with LLM_BASE_URL and LLM_MODEL, or LLM_EMBEDDING_BASE_URL and LLM_EMBEDDING_MODEL")
+	errEmbeddingConfig = errors.New("embedding configuration missing for this user: save a BYOK embedding configuration first")
 )
 
+const maxSourceNameRunes = 200
+
 type indexOptions struct {
-	Root       string
-	SourceName string
+	UserID int64
+	Root   string
+	Name   string
 }
 
 type indexService interface {
 	IndexSource(ctx context.Context, src kb.Source) (kb.ScanResult, error)
 }
 
-type sharedSourceStore interface {
-	UpsertSharedSource(ctx context.Context, name, rootPath string) (kb.Source, error)
+type dirSourceStore interface {
+	UpsertDirSource(ctx context.Context, ownerID int64, name, rootPath string) (kb.Source, error)
+}
+
+type embeddingResolver interface {
+	Resolve(ctx context.Context, userID int) (*llmsettings.UserStack, error)
 }
 
 type statusStore interface {
@@ -42,7 +53,7 @@ type statusStore interface {
 
 type statusSource struct {
 	ID        int64  `json:"id"`
-	Scope     string `json:"scope"`
+	OwnerID   int64  `json:"owner_id"`
 	Name      string `json:"name"`
 	Kind      string `json:"kind"`
 	Enabled   bool   `json:"enabled"`
@@ -52,32 +63,83 @@ type statusSource struct {
 }
 
 type statusReport struct {
-	EmbeddingModel string         `json:"embedding_model"`
-	Sources        []statusSource `json:"sources"`
+	Sources []statusSource `json:"sources"`
 }
 
 func parseIndexOptions(args []string) (indexOptions, error) {
 	flags := flag.NewFlagSet("kb index", flag.ContinueOnError)
 	flags.SetOutput(io.Discard)
+	user := flags.String("user", "", "")
 	root := flags.String("root", "", "")
+	name := flags.String("name", "", "")
 	if err := flags.Parse(args); err != nil {
 		return indexOptions{}, err
+	}
+	if strings.TrimSpace(*user) == "" {
+		return indexOptions{}, errUserRequired
+	}
+	userID, err := strconv.ParseInt(strings.TrimSpace(*user), 10, 64)
+	if err != nil || userID <= 0 {
+		return indexOptions{}, fmt.Errorf("--user must be a positive integer user id")
 	}
 	if *root == "" {
 		return indexOptions{}, errRootRequired
 	}
-	return indexOptions{Root: *root}, nil
+	sourceName, err := validateSourceName(*name)
+	if err != nil {
+		return indexOptions{}, err
+	}
+	return indexOptions{UserID: userID, Root: *root, Name: sourceName}, nil
 }
 
-func deploymentEmbedder(cfg *config.Config, tracerProvider trace.TracerProvider) (*rag.Embedder, error) {
-	embedder, err := rag.NewDeploymentEmbedder(cfg, tracerProvider)
-	if err != nil {
-		return nil, fmt.Errorf("%w: %v", errEmbeddingConfig, err)
+func validateSourceName(name string) (string, error) {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return "", nil
 	}
+	if len([]rune(name)) > maxSourceNameRunes {
+		return "", fmt.Errorf("--name must be at most %d characters", maxSourceNameRunes)
+	}
+	if strings.EqualFold(name, "inline") {
+		return "", fmt.Errorf("--name %q is reserved for the inline source", name)
+	}
+	return name, nil
+}
+
+func resolveUserEmbedder(ctx context.Context, cfg *config.Config, resolver embeddingResolver, userID int64) (kb.Embedder, error) {
+	stack, err := resolver.Resolve(ctx, int(userID))
+	if errors.Is(err, llmsettings.ErrNotFound) {
+		return nil, fmt.Errorf("user %d: %w", userID, errEmbeddingConfig)
+	}
+	if err != nil {
+		return nil, err
+	}
+	if stack == nil || stack.Embed == nil || stack.EmbedModel == "" {
+		return nil, fmt.Errorf("user %d: %w", userID, errEmbeddingConfig)
+	}
+	embedder := rag.NewEmbedder(stack.Embed, stack.EmbedModel, noop.NewTracerProvider().Tracer("nyx.kb.cli"))
+	embedder.SetDimensions(cfg.EmbeddingDimensions)
 	return embedder, nil
 }
 
-func runIndexWith(ctx context.Context, opts indexOptions, out io.Writer, svc indexService, shared sharedSourceStore, embedder kb.Embedder) error {
+func runIndexCommand(ctx context.Context, cfg *config.Config, store kb.Store, resolver embeddingResolver, args []string) error {
+	opts, err := parseIndexOptions(args)
+	if err != nil {
+		return err
+	}
+	embedder, err := resolveUserEmbedder(ctx, cfg, resolver, opts.UserID)
+	if err != nil {
+		return err
+	}
+	indexer := kb.NewIndexer(store, kb.ChunkOptionsFrom(cfg), kb.ConnectorOptionsFrom(cfg))
+	indexer.SetEmbedderResolver(func(context.Context, int64) (kb.Embedder, error) {
+		return embedder, nil
+	})
+	service := kb.NewService(store, indexer, kb.ConfigFrom(cfg), noop.NewTracerProvider().Tracer("nyx.kb.cmd"))
+	return runIndexWith(ctx, opts, os.Stdout, service, store, embedder)
+}
+
+func runIndexWith(ctx context.Context, opts indexOptions, out io.Writer, svc indexService, store dirSourceStore, embedder kb.Embedder) error {
 	if embedder == nil {
 		return errEmbeddingConfig
 	}
@@ -85,13 +147,16 @@ func runIndexWith(ctx context.Context, opts indexOptions, out io.Writer, svc ind
 	if err != nil {
 		return err
 	}
-	var src kb.Source
-	name := opts.SourceName
+	name := opts.Name
 	if name == "" {
-		name = "shared"
+		name = filepath.Base(root)
 	}
-	_, _ = fmt.Fprintf(out, "about to make %s visible to every user as shared source %q\n", root, name)
-	src, err = shared.UpsertSharedSource(ctx, name, root)
+	name, err = validateSourceName(name)
+	if err != nil {
+		return err
+	}
+	_, _ = fmt.Fprintf(out, "indexing user=%d source=%q root=%s\n", opts.UserID, name, root)
+	src, err := store.UpsertDirSource(ctx, opts.UserID, name, root)
 	if err != nil {
 		return err
 	}
@@ -104,12 +169,12 @@ func runIndexWith(ctx context.Context, opts indexOptions, out io.Writer, svc ind
 	return nil
 }
 
-func runStatusWith(ctx context.Context, out io.Writer, store statusStore, model string) error {
+func runStatusWith(ctx context.Context, out io.Writer, store statusStore) error {
 	sources, err := store.ListAllSources(ctx)
 	if err != nil {
 		return err
 	}
-	report := statusReport{EmbeddingModel: model, Sources: make([]statusSource, 0, len(sources))}
+	report := statusReport{Sources: make([]statusSource, 0, len(sources))}
 	for _, src := range sources {
 		stats, err := store.SourceStats(ctx, src.ID)
 		if err != nil {
@@ -117,7 +182,7 @@ func runStatusWith(ctx context.Context, out io.Writer, store statusStore, model 
 		}
 		report.Sources = append(report.Sources, statusSource{
 			ID:        src.ID,
-			Scope:     src.Scope,
+			OwnerID:   src.OwnerID,
 			Name:      src.Name,
 			Kind:      src.Kind,
 			Enabled:   src.Enabled,

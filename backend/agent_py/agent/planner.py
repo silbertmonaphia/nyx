@@ -476,10 +476,7 @@ def _knowledge_outline_block(sources: list[dict]) -> str:
             document_count = int(source.get("document_count", 0))
         except (TypeError, ValueError):
             document_count = 0
-        line = (
-            f"- source {source_id}: {name} "
-            f"(scope: {_outline_text(str(source.get('scope', '')))}, documents: {document_count})"
-        )
+        line = f"- source {source_id}: {name} (documents: {document_count})"
         if directories:
             line += "; directories: " + ", ".join(directories)
         else:
@@ -492,13 +489,14 @@ def _knowledge_outline_block(sources: list[dict]) -> str:
         "\nUse `kb` with `source` to narrow to a source; set `path` only to one of "
         "the listed directories and omit it when the source lists none."
     )
-    budget = _OUTLINE_BLOCK_MAX_CHARS - len(header) - len(footer)
+    marker = "- additional sources omitted"
+    budget = _OUTLINE_BLOCK_MAX_CHARS - len(header) - len(footer) - len(marker) - 1
     kept: list[str] = []
     used = 0
     for line in lines:
         addition = len(line) + (1 if kept else 0)
         if used + addition > budget:
-            kept.append("- additional sources omitted")
+            kept.append(marker)
             break
         kept.append(line)
         used += addition

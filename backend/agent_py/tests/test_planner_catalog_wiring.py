@@ -146,7 +146,6 @@ async def test_plan_node_passes_knowledge_outline_to_emitter(monkeypatch):
             {
                 "id": 7,
                 "name": "notes",
-                "scope": "user",
                 "document_count": 2,
                 "chunk_count": 4,
                 "directories": ["B-Cook"],

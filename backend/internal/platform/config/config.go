@@ -187,8 +187,6 @@ type Config struct {
 	RAGMaxBackfillPerRequest    int    `mapstructure:"RAG_MAX_BACKFILL_PER_REQUEST"`
 
 	KBEnabled            bool   `mapstructure:"KB_ENABLED"`
-	KBRoot               string `mapstructure:"KB_ROOT"`
-	KBSharedSourceName   string `mapstructure:"KB_SHARED_SOURCE_NAME"`
 	KBMaxFileBytes       int64  `mapstructure:"KB_MAX_FILE_BYTES"`
 	KBMaxFiles           int    `mapstructure:"KB_MAX_FILES"`
 	KBMaxDepth           int    `mapstructure:"KB_MAX_DEPTH"`
@@ -416,8 +414,6 @@ func setDefaults() {
 	viper.SetDefault("RAG_MAX_BACKFILL_PER_REQUEST", 20)
 
 	viper.SetDefault("KB_ENABLED", false)
-	viper.SetDefault("KB_ROOT", "")
-	viper.SetDefault("KB_SHARED_SOURCE_NAME", "shared")
 	viper.SetDefault("KB_MAX_FILE_BYTES", 2<<20)
 	viper.SetDefault("KB_MAX_FILES", 10000)
 	viper.SetDefault("KB_MAX_DEPTH", 20)
@@ -482,7 +478,7 @@ func bindEnvVars() {
 		"LLM_EMBEDDING_API_KEY", "LLM_EMBEDDING_ALLOW_PRIVATE_URL",
 		"EMBEDDING_DIMENSIONS",
 		"RAG_TOP_K", "RAG_MAX_CONTEXT_CHARS", "RAG_MAX_BACKFILL_PER_REQUEST",
-		"KB_ENABLED", "KB_ROOT", "KB_SHARED_SOURCE_NAME",
+		"KB_ENABLED",
 		"KB_MAX_FILE_BYTES", "KB_MAX_FILES", "KB_MAX_DEPTH",
 		"KB_CHUNK_TARGET_TOKENS", "KB_CHUNK_MAX_TOKENS", "KB_CHUNK_MIN_TOKENS",
 		"KB_CHUNK_OVERLAP_TOKENS", "KB_TOP_K", "KB_MAX_CONTEXT_CHARS",
@@ -628,9 +624,6 @@ func validateKBConfig(cfg *Config) error {
 	}
 	if err := validateKBChunking(cfg); err != nil {
 		return err
-	}
-	if strings.TrimSpace(cfg.KBSharedSourceName) == "" {
-		return fmt.Errorf("KB_SHARED_SOURCE_NAME must not be empty when KB_ENABLED=true")
 	}
 	if cfg.EmbeddingDimensions != 1024 {
 		return fmt.Errorf(

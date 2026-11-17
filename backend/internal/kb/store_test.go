@@ -12,16 +12,16 @@ import (
 
 var (
 	sourceColumns = []string{
-		"id", "scope", "owner_id", "name", "kind", "root_path", "enabled",
+		"id", "owner_id", "name", "kind", "root_path", "enabled",
 		"last_scan_at", "last_error", "created_at", "updated_at",
 	}
 	documentColumns = []string{
-		"id", "source_id", "scope", "owner_id", "origin", "rel_path", "title",
+		"id", "source_id", "owner_id", "origin", "rel_path", "title",
 		"doc_type", "content_hash", "byte_size", "mtime", "status",
 		"error_detail", "generation", "content", "created_at", "updated_at",
 	}
 	claimColumns = []string{
-		"id", "document_id", "scope", "owner_id", "source_id", "generation",
+		"id", "document_id", "owner_id", "source_id", "generation",
 		"ordinal", "heading_path", "content", "embed_text", "content_hash",
 		"embedding_model", "token_count", "locator", "created_at",
 	}
@@ -42,7 +42,7 @@ func anyArgs(n int) []any {
 func sourceRow() []any {
 	now := time.Now()
 	return []any{
-		int64(1), ScopeShared, nil, "shared", KindDir, "/srv/kb/shared",
+		int64(1), int64(7), "shared", KindDir, "/srv/kb/shared",
 		true, now, "", now, now,
 	}
 }
@@ -50,7 +50,7 @@ func sourceRow() []any {
 func documentRow() []any {
 	now := time.Now()
 	return []any{
-		int64(7), int64(1), ScopeShared, nil, OriginFile, "B-Cook/diet.md",
+		int64(7), int64(1), int64(7), OriginFile, "B-Cook/diet.md",
 		"diet", DocTypeMarkdown, []byte("hash"), int64(12), nil,
 		StatusIndexed, "", int32(1), nil, now, now,
 	}
@@ -70,41 +70,35 @@ func TestSQLStoreSourceAndDocumentMethods(t *testing.T) {
 	assert.Equal(t, "shared", src.Name)
 	assert.Equal(t, KindDir, src.Kind)
 
-	mock.ExpectQuery(`FROM kb_sources.*WHERE enabled`).WithArgs(anyArgs(1)...).
+	mock.ExpectQuery(`FROM kb_sources.*WHERE owner_id`).WithArgs(anyArgs(1)...).
 		WillReturnRows(pgxmock.NewRows(sourceColumns).AddRow(sourceRow()...))
-	visible, err := store.ListVisibleSources(ctx, 1)
+	visible, err := store.ListSources(ctx, 7)
 	require.NoError(t, err)
 	assert.Len(t, visible, 1)
 
-	mock.ExpectQuery(`SELECT .* FROM kb_sources ORDER BY scope`).WithArgs(anyArgs(0)...).
+	mock.ExpectQuery(`SELECT .* FROM kb_sources ORDER BY owner_id`).WithArgs(anyArgs(0)...).
 		WillReturnRows(pgxmock.NewRows(sourceColumns).AddRow(sourceRow()...))
 	all, err := store.ListAllSources(ctx)
 	require.NoError(t, err)
 	assert.Len(t, all, 1)
 
-	mock.ExpectQuery(`WHERE scope = 'user' AND owner_id`).WithArgs(anyArgs(1)...).
+	mock.ExpectQuery(`INSERT INTO kb_sources`).WithArgs(anyArgs(3)...).
 		WillReturnRows(pgxmock.NewRows(sourceColumns).AddRow(sourceRow()...))
-	owned, err := store.ListSourcesByOwner(ctx, 1)
-	require.NoError(t, err)
-	assert.Len(t, owned, 1)
-
-	mock.ExpectQuery(`INSERT INTO kb_sources`).WithArgs(anyArgs(2)...).
-		WillReturnRows(pgxmock.NewRows(sourceColumns).AddRow(sourceRow()...))
-	_, err = store.UpsertSharedSource(ctx, "shared", "/srv/kb/shared")
+	_, err = store.UpsertDirSource(ctx, 7, "shared", "/srv/kb/shared")
 	require.NoError(t, err)
 
 	mock.ExpectQuery(`INSERT INTO kb_sources`).WithArgs(anyArgs(1)...).
 		WillReturnRows(pgxmock.NewRows(sourceColumns).AddRow(sourceRow()...))
-	_, err = store.EnsureInlineSource(ctx, 1)
+	_, err = store.EnsureInlineSource(ctx, 7)
 	require.NoError(t, err)
 
 	mock.ExpectQuery(`UPDATE kb_sources`).WithArgs(anyArgs(3)...).
 		WillReturnRows(pgxmock.NewRows(sourceColumns).AddRow(sourceRow()...))
-	_, err = store.SetSourceEnabled(ctx, 1, 1, false)
+	_, err = store.SetSourceEnabled(ctx, 1, 7, false)
 	require.NoError(t, err)
 
 	mock.ExpectExec(`DELETE FROM kb_sources`).WithArgs(anyArgs(2)...).WillReturnResult(pgxmock.NewResult("DELETE", 1))
-	removed, err := store.DeleteUserSource(ctx, 1, 1)
+	removed, err := store.DeleteSource(ctx, 1, 7)
 	require.NoError(t, err)
 	assert.Equal(t, int64(1), removed)
 
@@ -139,12 +133,7 @@ func TestSQLStoreSourceAndDocumentMethods(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "B-Cook/diet.md", doc.RelPath)
 
-	mock.ExpectQuery(`FROM kb_documents.*scope = 'shared' OR`).WithArgs(anyArgs(2)...).
-		WillReturnRows(pgxmock.NewRows(documentColumns).AddRow(documentRow()...))
-	_, err = store.GetVisibleDocument(ctx, 7, 1)
-	require.NoError(t, err)
-
-	mock.ExpectQuery(`scope = 'user' AND owner_id`).WithArgs(anyArgs(2)...).
+	mock.ExpectQuery(`FROM kb_documents.*WHERE id = \$1 AND owner_id`).WithArgs(anyArgs(2)...).
 		WillReturnRows(pgxmock.NewRows(documentColumns).AddRow(documentRow()...))
 	_, err = store.GetOwnedDocument(ctx, 7, 1)
 	require.NoError(t, err)
@@ -159,9 +148,9 @@ func TestSQLStoreSourceAndDocumentMethods(t *testing.T) {
 	_, err = store.GetInlineDocumentByHash(ctx, 1, []byte("hash"))
 	require.NoError(t, err)
 
-	mock.ExpectQuery(`FROM kb_documents d.*WHERE \(d.scope`).WithArgs(anyArgs(6)...).
+	mock.ExpectQuery(`FROM kb_documents d.*WHERE d.owner_id`).WithArgs(anyArgs(6)...).
 		WillReturnRows(pgxmock.NewRows(documentColumns).AddRow(documentRow()...))
-	docs, err := store.ListVisibleDocuments(ctx, 1, nil, "", "", 10, 0)
+	docs, err := store.ListDocumentsByOwner(ctx, 1, nil, "", "", 10, 0)
 	require.NoError(t, err)
 	assert.Len(t, docs, 1)
 
@@ -183,9 +172,9 @@ func TestSQLStoreSourceAndDocumentMethods(t *testing.T) {
 	require.NoError(t, err)
 	assert.Len(t, docs, 1)
 
-	mock.ExpectQuery(`INSERT INTO kb_documents`).WithArgs(anyArgs(9)...).
+	mock.ExpectQuery(`INSERT INTO kb_documents`).WithArgs(anyArgs(8)...).
 		WillReturnRows(pgxmock.NewRows(documentColumns).AddRow(documentRow()...))
-	_, err = store.UpsertFileDocument(ctx, Document{SourceID: 1, Scope: ScopeShared, RelPath: "a.md"})
+	_, err = store.UpsertFileDocument(ctx, Document{SourceID: 1, OwnerID: 7, RelPath: "a.md"})
 	require.NoError(t, err)
 
 	mock.ExpectQuery(`INSERT INTO kb_documents`).WithArgs(anyArgs(7)...).
@@ -231,15 +220,15 @@ func TestSQLStoreChunkAndRetrievalMethods(t *testing.T) {
 	ctx := context.Background()
 	now := time.Now()
 
-	mock.ExpectQuery(`INSERT INTO kb_chunks`).WithArgs(anyArgs(13)...).
+	mock.ExpectQuery(`INSERT INTO kb_chunks`).WithArgs(anyArgs(12)...).
 		WillReturnRows(pgxmock.NewRows([]string{"id"}).AddRow(int64(11)))
-	id, err := store.InsertChunk(ctx, Chunk{DocumentID: 7, Scope: ScopeShared, SourceID: 1, Generation: 1})
+	id, err := store.InsertChunk(ctx, Chunk{DocumentID: 7, OwnerID: 7, SourceID: 1, Generation: 1})
 	require.NoError(t, err)
 	assert.Equal(t, int64(11), id)
 
 	mock.ExpectQuery(`FROM kb_chunks.*embedding IS NULL.*FOR UPDATE SKIP LOCKED`).WithArgs(anyArgs(3)...).
 		WillReturnRows(pgxmock.NewRows(claimColumns).AddRow(
-			int64(12), int64(7), ScopeShared, nil, int64(1), int32(1), int32(0),
+			int64(12), int64(7), int64(7), int64(1), int32(1), int32(0),
 			[]string{"A"}, "body", "embed text", []byte("hash"), "model-x",
 			int32(3), []byte(`{"line":1}`), now,
 		))
@@ -311,15 +300,22 @@ func TestSQLStoreMapsMissingRowsToSentinels(t *testing.T) {
 	_, err = store.SetSourceEnabled(ctx, 1, 1, false)
 	assert.ErrorIs(t, err, ErrSourceNotFound)
 
+	_, err = store.UpsertDirSource(ctx, 1, "inline", "/tmp")
+	assert.ErrorIs(t, err, ErrSourceNameConflict)
+
+	mock.ExpectQuery(`INSERT INTO kb_sources`).WithArgs(anyArgs(3)...).WillReturnRows(emptySource())
+	_, err = store.UpsertDirSource(ctx, 1, "notes", "/tmp")
+	assert.ErrorIs(t, err, ErrSourceNameConflict)
+
+	mock.ExpectQuery(`INSERT INTO kb_sources`).WithArgs(anyArgs(1)...).WillReturnRows(emptySource())
+	_, err = store.EnsureInlineSource(ctx, 1)
+	assert.ErrorIs(t, err, ErrSourceNameConflict)
+
 	mock.ExpectQuery(`FROM kb_documents WHERE id = \$1`).WithArgs(anyArgs(1)...).WillReturnRows(emptyDocument())
 	_, err = store.GetDocument(ctx, 1)
 	assert.ErrorIs(t, err, ErrDocumentNotFound)
 
-	mock.ExpectQuery(`scope = 'shared' OR`).WithArgs(anyArgs(2)...).WillReturnRows(emptyDocument())
-	_, err = store.GetVisibleDocument(ctx, 1, 1)
-	assert.ErrorIs(t, err, ErrDocumentNotFound)
-
-	mock.ExpectQuery(`scope = 'user' AND owner_id`).WithArgs(anyArgs(2)...).WillReturnRows(emptyDocument())
+	mock.ExpectQuery(`FROM kb_documents WHERE id = \$1 AND owner_id`).WithArgs(anyArgs(2)...).WillReturnRows(emptyDocument())
 	_, err = store.GetOwnedDocument(ctx, 1, 1)
 	assert.ErrorIs(t, err, ErrDocumentNotFound)
 

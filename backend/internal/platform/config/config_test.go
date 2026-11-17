@@ -304,7 +304,7 @@ func TestLoadKBDefaults(t *testing.T) {
 	t.Setenv("DB_URL", "postgres://x")
 	t.Setenv("JWT_SECRET", auth.TestSecret)
 	for _, key := range []string{
-		"KB_ENABLED", "KB_ROOT", "KB_SHARED_SOURCE_NAME",
+		"KB_ENABLED",
 		"KB_MAX_FILE_BYTES", "KB_MAX_FILES", "KB_MAX_DEPTH",
 		"KB_CHUNK_TARGET_TOKENS", "KB_CHUNK_MAX_TOKENS", "KB_CHUNK_MIN_TOKENS",
 		"KB_CHUNK_OVERLAP_TOKENS", "KB_TOP_K", "KB_MAX_CONTEXT_CHARS",
@@ -319,9 +319,6 @@ func TestLoadKBDefaults(t *testing.T) {
 	}
 	if cfg.KBEnabled {
 		t.Error("KBEnabled default = true, want false")
-	}
-	if cfg.KBSharedSourceName != "shared" {
-		t.Errorf("KBSharedSourceName default = %q, want %q", cfg.KBSharedSourceName, "shared")
 	}
 	if cfg.KBMaxFileBytes != 2<<20 {
 		t.Errorf("KBMaxFileBytes default = %d, want %d", cfg.KBMaxFileBytes, int64(2<<20))
@@ -378,7 +375,6 @@ func TestLoadAcceptsKBDisabledWithoutPaths(t *testing.T) {
 	t.Setenv("DB_URL", "postgres://x")
 	t.Setenv("JWT_SECRET", auth.TestSecret)
 	t.Setenv("KB_ENABLED", "false")
-	t.Setenv("KB_ROOT", "")
 	t.Setenv("KB_TOP_K", "0")
 	t.Setenv("KB_CHUNK_TARGET_TOKENS", "0")
 
@@ -406,8 +402,6 @@ func TestLoadAcceptsKBEnabledWithValidValues(t *testing.T) {
 	t.Setenv("DB_URL", "postgres://x")
 	t.Setenv("JWT_SECRET", auth.TestSecret)
 	t.Setenv("KB_ENABLED", "true")
-	t.Setenv("KB_ROOT", "/srv/kb/shared")
-	t.Setenv("KB_SHARED_SOURCE_NAME", "notes")
 	t.Setenv("KB_CHUNK_TARGET_TOKENS", "300")
 	t.Setenv("KB_CHUNK_MAX_TOKENS", "600")
 	t.Setenv("KB_CHUNK_OVERLAP_TOKENS", "60")
@@ -416,19 +410,8 @@ func TestLoadAcceptsKBEnabledWithValidValues(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load() error = %v", err)
 	}
-	if !cfg.KBEnabled || cfg.KBSharedSourceName != "notes" {
-		t.Fatalf("KB config = enabled:%v name:%q, want enabled:true name:notes", cfg.KBEnabled, cfg.KBSharedSourceName)
-	}
-}
-
-func TestLoadRejectsEmptyKBSharedSourceNameWhenEnabled(t *testing.T) {
-	t.Setenv("DB_URL", "postgres://x")
-	t.Setenv("JWT_SECRET", auth.TestSecret)
-	t.Setenv("KB_ENABLED", "true")
-	t.Setenv("KB_SHARED_SOURCE_NAME", " ")
-
-	if _, err := Load(); err == nil {
-		t.Fatal("Load() error = nil, want empty KB_SHARED_SOURCE_NAME error")
+	if !cfg.KBEnabled {
+		t.Fatal("KBEnabled = false, want true")
 	}
 }
 

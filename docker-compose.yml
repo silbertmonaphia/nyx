@@ -402,10 +402,10 @@ services:
     # `backend/.env.example`; copy + edit to opt in.
     env_file:
       - backend/.env
-    # Knowledge base (opt-in): mount the operator's shared corpus, then
-    # set KB_ROOT to the in-container path below in backend/.env.
+    # Knowledge base (opt-in): mount an operator-chosen directory, then
+    # register it per user with `kb index --user <id> --root <in-container path>`.
     # volumes:
-    #   - ${KB_SHARED_DIR:-./kb/shared}:/srv/nyx/kb/shared:ro
+    #   - ${KB_DIR:-./kb}:/srv/nyx/kb:ro
     depends_on:
       db:
         condition: service_healthy

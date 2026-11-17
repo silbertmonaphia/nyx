@@ -6,8 +6,6 @@ package db
 
 import (
 	"context"
-
-	"github.com/jackc/pgx/v5/pgtype"
 )
 
 type Querier interface {
@@ -19,25 +17,23 @@ type Querier interface {
 	DeleteChunksByDocument(ctx context.Context, documentID int64) error
 	DeleteDocumentByID(ctx context.Context, id int64) error
 	DeletePendingChunks(ctx context.Context, arg DeletePendingChunksParams) error
+	DeleteSource(ctx context.Context, arg DeleteSourceParams) (int64, error)
 	DeleteSupersededChunks(ctx context.Context, arg DeleteSupersededChunksParams) error
-	DeleteUserSource(ctx context.Context, arg DeleteUserSourceParams) (int64, error)
-	EnsureInlineSource(ctx context.Context, ownerID pgtype.Int8) (KbSource, error)
+	EnsureInlineSource(ctx context.Context, ownerID int64) (KbSource, error)
 	GetDocument(ctx context.Context, id int64) (KbDocument, error)
 	GetDocumentBySourcePath(ctx context.Context, arg GetDocumentBySourcePathParams) (KbDocument, error)
 	GetInlineDocumentByHash(ctx context.Context, arg GetInlineDocumentByHashParams) (KbDocument, error)
 	GetOwnedDocument(ctx context.Context, arg GetOwnedDocumentParams) (KbDocument, error)
 	GetSource(ctx context.Context, id int64) (KbSource, error)
-	GetVisibleDocument(ctx context.Context, arg GetVisibleDocumentParams) (KbDocument, error)
 	InsertChunk(ctx context.Context, arg InsertChunkParams) (int64, error)
 	ListAllSources(ctx context.Context) ([]KbSource, error)
 	ListDocumentHeadingPaths(ctx context.Context, arg ListDocumentHeadingPathsParams) ([][]string, error)
+	ListDocumentsByOwner(ctx context.Context, arg ListDocumentsByOwnerParams) ([]KbDocument, error)
 	ListDocumentsBySource(ctx context.Context, arg ListDocumentsBySourceParams) ([]KbDocument, error)
 	ListDocumentsWithUnembeddedChunks(ctx context.Context, arg ListDocumentsWithUnembeddedChunksParams) ([]KbDocument, error)
 	ListPendingDocuments(ctx context.Context, arg ListPendingDocumentsParams) ([]KbDocument, error)
-	ListSourcesByOwner(ctx context.Context, ownerID pgtype.Int8) ([]KbSource, error)
+	ListSources(ctx context.Context, ownerID int64) ([]KbSource, error)
 	ListTopLevelDirectories(ctx context.Context, sourceID int64) ([]string, error)
-	ListVisibleDocuments(ctx context.Context, arg ListVisibleDocumentsParams) ([]KbDocument, error)
-	ListVisibleSources(ctx context.Context, ownerID pgtype.Int8) ([]KbSource, error)
 	MarkDocumentPendingIfCurrent(ctx context.Context, arg MarkDocumentPendingIfCurrentParams) error
 	MarkDocumentStatus(ctx context.Context, arg MarkDocumentStatusParams) error
 	RetrieveKBPassages(ctx context.Context, arg RetrieveKBPassagesParams) ([]RetrieveKBPassagesRow, error)
@@ -50,9 +46,9 @@ type Querier interface {
 	SourcePendingCount(ctx context.Context, sourceID int64) (int64, error)
 	UpdateInlineDocumentContent(ctx context.Context, arg UpdateInlineDocumentContentParams) (KbDocument, error)
 	UpdateSourceScan(ctx context.Context, arg UpdateSourceScanParams) error
+	UpsertDirSource(ctx context.Context, arg UpsertDirSourceParams) (KbSource, error)
 	UpsertFileDocument(ctx context.Context, arg UpsertFileDocumentParams) (KbDocument, error)
 	UpsertInlineDocument(ctx context.Context, arg UpsertInlineDocumentParams) (KbDocument, error)
-	UpsertSharedSource(ctx context.Context, arg UpsertSharedSourceParams) (KbSource, error)
 }
 
 var _ Querier = (*Queries)(nil)

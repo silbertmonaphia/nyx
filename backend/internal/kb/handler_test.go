@@ -138,7 +138,6 @@ func TestHandlerSourceLifecycle(t *testing.T) {
 	}](t, resp)
 	require.Len(t, list.Sources, 1)
 	created := list.Sources[0]
-	assert.Equal(t, ScopeUser, created.Scope)
 	assert.Equal(t, KindInline, created.Kind)
 
 	resp = env.jsonRequest(t, http.MethodPatch, "/api/kb/sources/"+itoa(created.ID), env.tokenA, map[string]bool{"enabled": false})
@@ -287,7 +286,7 @@ func TestHandlerRefusesFileBackedEditAndDelete(t *testing.T) {
 	src, err := env.store.EnsureInlineSource(context.Background(), 1)
 	require.NoError(t, err)
 	doc, err := env.store.UpsertFileDocument(context.Background(), Document{
-		SourceID: src.ID, Scope: ScopeUser, OwnerID: 1, Origin: OriginFile,
+		SourceID: src.ID, OwnerID: 1, Origin: OriginFile,
 		RelPath: "disk.md", Title: "disk", DocType: DocTypeMarkdown,
 		ContentHash: hashBytes([]byte("# Disk\n\nfile body\n")),
 	})
@@ -324,7 +323,7 @@ func TestHandlerIndexReportsVisibleSources(t *testing.T) {
 	root := t.TempDir()
 	writeFile(t, filepath.Join(root, "note.md"), "# Note\n\nbody\n")
 	env := setupHandler(t, testConfig(), &countingEmbedder{})
-	_, err := env.store.UpsertSharedSource(context.Background(), "shared", root)
+	_, err := env.store.UpsertDirSource(context.Background(), 1, "posts", root)
 	require.NoError(t, err)
 
 	resp := env.jsonRequest(t, http.MethodPost, "/api/kb/index", env.tokenA, nil)
@@ -351,16 +350,16 @@ func itoa(value int64) string {
 
 func TestOutlineHandlerListsVisibleCorpus(t *testing.T) {
 	store := newFakeStore()
-	shared, err := store.UpsertSharedSource(context.Background(), "shared", t.TempDir())
+	dir, err := store.UpsertDirSource(context.Background(), 1, "posts", t.TempDir())
 	require.NoError(t, err)
 	doc, err := store.UpsertFileDocument(context.Background(), Document{
-		SourceID: shared.ID, Scope: ScopeShared, Origin: OriginFile,
+		SourceID: dir.ID, OwnerID: 1, Origin: OriginFile,
 		RelPath: "B-Cook/a.md", Title: "a", DocType: DocTypeMarkdown,
 		ContentHash: hashBytes([]byte("a")),
 	})
 	require.NoError(t, err)
 	_, err = store.InsertChunk(context.Background(), Chunk{
-		DocumentID: doc.ID, Scope: ScopeShared, SourceID: shared.ID,
+		DocumentID: doc.ID, OwnerID: 1, SourceID: dir.ID,
 		Generation: 1, Content: "secret body", EmbedText: "e", ContentHash: hashBytes([]byte("secret body")),
 	})
 	require.NoError(t, err)

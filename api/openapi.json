@@ -696,15 +696,11 @@
           "pending_count": {
             "format": "int64",
             "type": "integer"
-          },
-          "scope": {
-            "type": "string"
           }
         },
         "required": [
           "id",
           "name",
-          "scope",
           "kind",
           "enabled",
           "last_scan_at",
@@ -1541,7 +1537,7 @@
             "BearerAuth": []
           }
         ],
-        "summary": "Index the caller's visible knowledge sources",
+        "summary": "Index the caller's knowledge sources",
         "tags": [
           "knowledge"
         ]

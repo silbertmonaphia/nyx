@@ -19,7 +19,7 @@ SET generation   = $2,
     error_detail = '',
     updated_at   = CURRENT_TIMESTAMP
 WHERE id = $1 AND generation < $2
-RETURNING id, source_id, scope, owner_id, origin, rel_path, title, doc_type, content_hash, byte_size, mtime, status, error_detail, generation, content, created_at, updated_at
+RETURNING id, source_id, owner_id, origin, rel_path, title, doc_type, content_hash, byte_size, mtime, status, error_detail, generation, content, created_at, updated_at
 `
 
 type AdvanceDocumentGenerationParams struct {
@@ -33,7 +33,6 @@ func (q *Queries) AdvanceDocumentGeneration(ctx context.Context, arg AdvanceDocu
 	err := row.Scan(
 		&i.ID,
 		&i.SourceID,
-		&i.Scope,
 		&i.OwnerID,
 		&i.Origin,
 		&i.RelPath,
@@ -54,7 +53,7 @@ func (q *Queries) AdvanceDocumentGeneration(ctx context.Context, arg AdvanceDocu
 
 const claimUnembeddedChunks = `-- name: ClaimUnembeddedChunks :many
 SELECT
-    id, document_id, scope, owner_id, source_id, generation, ordinal,
+    id, document_id, owner_id, source_id, generation, ordinal,
     heading_path, content, embed_text, content_hash, embedding_model,
     token_count, locator, created_at
 FROM kb_chunks
@@ -73,8 +72,7 @@ type ClaimUnembeddedChunksParams struct {
 type ClaimUnembeddedChunksRow struct {
 	ID             int64
 	DocumentID     int64
-	Scope          string
-	OwnerID        pgtype.Int8
+	OwnerID        int64
 	SourceID       int64
 	Generation     int32
 	Ordinal        int32
@@ -100,7 +98,6 @@ func (q *Queries) ClaimUnembeddedChunks(ctx context.Context, arg ClaimUnembedded
 		if err := rows.Scan(
 			&i.ID,
 			&i.DocumentID,
-			&i.Scope,
 			&i.OwnerID,
 			&i.SourceID,
 			&i.Generation,
@@ -210,6 +207,23 @@ func (q *Queries) DeletePendingChunks(ctx context.Context, arg DeletePendingChun
 	return err
 }
 
+const deleteSource = `-- name: DeleteSource :execrows
+DELETE FROM kb_sources WHERE id = $1 AND owner_id = $2
+`
+
+type DeleteSourceParams struct {
+	ID      int64
+	OwnerID int64
+}
+
+func (q *Queries) DeleteSource(ctx context.Context, arg DeleteSourceParams) (int64, error) {
+	result, err := q.db.Exec(ctx, deleteSource, arg.ID, arg.OwnerID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const deleteSupersededChunks = `-- name: DeleteSupersededChunks :exec
 DELETE FROM kb_chunks WHERE document_id = $1 AND generation < $2
 `
@@ -224,37 +238,20 @@ func (q *Queries) DeleteSupersededChunks(ctx context.Context, arg DeleteSupersed
 	return err
 }
 
-const deleteUserSource = `-- name: DeleteUserSource :execrows
-DELETE FROM kb_sources WHERE id = $1 AND scope = 'user' AND owner_id = $2
-`
-
-type DeleteUserSourceParams struct {
-	ID      int64
-	OwnerID pgtype.Int8
-}
-
-func (q *Queries) DeleteUserSource(ctx context.Context, arg DeleteUserSourceParams) (int64, error) {
-	result, err := q.db.Exec(ctx, deleteUserSource, arg.ID, arg.OwnerID)
-	if err != nil {
-		return 0, err
-	}
-	return result.RowsAffected(), nil
-}
-
 const ensureInlineSource = `-- name: EnsureInlineSource :one
-INSERT INTO kb_sources (scope, owner_id, name, kind)
-VALUES ('user', $1, 'inline', 'inline')
-ON CONFLICT (scope, COALESCE(owner_id, 0), name) DO UPDATE SET
+INSERT INTO kb_sources (owner_id, name, kind)
+VALUES ($1, 'inline', 'inline')
+ON CONFLICT (owner_id, name) DO UPDATE SET
     updated_at = CURRENT_TIMESTAMP
-RETURNING id, scope, owner_id, name, kind, root_path, enabled, last_scan_at, last_error, created_at, updated_at
+WHERE kb_sources.kind = 'inline'
+RETURNING id, owner_id, name, kind, root_path, enabled, last_scan_at, last_error, created_at, updated_at
 `
 
-func (q *Queries) EnsureInlineSource(ctx context.Context, ownerID pgtype.Int8) (KbSource, error) {
+func (q *Queries) EnsureInlineSource(ctx context.Context, ownerID int64) (KbSource, error) {
 	row := q.db.QueryRow(ctx, ensureInlineSource, ownerID)
 	var i KbSource
 	err := row.Scan(
 		&i.ID,
-		&i.Scope,
 		&i.OwnerID,
 		&i.Name,
 		&i.Kind,
@@ -269,7 +266,7 @@ func (q *Queries) EnsureInlineSource(ctx context.Context, ownerID pgtype.Int8) (
 }
 
 const getDocument = `-- name: GetDocument :one
-SELECT id, source_id, scope, owner_id, origin, rel_path, title, doc_type, content_hash, byte_size, mtime, status, error_detail, generation, content, created_at, updated_at FROM kb_documents WHERE id = $1
+SELECT id, source_id, owner_id, origin, rel_path, title, doc_type, content_hash, byte_size, mtime, status, error_detail, generation, content, created_at, updated_at FROM kb_documents WHERE id = $1
 `
 
 func (q *Queries) GetDocument(ctx context.Context, id int64) (KbDocument, error) {
@@ -278,7 +275,6 @@ func (q *Queries) GetDocument(ctx context.Context, id int64) (KbDocument, error)
 	err := row.Scan(
 		&i.ID,
 		&i.SourceID,
-		&i.Scope,
 		&i.OwnerID,
 		&i.Origin,
 		&i.RelPath,
@@ -298,7 +294,7 @@ func (q *Queries) GetDocument(ctx context.Context, id int64) (KbDocument, error)
 }
 
 const getDocumentBySourcePath = `-- name: GetDocumentBySourcePath :one
-SELECT id, source_id, scope, owner_id, origin, rel_path, title, doc_type, content_hash, byte_size, mtime, status, error_detail, generation, content, created_at, updated_at FROM kb_documents WHERE source_id = $1 AND rel_path = $2
+SELECT id, source_id, owner_id, origin, rel_path, title, doc_type, content_hash, byte_size, mtime, status, error_detail, generation, content, created_at, updated_at FROM kb_documents WHERE source_id = $1 AND rel_path = $2
 `
 
 type GetDocumentBySourcePathParams struct {
@@ -312,7 +308,6 @@ func (q *Queries) GetDocumentBySourcePath(ctx context.Context, arg GetDocumentBy
 	err := row.Scan(
 		&i.ID,
 		&i.SourceID,
-		&i.Scope,
 		&i.OwnerID,
 		&i.Origin,
 		&i.RelPath,
@@ -332,14 +327,14 @@ func (q *Queries) GetDocumentBySourcePath(ctx context.Context, arg GetDocumentBy
 }
 
 const getInlineDocumentByHash = `-- name: GetInlineDocumentByHash :one
-SELECT id, source_id, scope, owner_id, origin, rel_path, title, doc_type, content_hash, byte_size, mtime, status, error_detail, generation, content, created_at, updated_at FROM kb_documents
+SELECT id, source_id, owner_id, origin, rel_path, title, doc_type, content_hash, byte_size, mtime, status, error_detail, generation, content, created_at, updated_at FROM kb_documents
 WHERE origin = 'inline' AND owner_id = $1 AND content_hash = $2
 ORDER BY id
 LIMIT 1
 `
 
 type GetInlineDocumentByHashParams struct {
-	OwnerID     pgtype.Int8
+	OwnerID     int64
 	ContentHash []byte
 }
 
@@ -349,7 +344,6 @@ func (q *Queries) GetInlineDocumentByHash(ctx context.Context, arg GetInlineDocu
 	err := row.Scan(
 		&i.ID,
 		&i.SourceID,
-		&i.Scope,
 		&i.OwnerID,
 		&i.Origin,
 		&i.RelPath,
@@ -369,13 +363,13 @@ func (q *Queries) GetInlineDocumentByHash(ctx context.Context, arg GetInlineDocu
 }
 
 const getOwnedDocument = `-- name: GetOwnedDocument :one
-SELECT id, source_id, scope, owner_id, origin, rel_path, title, doc_type, content_hash, byte_size, mtime, status, error_detail, generation, content, created_at, updated_at FROM kb_documents
-WHERE id = $1 AND scope = 'user' AND owner_id = $2
+SELECT id, source_id, owner_id, origin, rel_path, title, doc_type, content_hash, byte_size, mtime, status, error_detail, generation, content, created_at, updated_at FROM kb_documents
+WHERE id = $1 AND owner_id = $2
 `
 
 type GetOwnedDocumentParams struct {
 	ID      int64
-	OwnerID pgtype.Int8
+	OwnerID int64
 }
 
 func (q *Queries) GetOwnedDocument(ctx context.Context, arg GetOwnedDocumentParams) (KbDocument, error) {
@@ -384,7 +378,6 @@ func (q *Queries) GetOwnedDocument(ctx context.Context, arg GetOwnedDocumentPara
 	err := row.Scan(
 		&i.ID,
 		&i.SourceID,
-		&i.Scope,
 		&i.OwnerID,
 		&i.Origin,
 		&i.RelPath,
@@ -404,7 +397,7 @@ func (q *Queries) GetOwnedDocument(ctx context.Context, arg GetOwnedDocumentPara
 }
 
 const getSource = `-- name: GetSource :one
-SELECT id, scope, owner_id, name, kind, root_path, enabled, last_scan_at, last_error, created_at, updated_at FROM kb_sources WHERE id = $1
+SELECT id, owner_id, name, kind, root_path, enabled, last_scan_at, last_error, created_at, updated_at FROM kb_sources WHERE id = $1
 `
 
 func (q *Queries) GetSource(ctx context.Context, id int64) (KbSource, error) {
@@ -412,7 +405,6 @@ func (q *Queries) GetSource(ctx context.Context, id int64) (KbSource, error) {
 	var i KbSource
 	err := row.Scan(
 		&i.ID,
-		&i.Scope,
 		&i.OwnerID,
 		&i.Name,
 		&i.Kind,
@@ -426,56 +418,19 @@ func (q *Queries) GetSource(ctx context.Context, id int64) (KbSource, error) {
 	return i, err
 }
 
-const getVisibleDocument = `-- name: GetVisibleDocument :one
-SELECT id, source_id, scope, owner_id, origin, rel_path, title, doc_type, content_hash, byte_size, mtime, status, error_detail, generation, content, created_at, updated_at FROM kb_documents
-WHERE id = $1::bigint
-  AND (scope = 'shared' OR (scope = 'user' AND owner_id = $2::bigint))
-`
-
-type GetVisibleDocumentParams struct {
-	ID      int64
-	OwnerID int64
-}
-
-func (q *Queries) GetVisibleDocument(ctx context.Context, arg GetVisibleDocumentParams) (KbDocument, error) {
-	row := q.db.QueryRow(ctx, getVisibleDocument, arg.ID, arg.OwnerID)
-	var i KbDocument
-	err := row.Scan(
-		&i.ID,
-		&i.SourceID,
-		&i.Scope,
-		&i.OwnerID,
-		&i.Origin,
-		&i.RelPath,
-		&i.Title,
-		&i.DocType,
-		&i.ContentHash,
-		&i.ByteSize,
-		&i.Mtime,
-		&i.Status,
-		&i.ErrorDetail,
-		&i.Generation,
-		&i.Content,
-		&i.CreatedAt,
-		&i.UpdatedAt,
-	)
-	return i, err
-}
-
 const insertChunk = `-- name: InsertChunk :one
 INSERT INTO kb_chunks (
-    document_id, scope, owner_id, source_id, generation, ordinal,
+    document_id, owner_id, source_id, generation, ordinal,
     heading_path, content, embed_text, content_hash, embedding,
     embedding_model, token_count, locator
 )
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, NULL, $11, $12, $13)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NULL, $10, $11, $12)
 RETURNING id
 `
 
 type InsertChunkParams struct {
 	DocumentID     int64
-	Scope          string
-	OwnerID        pgtype.Int8
+	OwnerID        int64
 	SourceID       int64
 	Generation     int32
 	Ordinal        int32
@@ -491,7 +446,6 @@ type InsertChunkParams struct {
 func (q *Queries) InsertChunk(ctx context.Context, arg InsertChunkParams) (int64, error) {
 	row := q.db.QueryRow(ctx, insertChunk,
 		arg.DocumentID,
-		arg.Scope,
 		arg.OwnerID,
 		arg.SourceID,
 		arg.Generation,
@@ -510,8 +464,8 @@ func (q *Queries) InsertChunk(ctx context.Context, arg InsertChunkParams) (int64
 }
 
 const listAllSources = `-- name: ListAllSources :many
-SELECT id, scope, owner_id, name, kind, root_path, enabled, last_scan_at, last_error, created_at, updated_at FROM kb_sources
-ORDER BY scope, name
+SELECT id, owner_id, name, kind, root_path, enabled, last_scan_at, last_error, created_at, updated_at FROM kb_sources
+ORDER BY owner_id, name
 `
 
 func (q *Queries) ListAllSources(ctx context.Context) ([]KbSource, error) {
@@ -525,7 +479,6 @@ func (q *Queries) ListAllSources(ctx context.Context) ([]KbSource, error) {
 		var i KbSource
 		if err := rows.Scan(
 			&i.ID,
-			&i.Scope,
 			&i.OwnerID,
 			&i.Name,
 			&i.Kind,
@@ -577,8 +530,71 @@ func (q *Queries) ListDocumentHeadingPaths(ctx context.Context, arg ListDocument
 	return items, nil
 }
 
+const listDocumentsByOwner = `-- name: ListDocumentsByOwner :many
+SELECT id, source_id, owner_id, origin, rel_path, title, doc_type, content_hash, byte_size, mtime, status, error_detail, generation, content, created_at, updated_at FROM kb_documents d
+WHERE d.owner_id = $1::bigint
+  AND ($2::bigint IS NULL OR d.source_id = $2::bigint)
+  AND ($3::text IS NULL OR d.origin = $3::text)
+  AND ($4::text IS NULL OR d.status = $4::text)
+ORDER BY d.rel_path, d.id
+LIMIT $6::int OFFSET $5::int
+`
+
+type ListDocumentsByOwnerParams struct {
+	OwnerID     int64
+	SourceID    pgtype.Int8
+	Origin      pgtype.Text
+	Status      pgtype.Text
+	OffsetCount int32
+	LimitCount  int32
+}
+
+func (q *Queries) ListDocumentsByOwner(ctx context.Context, arg ListDocumentsByOwnerParams) ([]KbDocument, error) {
+	rows, err := q.db.Query(ctx, listDocumentsByOwner,
+		arg.OwnerID,
+		arg.SourceID,
+		arg.Origin,
+		arg.Status,
+		arg.OffsetCount,
+		arg.LimitCount,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []KbDocument{}
+	for rows.Next() {
+		var i KbDocument
+		if err := rows.Scan(
+			&i.ID,
+			&i.SourceID,
+			&i.OwnerID,
+			&i.Origin,
+			&i.RelPath,
+			&i.Title,
+			&i.DocType,
+			&i.ContentHash,
+			&i.ByteSize,
+			&i.Mtime,
+			&i.Status,
+			&i.ErrorDetail,
+			&i.Generation,
+			&i.Content,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listDocumentsBySource = `-- name: ListDocumentsBySource :many
-SELECT id, source_id, scope, owner_id, origin, rel_path, title, doc_type, content_hash, byte_size, mtime, status, error_detail, generation, content, created_at, updated_at FROM kb_documents
+SELECT id, source_id, owner_id, origin, rel_path, title, doc_type, content_hash, byte_size, mtime, status, error_detail, generation, content, created_at, updated_at FROM kb_documents
 WHERE source_id = $1
 ORDER BY rel_path
 LIMIT $2 OFFSET $3
@@ -602,7 +618,6 @@ func (q *Queries) ListDocumentsBySource(ctx context.Context, arg ListDocumentsBy
 		if err := rows.Scan(
 			&i.ID,
 			&i.SourceID,
-			&i.Scope,
 			&i.OwnerID,
 			&i.Origin,
 			&i.RelPath,
@@ -629,18 +644,18 @@ func (q *Queries) ListDocumentsBySource(ctx context.Context, arg ListDocumentsBy
 }
 
 const listDocumentsWithUnembeddedChunks = `-- name: ListDocumentsWithUnembeddedChunks :many
-SELECT DISTINCT d.id, d.source_id, d.scope, d.owner_id, d.origin, d.rel_path, d.title, d.doc_type, d.content_hash, d.byte_size, d.mtime, d.status, d.error_detail, d.generation, d.content, d.created_at, d.updated_at
+SELECT DISTINCT d.id, d.source_id, d.owner_id, d.origin, d.rel_path, d.title, d.doc_type, d.content_hash, d.byte_size, d.mtime, d.status, d.error_detail, d.generation, d.content, d.created_at, d.updated_at
 FROM kb_documents d
 JOIN kb_sources s ON s.id = d.source_id
 JOIN kb_chunks c ON c.document_id = d.id AND c.embedding IS NULL
 WHERE s.enabled
-  AND (d.scope = 'shared' OR (d.scope = 'user' AND d.owner_id = $1))
+  AND d.owner_id = $1
 ORDER BY d.updated_at
 LIMIT $2
 `
 
 type ListDocumentsWithUnembeddedChunksParams struct {
-	OwnerID pgtype.Int8
+	OwnerID int64
 	Limit   int32
 }
 
@@ -656,7 +671,6 @@ func (q *Queries) ListDocumentsWithUnembeddedChunks(ctx context.Context, arg Lis
 		if err := rows.Scan(
 			&i.ID,
 			&i.SourceID,
-			&i.Scope,
 			&i.OwnerID,
 			&i.Origin,
 			&i.RelPath,
@@ -683,18 +697,18 @@ func (q *Queries) ListDocumentsWithUnembeddedChunks(ctx context.Context, arg Lis
 }
 
 const listPendingDocuments = `-- name: ListPendingDocuments :many
-SELECT d.id, d.source_id, d.scope, d.owner_id, d.origin, d.rel_path, d.title, d.doc_type, d.content_hash, d.byte_size, d.mtime, d.status, d.error_detail, d.generation, d.content, d.created_at, d.updated_at
+SELECT d.id, d.source_id, d.owner_id, d.origin, d.rel_path, d.title, d.doc_type, d.content_hash, d.byte_size, d.mtime, d.status, d.error_detail, d.generation, d.content, d.created_at, d.updated_at
 FROM kb_documents d
 JOIN kb_sources s ON s.id = d.source_id
 WHERE d.status = 'pending'
   AND s.enabled
-  AND (d.scope = 'shared' OR (d.scope = 'user' AND d.owner_id = $1))
+  AND d.owner_id = $1
 ORDER BY d.updated_at
 LIMIT $2
 `
 
 type ListPendingDocumentsParams struct {
-	OwnerID pgtype.Int8
+	OwnerID int64
 	Limit   int32
 }
 
@@ -710,7 +724,6 @@ func (q *Queries) ListPendingDocuments(ctx context.Context, arg ListPendingDocum
 		if err := rows.Scan(
 			&i.ID,
 			&i.SourceID,
-			&i.Scope,
 			&i.OwnerID,
 			&i.Origin,
 			&i.RelPath,
@@ -736,14 +749,14 @@ func (q *Queries) ListPendingDocuments(ctx context.Context, arg ListPendingDocum
 	return items, nil
 }
 
-const listSourcesByOwner = `-- name: ListSourcesByOwner :many
-SELECT id, scope, owner_id, name, kind, root_path, enabled, last_scan_at, last_error, created_at, updated_at FROM kb_sources
-WHERE scope = 'user' AND owner_id = $1
+const listSources = `-- name: ListSources :many
+SELECT id, owner_id, name, kind, root_path, enabled, last_scan_at, last_error, created_at, updated_at FROM kb_sources
+WHERE owner_id = $1
 ORDER BY name
 `
 
-func (q *Queries) ListSourcesByOwner(ctx context.Context, ownerID pgtype.Int8) ([]KbSource, error) {
-	rows, err := q.db.Query(ctx, listSourcesByOwner, ownerID)
+func (q *Queries) ListSources(ctx context.Context, ownerID int64) ([]KbSource, error) {
+	rows, err := q.db.Query(ctx, listSources, ownerID)
 	if err != nil {
 		return nil, err
 	}
@@ -753,7 +766,6 @@ func (q *Queries) ListSourcesByOwner(ctx context.Context, ownerID pgtype.Int8) (
 		var i KbSource
 		if err := rows.Scan(
 			&i.ID,
-			&i.Scope,
 			&i.OwnerID,
 			&i.Name,
 			&i.Kind,
@@ -794,109 +806,6 @@ func (q *Queries) ListTopLevelDirectories(ctx context.Context, sourceID int64) (
 			return nil, err
 		}
 		items = append(items, directory)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
-const listVisibleDocuments = `-- name: ListVisibleDocuments :many
-SELECT id, source_id, scope, owner_id, origin, rel_path, title, doc_type, content_hash, byte_size, mtime, status, error_detail, generation, content, created_at, updated_at FROM kb_documents d
-WHERE (d.scope = 'shared' OR (d.scope = 'user' AND d.owner_id = $1::bigint))
-  AND ($2::bigint IS NULL OR d.source_id = $2::bigint)
-  AND ($3::text IS NULL OR d.origin = $3::text)
-  AND ($4::text IS NULL OR d.status = $4::text)
-ORDER BY d.rel_path, d.id
-LIMIT $6::int OFFSET $5::int
-`
-
-type ListVisibleDocumentsParams struct {
-	OwnerID     int64
-	SourceID    pgtype.Int8
-	Origin      pgtype.Text
-	Status      pgtype.Text
-	OffsetCount int32
-	LimitCount  int32
-}
-
-func (q *Queries) ListVisibleDocuments(ctx context.Context, arg ListVisibleDocumentsParams) ([]KbDocument, error) {
-	rows, err := q.db.Query(ctx, listVisibleDocuments,
-		arg.OwnerID,
-		arg.SourceID,
-		arg.Origin,
-		arg.Status,
-		arg.OffsetCount,
-		arg.LimitCount,
-	)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	items := []KbDocument{}
-	for rows.Next() {
-		var i KbDocument
-		if err := rows.Scan(
-			&i.ID,
-			&i.SourceID,
-			&i.Scope,
-			&i.OwnerID,
-			&i.Origin,
-			&i.RelPath,
-			&i.Title,
-			&i.DocType,
-			&i.ContentHash,
-			&i.ByteSize,
-			&i.Mtime,
-			&i.Status,
-			&i.ErrorDetail,
-			&i.Generation,
-			&i.Content,
-			&i.CreatedAt,
-			&i.UpdatedAt,
-		); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
-const listVisibleSources = `-- name: ListVisibleSources :many
-SELECT id, scope, owner_id, name, kind, root_path, enabled, last_scan_at, last_error, created_at, updated_at FROM kb_sources
-WHERE enabled = TRUE
-  AND (scope = 'shared' OR (scope = 'user' AND owner_id = $1))
-ORDER BY CASE scope WHEN 'shared' THEN 0 ELSE 1 END, name
-`
-
-func (q *Queries) ListVisibleSources(ctx context.Context, ownerID pgtype.Int8) ([]KbSource, error) {
-	rows, err := q.db.Query(ctx, listVisibleSources, ownerID)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	items := []KbSource{}
-	for rows.Next() {
-		var i KbSource
-		if err := rows.Scan(
-			&i.ID,
-			&i.Scope,
-			&i.OwnerID,
-			&i.Name,
-			&i.Kind,
-			&i.RootPath,
-			&i.Enabled,
-			&i.LastScanAt,
-			&i.LastError,
-			&i.CreatedAt,
-			&i.UpdatedAt,
-		); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err
@@ -961,13 +870,12 @@ WHERE c.embedding IS NOT NULL
   AND c.embedding_model = $2::text
   AND d.generation > 0
   AND s.enabled
-  AND (c.scope = 'shared' OR (c.scope = 'user' AND c.owner_id = $3::bigint))
-  AND (d.scope = 'shared' OR (d.scope = 'user' AND d.owner_id = $3::bigint))
-  AND d.scope = c.scope
-  AND d.owner_id IS NOT DISTINCT FROM c.owner_id
+  AND c.owner_id = $3::bigint
+  AND d.owner_id = $3::bigint
+  AND s.owner_id = $3::bigint
+  AND d.owner_id = c.owner_id
   AND d.source_id = c.source_id
-  AND s.scope = c.scope
-  AND s.owner_id IS NOT DISTINCT FROM c.owner_id
+  AND s.owner_id = c.owner_id
   AND ($4::bigint IS NULL OR c.source_id = $4::bigint)
   AND ($5::text IS NULL OR starts_with(d.rel_path, $5::text))
 ORDER BY c.embedding <=> $1, c.id
@@ -1066,14 +974,14 @@ func (q *Queries) SetDocumentTitle(ctx context.Context, arg SetDocumentTitlePara
 const setSourceEnabled = `-- name: SetSourceEnabled :one
 UPDATE kb_sources
 SET enabled = $2, updated_at = CURRENT_TIMESTAMP
-WHERE id = $1 AND scope = 'user' AND owner_id = $3
-RETURNING id, scope, owner_id, name, kind, root_path, enabled, last_scan_at, last_error, created_at, updated_at
+WHERE id = $1 AND owner_id = $3
+RETURNING id, owner_id, name, kind, root_path, enabled, last_scan_at, last_error, created_at, updated_at
 `
 
 type SetSourceEnabledParams struct {
 	ID      int64
 	Enabled bool
-	OwnerID pgtype.Int8
+	OwnerID int64
 }
 
 func (q *Queries) SetSourceEnabled(ctx context.Context, arg SetSourceEnabledParams) (KbSource, error) {
@@ -1081,7 +989,6 @@ func (q *Queries) SetSourceEnabled(ctx context.Context, arg SetSourceEnabledPara
 	var i KbSource
 	err := row.Scan(
 		&i.ID,
-		&i.Scope,
 		&i.OwnerID,
 		&i.Name,
 		&i.Kind,
@@ -1166,7 +1073,7 @@ SET content      = $2,
     error_detail = '',
     updated_at   = CURRENT_TIMESTAMP
 WHERE id = $1 AND origin = 'inline'
-RETURNING id, source_id, scope, owner_id, origin, rel_path, title, doc_type, content_hash, byte_size, mtime, status, error_detail, generation, content, created_at, updated_at
+RETURNING id, source_id, owner_id, origin, rel_path, title, doc_type, content_hash, byte_size, mtime, status, error_detail, generation, content, created_at, updated_at
 `
 
 type UpdateInlineDocumentContentParams struct {
@@ -1187,7 +1094,6 @@ func (q *Queries) UpdateInlineDocumentContent(ctx context.Context, arg UpdateInl
 	err := row.Scan(
 		&i.ID,
 		&i.SourceID,
-		&i.Scope,
 		&i.OwnerID,
 		&i.Origin,
 		&i.RelPath,
@@ -1224,12 +1130,47 @@ func (q *Queries) UpdateSourceScan(ctx context.Context, arg UpdateSourceScanPara
 	return err
 }
 
+const upsertDirSource = `-- name: UpsertDirSource :one
+INSERT INTO kb_sources (owner_id, name, kind, root_path)
+VALUES ($1, $2, 'dir', $3)
+ON CONFLICT (owner_id, name) DO UPDATE SET
+    root_path  = EXCLUDED.root_path,
+    enabled    = TRUE,
+    updated_at = CURRENT_TIMESTAMP
+WHERE kb_sources.kind = 'dir'
+RETURNING id, owner_id, name, kind, root_path, enabled, last_scan_at, last_error, created_at, updated_at
+`
+
+type UpsertDirSourceParams struct {
+	OwnerID  int64
+	Name     string
+	RootPath pgtype.Text
+}
+
+func (q *Queries) UpsertDirSource(ctx context.Context, arg UpsertDirSourceParams) (KbSource, error) {
+	row := q.db.QueryRow(ctx, upsertDirSource, arg.OwnerID, arg.Name, arg.RootPath)
+	var i KbSource
+	err := row.Scan(
+		&i.ID,
+		&i.OwnerID,
+		&i.Name,
+		&i.Kind,
+		&i.RootPath,
+		&i.Enabled,
+		&i.LastScanAt,
+		&i.LastError,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
 const upsertFileDocument = `-- name: UpsertFileDocument :one
 INSERT INTO kb_documents (
-    source_id, scope, owner_id, origin, rel_path, title, doc_type,
+    source_id, owner_id, origin, rel_path, title, doc_type,
     content_hash, byte_size, mtime, status, error_detail, generation, content
 )
-VALUES ($1, $2, $3, 'file', $4, $5, $6, $7, $8, $9, 'pending', '', 0, NULL)
+VALUES ($1, $2, 'file', $3, $4, $5, $6, $7, $8, 'pending', '', 0, NULL)
 ON CONFLICT (source_id, rel_path) DO UPDATE SET
     content_hash = EXCLUDED.content_hash,
     byte_size    = EXCLUDED.byte_size,
@@ -1239,13 +1180,12 @@ ON CONFLICT (source_id, rel_path) DO UPDATE SET
     status       = 'pending',
     error_detail = '',
     updated_at   = CURRENT_TIMESTAMP
-RETURNING id, source_id, scope, owner_id, origin, rel_path, title, doc_type, content_hash, byte_size, mtime, status, error_detail, generation, content, created_at, updated_at
+RETURNING id, source_id, owner_id, origin, rel_path, title, doc_type, content_hash, byte_size, mtime, status, error_detail, generation, content, created_at, updated_at
 `
 
 type UpsertFileDocumentParams struct {
 	SourceID    int64
-	Scope       string
-	OwnerID     pgtype.Int8
+	OwnerID     int64
 	RelPath     string
 	Title       string
 	DocType     string
@@ -1257,7 +1197,6 @@ type UpsertFileDocumentParams struct {
 func (q *Queries) UpsertFileDocument(ctx context.Context, arg UpsertFileDocumentParams) (KbDocument, error) {
 	row := q.db.QueryRow(ctx, upsertFileDocument,
 		arg.SourceID,
-		arg.Scope,
 		arg.OwnerID,
 		arg.RelPath,
 		arg.Title,
@@ -1270,7 +1209,6 @@ func (q *Queries) UpsertFileDocument(ctx context.Context, arg UpsertFileDocument
 	err := row.Scan(
 		&i.ID,
 		&i.SourceID,
-		&i.Scope,
 		&i.OwnerID,
 		&i.Origin,
 		&i.RelPath,
@@ -1291,10 +1229,10 @@ func (q *Queries) UpsertFileDocument(ctx context.Context, arg UpsertFileDocument
 
 const upsertInlineDocument = `-- name: UpsertInlineDocument :one
 INSERT INTO kb_documents (
-    source_id, scope, owner_id, origin, rel_path, title, doc_type,
+    source_id, owner_id, origin, rel_path, title, doc_type,
     content_hash, byte_size, mtime, status, error_detail, generation, content
 )
-VALUES ($1, 'user', $2, 'inline', $3, $4, 'markdown', $5, $6, NULL, 'pending', '', 0, $7)
+VALUES ($1, $2, 'inline', $3, $4, 'markdown', $5, $6, NULL, 'pending', '', 0, $7)
 ON CONFLICT (source_id, rel_path) DO UPDATE SET
     title        = EXCLUDED.title,
     content_hash = EXCLUDED.content_hash,
@@ -1303,12 +1241,12 @@ ON CONFLICT (source_id, rel_path) DO UPDATE SET
     status       = 'pending',
     error_detail = '',
     updated_at   = CURRENT_TIMESTAMP
-RETURNING id, source_id, scope, owner_id, origin, rel_path, title, doc_type, content_hash, byte_size, mtime, status, error_detail, generation, content, created_at, updated_at
+RETURNING id, source_id, owner_id, origin, rel_path, title, doc_type, content_hash, byte_size, mtime, status, error_detail, generation, content, created_at, updated_at
 `
 
 type UpsertInlineDocumentParams struct {
 	SourceID    int64
-	OwnerID     pgtype.Int8
+	OwnerID     int64
 	RelPath     string
 	Title       string
 	ContentHash []byte
@@ -1330,7 +1268,6 @@ func (q *Queries) UpsertInlineDocument(ctx context.Context, arg UpsertInlineDocu
 	err := row.Scan(
 		&i.ID,
 		&i.SourceID,
-		&i.Scope,
 		&i.OwnerID,
 		&i.Origin,
 		&i.RelPath,
@@ -1343,41 +1280,6 @@ func (q *Queries) UpsertInlineDocument(ctx context.Context, arg UpsertInlineDocu
 		&i.ErrorDetail,
 		&i.Generation,
 		&i.Content,
-		&i.CreatedAt,
-		&i.UpdatedAt,
-	)
-	return i, err
-}
-
-const upsertSharedSource = `-- name: UpsertSharedSource :one
-INSERT INTO kb_sources (scope, owner_id, name, kind, root_path)
-VALUES ('shared', NULL, $1, 'dir', $2)
-ON CONFLICT (scope, COALESCE(owner_id, 0), name) DO UPDATE SET
-    root_path  = EXCLUDED.root_path,
-    kind       = 'dir',
-    enabled    = TRUE,
-    updated_at = CURRENT_TIMESTAMP
-RETURNING id, scope, owner_id, name, kind, root_path, enabled, last_scan_at, last_error, created_at, updated_at
-`
-
-type UpsertSharedSourceParams struct {
-	Name     string
-	RootPath pgtype.Text
-}
-
-func (q *Queries) UpsertSharedSource(ctx context.Context, arg UpsertSharedSourceParams) (KbSource, error) {
-	row := q.db.QueryRow(ctx, upsertSharedSource, arg.Name, arg.RootPath)
-	var i KbSource
-	err := row.Scan(
-		&i.ID,
-		&i.Scope,
-		&i.OwnerID,
-		&i.Name,
-		&i.Kind,
-		&i.RootPath,
-		&i.Enabled,
-		&i.LastScanAt,
-		&i.LastError,
 		&i.CreatedAt,
 		&i.UpdatedAt,
 	)
