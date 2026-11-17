@@ -23,7 +23,7 @@ from agent.tool_dispatch import (
     ToolDispatcher,
     registry_planner_block,
 )
-from agent.tools_client import normalize_registry_tools
+from agent.tools_client import ToolUnavailableError, normalize_registry_tools
 
 FIXTURE = Path(__file__).parent / "fixtures" / "mcp_tools_list.json"
 
@@ -75,17 +75,30 @@ def test_normalization_binds_fixture_schemas(captured_wire):
     """Bound MCP tools carry their real argument schema (spec scenario),
     and annotations are preserved on the side map — not inside the bound
     function object."""
-    schemas, annotations = normalize_registry_tools(captured_wire)
+    schemas, annotations, idempotency_tools = normalize_registry_tools(captured_wire)
 
     by_name = {t["name"]: t for t in captured_wire}
     assert {s["function"]["name"] for s in schemas} == FIVE_TOOLS
     for schema in schemas:
         fn = schema["function"]
         assert schema["type"] == "function"
-        assert fn["parameters"] == by_name[fn["name"]]["inputSchema"]
+        raw_parameters = dict(by_name[fn["name"]]["inputSchema"])
+        if fn["name"] in idempotency_tools:
+            raw_properties = dict(raw_parameters["properties"])
+            raw_properties.pop("idempotency_key")
+            raw_parameters["properties"] = raw_properties
+            required = raw_parameters.get("required")
+            if isinstance(required, list):
+                raw_parameters["required"] = [
+                    name for name in required if name != "idempotency_key"
+                ]
+        assert fn["parameters"] == raw_parameters
+        assert "idempotency_key" not in fn["parameters"].get("properties", {})
+        assert "idempotency_key" not in fn["description"]
         assert "inputSchema" not in fn
         assert "annotations" not in fn  # never inside the bound object
 
+    assert idempotency_tools == {"create_feed", "update_feed", "delete_feed"}
     assert set(annotations) == FIVE_TOOLS
     assert annotations["list_feeds"]["readOnlyHint"] is True
     assert annotations["get_feed"]["readOnlyHint"] is True
@@ -96,7 +109,7 @@ def test_normalization_binds_fixture_schemas(captured_wire):
 
 
 def test_bound_list_feeds_parameters_are_non_empty(captured_wire):
-    schemas, _ = normalize_registry_tools(captured_wire)
+    schemas, _, _ = normalize_registry_tools(captured_wire)
     list_feeds = next(s for s in schemas if s["function"]["name"] == "list_feeds")
     parameters = list_feeds["function"]["parameters"]
     assert parameters.get("type") == "object"
@@ -111,7 +124,7 @@ def test_unbindable_entries_skipped_not_fatal(caplog):
         "not-a-dict",
     ]
     with caplog.at_level(logging.WARNING, logger="nyx.agent.tools_client"):
-        schemas, annotations = normalize_registry_tools(raw)
+        schemas, annotations, _ = normalize_registry_tools(raw)
 
     assert [s["function"]["name"] for s in schemas] == ["ok_tool"]
     assert set(annotations) == {"ok_tool"}
@@ -122,7 +135,7 @@ def test_unbindable_entries_skipped_not_fatal(caplog):
 def test_absent_annotations_do_not_crash(captured_wire):
     raw = [t for t in captured_wire if t["name"] == "create_feed"]
     raw[0] = {k: v for k, v in raw[0].items() if k != "annotations"}
-    schemas, annotations = normalize_registry_tools(raw)
+    schemas, annotations, _ = normalize_registry_tools(raw)
     assert schemas and annotations["create_feed"] == {}
 
 
@@ -133,7 +146,7 @@ def test_retry_reprompt_schema_text_uses_normalized_shape(captured_wire):
     """Spec scenario "Retry re-prompt shows the real schema": the re-prompt
     text carries the tool's actual parameters — and the un-normalized wire
     shape is pinned as the trap this normalization fixes."""
-    schemas, _ = normalize_registry_tools(captured_wire)
+    schemas, _, _ = normalize_registry_tools(captured_wire)
     text = _tool_schema_text(schemas, "list_feeds")
     assert text != "{}"
     parsed = json.loads(text)
@@ -145,6 +158,31 @@ def test_retry_reprompt_schema_text_uses_normalized_shape(captured_wire):
     assert _tool_schema_text(captured_wire, "list_feeds") == "{}"
     # Unknown tools still degrade to "{}" (the rejection text carries the error).
     assert _tool_schema_text(schemas, "nope") == "{}"
+
+
+def test_idempotency_key_hidden_from_reprompt_schema(captured_wire):
+    schemas, _, idempotency_tools = normalize_registry_tools(captured_wire)
+    assert "create_feed" in idempotency_tools
+    parsed = json.loads(_tool_schema_text(schemas, "create_feed"))
+    assert "idempotency_key" not in parsed["properties"]
+
+
+async def test_dispatcher_reports_idempotency_capability(captured_wire):
+    local = LocalToolRegistry([_local("web_fetch")])
+    dispatcher = ToolDispatcher(mcp=_StubMcp(tools=captured_wire), local=local)
+
+    assert await dispatcher.accepts_idempotency_key("create_feed") is True
+    assert await dispatcher.accepts_idempotency_key("update_feed") is True
+    assert await dispatcher.accepts_idempotency_key("delete_feed") is True
+    assert await dispatcher.accepts_idempotency_key("list_feeds") is False
+    assert await dispatcher.accepts_idempotency_key("web_fetch") is False
+    assert await dispatcher.accepts_idempotency_key("no_such_tool") is False
+
+
+async def test_dispatcher_idempotency_capability_on_registry_outage():
+    dispatcher = ToolDispatcher(mcp=_StubMcp(fail=True), local=LocalToolRegistry())
+    with pytest.raises(ToolUnavailableError):
+        await dispatcher.accepts_idempotency_key("create_feed")
 
 
 # --- 2.4 per-run memoization -------------------------------------------------
@@ -232,6 +270,7 @@ async def test_registry_planner_block_lists_captured_tools(captured_wire):
     assert block.startswith("\n\nRegistry tools available")
     for name in FIVE_TOOLS:
         assert f"- {name}" in block
+    assert "idempotency_key" not in block
 
 
 async def test_registry_planner_block_empty_when_no_tools():

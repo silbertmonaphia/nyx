@@ -14,6 +14,13 @@
           "maxLength": 1000,
           "type": "string"
         },
+        "idempotency_key": {
+          "description": "Optional client-generated idempotency key. Derive one deterministic key per logical operation and reuse it when retrying the identical call; use a new key for a new operation. Omit to opt out of deduplication.",
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9:_-]+$",
+          "type": "string"
+        },
         "title": {
           "description": "Title of the feed.",
           "maxLength": 100,
@@ -42,6 +49,13 @@
           "description": "Feed id.",
           "minimum": 1,
           "type": "number"
+        },
+        "idempotency_key": {
+          "description": "Optional client-generated idempotency key. Derive one deterministic key per logical operation and reuse it when retrying the identical call; use a new key for a new operation. Omit to opt out of deduplication.",
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9:_-]+$",
+          "type": "string"
         }
       },
       "required": [
@@ -132,6 +146,13 @@
           "description": "Feed id.",
           "minimum": 1,
           "type": "number"
+        },
+        "idempotency_key": {
+          "description": "Optional client-generated idempotency key. Derive one deterministic key per logical operation and reuse it when retrying the identical call; use a new key for a new operation. Omit to opt out of deduplication.",
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9:_-]+$",
+          "type": "string"
         },
         "title": {
           "description": "Title of the feed.",

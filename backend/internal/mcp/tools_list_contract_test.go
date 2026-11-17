@@ -170,6 +170,41 @@ func TestHandler_ToolsList_AnnotationContract(t *testing.T) {
 	}
 }
 
+func TestHandler_ToolsList_IdempotencyKeyContract(t *testing.T) {
+	tools := liveToolsList(t)
+
+	for _, name := range []string{ToolCreateFeed, ToolUpdateFeed, ToolDeleteFeed} {
+		raw, ok := tools[name]
+		require.True(t, ok, "tool %q missing from tools/list", name)
+		schema, ok := raw["inputSchema"].(map[string]any)
+		require.True(t, ok, "tool %q must carry an inputSchema object", name)
+		properties, ok := schema["properties"].(map[string]any)
+		require.True(t, ok, "tool %q inputSchema must carry properties", name)
+		property, ok := properties["idempotency_key"].(map[string]any)
+		require.True(t, ok, "tool %q must declare idempotency_key so clients can opt into deduplication", name)
+		assert.NotEmpty(t, property["description"], "tool %q idempotency_key must document its semantics", name)
+		assert.Equal(t, "^[A-Za-z0-9:_-]+$", property["pattern"], "tool %q must advertise the accepted key charset", name)
+		assert.EqualValues(t, 1, property["minLength"], "tool %q must reject an empty key", name)
+		description, _ := raw["description"].(string)
+		assert.NotContains(t, description, "idempotency_key", "the model-facing tool description must not ask for the key")
+
+		required, _ := schema["required"].([]any)
+		for _, field := range required {
+			assert.NotEqual(t, "idempotency_key", field, "tool %q idempotency_key must stay optional", name)
+		}
+	}
+
+	for _, name := range []string{ToolListFeeds, ToolGetFeed} {
+		raw, ok := tools[name]
+		require.True(t, ok, "tool %q missing from tools/list", name)
+		schema, ok := raw["inputSchema"].(map[string]any)
+		require.True(t, ok, "tool %q must carry an inputSchema object", name)
+		properties, _ := schema["properties"].(map[string]any)
+		_, exists := properties["idempotency_key"]
+		assert.False(t, exists, "read-only tool %q must not declare idempotency_key", name)
+	}
+}
+
 // TestHandler_ToolsList_GoldenFixture asserts the live tools/list
 // response deep-equals the checked-in cross-runtime fixture, and
 // regenerates that fixture under `-update` (see the package comment

@@ -27,11 +27,12 @@ See `proposal.md` — Why. Relevant current state:
 
 ## Decisions
 
-### Deterministic UUIDv5 over (run, step, tool, canonical args)
+### Deterministic UUIDv5 over (run, turn, step, tool, canonical args)
 
-Key = `uuid5(namespace, f"{run_id}:{step_id}:{tool}:{canonical_args}")`. Canonicalisation reuses the executor's existing `_canonical_args` helper (sorted keys, compact separators).
+Key = `uuid5(namespace, f"{run_id}:{turn_id}:{step_id}:{tool}:{canonical_args}")`. Canonicalisation reuses the executor's existing `_canonical_args` helper (sorted keys, deterministic JSON).
 
-- Why: survives resume without storage — the run id and step id are checkpointed, and plan `tool` step arguments come from the checkpoint. A random UUID minted once per intent survives retries but not resume; a DB-stored "current intent" row would add a second write per call.
+- Why: survives resume without storage — the run id, turn id, and step id are checkpointed, and plan `tool` step arguments come from the checkpoint. A random UUID minted once per intent survives retries but not resume; a DB-stored "current intent" row would add a second write per call.
+- Why the turn id: a chat continuation reuses the session id as `run_id`, so without a per-turn discriminator an identical request in a later turn of the same session would collide with the earlier turn's record and silently skip the new write. `new_state` mints a fresh `turn_id` per turn; resume reads it back from the checkpoint.
 - React-step caveat: arguments are model-generated; identical regenerated arguments dedupe, different arguments are a new intent (accepted limitation; mutating calls remain approval-gated).
 - The key is derived **before** the approval gate; a crash after approval re-derives the same key from the same arguments.
 - A model-supplied `idempotency_key` is overwritten by the derived value; it is never trusted.
@@ -41,7 +42,8 @@ Key = `uuid5(namespace, f"{run_id}:{step_id}:{tool}:{canonical_args}")`. Canonic
 The key rides as an optional argument on the mutating tool's `inputSchema`.
 
 - Why: typed handlers and external agents already speak arguments; MCP has no standard idempotency field, and `_meta` is invisible to typed tool handlers and non-portable.
-- Trade-off: the opaque (non-secret) key appears in `tool_call` / `confirm_request` frames and therefore the confirmation card. Filtering it in the card is UI polish, not a contract change.
+- The key is added only to the dispatched argument map, so `tool_call` / `confirm_request` frames carry the model-level arguments without it and the confirmation card stays clean.
+- The mutating tool descriptions MUST NOT mention the key (the planner catalog renders descriptions into the model prompt). External-client guidance lives only on the `idempotency_key` property description, which the agent strips with the property.
 - Schema-driven injection: the agent adds the argument only when the served schema declares it. This makes rollout order irrelevant — a new agent against an old registry never sends an unknown field.
 
 ### Postgres table, same transaction as the mutation
@@ -62,7 +64,7 @@ Index rationale:
 
 - `PRIMARY KEY (owner_id, key)` is both the conflict target and the owner-isolation boundary. Its `owner_id` prefix also serves per-user erasure and owner-scoped cleanup, so no separate owner index is needed.
 - `created_at` is the only non-PK query (retention sweep), so a single b-tree index covers it.
-- No index on `tool`: nothing filters by it; it is diagnostic data only.
+- No index on `tool`: nothing filters by it; it is compared on replay to reject a key reused across different tools.
 - `ON DELETE CASCADE` matches the project's newer owner-scoped tables (`kb_sources`, `user_llm_settings`, refresh tokens). The stored response can contain feed content, so a user deletion must not leave it behind.
 - This is the only new table in the change; existing tables are untouched. The item is raw SQL in the Go migration chain (not alembic) because only the Go write path reads it.
 
@@ -101,7 +103,7 @@ Rejected variants: running the hooks inside the transaction (an external embeddi
 
 ### Retention
 
-A Go-side periodic cleanup deletes rows older than `TOOL_IDEMPOTENCY_RETENTION` (default 7 days). Retention is orders of magnitude larger than any retry/resume window; purging only ends the dedupe window and never touches feed data.
+A Go-side periodic cleanup deletes rows older than `TOOL_IDEMPOTENCY_RETENTION` (default 7 days). Retention is orders of magnitude larger than any retry/resume window; purging only ends the dedupe window and never touches feed data. The configured window must be at least one hour, which also keeps an hourly sweep from racing the conflict/replay read.
 
 ## Risks / Trade-offs
 
@@ -113,6 +115,7 @@ A Go-side periodic cleanup deletes rows older than `TOOL_IDEMPOTENCY_RETENTION` 
 - **Manual purge inside the retry window** → possible only via operator action; retention default prevents it.
 - **Replay skips embedding indexing and cache invalidation** → acceptable: the original commit already ran them, and indexing is best-effort (a failed index is dropped, as today). A replayed duplicate is not a new write and must not spend a provider call.
 - **JSONB response bloat** → bounded by retention plus the owner cascade; responses are the tool's own small result objects.
+- **External client reuses a key across different tools** → rejected with a typed validation error on replay instead of silently returning the other tool's response.
 
 ## Migration Plan
 
@@ -122,5 +125,4 @@ A Go-side periodic cleanup deletes rows older than `TOOL_IDEMPOTENCY_RETENTION` 
 
 ## Open Questions
 
-- Whether the confirmation card should hide the `idempotency_key` argument (cosmetic; can land later without spec changes).
 - The retention default may need tuning once write volume is known (config-only).

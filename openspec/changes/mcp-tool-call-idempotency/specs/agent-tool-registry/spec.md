@@ -4,7 +4,7 @@
 
 ### Requirement: Mutating tool schemas declare an optional idempotency key
 
-The mutating feed tools (`create_feed`, `update_feed`, `delete_feed`) SHALL declare an optional `idempotency_key` string argument in their served input schema, with a bounded length and a restricted character set. The argument SHALL be optional: a caller that omits it receives today's behavior with no deduplication. Read-only tools SHALL NOT declare the argument. The MCP `tools/list` surface SHALL expose the argument so external agents can opt in, and the tool descriptions SHALL document its semantics.
+The mutating feed tools (`create_feed`, `update_feed`, `delete_feed`) SHALL declare an optional `idempotency_key` string argument in their served input schema, with a bounded length, a restricted character set, and matching schema constraints (minimum length and pattern) advertised to clients. The argument SHALL be optional: a caller that omits it receives today's behavior with no deduplication. Read-only tools SHALL NOT declare the argument. The MCP `tools/list` surface SHALL expose the argument so external agents can opt in, and the tool descriptions SHALL document its semantics.
 
 #### Scenario: Mutating tool advertises the optional key
 
@@ -23,7 +23,7 @@ The mutating feed tools (`create_feed`, `update_feed`, `delete_feed`) SHALL decl
 
 ### Requirement: Mutating dispatches are deduplicated per owner and key
 
-When a mutating tool call carries an `idempotency_key`, the registry SHALL record the call and its response atomically with the underlying write: the idempotency record and the data mutation MUST commit in the same Postgres transaction, keyed by the authenticated owner id and the key. A dispatch whose (owner, key) already has a recorded response SHALL return that stored response without re-executing the write. The stored response MUST be the original successful tool result — including `delete_feed` returning its original success rather than a not-found error on replay. A concurrent duplicate SHALL wait for the first transaction and then return the stored response. Keys MUST be validated for length and character set before the tool body runs; an invalid key MUST return a typed validation error. Deduplication MUST NOT allow one owner to read another owner's stored response.
+When a mutating tool call carries an `idempotency_key`, the registry SHALL record the call and its response atomically with the underlying write: the idempotency record and the data mutation MUST commit in the same Postgres transaction, keyed by the authenticated owner id and the key. A dispatch whose (owner, key) already has a recorded response for the same tool SHALL return that stored response without re-executing the write. A key already recorded for a different tool MUST be rejected with a typed validation error rather than replaying the other tool's response. The stored response MUST be the original successful tool result — including `delete_feed` returning its original success rather than a not-found error on replay. A concurrent duplicate SHALL wait for the first transaction and then return the stored response. Keys MUST be validated for length and character set before the tool body runs; an invalid key MUST return a typed validation error. Deduplication MUST NOT allow one owner to read another owner's stored response.
 
 #### Scenario: Duplicate create returns the original row
 
@@ -45,6 +45,11 @@ When a mutating tool call carries an `idempotency_key`, the registry SHALL recor
 - **WHEN** two owners present the same key value
 - **THEN** each dispatch executes independently and neither can read the other's stored response
 
+#### Scenario: Cross-tool key reuse is rejected
+
+- **WHEN** an owner dispatches `create_feed` and then `delete_feed` with the same key value
+- **THEN** the second dispatch returns a typed validation error and does not replay the create response
+
 #### Scenario: Invalid key fails before the tool body
 
 - **WHEN** a caller supplies an `idempotency_key` that violates the declared length or character set
@@ -57,7 +62,7 @@ When a mutating tool call carries an `idempotency_key`, the registry SHALL recor
 
 ### Requirement: Idempotency records are retention-bounded
 
-The stored idempotency records SHALL be purged after a bounded retention window. Purging MUST only end the deduplication window; it MUST NOT modify tool data or leave a partially applied mutation.
+The stored idempotency records SHALL be purged after a bounded retention window of at least one hour. Purging MUST only end the deduplication window; it MUST NOT modify tool data or leave a partially applied mutation.
 
 #### Scenario: Expired records are purged
 

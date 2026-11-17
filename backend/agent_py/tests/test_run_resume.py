@@ -127,6 +127,39 @@ class _StubTools:
         return {"items": [1, 2, 3]}
 
 
+class _IdempotentStubTools:
+    calls: ClassVar[list[dict]] = []
+    gate: ClassVar[asyncio.Event | None] = None
+
+    async def list_tools(self):
+        return [
+            {
+                "type": "function",
+                "function": {
+                    "name": "create_feed",
+                    "description": "",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "title": {"type": "string"},
+                            "idempotency_key": {"type": "string"},
+                        },
+                        "required": ["title"],
+                    },
+                },
+            }
+        ]
+
+    async def accepts_idempotency_key(self, name):
+        return name == "create_feed"
+
+    async def call(self, name, arguments):
+        type(self).calls.append(dict(arguments))
+        if type(self).gate is not None:
+            await type(self).gate.wait()
+        return {"id": 99, "title": arguments.get("title", "")}
+
+
 async def _drop_schemas() -> None:
     conn = await asyncpg.connect(dsn=_DSN)
     try:
@@ -430,5 +463,87 @@ async def test_executor_skips_completed_steps_on_resume(monkeypatch):
             f"(step_1 already in step_outputs), got {_StubTools.call_count}. "
             f"The executor needs to skip steps with populated step_outputs."
         )
+
+    await _drop_schemas()
+
+
+async def test_idempotency_key_survives_checkpoint_resume(monkeypatch):
+    import asyncio
+
+    from agent.graph import build_graph
+    from agent.state import new_state
+    from agent.types import ChatMessage
+
+    _patch_common(monkeypatch)
+    monkeypatch.setattr(
+        _StubLlm,
+        "_PLAN",
+        {
+            "steps": [
+                {
+                    "id": "step_1",
+                    "kind": "tool",
+                    "tool": "create_feed",
+                    "args": {"title": "resume-key"},
+                },
+                {"id": "step_2", "kind": "llm", "prompt": "done"},
+            ]
+        },
+    )
+    _IdempotentStubTools.calls = []
+    _IdempotentStubTools.gate = asyncio.Event()
+    await _drop_schemas()
+    settings = _settings()
+    _patch_settings(monkeypatch, settings)
+
+    from agent.main import create_app, lifespan
+
+    app1 = create_app()
+    async with lifespan(app1):
+        graph1 = build_graph(
+            settings=app1.state.settings,
+            budget=_StubBudget(),
+            rag=_StubRag(),
+            tools=_IdempotentStubTools(),
+            checkpointer=app1.state.checkpointer,
+        )
+        run_id = f"resume-key-{uuid.uuid4()}"
+        config = {"configurable": {"thread_id": run_id}}
+        state = new_state(
+            user_id=1,
+            run_id=run_id,
+            messages=[ChatMessage(role="user", content="hi")],
+            model="stub-model",
+        )
+        graph_task = asyncio.create_task(_drain(graph1, state, config))
+        for _ in range(200):
+            if _IdempotentStubTools.calls:
+                break
+            await asyncio.sleep(0.01)
+        assert _IdempotentStubTools.calls, "phase 1 never dispatched the tool"
+        phase1_key = _IdempotentStubTools.calls[0]["idempotency_key"]
+        assert phase1_key
+        graph_task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await graph_task
+        _IdempotentStubTools.gate = None
+
+    from agent.main import create_app as create_app2
+    from agent.main import lifespan as lifespan2
+
+    _patch_settings(monkeypatch, settings)
+    app2 = create_app2()
+    async with lifespan2(app2):
+        graph2 = build_graph(
+            settings=app2.state.settings,
+            budget=_StubBudget(),
+            rag=_StubRag(),
+            tools=_IdempotentStubTools(),
+            checkpointer=app2.state.checkpointer,
+        )
+        async for _ in graph2.astream(None, config=config, stream_mode="values"):
+            pass
+        assert len(_IdempotentStubTools.calls) >= 2
+        assert _IdempotentStubTools.calls[-1]["idempotency_key"] == phase1_key
 
     await _drop_schemas()

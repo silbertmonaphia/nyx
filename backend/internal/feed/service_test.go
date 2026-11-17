@@ -56,6 +56,25 @@ func (s *stubRepo) Delete(_ context.Context, userID int, id int) error {
 }
 func (s *stubRepo) Ping(context.Context) error { return nil }
 
+func TestIdempotentMethodsRequireStore(t *testing.T) {
+	svc := NewService(
+		&stubRepo{},
+		cache.NewNoop(),
+		NoopEmbeddingIndexer{},
+		time.Minute,
+		0,
+		noop.NewTracerProvider().Tracer("test"),
+	)
+	idem, ok := svc.(idempotentService)
+	require.True(t, ok)
+	ctx := ctxWithUser(t, 1)
+
+	assert.ErrorIs(t, idem.CreateFeedIdempotent(ctx, &Feed{}, "k"), ErrIdempotencyUnavailable)
+	assert.ErrorIs(t, idem.UpdateFeedIdempotent(ctx, 1, &Feed{}, "k"), ErrIdempotencyUnavailable)
+	_, err := idem.DeleteFeedIdempotent(ctx, 1, "k")
+	assert.ErrorIs(t, err, ErrIdempotencyUnavailable)
+}
+
 func newServiceWithCache(t *testing.T) (Service, *stubRepo, *miniredis.Miniredis) {
 	t.Helper()
 	mr := miniredis.RunT(t)

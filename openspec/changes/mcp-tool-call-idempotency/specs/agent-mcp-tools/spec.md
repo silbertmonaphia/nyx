@@ -4,12 +4,17 @@
 
 ### Requirement: Idempotency-key property is served but hidden from the model
 
-When a registry tool's served `inputSchema` declares an optional `idempotency_key` property, the MCP `tools/list` surface SHALL expose it with a description telling clients to derive one deterministic key per logical operation, reuse it for identical retries, use a new key for a new operation, and omit it to opt out of deduplication. The agent's normalization SHALL exclude the property from the model-bound function schema and from the argument-schema text composed for retry re-prompts, so the model is never asked to produce or correct it. The dispatch funnel SHALL determine that a tool accepts a key from the raw served schema, not from the model-bound schema. The property MUST remain optional, and its presence MUST NOT change planner-catalog rendering, the confirmation policy, or retry classification.
+When a registry tool's served `inputSchema` declares an optional `idempotency_key` property, the MCP `tools/list` surface SHALL expose it with a description telling clients to derive one deterministic key per logical operation, reuse it for identical retries, use a new key for a new operation, and omit it to opt out of deduplication. The served property schema SHALL advertise the accepted minimum length and character pattern. The tool's top-level description MUST NOT mention the key: the planner catalog renders descriptions into the model prompt. The agent's normalization SHALL exclude the property from the model-bound function schema and from the argument-schema text composed for retry re-prompts, so the model is never asked to produce or correct it. The dispatch funnel SHALL determine that a tool accepts a key from the raw served schema, not from the model-bound schema. The property MUST remain optional, and its presence MUST NOT change planner-catalog rendering, the confirmation policy, or retry classification.
 
 #### Scenario: Served schema advertises the key with guidance
 
 - **WHEN** MCP `tools/list` returns `create_feed`
-- **THEN** its `inputSchema` includes an optional `idempotency_key` property whose description states the reuse-on-retry and new-key-per-operation semantics
+- **THEN** its `inputSchema` includes an optional `idempotency_key` property whose description states the reuse-on-retry and new-key-per-operation semantics, with the accepted minimum length and pattern on the property schema
+
+#### Scenario: Tool description does not ask the model for the key
+
+- **WHEN** the planner catalog or the bound function description is rendered from `tools/list`
+- **THEN** the top-level tool description does not mention `idempotency_key`; the guidance exists only on the property the agent strips
 
 #### Scenario: Model-bound schema excludes the property
 

@@ -2,12 +2,15 @@ package feed
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
+	"nyx/internal/idempotency"
 	"nyx/internal/platform/cache"
 	"nyx/internal/reqctx"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/rs/zerolog/log"
 	"go.opentelemetry.io/otel/trace"
 )
@@ -55,10 +58,22 @@ func (NoopEmbeddingIndexer) Delete(context.Context, int) error { return nil }
 
 const DefaultIndexTimeout = 5 * time.Second
 
+var ErrIdempotencyUnavailable = errors.New("feed: idempotency store unavailable")
+
+type DeleteReceipt struct {
+	Deleted bool `json:"deleted"`
+	ID      int  `json:"id"`
+}
+
+type txBinder interface {
+	WithTx(tx pgx.Tx) Repository
+}
+
 type feedService struct {
 	repo         Repository
 	cache        cache.Cache
 	indexer      EmbeddingIndexer
+	idem         *idempotency.Store
 	ttl          time.Duration
 	indexTimeout time.Duration
 	tracer       trace.Tracer
@@ -94,6 +109,10 @@ func (s *feedService) SetIndexer(idx EmbeddingIndexer) {
 		idx = NoopEmbeddingIndexer{}
 	}
 	s.indexer = idx
+}
+
+func (s *feedService) SetIdempotency(store *idempotency.Store) {
+	s.idem = store
 }
 
 // GetFeeds is a cache-aside read scoped to the authenticated user.
@@ -155,6 +174,11 @@ func (s *feedService) CreateFeed(ctx context.Context, m *Feed) error {
 	if err := s.repo.Create(ctx, userID, m); err != nil {
 		return err
 	}
+	s.afterCreate(ctx, userID, m)
+	return nil
+}
+
+func (s *feedService) afterCreate(ctx context.Context, userID int, m *Feed) {
 	indexCtx, cancel := context.WithTimeout(ctx, s.indexTimeout)
 	if err := s.indexer.Index(indexCtx, userID, m); err != nil {
 		log.Warn().Err(err).Int("feed_id", m.ID).Msg("feed embedding index failed")
@@ -166,7 +190,6 @@ func (s *feedService) CreateFeed(ctx context.Context, m *Feed) error {
 	}
 	cancel()
 	s.invalidate(ctx, userID)
-	return nil
 }
 
 // UpdateFeed persists the changes then invalidates every cached page
@@ -182,6 +205,11 @@ func (s *feedService) UpdateFeed(ctx context.Context, id int, m *Feed) error {
 	if err := s.repo.Update(ctx, userID, id, m); err != nil {
 		return err
 	}
+	s.afterUpdate(ctx, userID, id, m)
+	return nil
+}
+
+func (s *feedService) afterUpdate(ctx context.Context, userID int, id int, m *Feed) {
 	indexCtx, cancel := context.WithTimeout(ctx, s.indexTimeout)
 	if err := s.indexer.Index(indexCtx, userID, m); err != nil {
 		log.Warn().Err(err).Int("feed_id", id).Msg("feed embedding index failed")
@@ -193,7 +221,6 @@ func (s *feedService) UpdateFeed(ctx context.Context, id int, m *Feed) error {
 	}
 	cancel()
 	s.invalidate(ctx, userID)
-	return nil
 }
 
 // DeleteFeed soft-deletes the row then invalidates every cached page
@@ -209,13 +236,104 @@ func (s *feedService) DeleteFeed(ctx context.Context, id int) error {
 	if err := s.repo.Delete(ctx, userID, id); err != nil {
 		return err
 	}
+	s.afterDelete(ctx, userID, id)
+	return nil
+}
+
+func (s *feedService) afterDelete(ctx context.Context, userID int, id int) {
 	indexCtx, cancel := context.WithTimeout(ctx, s.indexTimeout)
 	if err := s.indexer.Delete(indexCtx, id); err != nil {
 		log.Warn().Err(err).Int("feed_id", id).Msg("feed embedding delete failed")
 	}
 	cancel()
 	s.invalidate(ctx, userID)
+}
+
+func (s *feedService) CreateFeedIdempotent(ctx context.Context, m *Feed, key string) error {
+	ctx, span := s.tracer.Start(ctx, "feed.CreateFeedIdempotent", trace.WithSpanKind(trace.SpanKindInternal))
+	defer span.End()
+
+	userID := reqctx.UserIDFromContext(ctx)
+	binder, bindErr := s.idempotentBinder()
+	if bindErr != nil {
+		return bindErr
+	}
+
+	replayed, err := s.idem.Do(ctx, int64(userID), key, "create_feed", m, func(tx pgx.Tx) (any, error) {
+		if err := binder.WithTx(tx).Create(ctx, userID, m); err != nil {
+			return nil, err
+		}
+		return *m, nil
+	})
+	if err != nil {
+		return err
+	}
+	if !replayed {
+		s.afterCreate(ctx, userID, m)
+	}
 	return nil
+}
+
+func (s *feedService) UpdateFeedIdempotent(ctx context.Context, id int, m *Feed, key string) error {
+	ctx, span := s.tracer.Start(ctx, "feed.UpdateFeedIdempotent", trace.WithSpanKind(trace.SpanKindInternal))
+	defer span.End()
+
+	userID := reqctx.UserIDFromContext(ctx)
+	binder, bindErr := s.idempotentBinder()
+	if bindErr != nil {
+		return bindErr
+	}
+
+	replayed, err := s.idem.Do(ctx, int64(userID), key, "update_feed", m, func(tx pgx.Tx) (any, error) {
+		if err := binder.WithTx(tx).Update(ctx, userID, id, m); err != nil {
+			return nil, err
+		}
+		return *m, nil
+	})
+	if err != nil {
+		return err
+	}
+	if !replayed {
+		s.afterUpdate(ctx, userID, id, m)
+	}
+	return nil
+}
+
+func (s *feedService) DeleteFeedIdempotent(ctx context.Context, id int, key string) (DeleteReceipt, error) {
+	ctx, span := s.tracer.Start(ctx, "feed.DeleteFeedIdempotent", trace.WithSpanKind(trace.SpanKindInternal))
+	defer span.End()
+
+	userID := reqctx.UserIDFromContext(ctx)
+	binder, bindErr := s.idempotentBinder()
+	if bindErr != nil {
+		return DeleteReceipt{}, bindErr
+	}
+
+	var receipt DeleteReceipt
+	replayed, err := s.idem.Do(ctx, int64(userID), key, "delete_feed", &receipt, func(tx pgx.Tx) (any, error) {
+		if err := binder.WithTx(tx).Delete(ctx, userID, id); err != nil {
+			return nil, err
+		}
+		return DeleteReceipt{Deleted: true, ID: id}, nil
+	})
+	if err != nil {
+		return DeleteReceipt{}, err
+	}
+	if !replayed {
+		s.afterDelete(ctx, userID, id)
+	}
+	return receipt, nil
+}
+
+func (s *feedService) idempotentBinder() (txBinder, error) {
+	if s.idem == nil {
+		return nil, ErrIdempotencyUnavailable
+	}
+	binder, ok := s.repo.(txBinder)
+	if !ok {
+		return nil, ErrIdempotencyUnavailable
+	}
+	return binder, nil
 }
 
 // GetFeedByID is a single-row, no-cache read scoped to the

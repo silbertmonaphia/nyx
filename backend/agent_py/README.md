@@ -62,12 +62,44 @@ flowchart TB
   works with no account) and SSRF-guarded `web_fetch` with untrusted-content framing.
 - **Feed tools with confirmation** — the planner sees the live MCP registry (feed CRUD);
   non-read-only calls pause the run on an in-chat approve/deny card (`confirm_request`).
+- **Idempotent write tools** — every mutating tool call carries a deterministic
+  `idempotency_key` derived once per logical call, stable across transient retries and checkpoint
+  resume, so a replayed create/update/delete never double-applies. The model never sees the
+  property, and a supplied value is overwritten for declaring tools; Go commits the write and
+  its idempotency record atomically. Details below.
 - **Memory** — every session and message is persisted (1-year retention floor, soft-delete +
   grace); the planner and the executor get a cross-session "Known user preferences" block;
   sessions title themselves from the first exchange (deterministic 48-char label, then one
   fire-and-forget refinement call); the subject-facing surfaces are owner-scoped:
   `/agent/sessions*` (history sidebar API) and GDPR export/erasure (`/agent/me/*`) with a
   counts-only audit log.
+
+### Idempotent mutating tool calls
+
+OpenSpec change `mcp-tool-call-idempotency`.
+
+- **Key** — the executor derives `uuid5(fixed namespace, "<run_id>:<turn_id>:<step_id>:<tool>:<canonical_args>")`
+  once per logical tool call and attaches it as the `idempotency_key` argument. `turn_id` is minted
+  per turn and checkpointed, so identical turns in one session stay distinct while a resume
+  reproduces the original key. `call_id` stays per-attempt for SSE frames.
+- **Model-hidden** — normalization strips the served `idempotency_key` property from the
+  model-bound schema and from the retry re-prompt schema text. For a tool that declares the
+  property, any model-supplied value is overwritten; non-declaring tools receive unchanged
+  arguments.
+- **Schema-driven** — only tools whose served MCP `inputSchema` declares `idempotency_key` receive
+  it: `create_feed`, `update_feed`, `delete_feed` declare it, read-only tools do not. External MCP
+  clients may omit it (no dedupe, legacy behavior); an absent key is unchanged behavior.
+- **Stability** — the key survives transient retries and checkpoint resume for plan `tool` steps.
+  A corrected re-prompt that changes the tool name or arguments is a new intent and derives a new
+  key. React steps whose regenerated arguments differ are a new intent too, and are therefore not
+  deduped (documented limitation).
+- **Enforcement** — Go runs the mutation and its `tool_idempotency` record in one Postgres
+  transaction keyed by (authenticated owner id, key); a duplicate returns the stored original
+  success response, so a replayed `delete_feed` returns success rather than not-found. Records are
+  retention-bounded (`TOOL_IDEMPOTENCY_RETENTION`, default `168h`).
+- **Test fault seam** — `PYTHON_AGENT_TEST_LOSE_TOOL_RESULT_ONCE=true` makes the executor drop the
+  first mutating-tool result per run after the server committed it, forcing the transient retry
+  path. Test environments only; never enable in a deployed environment.
 
 ## Endpoints
 
@@ -143,6 +175,10 @@ recreate the `agent.*` / `langgraph.*` schemas — and `PYTHON_AGENT_DATABASE_UR
 
 `fakeredis` + `httpx.MockTransport` — no live network needed.
 
+`PYTHON_AGENT_TEST_LOSE_TOOL_RESULT_ONCE=true` is the fault seam for the idempotent-retry path: the
+executor drops the first mutating-tool result per run after the Go server has committed it, forcing a
+transient retry with the same key. Never enable it in a deployed environment.
+
 ## Lint and type checking
 
 ```bash
@@ -187,6 +223,8 @@ Common flags:
 |---|---|---|
 | `PYTHON_AGENT_PLANNER_STRUCTURED_ENABLED` | `true` | `false` → legacy free-text plan parsing |
 | `PYTHON_AGENT_TOOL_RETRY_MAX` | `2` | Retries per tool call (validator + transient paths) |
+| `TOOL_IDEMPOTENCY_RETENTION` | `168h` | Go backend: retention window for `tool_idempotency` dedupe records (unprefixed — shared cross-runtime contract) |
+| `PYTHON_AGENT_TEST_LOSE_TOOL_RESULT_ONCE` | `false` | Test-only fault seam: drop the first mutating-tool result per run after commit to exercise the idempotent transient-retry path. Never enable in a deployed environment. |
 | `PYTHON_AGENT_WEB_FETCH_ENABLED` / `WEB_SEARCH_ENABLED` | `false` | Agent-native web tools; search runs keyless without `TAVILY_API_KEY` |
 | `PYTHON_AGENT_SWEEP_ENABLED` | `true` | Stale-run reaper kill switch |
 | `PYTHON_AGENT_OTEL_ENABLED` | `true` | Jaeger span export; `false` → no Jaeger exporter constructed |

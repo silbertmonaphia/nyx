@@ -17,6 +17,7 @@ import json
 import logging
 import random
 import re
+import threading
 import uuid
 from typing import Any
 
@@ -1138,22 +1139,58 @@ async def _dispatch_tool_with_retries(
         # stays outside it so an exception still reaches this frame's
         # handler with the observation already closed as ERROR.
         attempt_error: Exception | None = None
-        with trace_observation(
-            "agent.tool_call",
-            input={"tool": current_name, "args": current_args},
-            metadata={
-                "tool": current_name,
-                "step_id": step_id,
-                "attempt": retries_made + 1,
-            },
-        ) as lf_tool:
+        dispatch_args = current_args
+        accepts_idempotency_key = False
+        accepts_key_checker = getattr(tools, "accepts_idempotency_key", None)
+        if accepts_key_checker is not None:
             try:
-                result = await tools.call(current_name, current_args)
-            except Exception as exc:  # noqa: BLE001 — classified below, never re-raised raw
-                attempt_error = exc
-                update_observation(lf_tool, output={"status": "failed"}, level="ERROR")
-            else:
-                update_observation(lf_tool, output={"status": "ok"})
+                accepts_idempotency_key = bool(await accepts_key_checker(current_name))
+            except Exception as exc:  # noqa: BLE001 — fail closed on an unknown capability
+                attempt_error = (
+                    exc
+                    if isinstance(exc, ToolUnavailableError)
+                    else ToolUnavailableError(repr(exc))
+                )
+            if attempt_error is None and accepts_idempotency_key:
+                dispatch_args = {
+                    key: value
+                    for key, value in current_args.items()
+                    if key != "idempotency_key"
+                }
+                dispatch_args["idempotency_key"] = _idempotency_key(
+                    state["run_id"],
+                    state.get("turn_id") or state["run_id"],
+                    step_id,
+                    current_name,
+                    dispatch_args,
+                )
+        if attempt_error is None:
+            with trace_observation(
+                "agent.tool_call",
+                input={"tool": current_name, "args": current_args},
+                metadata={
+                    "tool": current_name,
+                    "step_id": step_id,
+                    "attempt": retries_made + 1,
+                },
+            ) as lf_tool:
+                try:
+                    result = await tools.call(current_name, dispatch_args)
+                except Exception as exc:  # noqa: BLE001 — classified below, never re-raised raw
+                    attempt_error = exc
+                    update_observation(lf_tool, output={"status": "failed"}, level="ERROR")
+                else:
+                    if accepts_idempotency_key and _should_lose_tool_result_once(
+                        state["run_id"], settings
+                    ):
+                        attempt_error = ToolUnavailableError(
+                            "injected tool response loss (test fault)"
+                        )
+                        update_observation(
+                            lf_tool, output={"status": "failed"}, level="ERROR"
+                        )
+                    else:
+                        update_observation(lf_tool, output={"status": "ok"})
 
         if attempt_error is not None:
             failure_class = _classify_tool_failure(attempt_error)
@@ -1414,6 +1451,30 @@ def _canonical_args(args: dict) -> str:
         return json.dumps(args, sort_keys=True, default=str)
     except (TypeError, ValueError):
         return repr(args)
+
+
+_IDEMPOTENCY_NAMESPACE = uuid.uuid5(
+    uuid.NAMESPACE_URL, "https://nyx.local/tool-call-idempotency"
+)
+_TEST_LOST_RESULT_RUNS: set[str] = set()
+_TEST_LOST_RESULT_LOCK = threading.Lock()
+
+
+def _idempotency_key(
+    run_id: str, turn_id: str, step_id: str, tool_name: str, args: dict
+) -> str:
+    payload = f"{run_id}:{turn_id}:{step_id}:{tool_name}:{_canonical_args(args)}"
+    return str(uuid.uuid5(_IDEMPOTENCY_NAMESPACE, payload))
+
+
+def _should_lose_tool_result_once(run_id: str, settings: Settings) -> bool:
+    if not settings.test_lose_tool_result_once:
+        return False
+    with _TEST_LOST_RESULT_LOCK:
+        if run_id in _TEST_LOST_RESULT_RUNS:
+            return False
+        _TEST_LOST_RESULT_RUNS.add(run_id)
+        return True
 
 
 def _tool_schema_text(schemas: list, tool_name: str) -> str:

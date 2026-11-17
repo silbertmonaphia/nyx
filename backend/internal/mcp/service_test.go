@@ -95,8 +95,79 @@ func contextOrBG() context.Context { return context.Background() }
 
 // newTestService returns a Service wired over the supplied stub
 // with a noop tracer so spans don't try to export.
-func newTestService(stub *stubFeedService) *Service {
+func newTestService(stub feed.Service) *Service {
 	return NewService(stub, noop.NewTracerProvider().Tracer("test"))
+}
+
+type idempotentStubFeedService struct {
+	*stubFeedService
+	createIdemCalls int
+	updateIdemCalls int
+	deleteIdemCalls int
+	lastIdemKey     string
+}
+
+func (s *idempotentStubFeedService) CreateFeedIdempotent(_ context.Context, m *feed.Feed, key string) error {
+	s.createIdemCalls++
+	s.lastIdemKey = key
+	m.ID = 91
+	return nil
+}
+
+func (s *idempotentStubFeedService) UpdateFeedIdempotent(_ context.Context, id int, m *feed.Feed, key string) error {
+	s.updateIdemCalls++
+	s.lastIdemKey = key
+	m.ID = id
+	return nil
+}
+
+func (s *idempotentStubFeedService) DeleteFeedIdempotent(_ context.Context, id int, key string) (feed.DeleteReceipt, error) {
+	s.deleteIdemCalls++
+	s.lastIdemKey = key
+	return feed.DeleteReceipt{Deleted: true, ID: id}, nil
+}
+
+func TestService_CreateFeed_WithoutKeyUsesLegacyPath(t *testing.T) {
+	base := &stubFeedService{}
+	stub := &idempotentStubFeedService{stubFeedService: base}
+	svc := newTestService(stub)
+
+	ctx := reqctx.WithUserID(context.Background(), 42)
+	_, err := svc.handleCreateFeed(ctx, mcp.CallToolRequest{}, createFeedArgs{Title: "Hello"})
+	require.NoError(t, err)
+	require.NotNil(t, base.lastCreateFeed)
+	assert.Zero(t, stub.createIdemCalls)
+	assert.Empty(t, stub.lastIdemKey)
+}
+
+func TestService_CreateFeed_WithKeyRoutesToIdempotentPath(t *testing.T) {
+	base := &stubFeedService{}
+	stub := &idempotentStubFeedService{stubFeedService: base}
+	svc := newTestService(stub)
+
+	ctx := reqctx.WithUserID(context.Background(), 42)
+	_, err := svc.handleCreateFeed(ctx, mcp.CallToolRequest{}, createFeedArgs{
+		Title:          "Hello",
+		IdempotencyKey: "k-1",
+	})
+	require.NoError(t, err)
+	assert.Equal(t, 1, stub.createIdemCalls)
+	assert.Equal(t, "k-1", stub.lastIdemKey)
+	assert.Nil(t, base.lastCreateFeed, "legacy write must not run when a key is present")
+}
+
+func TestService_CreateFeed_WithKeyUnsupportedMapsToInternal(t *testing.T) {
+	stub := &stubFeedService{}
+	svc := newTestService(stub)
+
+	ctx := reqctx.WithUserID(context.Background(), 42)
+	_, err := svc.handleCreateFeed(ctx, mcp.CallToolRequest{}, createFeedArgs{
+		Title:          "Hello",
+		IdempotencyKey: "k-1",
+	})
+	require.Error(t, err)
+	assert.True(t, errors.Is(err, ErrInternal), "an unwired idempotency store must map to ErrInternal; got %v", err)
+	assert.Nil(t, stub.lastCreateFeed)
 }
 
 func TestService_ListFeeds_PageSizeClampedTo100(t *testing.T) {

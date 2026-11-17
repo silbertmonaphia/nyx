@@ -166,7 +166,26 @@ class ToolsClient:
         return result
 
 
-def normalize_registry_tools(raw_tools: object) -> tuple[list[dict], dict[str, dict]]:
+_IDEMPOTENCY_KEY = "idempotency_key"
+
+
+def _strip_idempotency_key(schema: dict) -> tuple[dict, bool]:
+    properties = schema.get("properties")
+    if not isinstance(properties, dict) or _IDEMPOTENCY_KEY not in properties:
+        return schema, False
+    stripped = dict(schema)
+    stripped["properties"] = {
+        key: value for key, value in properties.items() if key != _IDEMPOTENCY_KEY
+    }
+    required = stripped.get("required")
+    if isinstance(required, list):
+        stripped["required"] = [name for name in required if name != _IDEMPOTENCY_KEY]
+    return stripped, True
+
+
+def normalize_registry_tools(
+    raw_tools: object,
+) -> tuple[list[dict], dict[str, dict], set[str]]:
     """Normalize MCP-native `tools/list` entries into bindable function tools.
 
     The Go server's wire shape is `{name, description, inputSchema,
@@ -178,17 +197,22 @@ def normalize_registry_tools(raw_tools: object) -> tuple[list[dict], dict[str, d
     — they must NOT travel inside the bound function object, which is the
     same silent-drop trap this normalization exists to fix.
 
+    The served `idempotency_key` property is stripped from the bindable
+    schema and recorded per tool: the runtime derives and injects that
+    argument, so the model must neither see it nor supply it.
+
     Entries that cannot be bound (missing name, or a schema that is not an
     object) are logged and skipped; the run continues with the rest. An
     absent or empty `annotations` object normalizes to `{}` (fail-safe:
     the confirmation policy gates on a positive `readOnlyHint=true`).
 
-    Returns `(schemas, annotations_by_name)`.
+    Returns `(schemas, annotations_by_name, idempotency_tools)`.
     """
     schemas: list[dict] = []
     annotations: dict[str, dict] = {}
+    idempotency_tools: set[str] = set()
     if not isinstance(raw_tools, list):
-        return schemas, annotations
+        return schemas, annotations, idempotency_tools
     for entry in raw_tools:
         if not isinstance(entry, dict):
             log.warning(
@@ -206,13 +230,19 @@ def normalize_registry_tools(raw_tools: object) -> tuple[list[dict], dict[str, d
                 log.warning("registry tools/list: skipping entry without a name")
                 continue
             parameters = function.get("parameters")
+            if isinstance(parameters, dict):
+                parameters, declared = _strip_idempotency_key(parameters)
+            else:
+                parameters, declared = {}, False
+            if declared:
+                idempotency_tools.add(name)
             schemas.append(
                 {
                     "type": "function",
                     "function": {
                         "name": name,
                         "description": function.get("description") or "",
-                        "parameters": parameters if isinstance(parameters, dict) else {},
+                        "parameters": parameters,
                     },
                 }
             )
@@ -233,6 +263,9 @@ def normalize_registry_tools(raw_tools: object) -> tuple[list[dict], dict[str, d
                     type(schema).__name__,
                 )
                 continue
+            schema, declared = _strip_idempotency_key(schema)
+            if declared:
+                idempotency_tools.add(name)
             schemas.append(
                 {
                     "type": "function",
@@ -247,7 +280,7 @@ def normalize_registry_tools(raw_tools: object) -> tuple[list[dict], dict[str, d
         annotations[name] = (
             entry_annotations if isinstance(entry_annotations, dict) else {}
         )
-    return schemas, annotations
+    return schemas, annotations, idempotency_tools
 
 
 def _iserror_text(result: dict) -> str:

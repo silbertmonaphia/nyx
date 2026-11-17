@@ -11,6 +11,7 @@ backoff, both unchanged from the registry-tool paths.
 from __future__ import annotations
 
 import logging
+import uuid
 from typing import ClassVar
 
 import pytest
@@ -18,8 +19,13 @@ from langchain_core.messages import AIMessage
 from opentelemetry import trace
 
 from agent import executor as executor_module
+from agent.approvals import DECISION_APPROVE
 from agent.config import Settings
-from agent.executor import _dispatch_tool_with_retries
+from agent.executor import (
+    _dispatch_tool_with_retries,
+    _idempotency_key,
+    _should_lose_tool_result_once,
+)
 from agent.state import new_state
 from agent.tool_dispatch import LocalTool, LocalToolRegistry, ToolDispatcher
 from agent.tools_client import ToolError, ToolUnavailableError
@@ -239,6 +245,297 @@ def _patch_llm(monkeypatch):
     monkeypatch.setattr(executor_module, "ChatOpenAI", _ScriptedLlm)
     _ScriptedLlm.responses = []
     yield
+
+
+@pytest.fixture(autouse=True)
+def _clear_test_fault_runs():
+    executor_module._TEST_LOST_RESULT_RUNS.clear()
+    yield
+    executor_module._TEST_LOST_RESULT_RUNS.clear()
+
+
+class FlakyMcp(FakeMcp):
+    def __init__(self, schemas=None, failures: int = 0, result=None):
+        super().__init__(schemas=schemas, result=result)
+        self.failures = failures
+
+    async def call(self, name, arguments):
+        self.calls.append((name, arguments))
+        if self.failures > 0:
+            self.failures -= 1
+            raise ToolUnavailableError("timeout")
+        return self.result
+
+
+class FlakyListMcp(FakeMcp):
+    def __init__(self, schemas=None, list_failures: int = 0):
+        super().__init__(schemas=schemas)
+        self.list_failures = list_failures
+
+    async def list_tools(self):
+        if self.list_failures > 0:
+            self.list_failures -= 1
+            raise RuntimeError("mcp down")
+        return list(self.schemas)
+
+
+def idempotent_schema(name: str) -> dict:
+    return {
+        "name": name,
+        "description": "",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "title": {"type": "string"},
+                "idempotency_key": {"type": "string"},
+            },
+            "required": ["title"],
+        },
+        "annotations": {"readOnlyHint": False},
+    }
+
+
+class _ApproveAll:
+    async def request_confirmation(self, *args, **kwargs):
+        return DECISION_APPROVE
+
+
+def read_only_schema(name: str) -> dict:
+    return {
+        "name": name,
+        "description": "",
+        "inputSchema": {
+            "type": "object",
+            "properties": {"query": {"type": "string"}},
+        },
+        "annotations": {"readOnlyHint": True},
+    }
+
+
+def test_idempotency_key_is_deterministic():
+    first = _idempotency_key("r", "t1", "s1", "create_feed", {"title": "x"})
+    same = _idempotency_key("r", "t1", "s1", "create_feed", {"title": "x"})
+    other_turn = _idempotency_key("r", "t2", "s1", "create_feed", {"title": "x"})
+    other_step = _idempotency_key("r", "t1", "s2", "create_feed", {"title": "x"})
+    other_args = _idempotency_key("r", "t1", "s1", "create_feed", {"title": "y"})
+
+    assert first == same
+    assert len({first, other_turn, other_step, other_args}) == 4
+    assert str(uuid.UUID(first)) == first
+
+
+def test_session_continuation_turns_get_distinct_keys():
+    first = new_state(user_id=1, run_id="session-1", messages=[], model="stub")
+    second = new_state(user_id=1, run_id="session-1", messages=[], model="stub")
+
+    assert first["turn_id"] != second["turn_id"]
+    assert _idempotency_key(
+        "session-1", first["turn_id"], "step_1", "create_feed", {"title": "x"}
+    ) != _idempotency_key(
+        "session-1", second["turn_id"], "step_1", "create_feed", {"title": "x"}
+    )
+
+
+def test_resume_reuses_checkpointed_turn_id():
+    original = new_state(user_id=1, run_id="session-1", messages=[], model="stub")
+    resumed = new_state(
+        user_id=1,
+        run_id="session-1",
+        messages=[],
+        model="stub",
+        turn_id=original["turn_id"],
+    )
+
+    assert resumed["turn_id"] == original["turn_id"]
+    assert _idempotency_key(
+        "session-1", original["turn_id"], "step_1", "create_feed", {"title": "x"}
+    ) == _idempotency_key(
+        "session-1", resumed["turn_id"], "step_1", "create_feed", {"title": "x"}
+    )
+
+
+async def test_idempotency_key_stable_across_transient_retries(tracer):
+    mcp = FlakyMcp(schemas=[idempotent_schema("create_feed")], failures=1)
+    dispatcher = ToolDispatcher(mcp=mcp)
+    state = _state()
+
+    with tracer.start_as_current_span("x") as span:
+        ok, _result, _content = await _dispatch_tool_with_retries(
+            state,
+            step_id="s1",
+            tool_name="create_feed",
+            args={"title": "x"},
+            tools=dispatcher,
+            approvals=_ApproveAll(),
+            settings=_settings(),
+            tracer=tracer,
+            budget=_StubBudget(),
+            span=span,
+        )
+
+    assert ok is True
+    assert len(mcp.calls) == 2
+    keys = [arguments["idempotency_key"] for _, arguments in mcp.calls]
+    assert keys[0] == keys[1]
+    assert keys[0] == _idempotency_key(
+        "r", state["turn_id"], "s1", "create_feed", {"title": "x"}
+    )
+
+    frames = [e for e in state["events_so_far"] if e.kind == "tool_call"]
+    assert len(frames) == 2
+    assert frames[0].payload["call_id"] != frames[1].payload["call_id"]
+    assert "idempotency_key" not in frames[0].payload["args"]
+
+
+async def test_model_supplied_idempotency_key_is_overridden(tracer):
+    mcp = FakeMcp(schemas=[idempotent_schema("create_feed")])
+    dispatcher = ToolDispatcher(mcp=mcp)
+    state = _state()
+
+    with tracer.start_as_current_span("x") as span:
+        ok, _result, _content = await _dispatch_tool_with_retries(
+            state,
+            step_id="s1",
+            tool_name="create_feed",
+            args={"title": "x", "idempotency_key": "model-key"},
+            tools=dispatcher,
+            approvals=_ApproveAll(),
+            settings=_settings(),
+            tracer=tracer,
+            budget=_StubBudget(),
+            span=span,
+        )
+
+    assert ok is True
+    dispatched = mcp.calls[0][1]
+    assert dispatched["idempotency_key"] != "model-key"
+    assert dispatched["idempotency_key"] == _idempotency_key(
+        "r", state["turn_id"], "s1", "create_feed", {"title": "x"}
+    )
+
+
+async def test_non_declaring_tool_gets_no_idempotency_key(tracer):
+    mcp = FakeMcp(schemas=[read_only_schema("list_feeds")])
+    dispatcher = ToolDispatcher(mcp=mcp)
+    state = _state()
+
+    with tracer.start_as_current_span("x") as span:
+        ok, _result, _content = await _dispatch_tool_with_retries(
+            state,
+            step_id="s1",
+            tool_name="list_feeds",
+            args={"query": "x"},
+            tools=dispatcher,
+            settings=_settings(),
+            tracer=tracer,
+            budget=_StubBudget(),
+            span=span,
+        )
+
+    assert ok is True
+    assert mcp.calls[0][1] == {"query": "x"}
+
+
+async def test_non_declaring_tool_keeps_model_supplied_key(tracer):
+    mcp = FakeMcp(schemas=[read_only_schema("list_feeds")])
+    dispatcher = ToolDispatcher(mcp=mcp)
+    state = _state()
+
+    with tracer.start_as_current_span("x") as span:
+        ok, _result, _content = await _dispatch_tool_with_retries(
+            state,
+            step_id="s1",
+            tool_name="list_feeds",
+            args={"query": "x", "idempotency_key": "model-key"},
+            tools=dispatcher,
+            settings=_settings(),
+            tracer=tracer,
+            budget=_StubBudget(),
+            span=span,
+        )
+
+    assert ok is True
+    assert mcp.calls[0][1] == {"query": "x", "idempotency_key": "model-key"}
+
+
+async def test_injected_response_loss_forces_retry_with_same_key(tracer):
+    mcp = FakeMcp(schemas=[idempotent_schema("create_feed")])
+    dispatcher = ToolDispatcher(mcp=mcp)
+    state = _state()
+    settings = _settings().model_copy(update={"test_lose_tool_result_once": True})
+
+    with tracer.start_as_current_span("x") as span:
+        ok, _result, _content = await _dispatch_tool_with_retries(
+            state,
+            step_id="s1",
+            tool_name="create_feed",
+            args={"title": "x"},
+            tools=dispatcher,
+            approvals=_ApproveAll(),
+            settings=settings,
+            tracer=tracer,
+            budget=_StubBudget(),
+            span=span,
+        )
+
+    assert ok is True
+    assert len(mcp.calls) == 2
+    keys = [arguments["idempotency_key"] for _, arguments in mcp.calls]
+    assert keys[0] == keys[1]
+
+
+def test_test_fault_gate_defaults_off():
+    assert _should_lose_tool_result_once("r", _settings()) is False
+
+
+async def test_capability_lookup_failure_fails_closed(tracer):
+    mcp = FakeMcp(schemas=[idempotent_schema("create_feed")], fail_list=True)
+    dispatcher = ToolDispatcher(mcp=mcp)
+    state = _state()
+
+    with tracer.start_as_current_span("x") as span:
+        ok, _result, content = await _dispatch_tool_with_retries(
+            state,
+            step_id="s1",
+            tool_name="create_feed",
+            args={"title": "x"},
+            tools=dispatcher,
+            approvals=_ApproveAll(),
+            settings=_settings(),
+            tracer=tracer,
+            budget=_StubBudget(),
+            span=span,
+        )
+
+    assert ok is False
+    assert mcp.calls == []
+    assert content == "tool unavailable"
+
+
+async def test_capability_lookup_recovery_injects_key(tracer):
+    mcp = FlakyListMcp(schemas=[idempotent_schema("create_feed")], list_failures=1)
+    dispatcher = ToolDispatcher(mcp=mcp)
+    state = _state()
+
+    with tracer.start_as_current_span("x") as span:
+        ok, _result, _content = await _dispatch_tool_with_retries(
+            state,
+            step_id="s1",
+            tool_name="create_feed",
+            args={"title": "x"},
+            tools=dispatcher,
+            approvals=_ApproveAll(),
+            settings=_settings(),
+            tracer=tracer,
+            budget=_StubBudget(),
+            span=span,
+        )
+
+    assert ok is True
+    assert len(mcp.calls) == 1
+    assert mcp.calls[0][1]["idempotency_key"] == _idempotency_key(
+        "r", state["turn_id"], "s1", "create_feed", {"title": "x"}
+    )
 
 
 async def test_web_tool_arg_error_drives_reprompt_path(tracer, monkeypatch):

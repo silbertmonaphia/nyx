@@ -117,19 +117,20 @@ type Config struct {
 	// the upstream completion size. LLM_TIMEOUT is the per-call
 	// socket deadline; LLM_MAX_STREAM_DURATION is the hard wall-clock
 	// cap on a single stream — anything longer is force-closed.
-	LLMEnabled            bool   `mapstructure:"LLM_ENABLED"`
-	LLMProvider           string `mapstructure:"LLM_PROVIDER"`
-	LLMBaseURL            string `mapstructure:"LLM_BASE_URL"`
-	LLMAPIKey             string `mapstructure:"LLM_API_KEY"`
-	LLMModel              string `mapstructure:"LLM_MODEL"`
-	LLMTimeout            string `mapstructure:"LLM_TIMEOUT"`
-	FeedIndexTimeout      string `mapstructure:"FEED_INDEX_TIMEOUT"`
-	LLMMaxTokens          int    `mapstructure:"LLM_MAX_TOKENS"`
-	LLMSystemPrompt       string `mapstructure:"LLM_SYSTEM_PROMPT"`
-	LLMMaxHistoryMessages int    `mapstructure:"LLM_MAX_HISTORY_MESSAGES"`
-	LLMMaxMessageChars    int    `mapstructure:"LLM_MAX_MESSAGE_CHARS"`
-	LLMMaxStreamDuration  string `mapstructure:"LLM_MAX_STREAM_DURATION"`
-	LLMAllowPrivateURL    bool   `mapstructure:"LLM_ALLOW_PRIVATE_URL"`
+	LLMEnabled               bool   `mapstructure:"LLM_ENABLED"`
+	LLMProvider              string `mapstructure:"LLM_PROVIDER"`
+	LLMBaseURL               string `mapstructure:"LLM_BASE_URL"`
+	LLMAPIKey                string `mapstructure:"LLM_API_KEY"`
+	LLMModel                 string `mapstructure:"LLM_MODEL"`
+	LLMTimeout               string `mapstructure:"LLM_TIMEOUT"`
+	FeedIndexTimeout         string `mapstructure:"FEED_INDEX_TIMEOUT"`
+	ToolIdempotencyRetention string `mapstructure:"TOOL_IDEMPOTENCY_RETENTION"`
+	LLMMaxTokens             int    `mapstructure:"LLM_MAX_TOKENS"`
+	LLMSystemPrompt          string `mapstructure:"LLM_SYSTEM_PROMPT"`
+	LLMMaxHistoryMessages    int    `mapstructure:"LLM_MAX_HISTORY_MESSAGES"`
+	LLMMaxMessageChars       int    `mapstructure:"LLM_MAX_MESSAGE_CHARS"`
+	LLMMaxStreamDuration     string `mapstructure:"LLM_MAX_STREAM_DURATION"`
+	LLMAllowPrivateURL       bool   `mapstructure:"LLM_ALLOW_PRIVATE_URL"`
 
 	BYOKAllowPrivateURL bool `mapstructure:"BYOK_ALLOW_PRIVATE_URL"`
 
@@ -186,17 +187,17 @@ type Config struct {
 	RAGMaxContextChars          int    `mapstructure:"RAG_MAX_CONTEXT_CHARS"`
 	RAGMaxBackfillPerRequest    int    `mapstructure:"RAG_MAX_BACKFILL_PER_REQUEST"`
 
-	KBEnabled            bool   `mapstructure:"KB_ENABLED"`
-	KBMaxFileBytes       int64  `mapstructure:"KB_MAX_FILE_BYTES"`
-	KBMaxFiles           int    `mapstructure:"KB_MAX_FILES"`
-	KBMaxDepth           int    `mapstructure:"KB_MAX_DEPTH"`
-	KBChunkTargetTokens  int    `mapstructure:"KB_CHUNK_TARGET_TOKENS"`
-	KBChunkMaxTokens     int    `mapstructure:"KB_CHUNK_MAX_TOKENS"`
-	KBChunkMinTokens     int    `mapstructure:"KB_CHUNK_MIN_TOKENS"`
-	KBChunkOverlapTokens int    `mapstructure:"KB_CHUNK_OVERLAP_TOKENS"`
-	KBTopK               int    `mapstructure:"KB_TOP_K"`
-	KBMaxContextChars    int    `mapstructure:"KB_MAX_CONTEXT_CHARS"`
-	KBIndexConcurrency   int    `mapstructure:"KB_INDEX_CONCURRENCY"`
+	KBEnabled            bool  `mapstructure:"KB_ENABLED"`
+	KBMaxFileBytes       int64 `mapstructure:"KB_MAX_FILE_BYTES"`
+	KBMaxFiles           int   `mapstructure:"KB_MAX_FILES"`
+	KBMaxDepth           int   `mapstructure:"KB_MAX_DEPTH"`
+	KBChunkTargetTokens  int   `mapstructure:"KB_CHUNK_TARGET_TOKENS"`
+	KBChunkMaxTokens     int   `mapstructure:"KB_CHUNK_MAX_TOKENS"`
+	KBChunkMinTokens     int   `mapstructure:"KB_CHUNK_MIN_TOKENS"`
+	KBChunkOverlapTokens int   `mapstructure:"KB_CHUNK_OVERLAP_TOKENS"`
+	KBTopK               int   `mapstructure:"KB_TOP_K"`
+	KBMaxContextChars    int   `mapstructure:"KB_MAX_CONTEXT_CHARS"`
+	KBIndexConcurrency   int   `mapstructure:"KB_INDEX_CONCURRENCY"`
 
 	// MCP server (Model Context Protocol) for the feed domain.
 	// MCP_ENABLED is the master switch. When false (default) no
@@ -375,6 +376,7 @@ func setDefaults() {
 	viper.SetDefault("LLM_PROVIDER", "openai")
 	viper.SetDefault("LLM_TIMEOUT", "60s")
 	viper.SetDefault("FEED_INDEX_TIMEOUT", "5s")
+	viper.SetDefault("TOOL_IDEMPOTENCY_RETENTION", "168h")
 	viper.SetDefault("LLM_MAX_TOKENS", 1024)
 	viper.SetDefault("LLM_MAX_HISTORY_MESSAGES", 50)
 	viper.SetDefault("LLM_MAX_MESSAGE_CHARS", 32768)
@@ -470,6 +472,7 @@ func bindEnvVars() {
 		"LLM_ENABLED", "LLM_PROVIDER", "LLM_BASE_URL", "LLM_API_KEY", "LLM_MODEL",
 		"LLM_TIMEOUT", "LLM_MAX_TOKENS", "LLM_SYSTEM_PROMPT",
 		"LLM_MAX_HISTORY_MESSAGES", "LLM_MAX_MESSAGE_CHARS",
+		"TOOL_IDEMPOTENCY_RETENTION",
 		"LLM_MAX_STREAM_DURATION", "LLM_ALLOW_PRIVATE_URL",
 		"BYOK_ALLOW_PRIVATE_URL",
 		"LLM_FALLBACK_BASE_URL", "LLM_FALLBACK_API_KEY", "LLM_FALLBACK_MODEL",
@@ -549,7 +552,11 @@ func validateDurations(cfg *Config) error {
 	if feedIndexTimeout <= 0 {
 		return fmt.Errorf("FEED_INDEX_TIMEOUT must be positive, got %v", feedIndexTimeout)
 	}
-	return errors.Join(validateAgentRunTokenTTL(cfg), validateRAGBackfillSize(cfg))
+	return errors.Join(
+		validateAgentRunTokenTTL(cfg),
+		validateRAGBackfillSize(cfg),
+		validateIdempotencyRetention(cfg),
+	)
 }
 
 const agentRunDetachedEnvelope = 10 * time.Minute
@@ -590,6 +597,22 @@ func validateRAGBackfillSize(cfg *Config) error {
 		return fmt.Errorf(
 			"RAG_MAX_BACKFILL_PER_REQUEST must be between 1 and %d, got %d",
 			maxRAGBackfillPerRequest, cfg.RAGMaxBackfillPerRequest,
+		)
+	}
+	return nil
+}
+
+const minIdempotencyRetention = time.Hour
+
+func validateIdempotencyRetention(cfg *Config) error {
+	retention, err := time.ParseDuration(cfg.ToolIdempotencyRetention)
+	if err != nil {
+		return fmt.Errorf("invalid TOOL_IDEMPOTENCY_RETENTION: %w", err)
+	}
+	if retention < minIdempotencyRetention {
+		return fmt.Errorf(
+			"TOOL_IDEMPOTENCY_RETENTION must be at least %v, got %v",
+			minIdempotencyRetention, retention,
 		)
 	}
 	return nil

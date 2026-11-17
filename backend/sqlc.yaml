@@ -156,3 +156,20 @@ sql:
           path_prefix: "PathPrefix"
           created_at: "CreatedAt"
           updated_at: "UpdatedAt"
+  - engine: "postgresql"
+    queries: "queries/tool_idempotency.sql"
+    schema:
+      - "migrations/000004_create_users_table.up.sql"
+      - "migrations/000021_create_tool_idempotency.up.sql"
+    gen:
+      go:
+        package: "db"
+        out: "internal/idempotency/db"
+        sql_package: "pgx/v5"
+        emit_interface: true
+        emit_json_tags: false
+        emit_prepared_queries: false
+        emit_empty_slices: true
+        rename:
+          owner_id: "OwnerID"
+          created_at: "CreatedAt"

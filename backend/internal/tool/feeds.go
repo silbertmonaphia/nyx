@@ -2,8 +2,11 @@ package tool
 
 import (
 	"context"
+	"errors"
+	"fmt"
 
 	"nyx/internal/feed"
+	"nyx/internal/idempotency"
 	"nyx/internal/reqctx"
 )
 
@@ -54,18 +57,34 @@ type GetFeedArgs struct {
 }
 
 type CreateFeedArgs struct {
-	Title       string `json:"title"                   validate:"required,min=1,max=100"`
-	Description string `json:"description,omitempty"   validate:"max=1000"`
+	Title          string `json:"title"                     validate:"required,min=1,max=100"`
+	Description    string `json:"description,omitempty"     validate:"max=1000"`
+	IdempotencyKey string `json:"idempotency_key,omitempty" validate:"max=128,keycharset"`
 }
 
 type UpdateFeedArgs struct {
-	ID          int    `json:"id"                      validate:"required,min=1"`
-	Title       string `json:"title"                   validate:"required,min=1,max=100"`
-	Description string `json:"description,omitempty"   validate:"max=1000"`
+	ID             int    `json:"id"                        validate:"required,min=1"`
+	Title          string `json:"title"                     validate:"required,min=1,max=100"`
+	Description    string `json:"description,omitempty"     validate:"max=1000"`
+	IdempotencyKey string `json:"idempotency_key,omitempty" validate:"max=128,keycharset"`
 }
 
 type DeleteFeedArgs struct {
-	ID int `json:"id" validate:"required,min=1"`
+	ID             int    `json:"id"                        validate:"required,min=1"`
+	IdempotencyKey string `json:"idempotency_key,omitempty" validate:"max=128,keycharset"`
+}
+
+type idempotentFeedService interface {
+	CreateFeedIdempotent(ctx context.Context, m *feed.Feed, key string) error
+	UpdateFeedIdempotent(ctx context.Context, id int, m *feed.Feed, key string) error
+	DeleteFeedIdempotent(ctx context.Context, id int, key string) (feed.DeleteReceipt, error)
+}
+
+func mapIdempotentError(err error) error {
+	if errors.Is(err, idempotency.ErrKeyReused) {
+		return fmt.Errorf("%w: %v", ErrInvalidArgs, err)
+	}
+	return err
 }
 
 // RegisterFeedTools populates reg with the five feed CRUD tools.
@@ -154,6 +173,16 @@ func makeCreateFeedDispatch(feeds feed.Service) func(context.Context, any) (any,
 	return func(ctx context.Context, raw any) (any, error) {
 		args := raw.(CreateFeedArgs)
 		m := &feed.Feed{UserID: reqctx.UserIDFromContext(ctx), Title: args.Title, Description: args.Description}
+		if args.IdempotencyKey != "" {
+			iw, ok := feeds.(idempotentFeedService)
+			if !ok {
+				return nil, ErrIdempotencyUnsupported
+			}
+			if err := iw.CreateFeedIdempotent(ctx, m, args.IdempotencyKey); err != nil {
+				return nil, mapIdempotentError(err)
+			}
+			return *m, nil
+		}
 		if err := feeds.CreateFeed(ctx, m); err != nil {
 			return nil, err
 		}
@@ -165,6 +194,16 @@ func makeUpdateFeedDispatch(feeds feed.Service) func(context.Context, any) (any,
 	return func(ctx context.Context, raw any) (any, error) {
 		args := raw.(UpdateFeedArgs)
 		m := &feed.Feed{UserID: reqctx.UserIDFromContext(ctx), Title: args.Title, Description: args.Description}
+		if args.IdempotencyKey != "" {
+			iw, ok := feeds.(idempotentFeedService)
+			if !ok {
+				return nil, ErrIdempotencyUnsupported
+			}
+			if err := iw.UpdateFeedIdempotent(ctx, args.ID, m, args.IdempotencyKey); err != nil {
+				return nil, mapIdempotentError(err)
+			}
+			return *m, nil
+		}
 		if err := feeds.UpdateFeed(ctx, args.ID, m); err != nil {
 			return nil, err
 		}
@@ -175,13 +214,21 @@ func makeUpdateFeedDispatch(feeds feed.Service) func(context.Context, any) (any,
 func makeDeleteFeedDispatch(feeds feed.Service) func(context.Context, any) (any, error) {
 	return func(ctx context.Context, raw any) (any, error) {
 		args := raw.(DeleteFeedArgs)
+		if args.IdempotencyKey != "" {
+			iw, ok := feeds.(idempotentFeedService)
+			if !ok {
+				return nil, ErrIdempotencyUnsupported
+			}
+			receipt, err := iw.DeleteFeedIdempotent(ctx, args.ID, args.IdempotencyKey)
+			if err != nil {
+				return nil, mapIdempotentError(err)
+			}
+			return receipt, nil
+		}
 		if err := feeds.DeleteFeed(ctx, args.ID); err != nil {
 			return nil, err
 		}
-		return struct {
-			Deleted bool `json:"deleted"`
-			ID      int  `json:"id"`
-		}{Deleted: true, ID: args.ID}, nil
+		return feed.DeleteReceipt{Deleted: true, ID: args.ID}, nil
 	}
 }
 

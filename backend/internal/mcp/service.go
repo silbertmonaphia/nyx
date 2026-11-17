@@ -36,6 +36,8 @@ func init() {
 	api.RegisterSentinel(ErrInternal, http.StatusInternalServerError, "Internal error")
 }
 
+const idempotencyKeyDescription = "Optional client-generated idempotency key. Derive one deterministic key per logical operation and reuse it when retrying the identical call; use a new key for a new operation. Omit to opt out of deduplication."
+
 // Service is the MCP-side projection over the registry. After the
 // agent-loop migration the MCP layer owns nothing but the wire
 // shape (JSON-RPC envelopes, mcp-go schemas, CallToolResult
@@ -149,6 +151,12 @@ func (s *Service) RegisterTools(mcpServer *server.MCPServer) {
 				mcp.Description("Optional description."),
 				mcp.MaxLength(1000),
 			),
+			mcp.WithString("idempotency_key",
+				mcp.Description(idempotencyKeyDescription),
+				mcp.MinLength(1),
+				mcp.MaxLength(128),
+				mcp.Pattern("^[A-Za-z0-9:_-]+$"),
+			),
 		),
 		mcp.NewTypedToolHandler(s.handleCreateFeed),
 	)
@@ -173,6 +181,12 @@ func (s *Service) RegisterTools(mcpServer *server.MCPServer) {
 				mcp.Description("Optional description."),
 				mcp.MaxLength(1000),
 			),
+			mcp.WithString("idempotency_key",
+				mcp.Description(idempotencyKeyDescription),
+				mcp.MinLength(1),
+				mcp.MaxLength(128),
+				mcp.Pattern("^[A-Za-z0-9:_-]+$"),
+			),
 		),
 		mcp.NewTypedToolHandler(s.handleUpdateFeed),
 	)
@@ -186,6 +200,12 @@ func (s *Service) RegisterTools(mcpServer *server.MCPServer) {
 				mcp.Required(),
 				mcp.Description("Feed id."),
 				mcp.Min(1),
+			),
+			mcp.WithString("idempotency_key",
+				mcp.Description(idempotencyKeyDescription),
+				mcp.MinLength(1),
+				mcp.MaxLength(128),
+				mcp.Pattern("^[A-Za-z0-9:_-]+$"),
 			),
 		),
 		mcp.NewTypedToolHandler(s.handleDeleteFeed),

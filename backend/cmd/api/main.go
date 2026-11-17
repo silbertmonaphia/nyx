@@ -13,6 +13,7 @@ import (
 	"nyx/internal/chat"
 	"nyx/internal/features"
 	"nyx/internal/feed"
+	"nyx/internal/idempotency"
 	"nyx/internal/kb"
 	"nyx/internal/llm"
 	"nyx/internal/llm/openai"
@@ -144,6 +145,18 @@ func wireEmbeddingInvalidation(handler *llmsettings.Handler, ragSvc *rag.Service
 // graceful-shutdown wiring sits in the final defer block. Errors
 // during startup fail closed via log.Fatal — the operator sees
 // a clear, single-line root cause in the boot log.
+func mountFeedIdempotency(db *pgxpool.Pool, feedService feed.Service, cfg *config.Config) func() {
+	retention, err := time.ParseDuration(cfg.ToolIdempotencyRetention)
+	if err != nil {
+		log.Fatal().Err(err).Msg("Invalid TOOL_IDEMPOTENCY_RETENTION")
+	}
+	store := idempotency.NewStore(db, retention)
+	if setter, ok := feedService.(interface{ SetIdempotency(*idempotency.Store) }); ok {
+		setter.SetIdempotency(store)
+	}
+	return store.RunRetention(time.Hour)
+}
+
 func buildAndServe(cfg *config.Config) {
 	// Build the JWT TokenService. config.Load already validated that
 	// cfg.JWTSecret is non-default and at least MinSecretBytes long;
@@ -239,6 +252,8 @@ func buildAndServe(cfg *config.Config) {
 	var feedIndexer feed.EmbeddingIndexer = feed.NoopEmbeddingIndexer{}
 	feedRepo := feed.NewRepository(db)
 	feedService := feed.NewService(feedRepo, cacheClient, feedIndexer, cacheTTL, feedIndexTimeout, tracing.Provider.Tracer("nyx.feed"))
+	stopIdempotencyRetention := mountFeedIdempotency(db, feedService, cfg)
+	defer stopIdempotencyRetention()
 	feedHandler := feed.NewHandler(feedService)
 
 	// Initialize User domain. accessTTL / refreshTTL come from viper

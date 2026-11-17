@@ -56,7 +56,7 @@ sqlc:
 # changed a query/schema without re-running `make sqlc`.
 sqlc-diff:
 	sqlc generate
-	git diff --exit-code internal/feed/db internal/user/db internal/llmsettings/db internal/rag/db internal/kb/db
+	git diff --exit-code internal/feed/db internal/user/db internal/llmsettings/db internal/rag/db internal/kb/db internal/idempotency/db
 
 sqlc-version:
 	sqlc version

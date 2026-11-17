@@ -39,7 +39,11 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import Any
 
-from .tools_client import ToolsClient, normalize_registry_tools
+from .tools_client import (
+    ToolsClient,
+    ToolUnavailableError,
+    normalize_registry_tools,
+)
 
 log = logging.getLogger("nyx.agent.tool_dispatch")
 
@@ -112,8 +116,11 @@ class ToolDispatcher:
         # poison the rest of the run; the next consumer retries it.
         self._registry_schemas: list[dict] | None = None
         self._registry_annotations: dict[str, dict] | None = None
+        self._idempotency_tools: set[str] | None = None
 
-    async def _load_registry(self) -> tuple[list[dict], dict[str, dict]] | None:
+    async def _load_registry(
+        self,
+    ) -> tuple[list[dict], dict[str, dict], set[str]] | None:
         """Fetch + normalize the MCP registry once per run (memoized).
 
         Returns None when the fetch fails — callers degrade: `list_tools`
@@ -122,16 +129,22 @@ class ToolDispatcher:
         tools. A successful fetch with an empty list is memoized as such
         (legitimately no tools — not a failure).
         """
-        if self._registry_schemas is None or self._registry_annotations is None:
+        if (
+            self._registry_schemas is None
+            or self._registry_annotations is None
+            or self._idempotency_tools is None
+        ):
             try:
                 raw = await self._mcp.list_tools()
             except Exception as exc:  # noqa: BLE001 — degrade, never fail the list
                 log.warning("MCP tools/list failed: %r", exc)
                 return None
-            self._registry_schemas, self._registry_annotations = (
-                normalize_registry_tools(raw)
-            )
-        return self._registry_schemas, self._registry_annotations
+            (
+                self._registry_schemas,
+                self._registry_annotations,
+                self._idempotency_tools,
+            ) = normalize_registry_tools(raw)
+        return self._registry_schemas, self._registry_annotations, self._idempotency_tools
 
     async def list_tools(self) -> list[dict]:
         local_schemas = self._local.schemas()
@@ -142,7 +155,7 @@ class ToolDispatcher:
             if local_schemas:
                 log.warning("MCP tools/list failed; serving agent-native tools only")
             return local_schemas
-        mcp_schemas, _ = loaded
+        mcp_schemas, _, _ = loaded
 
         merged = list(local_schemas)
         for schema in mcp_schemas:
@@ -171,7 +184,7 @@ class ToolDispatcher:
         loaded = await self._load_registry()
         if loaded is None:
             return []
-        schemas, _ = loaded
+        schemas, _, _ = loaded
         local_names = {_schema_name(s) for s in self._local.schemas()}
         return [s for s in schemas if _schema_name(s) not in local_names]
 
@@ -196,11 +209,22 @@ class ToolDispatcher:
         loaded = await self._load_registry()
         if loaded is None:
             return True
-        _, annotations = loaded
+        _, annotations, _ = loaded
         entry = annotations.get(name)
         if entry is None:
             return False
         return entry.get("readOnlyHint") is not True
+
+    async def accepts_idempotency_key(self, name: str) -> bool:
+        if name in self._local:
+            return False
+        loaded = await self._load_registry()
+        if loaded is None:
+            raise ToolUnavailableError(
+                "MCP tools/list failed; cannot determine idempotency capability"
+            )
+        _, _, idempotency_tools = loaded
+        return name in idempotency_tools
 
     async def call(self, name: str, arguments: dict) -> dict:
         if name in self._local:

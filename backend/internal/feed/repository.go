@@ -115,12 +115,16 @@ func NewRepository(pool Pool) Repository {
 	return &sqlRepository{pool: pool, q: db.New(pool)}
 }
 
-// NewRepositoryFromQuerier is a test-only constructor that accepts a
-// pre-built *db.Queries (e.g. one bound to a transaction via
-// db.New(pool).WithTx(tx)). GetAll is not usable in this mode; tests
-// that exercise GetAll go through NewRepository with a mock pool.
+// NewRepositoryFromQuerier accepts a pre-built *db.Queries (e.g. one
+// bound to a transaction via db.New(pool).WithTx(tx)). GetAll is not
+// usable in this mode; callers that need it use NewRepository with a
+// pool.
 func NewRepositoryFromQuerier(q *db.Queries) Repository {
 	return &sqlRepository{q: q}
+}
+
+func (r *sqlRepository) WithTx(tx pgx.Tx) Repository {
+	return NewRepositoryFromQuerier(r.q.WithTx(tx))
 }
 
 // GetAll returns one paginated page of feeds owned by userID. SELECT

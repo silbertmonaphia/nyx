@@ -90,33 +90,30 @@ func applyRule(name string, fv reflect.Value, rule string) error {
 		if isZero(fv) {
 			return fieldErrorf(name, fmt.Errorf("required"))
 		}
-	case "min":
+	case "min", "max":
 		if !hasVal {
-			return fieldErrorf(name, fmt.Errorf("min: missing value"))
+			return fieldErrorf(name, fmt.Errorf("%s: missing value", key))
 		}
 		n, err := strconv.Atoi(val)
 		if err != nil {
-			return fieldErrorf(name, fmt.Errorf("min: bad value %q", val))
+			return fieldErrorf(name, fmt.Errorf("%s: bad value %q", key, val))
 		}
-		if err := minCheck(fv, n); err != nil {
-			return fieldErrorf(name, err)
+		checkErr := minCheck(fv, n)
+		if key == "max" {
+			checkErr = maxCheck(fv, n)
 		}
-	case "max":
-		if !hasVal {
-			return fieldErrorf(name, fmt.Errorf("max: missing value"))
-		}
-		n, err := strconv.Atoi(val)
-		if err != nil {
-			return fieldErrorf(name, fmt.Errorf("max: bad value %q", val))
-		}
-		if err := maxCheck(fv, n); err != nil {
-			return fieldErrorf(name, err)
+		if checkErr != nil {
+			return fieldErrorf(name, checkErr)
 		}
 	case "oneof":
 		if !hasVal {
 			return fieldErrorf(name, fmt.Errorf("oneof: missing value"))
 		}
 		if err := oneOfCheck(fv, strings.Fields(val)); err != nil {
+			return fieldErrorf(name, err)
+		}
+	case "keycharset":
+		if err := keyCharsetCheck(fv); err != nil {
 			return fieldErrorf(name, err)
 		}
 	default:
@@ -196,6 +193,23 @@ func maxCheck(fv reflect.Value, n int) error {
 	case reflect.String, reflect.Slice, reflect.Array, reflect.Map:
 		if fv.Len() > n {
 			return fmt.Errorf("length must be <= %d", n)
+		}
+	}
+	return nil
+}
+
+func keyCharsetCheck(fv reflect.Value) error {
+	if fv.Kind() != reflect.String {
+		return fmt.Errorf("keycharset applies to strings only")
+	}
+	for _, r := range fv.String() {
+		switch {
+		case r >= 'a' && r <= 'z':
+		case r >= 'A' && r <= 'Z':
+		case r >= '0' && r <= '9':
+		case r == ':', r == '_', r == '-':
+		default:
+			return fmt.Errorf("must match [A-Za-z0-9:_-]")
 		}
 	}
 	return nil

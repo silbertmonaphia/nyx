@@ -4,7 +4,7 @@
 
 ### Requirement: Idempotency key is stable across retries and resume
 
-For every registry tool call whose served input schema declares an `idempotency_key` argument, the agent SHALL derive exactly one key per intent and attach it to every attempt of that intent. The key MUST be deterministic over the run id, step id, tool name, and canonicalised arguments. Transient retries and re-prompts that preserve the tool name and arguments MUST reuse the same key; a corrected re-prompt that changes either MUST derive a new key. A resumed run that re-executes the same plan step with the same arguments MUST derive the same key as the original execution. The per-attempt `call_id` used by `tool_call` / `tool_result` frames is independent of the key and MAY differ between attempts. The key MUST be derived before the approval gate so that a retry after an approval decision reuses it.
+For every registry tool call whose served input schema declares an `idempotency_key` argument, the agent SHALL derive exactly one key per intent and attach it to every attempt of that intent. The key MUST be deterministic over the run id, turn id, step id, tool name, and canonicalised arguments. The turn id MUST be minted per turn and carried in the checkpointed graph state, so two identical turns in one chat session whose run id is the shared session id derive different keys, while a resumed run reproduces the original turn's key. Transient retries and re-prompts that preserve the tool name and arguments MUST reuse the same key; a corrected re-prompt that changes either MUST derive a new key. The per-attempt `call_id` used by `tool_call` / `tool_result` frames is independent of the key and MAY differ between attempts. The key MUST be derived before the approval gate so that a retry after an approval decision reuses it.
 
 #### Scenario: Transient retry reuses the key
 
@@ -19,7 +19,12 @@ For every registry tool call whose served input schema declares an `idempotency_
 #### Scenario: Resume reproduces the key
 
 - **WHEN** a run resumes after a crash and re-executes a plan step whose tool and arguments are unchanged
-- **THEN** the dispatch carries the same `idempotency_key` the original execution used
+- **THEN** the dispatch carries the same `idempotency_key` the original execution used, derived from the checkpointed turn id
+
+#### Scenario: A new turn in the same session gets a new key
+
+- **WHEN** a later turn of the same chat session repeats an earlier turn's tool call with identical arguments and step id
+- **THEN** the dispatch carries a different `idempotency_key` because the turn id differs, so the mutation executes rather than replaying the earlier turn's response
 
 #### Scenario: Approval wait does not change the key
 

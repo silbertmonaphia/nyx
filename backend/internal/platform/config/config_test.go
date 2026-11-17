@@ -140,6 +140,20 @@ func TestLoadRejectsNonPositiveFeedIndexTimeout(t *testing.T) {
 	}
 }
 
+func TestLoadRejectsInvalidToolIdempotencyRetention(t *testing.T) {
+	for _, value := range []string{"not-a-duration", "0s", "-1h", "1m"} {
+		t.Run(value, func(t *testing.T) {
+			t.Setenv("DB_URL", "postgres://x")
+			t.Setenv("JWT_SECRET", auth.TestSecret)
+			t.Setenv("TOOL_IDEMPOTENCY_RETENTION", value)
+
+			if _, err := Load(); err == nil {
+				t.Fatalf("Load() error = nil, want TOOL_IDEMPOTENCY_RETENTION rejection for %q", value)
+			}
+		})
+	}
+}
+
 func TestLoad_AgentRunTokenTTLDefault(t *testing.T) {
 	t.Setenv("DB_URL", "postgres://x")
 	t.Setenv("JWT_SECRET", auth.TestSecret)

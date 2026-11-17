@@ -49,6 +49,8 @@ var (
 	// / ErrMissingOwner / ErrToolNotFound / ErrPanic. The wrapped
 	// error is logged; the caller sees only ErrInternal.
 	ErrInternal = errors.New("tool: internal error")
+
+	ErrIdempotencyUnsupported = errors.New("tool: idempotent writes unavailable")
 )
 
 // FieldError carries the failing field name returned by the validator.

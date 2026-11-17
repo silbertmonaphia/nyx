@@ -6,6 +6,7 @@ AgentState flows through the planner → executor nodes. Each node appends typed
 
 from __future__ import annotations
 
+import secrets
 from collections.abc import Mapping
 from typing import Any, TypedDict
 
@@ -18,6 +19,7 @@ class AgentState(TypedDict, total=False):
     # --- Input (set by FastAPI handler before invoking the graph) ---
     user_id: int
     run_id: str
+    turn_id: str
     request_id: str | None  # from the HTTP request; threaded into error events
     messages: list[ChatMessage]
     model: str | None  # model override; None uses settings.llm_model
@@ -65,6 +67,7 @@ def new_state(
     run_id: str,
     messages: list[ChatMessage],
     model: str | None,
+    turn_id: str | None = None,
     request_id: str | None = None,
     llm_override: LLMOverrideView | None = None,
     tavily_override: TavilyOverrideView | None = None,
@@ -72,6 +75,7 @@ def new_state(
     return AgentState(
         user_id=user_id,
         run_id=run_id,
+        turn_id=turn_id or secrets.token_hex(16),
         request_id=request_id,
         messages=messages,
         model=model,
