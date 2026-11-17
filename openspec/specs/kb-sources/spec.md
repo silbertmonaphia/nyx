@@ -1,7 +1,7 @@
 # kb-sources Specification
 
 ## Purpose
-The registry of where knowledge content comes from and who may see it. A source is one place content is read from — an operator-managed shared directory or a per-user inline store of application-created documents — together with the visibility rule that governs everything indexed from it. No document from one user's source is ever visible to another user.
+The registry of where knowledge content comes from and who may see it. A source is one place content is read from — a per-user scanned directory registered by an operator, or a per-user inline store of application-created documents — together with the ownership rule that governs everything indexed from it. No document from one user's source is ever visible to another user.
 
 ## Requirements
 
