@@ -9,7 +9,9 @@ not modified and `rag: true` still means "my feeds".
 - **Sources.** Every source belongs to exactly one user. A user's `inline`
   source holds documents uploaded or typed into the app; directory (`dir`)
   sources are registered per user by the operator CLI (`kb index --user`) and
-  are never exposed through the HTTP API.
+  are never exposed through the HTTP API. Excluding a source from search skips
+  its scans and keeps it out of retrieval, but leaves its documents listed and
+  editable in the SPA so the source can be re-enabled.
 - **Chunking.** Markdown is parsed into a heading-aware block sequence. A chunk
   never spans two heading paths; tables and fenced code blocks are never split;
   every embedded text starts with `relative/path › heading / path` while the
