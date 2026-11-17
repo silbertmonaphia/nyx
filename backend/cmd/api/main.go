@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"nyx/internal/chat"
+	"nyx/internal/features"
 	"nyx/internal/feed"
 	"nyx/internal/kb"
 	"nyx/internal/llm"
@@ -304,6 +305,7 @@ func buildAndServe(cfg *config.Config) {
 
 	feed.RegisterFeedOps(humaAPI, feedHandler, tokens)
 	user.RegisterUserOps(humaAPI, userHandler, tokens)
+	features.RegisterFeatureOps(humaAPI, features.NewHandler(cfg.AgentEnabled), tokens)
 
 	userLLMResolver, userLLMSettingsHandler, stopValidateGC := mountLLMSettingsOps(humaAPI, cfg, db, tracing.Provider, tokens)
 	defer stopValidateGC()

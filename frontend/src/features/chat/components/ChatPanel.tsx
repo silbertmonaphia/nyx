@@ -143,6 +143,7 @@ const StepRow: React.FC<{ step: ChatStep }> = ({ step }) => {
 interface ChatPanelProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
+  agentMode?: boolean;
 }
 
 /**
@@ -163,7 +164,11 @@ interface ChatPanelProps {
  * burst of SSE deltas doesn't queue up dozens of `scrollTop` writes
  * per second.
  */
-export const ChatPanel: React.FC<ChatPanelProps> = ({ open, onOpenChange }) => {
+export const ChatPanel: React.FC<ChatPanelProps> = ({
+  open,
+  onOpenChange,
+  agentMode = false,
+}) => {
   const { t } = useTranslation();
   const messages = useChat((s) => s.messages);
   const isStreaming = useChat((s) => s.isStreaming);
@@ -560,15 +565,17 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ open, onOpenChange }) => {
                   {t("chat.recovery.reconnecting")}
                 </p>
               )}
-              <label className="flex items-center gap-2 text-xs text-muted-foreground">
-                <input
-                  type="checkbox"
-                  checked={knowledgeEnabled}
-                  onChange={(e) => setKnowledgeEnabled(e.target.checked)}
-                  data-testid="chat-kb-toggle"
-                />
-                {t("chat.knowledgeToggle")}
-              </label>
+              {!agentMode && (
+                <label className="flex items-center gap-2 text-xs text-muted-foreground">
+                  <input
+                    type="checkbox"
+                    checked={knowledgeEnabled}
+                    onChange={(e) => setKnowledgeEnabled(e.target.checked)}
+                    data-testid="chat-kb-toggle"
+                  />
+                  {t("chat.knowledgeToggle")}
+                </label>
+              )}
               <Textarea
                 value={draft}
                 onChange={(e) => setDraft(e.target.value)}

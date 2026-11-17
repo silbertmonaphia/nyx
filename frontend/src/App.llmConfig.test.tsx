@@ -13,6 +13,7 @@ import { i18n } from '~/i18n';
 vi.mock('./features/feeds/hooks/useFeeds');
 vi.mock('./store/authStore');
 vi.mock('./features/chat/hooks/useLlmConfig');
+vi.mock('./features/chat/hooks/useAgentEnabled');
 const kbSettingsMock = vi.hoisted(() => ({
   data: { enabled: false, embedding_model: '' } as { enabled: boolean; embedding_model: string },
 }));

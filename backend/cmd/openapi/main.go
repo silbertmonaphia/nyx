@@ -20,6 +20,7 @@ import (
 	"os"
 	"time"
 
+	"nyx/internal/features"
 	"nyx/internal/feed"
 	"nyx/internal/kb"
 	"nyx/internal/llmsettings"
@@ -86,6 +87,7 @@ func generateSpec() ([]byte, error) {
 	// funcs are never called.
 	feed.RegisterFeedOps(humaAPI, feed.NewHandler(nil), tokens)
 	user.RegisterUserOps(humaAPI, user.NewHandler(nil), tokens)
+	features.RegisterFeatureOps(humaAPI, features.NewHandler(false), tokens)
 	llmsettings.RegisterLLMConfigOps(humaAPI, llmsettings.NewHandler(nil), tokens)
 	kb.RegisterKBOps(humaAPI, kb.NewHandler(nil), tokens)
 

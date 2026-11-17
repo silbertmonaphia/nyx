@@ -210,6 +210,19 @@
         ],
         "type": "object"
       },
+      "FeaturesResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "agent_enabled": {
+            "description": "True when the chat handler proxies to the Python agent (AGENT_ENABLED=true).",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "agent_enabled"
+        ],
+        "type": "object"
+      },
       "Feed": {
         "additionalProperties": false,
         "properties": {
@@ -915,6 +928,43 @@
   },
   "openapi": "3.1.0",
   "paths": {
+    "/api/features": {
+      "get": {
+        "description": "Reports operator-level feature switches the SPA renders conditionally. agent_enabled is true when the chat handler proxies to the Python agent.",
+        "operationId": "get-features",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FeaturesResponse"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Get feature availability",
+        "tags": [
+          "features"
+        ]
+      }
+    },
     "/api/feeds": {
       "get": {
         "description": "Returns a paginated list of feeds owned by the authenticated caller, optionally filtered by a search term matched against title and description.",

@@ -4,6 +4,26 @@
  */
 
 export interface paths {
+    "/api/features": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get feature availability
+         * @description Reports operator-level feature switches the SPA renders conditionally. agent_enabled is true when the chat handler proxies to the Python agent.
+         */
+        get: operations["get-features"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/feeds": {
         parameters: {
             query?: never;
@@ -436,6 +456,10 @@ export interface components {
             error: string;
             request_id?: string;
         };
+        FeaturesResponse: {
+            /** @description True when the chat handler proxies to the Python agent (AGENT_ENABLED=true). */
+            agent_enabled: boolean;
+        };
         Feed: {
             /** Format: date-time */
             created_at: string;
@@ -648,6 +672,35 @@ export interface components {
 }
 export type $defs = Record<string, never>;
 export interface operations {
+    "get-features": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FeaturesResponse"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
     "get-feeds": {
         parameters: {
             query?: {

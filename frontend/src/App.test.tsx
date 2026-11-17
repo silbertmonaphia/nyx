@@ -6,6 +6,7 @@ import { useFeeds } from './features/feeds/hooks/useFeeds';
 import { useAuthStore } from './store/authStore';
 import { useFeedUiStore } from './features/feeds/store/feedUiStore';
 import { useLlmConfig } from './features/chat/hooks/useLlmConfig';
+import { useAgentEnabled } from './features/chat/hooks/useAgentEnabled';
 import { useKbAvailability } from './features/kb/hooks/useKb';
 import { useUiStore } from './store/uiStore';
 import { i18n } from '~/i18n';
@@ -13,6 +14,7 @@ import { i18n } from '~/i18n';
 vi.mock('./features/feeds/hooks/useFeeds');
 vi.mock('./store/authStore');
 vi.mock('./features/chat/hooks/useLlmConfig');
+vi.mock('./features/chat/hooks/useAgentEnabled');
 vi.mock('./features/kb/components/KnowledgeBasePage', () => ({
   KnowledgeBasePage: () => <div data-testid="kb-page-mock" />,
 }));
@@ -25,12 +27,14 @@ vi.mock('./features/chat/components/ChatPanel', () => ({
   ChatPanel: ({
     open,
     onOpenChange,
+    agentMode,
   }: {
     open: boolean;
     onOpenChange: (open: boolean) => void;
+    agentMode?: boolean;
   }) =>
     open ? (
-      <div data-testid="chat-panel-mock">
+      <div data-testid="chat-panel-mock" data-agent-mode={String(agentMode === true)}>
         <button type="button" onClick={() => onOpenChange(false)}>
           close-chat-mock
         </button>
@@ -41,6 +45,7 @@ vi.mock('./features/chat/components/ChatPanel', () => ({
 const mockUseFeeds = useFeeds as any;
 const mockUseAuthStore = useAuthStore as any;
 const mockUseLlmConfig = useLlmConfig as any;
+const mockUseAgentEnabled = useAgentEnabled as any;
 const mockUseKbAvailability = useKbAvailability as any;
 
 const baseFeeds = {
@@ -59,6 +64,7 @@ const baseFeeds = {
 describe('App', () => {
   beforeEach(() => {
     mockUseKbAvailability.mockReturnValue(true);
+    mockUseAgentEnabled.mockReturnValue(false);
     useUiStore.setState({ activeView: 'feeds' });
     mockUseFeeds.mockReturnValue({ ...baseFeeds });
     mockUseLlmConfig.mockReturnValue({
@@ -119,6 +125,44 @@ describe('App', () => {
     await userEvent.click(screen.getByTestId('view-tab-feeds'));
     expect(screen.queryByTestId('kb-page-mock')).not.toBeInTheDocument();
     expect(screen.getByTestId('chat-panel-mock')).toBeInTheDocument();
+  });
+
+  it('passes the agent-mode flag to the chat panel', () => {
+    mockUseAgentEnabled.mockReturnValue(true);
+    const authed = {
+      isAuthenticated: true,
+      user: { id: 1, username: 'alice', created_at: '', updated_at: '' },
+      logout: vi.fn(),
+      logoutAll: vi.fn(),
+    };
+    mockUseAuthStore.mockReturnValue(authed);
+    mockUseAuthStore.getState = vi.fn().mockReturnValue(authed);
+
+    render(<App />);
+
+    expect(screen.getByTestId('chat-panel-mock')).toHaveAttribute(
+      'data-agent-mode',
+      'true',
+    );
+  });
+
+  it('defaults the chat panel to legacy mode while the probe is unknown', () => {
+    mockUseAgentEnabled.mockReturnValue(undefined);
+    const authed = {
+      isAuthenticated: true,
+      user: { id: 1, username: 'alice', created_at: '', updated_at: '' },
+      logout: vi.fn(),
+      logoutAll: vi.fn(),
+    };
+    mockUseAuthStore.mockReturnValue(authed);
+    mockUseAuthStore.getState = vi.fn().mockReturnValue(authed);
+
+    render(<App />);
+
+    expect(screen.getByTestId('chat-panel-mock')).toHaveAttribute(
+      'data-agent-mode',
+      'false',
+    );
   });
 
   it('hides the knowledge tabs when the backend has KB disabled', () => {

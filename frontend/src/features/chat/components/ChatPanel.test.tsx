@@ -1231,3 +1231,19 @@ describe('ChatPanel replay paging UI (agent-chat-history-perf)', () => {
     expect(screen.queryByTestId('chat-replay-top-sentinel')).toBeNull();
   });
 });
+
+describe('ChatPanel knowledge toggle', () => {
+  beforeEach(() => {
+    resetStore();
+  });
+
+  it('renders the knowledge toggle when the chat runs without the agent', () => {
+    render(<ChatPanel open={true} onOpenChange={vi.fn()} />);
+    expect(screen.getByTestId('chat-kb-toggle')).toBeInTheDocument();
+  });
+
+  it('hides the knowledge toggle when the agent plans retrieval itself', () => {
+    render(<ChatPanel open={true} onOpenChange={vi.fn()} agentMode={true} />);
+    expect(screen.queryByTestId('chat-kb-toggle')).toBeNull();
+  });
+});

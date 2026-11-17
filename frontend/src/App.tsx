@@ -34,6 +34,7 @@ import { resetLlmConfigStateForNewUser } from './features/chat/services/resetLlm
 import { resetKbStateForNewUser } from './features/kb/services/resetKbState';
 import { LlmConfigModal } from './features/chat/components/LlmConfigModal';
 import { useLlmConfig } from './features/chat/hooks/useLlmConfig';
+import { useAgentEnabled } from './features/chat/hooks/useAgentEnabled';
 import { useChatStore } from './features/chat/store/chatStore';
 import { KnowledgeBasePage } from './features/kb/components/KnowledgeBasePage';
 import { useKbAvailability } from './features/kb/hooks/useKb';
@@ -56,6 +57,7 @@ function App() {
   const activeView = useUiStore((state) => state.activeView);
   const setActiveView = useUiStore((state) => state.setActiveView);
   const kbAvailable = useKbAvailability();
+  const agentEnabled = useAgentEnabled();
   const [confirmDeleteId, setConfirmDeleteId] = useState<number | null>(null);
   const [chatDismissed, setChatDismissed] = useState(false);
   const chatOpen = isAuthenticated && !chatDismissed;
@@ -495,6 +497,7 @@ function App() {
       <ChatPanel
         open={chatOpen && !llmModalBlocking}
         onOpenChange={(open) => setChatDismissed(!open)}
+        agentMode={agentEnabled === true}
       />
 
       {llmFeatureActive && (
