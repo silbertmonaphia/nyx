@@ -340,9 +340,12 @@ export const en: Translation = {
       sourceCounts: '{{documents}} documents · {{chunks}} chunks · {{pending}} pending',
       lastScan: 'Last indexed {{time}}',
       neverScanned: 'Never indexed',
-      disabled: 'Disabled',
-      disable: 'Disable',
-      enable: 'Enable',
+      disabled: 'Excluded from search',
+      disable: 'Exclude from search',
+      enable: 'Include in search',
+      disabledHint:
+        "Documents stay available here and can still be edited; the assistant just won't search this source.",
+      documentSourceDisabled: '{{name}} · excluded from search',
       identityMismatch:
         'This source was indexed with a different embedding model, so it cannot contribute passages to your searches.',
       deleteSource: 'Delete source',

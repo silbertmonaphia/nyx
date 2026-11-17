@@ -8,7 +8,9 @@ not modified and `rag: true` still means "my feeds".
 
 - **Sources.** One operator-managed *shared* directory readable by every user.
   Each user also gets an `inline` source holding documents uploaded or typed
-  into the app.
+  into the app. Excluding a source from search skips its scans and keeps it out
+  of retrieval, but leaves its documents listed and editable in the SPA so the
+  source can be re-enabled.
 - **Chunking.** Markdown is parsed into a heading-aware block sequence. A chunk
   never spans two heading paths; tables and fenced code blocks are never split;
   every embedded text starts with `relative/path › heading / path` while the
