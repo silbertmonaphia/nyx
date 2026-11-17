@@ -141,7 +141,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Index the caller's visible knowledge sources */
+        /** Index the caller's knowledge sources */
         post: operations["index-kb-sources"];
         delete?: never;
         options?: never;
@@ -603,7 +603,6 @@ export interface components {
             name: string;
             /** Format: int64 */
             pending_count: number;
-            scope: string;
         };
         TavilyInput: {
             /** @description Write-only API key. Optional: an empty key uses the provider's keyless tier; on update, empty keeps the stored key. */

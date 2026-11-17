@@ -292,9 +292,6 @@ export const zh = {
     },
     kb: {
       title: '知识库',
-      index: '立即索引',
-      indexDone: '已索引 {{documents}} 个文档（{{chunks}} 个片段）',
-      indexFailed: '索引失败',
       upload: '上传文件',
       uploadDone: '文档已上传',
       uploadFailed: '上传失败',
@@ -333,10 +330,6 @@ export const zh = {
         pending: '待索引',
         indexed: '已索引',
         failed: '失败',
-      },
-      scope: {
-        shared: '共享',
-        user: '私有',
       },
       kind: {
         dir: '目录',

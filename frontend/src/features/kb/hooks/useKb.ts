@@ -91,10 +91,6 @@ export const useKbMutations = () => {
     mutationFn: (id: number) => kbService.deleteDocument(id),
     onSuccess: () => invalidateSourcesAndDocuments(queryClient),
   });
-  const indexSources = useMutation({
-    mutationFn: kbService.indexSources,
-    onSuccess: () => invalidateSourcesAndDocuments(queryClient),
-  });
   return {
     updateSource,
     deleteSource,
@@ -102,6 +98,5 @@ export const useKbMutations = () => {
     createTextDocument,
     updateDocument,
     deleteDocument,
-    indexSources,
   };
 };

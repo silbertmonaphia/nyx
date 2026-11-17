@@ -16,8 +16,7 @@ const mockedService = kbService as unknown as {
 
 const source: KbSource = {
   id: 1,
-  name: 'shared',
-  scope: 'user',
+  name: 'posts',
   kind: 'dir',
   enabled: true,
   last_scan_at: '2026-11-01T00:00:00Z',
@@ -99,7 +98,7 @@ describe('KnowledgeBasePage', () => {
     mockedService.listDocuments.mockResolvedValue([document]);
     renderPage();
 
-    expect(await screen.findByText('shared')).toBeInTheDocument();
+    expect(await screen.findByText('posts')).toBeInTheDocument();
     expect(screen.getByText(/2 documents · 5 chunks/)).toBeInTheDocument();
     expect(await screen.findByText('Notes')).toBeInTheDocument();
     expect(screen.getByTestId('kb-document-status')).toHaveTextContent('Indexed');
@@ -140,9 +139,8 @@ describe('KnowledgeBasePage', () => {
     );
   });
 
-  it('uploads a file and triggers indexing', async () => {
+  it('uploads a file', async () => {
     mockedService.uploadDocument.mockResolvedValue(document);
-    mockedService.indexSources.mockResolvedValue({ sources: [] });
     renderPage();
 
     const file = new File(['# hi'], 'note.md', { type: 'text/markdown' });
@@ -150,9 +148,13 @@ describe('KnowledgeBasePage', () => {
     await waitFor(() =>
       expect(mockedService.uploadDocument).toHaveBeenCalledWith(file),
     );
+  });
 
-    await userEvent.click(screen.getByTestId('kb-index'));
-    await waitFor(() => expect(mockedService.indexSources).toHaveBeenCalled());
+  it('offers enable/disable and delete for a directory source', async () => {
+    mockedService.listSources.mockResolvedValue([source]);
+    renderPage();
+    expect(await screen.findByTestId('kb-source-toggle')).toBeTruthy();
+    expect(screen.getByTestId('kb-source-delete')).toBeTruthy();
   });
 
   it('rejects an oversized upload before calling the API', async () => {
