@@ -110,9 +110,9 @@ dev-down-langfuse:
 up-vllm:
 	$(COMPOSE) --profile vllm --profile embed up -d
 
-#: Stop the vLLM chat + embed containers (preserves volumes).
+#: Stop the vLLM chat + embed containers only (preserves volumes; db/redis/jaeger keep running).
 down-vllm:
-	$(COMPOSE) --profile vllm --profile embed down
+	$(COMPOSE) --profile vllm --profile embed down vllm vllm-embed
 
 #: Stop the infra containers (preserves volumes).
 down:
