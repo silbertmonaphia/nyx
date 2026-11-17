@@ -23,8 +23,6 @@ var inlineIndexLimit = 20 * time.Second
 
 type Config struct {
 	Enabled          bool
-	Root             string
-	SharedSourceName string
 	Chunk            ChunkOptions
 	TopK             int
 	MaxContextChars  int
@@ -43,24 +41,22 @@ type Ingester interface {
 }
 
 type Service struct {
-	store              Store
-	indexer            Ingester
-	cfg                Config
-	deploymentEmbedder Embedder
-	embedderResolver   EmbedderResolver
-	catchUp            sync.Map
-	indexLocks         sync.Map
-	documentLocks      sync.Map
-	tracer             trace.Tracer
+	store            Store
+	indexer          Ingester
+	cfg              Config
+	embedderResolver EmbedderResolver
+	catchUp          sync.Map
+	indexLocks       sync.Map
+	documentLocks    sync.Map
+	tracer           trace.Tracer
 }
 
-func NewService(store Store, indexer Ingester, cfg Config, deploymentEmbedder Embedder, tracer trace.Tracer) *Service {
+func NewService(store Store, indexer Ingester, cfg Config, tracer trace.Tracer) *Service {
 	return &Service{
-		store:              store,
-		indexer:            indexer,
-		cfg:                cfg,
-		deploymentEmbedder: deploymentEmbedder,
-		tracer:             tracer,
+		store:   store,
+		indexer: indexer,
+		cfg:     cfg,
+		tracer:  tracer,
 	}
 }
 
@@ -72,27 +68,8 @@ func (s *Service) Enabled() bool {
 	return s.cfg.Enabled
 }
 
-func (s *Service) ProvisionShared(ctx context.Context) (Source, error) {
-	if strings.TrimSpace(s.cfg.Root) == "" {
-		return Source{}, nil
-	}
-	root, err := resolveDir(s.cfg.Root)
-	if err != nil {
-		return Source{}, err
-	}
-	name := strings.TrimSpace(s.cfg.SharedSourceName)
-	if name == "" {
-		name = "shared"
-	}
-	return s.store.UpsertSharedSource(ctx, name, root)
-}
-
-func (s *Service) ProvisionInline(ctx context.Context, userID int64) (Source, error) {
-	return s.store.EnsureInlineSource(ctx, userID)
-}
-
 func (s *Service) ListSources(ctx context.Context, userID int64) ([]SourceInfo, error) {
-	sources, err := s.store.ListVisibleSources(ctx, userID)
+	sources, err := s.store.ListSources(ctx, userID)
 	if err != nil {
 		return nil, err
 	}
@@ -127,7 +104,7 @@ func (s *Service) SetSourceEnabled(ctx context.Context, userID, sourceID int64, 
 	if err != nil {
 		return Source{}, err
 	}
-	if src.Scope == ScopeShared || src.OwnerID != userID {
+	if src.OwnerID != userID {
 		return Source{}, ErrSourceNotFound
 	}
 	return s.store.SetSourceEnabled(ctx, sourceID, userID, enabled)
@@ -138,13 +115,10 @@ func (s *Service) DeleteSource(ctx context.Context, userID, sourceID int64) erro
 	if err != nil {
 		return err
 	}
-	if src.Scope == ScopeShared {
-		return ErrSharedSourceLocked
-	}
 	if src.OwnerID != userID {
 		return ErrSourceNotFound
 	}
-	removed, err := s.store.DeleteUserSource(ctx, sourceID, userID)
+	removed, err := s.store.DeleteSource(ctx, sourceID, userID)
 	if err != nil {
 		return err
 	}
@@ -168,15 +142,15 @@ func (s *Service) ListDocuments(ctx context.Context, userID int64, sourceID *int
 		offset = maxDocOffset
 	}
 	//nolint:gosec // G115: limit is clamped to maxDocLimit and offset to maxDocOffset.
-	return s.store.ListVisibleDocuments(ctx, userID, sourceID, origin, status, int32(limit), int32(offset))
+	return s.store.ListDocumentsByOwner(ctx, userID, sourceID, origin, status, int32(limit), int32(offset))
 }
 
 func (s *Service) GetDocument(ctx context.Context, userID, documentID int64) (Document, error) {
-	return s.store.GetVisibleDocument(ctx, documentID, userID)
+	return s.store.GetOwnedDocument(ctx, documentID, userID)
 }
 
 func (s *Service) DocumentHeadings(ctx context.Context, userID, documentID int64) ([][]string, error) {
-	doc, err := s.store.GetVisibleDocument(ctx, documentID, userID)
+	doc, err := s.store.GetOwnedDocument(ctx, documentID, userID)
 	if err != nil {
 		return nil, err
 	}
@@ -220,7 +194,6 @@ func (s *Service) CreateInlineDocument(ctx context.Context, userID int64, name, 
 	}
 	doc, err := s.store.UpsertInlineDocument(ctx, Document{
 		SourceID:    src.ID,
-		Scope:       ScopeUser,
 		OwnerID:     userID,
 		Origin:      OriginInline,
 		RelPath:     relPath,
@@ -283,10 +256,17 @@ func (s *Service) IndexVisible(ctx context.Context, userID int64) (IndexReport, 
 	ctx, span := s.tracer.Start(ctx, "kb.index_visible", trace.WithAttributes(attribute.Int64("kb.user_id", userID)))
 	defer span.End()
 
-	sources, err := s.store.ListVisibleSources(ctx, userID)
+	sources, err := s.store.ListSources(ctx, userID)
 	if err != nil {
 		return IndexReport{}, err
 	}
+	enabled := sources[:0]
+	for _, src := range sources {
+		if src.Enabled {
+			enabled = append(enabled, src)
+		}
+	}
+	sources = enabled
 	report := IndexReport{Sources: make([]SourceScanResult, len(sources))}
 	limit := s.cfg.IndexConcurrency
 	if limit < 1 {
@@ -393,12 +373,15 @@ func (s *Service) Retrieve(ctx context.Context, userID int64, queryVec []float32
 }
 
 func (s *Service) Outline(ctx context.Context, userID int64) (Outline, error) {
-	sources, err := s.store.ListVisibleSources(ctx, userID)
+	sources, err := s.store.ListSources(ctx, userID)
 	if err != nil {
 		return Outline{}, err
 	}
 	out := Outline{Sources: make([]OutlineSource, 0, len(sources))}
 	for _, src := range sources {
+		if !src.Enabled {
+			continue
+		}
 		stats, statsErr := s.store.SourceStats(ctx, src.ID)
 		if statsErr != nil {
 			return Outline{}, statsErr
@@ -406,7 +389,6 @@ func (s *Service) Outline(ctx context.Context, userID int64) (Outline, error) {
 		entry := OutlineSource{
 			ID:          src.ID,
 			Name:        src.Name,
-			Scope:       src.Scope,
 			Documents:   stats.Documents,
 			Chunks:      stats.Chunks,
 			Directories: []string{},
@@ -445,17 +427,15 @@ func (s *Service) embeddingIdentity(ctx context.Context, userID int64) string {
 }
 
 func (s *Service) resolveEmbedder(ctx context.Context, userID int64) Embedder {
-	if s.embedderResolver != nil {
-		embedder, err := s.embedderResolver(ctx, userID)
-		if err != nil {
-			log.Warn().Err(err).Int64("user_id", userID).Msg("kb per-user embedder unavailable")
-			return nil
-		}
-		if embedder != nil {
-			return embedder
-		}
+	if s.embedderResolver == nil {
+		return nil
 	}
-	return s.deploymentEmbedder
+	embedder, err := s.embedderResolver(ctx, userID)
+	if err != nil {
+		log.Warn().Err(err).Int64("user_id", userID).Msg("kb per-user embedder unavailable")
+		return nil
+	}
+	return embedder
 }
 
 func (s *Service) retryFailedInline(ctx context.Context, userID int64, doc Document) Document {

@@ -38,7 +38,6 @@ func NewHandler(service *Service) *Handler {
 type SourceView struct {
 	ID             int64      `json:"id"`
 	Name           string     `json:"name"`
-	Scope          string     `json:"scope"`
 	Kind           string     `json:"kind"`
 	Enabled        bool       `json:"enabled"`
 	LastScanAt     *time.Time `json:"last_scan_at"`
@@ -172,7 +171,7 @@ func RegisterKBOpsTest(api huma.API, h *Handler, tokens auth.TokenService, withA
 		OperationID: "index-kb-sources",
 		Method:      http.MethodPost,
 		Path:        "/api/kb/index",
-		Summary:     "Index the caller's visible knowledge sources",
+		Summary:     "Index the caller's knowledge sources",
 		Tags:        []string{"knowledge"},
 		Security:    []map[string][]string{{"BearerAuth": {}}},
 		Middlewares: middlewares,
@@ -526,7 +525,6 @@ func sourceView(info SourceInfo) SourceView {
 	return SourceView{
 		ID:             info.ID,
 		Name:           info.Name,
-		Scope:          info.Scope,
 		Kind:           info.Kind,
 		Enabled:        info.Enabled,
 		LastScanAt:     info.LastScanAt,

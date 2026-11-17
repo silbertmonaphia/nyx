@@ -683,7 +683,7 @@ func mountRAGFacade(cfg *config.Config, db *pgxpool.Pool, feedRepo feed.Reposito
 		ragSvc.SetEmbedderResolver(perUserEmbedder)
 		ragIndexer.SetEmbedderResolver(perUserEmbedder)
 	}
-	kbSvc := mountKBStack(cfg, db, ragEmbedder, perUserEmbedder, tracerProvider)
+	kbSvc := mountKBStack(cfg, db, perUserEmbedder, tracerProvider)
 	if kbSvc != nil {
 		ragSvc.SetKnowledgeRetriever(kbSvc, cfg.KBTopK, cfg.KBMaxContextChars)
 	}
@@ -724,14 +724,14 @@ func newPerUserEmbedderResolver(cfg *config.Config, userLLMResolver *llmsettings
 	}
 }
 
-func mountKBStack(cfg *config.Config, db *pgxpool.Pool, deployEmbedder *rag.Embedder, perUserEmbedder rag.EmbedderResolver, tracerProvider trace.TracerProvider) *kb.Service {
+func mountKBStack(cfg *config.Config, db *pgxpool.Pool, perUserEmbedder rag.EmbedderResolver, tracerProvider trace.TracerProvider) *kb.Service {
 	if !cfg.KBEnabled {
 		log.Info().Msg("Knowledge base disabled (KB_ENABLED=false)")
 		return nil
 	}
 	store := kb.NewSQLStore(db)
-	indexer := kb.NewIndexer(store, deployEmbedder, kb.ChunkOptionsFrom(cfg), kb.ConnectorOptionsFrom(cfg))
-	service := kb.NewService(store, indexer, kb.ConfigFrom(cfg), deployEmbedder, tracerProvider.Tracer("nyx.kb"))
+	indexer := kb.NewIndexer(store, kb.ChunkOptionsFrom(cfg), kb.ConnectorOptionsFrom(cfg))
+	service := kb.NewService(store, indexer, kb.ConfigFrom(cfg), tracerProvider.Tracer("nyx.kb"))
 	if perUserEmbedder != nil {
 		resolver := func(ctx context.Context, userID int64) (kb.Embedder, error) {
 			embedder, err := perUserEmbedder(ctx, int(userID))
@@ -747,7 +747,6 @@ func mountKBStack(cfg *config.Config, db *pgxpool.Pool, deployEmbedder *rag.Embe
 		service.SetEmbedderResolver(resolver)
 	}
 	log.Info().
-		Str("root", cfg.KBRoot).
 		Int("top_k", cfg.KBTopK).
 		Msg("Knowledge base enabled")
 	return service
@@ -756,16 +755,13 @@ func mountKBStack(cfg *config.Config, db *pgxpool.Pool, deployEmbedder *rag.Embe
 func mountKBRoutes(humaAPI huma.API, router chi.Router, cfg *config.Config, kbSvc *kb.Service, tokens auth.TokenService) {
 	if kbSvc == nil {
 		if cfg.KBEnabled {
-			log.Warn().Msg("KB_ENABLED=true but LLM_ENABLED=false; knowledge routes are disabled because the KB indexer shares the feed embedder")
+			log.Warn().Msg("KB_ENABLED=true but LLM_ENABLED=false; knowledge routes are disabled because KB indexing needs the per-user BYOK LLM settings surface")
 		}
 		return
 	}
 	handler := kb.NewHandler(kbSvc)
 	kb.RegisterKBOps(humaAPI, handler, tokens)
 	kb.RegisterKBUploadRoute(router, handler, tokens)
-	if _, err := kbSvc.ProvisionShared(context.Background()); err != nil {
-		log.Warn().Err(err).Str("root", cfg.KBRoot).Msg("shared knowledge source could not be provisioned")
-	}
 }
 
 // buildLLMClient dispatches on cfg.LLMProvider to the right client

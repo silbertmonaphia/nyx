@@ -63,7 +63,7 @@ flowchart TB
 
 - **账号** —— JWT access token，加上带 reuse detection 的轮转 refresh token。
 - **你的 feed** —— 创建、编辑、删除、搜索、分页；所有查询都限定在你自己的账号范围内。
-- **知识库** —— 与 feed 并列的第二个语料库：运维托管的共享目录，加上你自己的私有目录（限定在运维配置的根目录内），按标题切分并以路径引用。可在应用内上传或编写内置文档；文件来源的文档保持只读。默认关闭（`KB_ENABLED=false`）；详见 [`docs/knowledge-base.md`](docs/knowledge-base.md)。
+- **知识库** —— 与 feed 并列的私有语料库：应用内上传或编写的文档，以及运维用 `kb index --user` 为你注册的目录来源，按标题切分并以路径引用。上传/编写的文档可编辑，文件来源的文档保持只读。每个来源只对属主可见，并使用属主自己的 BYOK embedding 配置建立索引。默认关闭（`KB_ENABLED=false`）；详见 [`docs/knowledge-base.md`](docs/knowledge-base.md)。
 - **白天/夜间主题** —— 导航栏切换按钮位于 `Nyx` 字标右侧；未选择前实时跟随系统，选择后记住（`localStorage["nyx.theme"]`，缺省 = 跟随系统）并在首帧前应用（无闪烁）。
 - **双语界面（中文 / English）** —— 语言切换按钮位于主题开关旁。每次访问默认中文（不看浏览器语言）；显式选择会存到 `localStorage["nyx.locale"]`（`"zh"` | `"en"`）并长期记住，`<html lang>` 跟随当前语言。
 - **可选基础设施**，默认关闭 —— Redis 缓存、Jaeger 链路追踪、Sentry、MCP server。（Prometheus `/metrics` 始终开启。）

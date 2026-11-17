@@ -9,7 +9,6 @@ import {
 const source = {
   id: 1,
   name: 'inline',
-  scope: 'user',
   kind: 'inline',
   enabled: true,
   last_scan_at: null,

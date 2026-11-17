@@ -8,7 +8,9 @@ import (
 	"go.opentelemetry.io/otel/trace/noop"
 
 	"nyx/internal/kb"
+	"nyx/internal/llmsettings"
 	"nyx/internal/platform/config"
+	"nyx/internal/platform/crypto"
 	"nyx/internal/platform/database"
 )
 
@@ -39,32 +41,19 @@ func run(args []string) error {
 
 	tracerProvider := noop.NewTracerProvider()
 	store := kb.NewSQLStore(pool)
-	embedder, embedErr := deploymentEmbedder(cfg, tracerProvider)
 
 	switch args[0] {
 	case "index":
-		return runIndexCommand(ctx, cfg, store, embedder, embedErr, args[1:])
-	case "status":
-		model := ""
-		if embedder != nil {
-			model = embedder.Model()
+		settingsCipher, cipherErr := crypto.NewCipher(cfg.UserLLMEncryptionKey)
+		if cipherErr != nil {
+			return fmt.Errorf("invalid USER_LLM_ENCRYPTION_KEY: %w", cipherErr)
 		}
-		return runStatusWith(ctx, os.Stdout, store, model)
+		settingsService := llmsettings.NewService(llmsettings.NewRepository(pool), settingsCipher)
+		resolver := llmsettings.NewResolver(settingsService, cfg, tracerProvider)
+		return runIndexCommand(ctx, cfg, store, resolver, args[1:])
+	case "status":
+		return runStatusWith(ctx, os.Stdout, store)
 	default:
 		return fmt.Errorf("unknown subcommand %q (usage: kb <index|status>)", args[0])
 	}
-}
-
-func runIndexCommand(ctx context.Context, cfg *config.Config, store kb.Store, embedder kb.Embedder, embedErr error, args []string) error {
-	opts, err := parseIndexOptions(args)
-	if err != nil {
-		return err
-	}
-	opts.SourceName = cfg.KBSharedSourceName
-	if embedErr != nil {
-		return embedErr
-	}
-	indexer := kb.NewIndexer(store, embedder, kb.ChunkOptionsFrom(cfg), kb.ConnectorOptionsFrom(cfg))
-	service := kb.NewService(store, indexer, kb.ConfigFrom(cfg), embedder, noop.NewTracerProvider().Tracer("nyx.kb.cmd"))
-	return runIndexWith(ctx, opts, os.Stdout, service, store, embedder)
 }

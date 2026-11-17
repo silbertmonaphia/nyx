@@ -337,7 +337,7 @@ def test_retry_succeeds_after_validation_failure(monkeypatch, scripted_settings)
     assert client._call_count == 2
 
 
-def test_retry_recovers_from_kb_scope_validation(monkeypatch, scripted_settings):
+def test_retry_recovers_from_kb_path_validation(monkeypatch, scripted_settings):
     invalid = Plan(
         steps=[
             PlanStep(

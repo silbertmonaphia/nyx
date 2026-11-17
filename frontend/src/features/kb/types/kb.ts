@@ -1,4 +1,3 @@
-export type KbScope = 'shared' | 'user';
 export type KbKind = 'dir' | 'inline';
 export type KbOrigin = 'file' | 'inline';
 export type KbStatus = 'pending' | 'indexed' | 'failed';
@@ -6,7 +5,6 @@ export type KbStatus = 'pending' | 'indexed' | 'failed';
 export interface KbSource {
   id: number;
   name: string;
-  scope: KbScope;
   kind: KbKind;
   enabled: boolean;
   last_scan_at: string | null;
@@ -39,24 +37,6 @@ export interface KbDocument {
 export interface KbSettings {
   enabled: boolean;
   embedding_model: string;
-}
-
-export interface KbScanSkip {
-  rel_path: string;
-  reason: string;
-}
-
-export interface KbSourceScan {
-  source_id: number;
-  name: string;
-  documents: number;
-  chunks: number;
-  skipped: KbScanSkip[];
-  error?: string;
-}
-
-export interface KbIndexReport {
-  sources: KbSourceScan[];
 }
 
 export interface KbDocumentFilters {

@@ -23,6 +23,7 @@ import (
 	"nyx/internal/llm/openai"
 	"nyx/internal/platform/config"
 	"nyx/internal/rag"
+	"nyx/internal/user"
 	"nyx/test"
 )
 
@@ -136,17 +137,21 @@ func TestKbRecallBaseline(t *testing.T) {
 
 	store := kb.NewSQLStore(pool)
 	sourceName := "kb_recall_" + time.Now().Format("20060102_150405.000000000")
-	src, err := store.UpsertSharedSource(ctx, sourceName, kbRecallDocsRoot(t))
+	owner := kbRecallUser(t, pool)
+	src, err := store.UpsertDirSource(ctx, owner, sourceName, kbRecallDocsRoot(t))
 	require.NoError(t, err)
 	t.Cleanup(func() {
 		_, _ = pool.Exec(context.Background(), `DELETE FROM kb_sources WHERE id = $1`, src.ID)
 	})
 
 	embedder := &kbRecallEmbedder{byHash: kbRecallVectorHashes(chunks, vectors), model: vectors.Model}
-	indexer := kb.NewIndexer(store, embedder, kbRecallChunkOptions(), kb.ConnectorOptions{
+	indexer := kb.NewIndexer(store, kbRecallChunkOptions(), kb.ConnectorOptions{
 		MaxFileBytes: 1 << 20,
 		MaxFiles:     1000,
 		MaxDepth:     10,
+	})
+	indexer.SetEmbedderResolver(func(context.Context, int64) (kb.Embedder, error) {
+		return embedder, nil
 	})
 	result, err := indexer.ScanSource(ctx, src)
 	require.NoError(t, err)
@@ -168,7 +173,7 @@ func TestKbRecallBaseline(t *testing.T) {
 	categoryTotal := map[string]int{}
 
 	for _, query := range corpus.Queries {
-		evaluation := kbRecallEvaluateQuery(t, ctx, store, src.ID, vectors, query, randomVec)
+		evaluation := kbRecallEvaluateQuery(t, ctx, store, owner, src.ID, vectors, query, randomVec)
 		if evaluation.NegativeTop != nil {
 			negativeTopScores = append(negativeTopScores, *evaluation.NegativeTop)
 			continue
@@ -208,12 +213,12 @@ type kbRecallEvaluation struct {
 	NegativeTop  *float64
 }
 
-func kbRecallEvaluateQuery(t *testing.T, ctx context.Context, store *kb.SQLStore, sourceID int64, vectors kbRecallVectorSet, query kbRecallQuery, randomVec []float32) kbRecallEvaluation {
+func kbRecallEvaluateQuery(t *testing.T, ctx context.Context, store *kb.SQLStore, owner, sourceID int64, vectors kbRecallVectorSet, query kbRecallQuery, randomVec []float32) kbRecallEvaluation {
 	t.Helper()
 	passages, err := store.RetrievePassages(ctx, kb.RetrievalParams{
 		Embedding:      vectors.Queries[query.Key],
 		EmbeddingModel: vectors.Model,
-		UserID:         0,
+		UserID:         owner,
 		SourceID:       &sourceID,
 		PathPrefix:     query.Path,
 		Limit:          kbRecallK,
@@ -263,16 +268,16 @@ func kbRecallEvaluateQuery(t *testing.T, ctx context.Context, store *kb.SQLStore
 	result.Recall = float64(result.Hits) / float64(len(query.Relevant))
 	return kbRecallEvaluation{
 		Result:       result,
-		RandomRecall: kbRecallRandomRecall(t, ctx, store, sourceID, vectors.Model, query, relevant, randomVec),
+		RandomRecall: kbRecallRandomRecall(t, ctx, store, owner, sourceID, vectors.Model, query, relevant, randomVec),
 	}
 }
 
-func kbRecallRandomRecall(t *testing.T, ctx context.Context, store *kb.SQLStore, sourceID int64, model string, query kbRecallQuery, relevant map[string]struct{}, randomVec []float32) float64 {
+func kbRecallRandomRecall(t *testing.T, ctx context.Context, store *kb.SQLStore, owner, sourceID int64, model string, query kbRecallQuery, relevant map[string]struct{}, randomVec []float32) float64 {
 	t.Helper()
 	passages, err := store.RetrievePassages(ctx, kb.RetrievalParams{
 		Embedding:      randomVec,
 		EmbeddingModel: model,
-		UserID:         0,
+		UserID:         owner,
 		SourceID:       &sourceID,
 		PathPrefix:     query.Path,
 		Limit:          kbRecallK,
@@ -500,6 +505,16 @@ func requireKbRecallPgvector(t *testing.T) *pgxpool.Pool {
 	require.NoError(t, test.RunMigrationsForURL(ctx, url))
 	t.Cleanup(probe.Close)
 	return probe
+}
+
+func kbRecallUser(t *testing.T, pool *pgxpool.Pool) int64 {
+	t.Helper()
+	repo := user.NewRepository(pool)
+	username := "kb_recall_" + time.Now().Format("20060102_150405.000000000")
+	require.NoError(t, repo.CreateUser(context.Background(), &user.User{Username: username, PasswordHash: "x"}))
+	created, err := repo.GetUserByUsername(context.Background(), username)
+	require.NoError(t, err)
+	return int64(created.ID)
 }
 
 func kbRecallDocsRoot(t *testing.T) string {

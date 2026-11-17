@@ -1,46 +1,41 @@
 -- name: GetSource :one
 SELECT * FROM kb_sources WHERE id = $1;
 
--- name: ListVisibleSources :many
+-- name: ListSources :many
 SELECT * FROM kb_sources
-WHERE enabled = TRUE
-  AND (scope = 'shared' OR (scope = 'user' AND owner_id = $1))
-ORDER BY CASE scope WHEN 'shared' THEN 0 ELSE 1 END, name;
+WHERE owner_id = $1
+ORDER BY name;
 
 -- name: ListAllSources :many
 SELECT * FROM kb_sources
-ORDER BY scope, name;
+ORDER BY owner_id, name;
 
--- name: ListSourcesByOwner :many
-SELECT * FROM kb_sources
-WHERE scope = 'user' AND owner_id = $1
-ORDER BY name;
-
--- name: UpsertSharedSource :one
-INSERT INTO kb_sources (scope, owner_id, name, kind, root_path)
-VALUES ('shared', NULL, $1, 'dir', $2)
-ON CONFLICT (scope, COALESCE(owner_id, 0), name) DO UPDATE SET
+-- name: UpsertDirSource :one
+INSERT INTO kb_sources (owner_id, name, kind, root_path)
+VALUES ($1, $2, 'dir', $3)
+ON CONFLICT (owner_id, name) DO UPDATE SET
     root_path  = EXCLUDED.root_path,
-    kind       = 'dir',
     enabled    = TRUE,
     updated_at = CURRENT_TIMESTAMP
+WHERE kb_sources.kind = 'dir'
 RETURNING *;
 
 -- name: EnsureInlineSource :one
-INSERT INTO kb_sources (scope, owner_id, name, kind)
-VALUES ('user', $1, 'inline', 'inline')
-ON CONFLICT (scope, COALESCE(owner_id, 0), name) DO UPDATE SET
+INSERT INTO kb_sources (owner_id, name, kind)
+VALUES ($1, 'inline', 'inline')
+ON CONFLICT (owner_id, name) DO UPDATE SET
     updated_at = CURRENT_TIMESTAMP
+WHERE kb_sources.kind = 'inline'
 RETURNING *;
 
 -- name: SetSourceEnabled :one
 UPDATE kb_sources
 SET enabled = $2, updated_at = CURRENT_TIMESTAMP
-WHERE id = $1 AND scope = 'user' AND owner_id = $3
+WHERE id = $1 AND owner_id = $3
 RETURNING *;
 
--- name: DeleteUserSource :execrows
-DELETE FROM kb_sources WHERE id = $1 AND scope = 'user' AND owner_id = $2;
+-- name: DeleteSource :execrows
+DELETE FROM kb_sources WHERE id = $1 AND owner_id = $2;
 
 -- name: UpdateSourceScan :exec
 UPDATE kb_sources
@@ -70,14 +65,9 @@ ORDER BY directory;
 -- name: GetDocument :one
 SELECT * FROM kb_documents WHERE id = $1;
 
--- name: GetVisibleDocument :one
-SELECT * FROM kb_documents
-WHERE id = sqlc.arg(id)::bigint
-  AND (scope = 'shared' OR (scope = 'user' AND owner_id = sqlc.arg(owner_id)::bigint));
-
--- name: ListVisibleDocuments :many
+-- name: ListDocumentsByOwner :many
 SELECT * FROM kb_documents d
-WHERE (d.scope = 'shared' OR (d.scope = 'user' AND d.owner_id = sqlc.arg(owner_id)::bigint))
+WHERE d.owner_id = sqlc.arg(owner_id)::bigint
   AND (sqlc.narg(source_id)::bigint IS NULL OR d.source_id = sqlc.narg(source_id)::bigint)
   AND (sqlc.narg(origin)::text IS NULL OR d.origin = sqlc.narg(origin)::text)
   AND (sqlc.narg(status)::text IS NULL OR d.status = sqlc.narg(status)::text)
@@ -91,7 +81,7 @@ ORDER BY embedding_model;
 
 -- name: GetOwnedDocument :one
 SELECT * FROM kb_documents
-WHERE id = $1 AND scope = 'user' AND owner_id = $2;
+WHERE id = $1 AND owner_id = $2;
 
 -- name: GetDocumentBySourcePath :one
 SELECT * FROM kb_documents WHERE source_id = $1 AND rel_path = $2;
@@ -114,7 +104,7 @@ FROM kb_documents d
 JOIN kb_sources s ON s.id = d.source_id
 WHERE d.status = 'pending'
   AND s.enabled
-  AND (d.scope = 'shared' OR (d.scope = 'user' AND d.owner_id = $1))
+  AND d.owner_id = $1
 ORDER BY d.updated_at
 LIMIT $2;
 
@@ -124,16 +114,16 @@ FROM kb_documents d
 JOIN kb_sources s ON s.id = d.source_id
 JOIN kb_chunks c ON c.document_id = d.id AND c.embedding IS NULL
 WHERE s.enabled
-  AND (d.scope = 'shared' OR (d.scope = 'user' AND d.owner_id = $1))
+  AND d.owner_id = $1
 ORDER BY d.updated_at
 LIMIT $2;
 
 -- name: UpsertFileDocument :one
 INSERT INTO kb_documents (
-    source_id, scope, owner_id, origin, rel_path, title, doc_type,
+    source_id, owner_id, origin, rel_path, title, doc_type,
     content_hash, byte_size, mtime, status, error_detail, generation, content
 )
-VALUES ($1, $2, $3, 'file', $4, $5, $6, $7, $8, $9, 'pending', '', 0, NULL)
+VALUES ($1, $2, 'file', $3, $4, $5, $6, $7, $8, 'pending', '', 0, NULL)
 ON CONFLICT (source_id, rel_path) DO UPDATE SET
     content_hash = EXCLUDED.content_hash,
     byte_size    = EXCLUDED.byte_size,
@@ -147,10 +137,10 @@ RETURNING *;
 
 -- name: UpsertInlineDocument :one
 INSERT INTO kb_documents (
-    source_id, scope, owner_id, origin, rel_path, title, doc_type,
+    source_id, owner_id, origin, rel_path, title, doc_type,
     content_hash, byte_size, mtime, status, error_detail, generation, content
 )
-VALUES ($1, 'user', $2, 'inline', $3, $4, 'markdown', $5, $6, NULL, 'pending', '', 0, $7)
+VALUES ($1, $2, 'inline', $3, $4, 'markdown', $5, $6, NULL, 'pending', '', 0, $7)
 ON CONFLICT (source_id, rel_path) DO UPDATE SET
     title        = EXCLUDED.title,
     content_hash = EXCLUDED.content_hash,
@@ -220,16 +210,16 @@ WHERE source_id = $1
 
 -- name: InsertChunk :one
 INSERT INTO kb_chunks (
-    document_id, scope, owner_id, source_id, generation, ordinal,
+    document_id, owner_id, source_id, generation, ordinal,
     heading_path, content, embed_text, content_hash, embedding,
     embedding_model, token_count, locator
 )
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, NULL, $11, $12, $13)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NULL, $10, $11, $12)
 RETURNING id;
 
 -- name: ClaimUnembeddedChunks :many
 SELECT
-    id, document_id, scope, owner_id, source_id, generation, ordinal,
+    id, document_id, owner_id, source_id, generation, ordinal,
     heading_path, content, embed_text, content_hash, embedding_model,
     token_count, locator, created_at
 FROM kb_chunks
@@ -273,13 +263,12 @@ WHERE c.embedding IS NOT NULL
   AND c.embedding_model = sqlc.arg(embedding_model)::text
   AND d.generation > 0
   AND s.enabled
-  AND (c.scope = 'shared' OR (c.scope = 'user' AND c.owner_id = sqlc.arg(owner_id)::bigint))
-  AND (d.scope = 'shared' OR (d.scope = 'user' AND d.owner_id = sqlc.arg(owner_id)::bigint))
-  AND d.scope = c.scope
-  AND d.owner_id IS NOT DISTINCT FROM c.owner_id
+  AND c.owner_id = sqlc.arg(owner_id)::bigint
+  AND d.owner_id = sqlc.arg(owner_id)::bigint
+  AND s.owner_id = sqlc.arg(owner_id)::bigint
+  AND d.owner_id = c.owner_id
   AND d.source_id = c.source_id
-  AND s.scope = c.scope
-  AND s.owner_id IS NOT DISTINCT FROM c.owner_id
+  AND s.owner_id = c.owner_id
   AND (sqlc.narg(source_id)::bigint IS NULL OR c.source_id = sqlc.narg(source_id)::bigint)
   AND (sqlc.narg(path_prefix)::text IS NULL OR starts_with(d.rel_path, sqlc.narg(path_prefix)::text))
 ORDER BY c.embedding <=> sqlc.arg(embedding), c.id

@@ -1,6 +1,6 @@
 import React, { useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Loader2, RefreshCw, Trash2, Upload } from 'lucide-react';
+import { Loader2, Trash2, Upload } from 'lucide-react';
 import { Button } from '~/components/ui/Button';
 import { Input } from '~/components/ui/Input';
 import { Textarea } from '~/components/ui/Textarea';
@@ -55,9 +55,6 @@ const SourceCard: React.FC<{
           <div className="flex items-center gap-2">
             <span className="font-medium">{source.name}</span>
             <span className="text-[10px] uppercase tracking-wide rounded bg-muted px-1.5 py-0.5">
-              {t(`kb.scope.${source.scope}`)}
-            </span>
-            <span className="text-[10px] uppercase tracking-wide rounded bg-muted px-1.5 py-0.5">
               {t(`kb.kind.${source.kind}`)}
             </span>
             {!source.enabled && (
@@ -83,30 +80,26 @@ const SourceCard: React.FC<{
               : t('kb.neverScanned')}
           </p>
         </button>
-        {source.scope === 'user' && (
-          <>
-            <Button
-              type="button"
-              size="sm"
-              variant="outline"
-              onClick={onToggle}
-              disabled={toggling}
-              data-testid="kb-source-toggle"
-            >
-              {source.enabled ? t('kb.disable') : t('kb.enable')}
-            </Button>
-            <Button
-              type="button"
-              size="icon"
-              variant="ghost"
-              aria-label={t('kb.deleteSource')}
-              onClick={onDelete}
-              data-testid="kb-source-delete"
-            >
-              <Trash2 className="h-4 w-4" />
-            </Button>
-          </>
-        )}
+        <Button
+          type="button"
+          size="sm"
+          variant="outline"
+          onClick={onToggle}
+          disabled={toggling}
+          data-testid="kb-source-toggle"
+        >
+          {source.enabled ? t('kb.disable') : t('kb.enable')}
+        </Button>
+        <Button
+          type="button"
+          size="icon"
+          variant="ghost"
+          aria-label={t('kb.deleteSource')}
+          onClick={onDelete}
+          data-testid="kb-source-delete"
+        >
+          <Trash2 className="h-4 w-4" />
+        </Button>
       </div>
       {identityMismatch && (
         <p
@@ -239,28 +232,6 @@ export const KnowledgeBasePage: React.FC = () => {
   const sourcesById = new Map(sources.map((source) => [source.id, source]));
   const documents = [...(documentsQuery.data ?? [])].sort(newestFirst);
 
-  const runIndex = async () => {
-    try {
-      const report = await mutations.indexSources.mutateAsync();
-      const totals = report.sources.reduce(
-        (acc, source) => ({
-          documents: acc.documents + source.documents,
-          chunks: acc.chunks + source.chunks,
-        }),
-        { documents: 0, chunks: 0 },
-      );
-      addToast(
-        t('kb.indexDone', {
-          documents: totals.documents,
-          chunks: totals.chunks,
-        }),
-        'success',
-      );
-    } catch {
-      addToast(t('kb.indexFailed'), 'error');
-    }
-  };
-
   const uploadFile = async (file: File) => {
     if (file.size === 0) {
       addToast(t('kb.uploadEmpty'), 'error');
@@ -318,21 +289,6 @@ export const KnowledgeBasePage: React.FC = () => {
     <div className="w-full max-w-3xl mx-auto space-y-4" data-testid="kb-page">
       <div className="flex flex-col items-start gap-2">
         <h2 className="text-lg font-semibold">{t('kb.title')}</h2>
-        <Button
-          type="button"
-          size="sm"
-          variant="outline"
-          onClick={() => void runIndex()}
-          disabled={mutations.indexSources.isPending}
-          data-testid="kb-index"
-        >
-          {mutations.indexSources.isPending ? (
-            <Loader2 className="h-4 w-4 animate-spin" />
-          ) : (
-            <RefreshCw className="h-4 w-4" />
-          )}
-          {t('kb.index')}
-        </Button>
         <div className="flex flex-col items-start gap-1">
           <Button
             type="button"

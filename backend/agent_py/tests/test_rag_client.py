@@ -111,8 +111,7 @@ async def test_outline_reads_sources():
                 "sources": [
                     {
                         "id": 1,
-                        "name": "shared",
-                        "scope": "shared",
+                        "name": "posts",
                         "document_count": 3,
                         "chunk_count": 9,
                         "directories": ["B-Cook", "B-Sport"],
@@ -122,5 +121,5 @@ async def test_outline_reads_sources():
         )
 
     sources = await make_client(handler).outline()
-    assert sources[0]["name"] == "shared"
+    assert sources[0]["name"] == "posts"
     assert sources[0]["directories"] == ["B-Cook", "B-Sport"]

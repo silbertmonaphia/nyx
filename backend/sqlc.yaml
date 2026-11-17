@@ -124,6 +124,7 @@ sql:
       - "migrations/000013_drop_rating_from_feeds.up.sql"
       - "migrations/000014_add_feed_embeddings.up.sql"
       - "migrations/000018_create_kb_sources_documents_chunks.up.sql"
+      - "migrations/000020_drop_kb_shared_scope.up.sql"
     gen:
       go:
         package: "db"

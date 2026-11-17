@@ -31,8 +31,7 @@ type FeedEmbedding struct {
 type KbChunk struct {
 	ID             int64
 	DocumentID     int64
-	Scope          string
-	OwnerID        pgtype.Int8
+	OwnerID        int64
 	SourceID       int64
 	Generation     int32
 	Ordinal        int32
@@ -50,8 +49,7 @@ type KbChunk struct {
 type KbDocument struct {
 	ID          int64
 	SourceID    int64
-	Scope       string
-	OwnerID     pgtype.Int8
+	OwnerID     int64
 	Origin      string
 	RelPath     string
 	Title       string
@@ -69,8 +67,7 @@ type KbDocument struct {
 
 type KbSource struct {
 	ID         int64
-	Scope      string
-	OwnerID    pgtype.Int8
+	OwnerID    int64
 	Name       string
 	Kind       string
 	RootPath   pgtype.Text

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -24,24 +25,22 @@ type RetrievalParams struct {
 
 type Store interface {
 	GetSource(ctx context.Context, id int64) (Source, error)
-	ListVisibleSources(ctx context.Context, ownerID int64) ([]Source, error)
+	ListSources(ctx context.Context, ownerID int64) ([]Source, error)
 	ListAllSources(ctx context.Context) ([]Source, error)
-	ListSourcesByOwner(ctx context.Context, ownerID int64) ([]Source, error)
-	UpsertSharedSource(ctx context.Context, name, rootPath string) (Source, error)
+	UpsertDirSource(ctx context.Context, ownerID int64, name, rootPath string) (Source, error)
 	EnsureInlineSource(ctx context.Context, ownerID int64) (Source, error)
 	SetSourceEnabled(ctx context.Context, id, ownerID int64, enabled bool) (Source, error)
-	DeleteUserSource(ctx context.Context, id, ownerID int64) (int64, error)
+	DeleteSource(ctx context.Context, id, ownerID int64) (int64, error)
 	UpdateSourceScan(ctx context.Context, id int64, lastError string) error
 	SourceStats(ctx context.Context, id int64) (SourceStats, error)
 	ListTopLevelDirs(ctx context.Context, id int64) ([]string, error)
 	SourceEmbeddingModels(ctx context.Context, id int64) ([]string, error)
 
 	GetDocument(ctx context.Context, id int64) (Document, error)
-	GetVisibleDocument(ctx context.Context, id, ownerID int64) (Document, error)
 	GetOwnedDocument(ctx context.Context, id, ownerID int64) (Document, error)
 	GetDocumentBySourcePath(ctx context.Context, sourceID int64, relPath string) (Document, error)
 	GetInlineDocumentByHash(ctx context.Context, ownerID int64, hash []byte) (Document, error)
-	ListVisibleDocuments(ctx context.Context, ownerID int64, sourceID *int64, origin, status string, limit, offset int32) ([]Document, error)
+	ListDocumentsByOwner(ctx context.Context, ownerID int64, sourceID *int64, origin, status string, limit, offset int32) ([]Document, error)
 	ListDocumentsBySource(ctx context.Context, sourceID int64, limit, offset int32) ([]Document, error)
 	ListPendingDocuments(ctx context.Context, ownerID int64, limit int32) ([]Document, error)
 	ListDocumentsWithUnembedded(ctx context.Context, ownerID int64, limit int32) ([]Document, error)
@@ -86,8 +85,8 @@ func (s *SQLStore) GetSource(ctx context.Context, id int64) (Source, error) {
 	return sourceFromRow(row), nil
 }
 
-func (s *SQLStore) ListVisibleSources(ctx context.Context, ownerID int64) ([]Source, error) {
-	rows, err := s.q.ListVisibleSources(ctx, pgInt8(ownerID))
+func (s *SQLStore) ListSources(ctx context.Context, ownerID int64) ([]Source, error) {
+	rows, err := s.q.ListSources(ctx, ownerID)
 	if err != nil {
 		return nil, err
 	}
@@ -102,16 +101,18 @@ func (s *SQLStore) ListAllSources(ctx context.Context) ([]Source, error) {
 	return sourcesFromRows(rows), nil
 }
 
-func (s *SQLStore) ListSourcesByOwner(ctx context.Context, ownerID int64) ([]Source, error) {
-	rows, err := s.q.ListSourcesByOwner(ctx, pgInt8(ownerID))
-	if err != nil {
-		return nil, err
+func (s *SQLStore) UpsertDirSource(ctx context.Context, ownerID int64, name, rootPath string) (Source, error) {
+	if strings.EqualFold(strings.TrimSpace(name), "inline") {
+		return Source{}, ErrSourceNameConflict
 	}
-	return sourcesFromRows(rows), nil
-}
-
-func (s *SQLStore) UpsertSharedSource(ctx context.Context, name, rootPath string) (Source, error) {
-	row, err := s.q.UpsertSharedSource(ctx, kbdb.UpsertSharedSourceParams{Name: name, RootPath: pgText(rootPath)})
+	row, err := s.q.UpsertDirSource(ctx, kbdb.UpsertDirSourceParams{
+		OwnerID:  ownerID,
+		Name:     name,
+		RootPath: pgText(rootPath),
+	})
+	if errors.Is(err, pgx.ErrNoRows) {
+		return Source{}, ErrSourceNameConflict
+	}
 	if err != nil {
 		return Source{}, err
 	}
@@ -119,7 +120,10 @@ func (s *SQLStore) UpsertSharedSource(ctx context.Context, name, rootPath string
 }
 
 func (s *SQLStore) EnsureInlineSource(ctx context.Context, ownerID int64) (Source, error) {
-	row, err := s.q.EnsureInlineSource(ctx, pgInt8(ownerID))
+	row, err := s.q.EnsureInlineSource(ctx, ownerID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return Source{}, ErrSourceNameConflict
+	}
 	if err != nil {
 		return Source{}, err
 	}
@@ -130,7 +134,7 @@ func (s *SQLStore) SetSourceEnabled(ctx context.Context, id, ownerID int64, enab
 	row, err := s.q.SetSourceEnabled(ctx, kbdb.SetSourceEnabledParams{
 		ID:      id,
 		Enabled: enabled,
-		OwnerID: pgInt8(ownerID),
+		OwnerID: ownerID,
 	})
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Source{}, ErrSourceNotFound
@@ -141,8 +145,8 @@ func (s *SQLStore) SetSourceEnabled(ctx context.Context, id, ownerID int64, enab
 	return sourceFromRow(row), nil
 }
 
-func (s *SQLStore) DeleteUserSource(ctx context.Context, id, ownerID int64) (int64, error) {
-	return s.q.DeleteUserSource(ctx, kbdb.DeleteUserSourceParams{ID: id, OwnerID: pgInt8(ownerID)})
+func (s *SQLStore) DeleteSource(ctx context.Context, id, ownerID int64) (int64, error) {
+	return s.q.DeleteSource(ctx, kbdb.DeleteSourceParams{ID: id, OwnerID: ownerID})
 }
 
 func (s *SQLStore) UpdateSourceScan(ctx context.Context, id int64, lastError string) error {
@@ -184,19 +188,8 @@ func (s *SQLStore) GetDocument(ctx context.Context, id int64) (Document, error) 
 	return documentFromRow(row), nil
 }
 
-func (s *SQLStore) GetVisibleDocument(ctx context.Context, id, ownerID int64) (Document, error) {
-	row, err := s.q.GetVisibleDocument(ctx, kbdb.GetVisibleDocumentParams{ID: id, OwnerID: ownerID})
-	if errors.Is(err, pgx.ErrNoRows) {
-		return Document{}, ErrDocumentNotFound
-	}
-	if err != nil {
-		return Document{}, err
-	}
-	return documentFromRow(row), nil
-}
-
 func (s *SQLStore) GetOwnedDocument(ctx context.Context, id, ownerID int64) (Document, error) {
-	row, err := s.q.GetOwnedDocument(ctx, kbdb.GetOwnedDocumentParams{ID: id, OwnerID: pgInt8(ownerID)})
+	row, err := s.q.GetOwnedDocument(ctx, kbdb.GetOwnedDocumentParams{ID: id, OwnerID: ownerID})
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Document{}, ErrDocumentNotFound
 	}
@@ -219,7 +212,7 @@ func (s *SQLStore) GetDocumentBySourcePath(ctx context.Context, sourceID int64, 
 
 func (s *SQLStore) GetInlineDocumentByHash(ctx context.Context, ownerID int64, hash []byte) (Document, error) {
 	row, err := s.q.GetInlineDocumentByHash(ctx, kbdb.GetInlineDocumentByHashParams{
-		OwnerID:     pgInt8(ownerID),
+		OwnerID:     ownerID,
 		ContentHash: hash,
 	})
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -231,8 +224,8 @@ func (s *SQLStore) GetInlineDocumentByHash(ctx context.Context, ownerID int64, h
 	return documentFromRow(row), nil
 }
 
-func (s *SQLStore) ListVisibleDocuments(ctx context.Context, ownerID int64, sourceID *int64, origin, status string, limit, offset int32) ([]Document, error) {
-	rows, err := s.q.ListVisibleDocuments(ctx, kbdb.ListVisibleDocumentsParams{
+func (s *SQLStore) ListDocumentsByOwner(ctx context.Context, ownerID int64, sourceID *int64, origin, status string, limit, offset int32) ([]Document, error) {
+	rows, err := s.q.ListDocumentsByOwner(ctx, kbdb.ListDocumentsByOwnerParams{
 		OwnerID:     ownerID,
 		SourceID:    pgInt8Ptr(sourceID),
 		Origin:      pgText(origin),
@@ -259,7 +252,7 @@ func (s *SQLStore) ListDocumentsBySource(ctx context.Context, sourceID int64, li
 }
 
 func (s *SQLStore) ListPendingDocuments(ctx context.Context, ownerID int64, limit int32) ([]Document, error) {
-	rows, err := s.q.ListPendingDocuments(ctx, kbdb.ListPendingDocumentsParams{OwnerID: pgInt8(ownerID), Limit: limit})
+	rows, err := s.q.ListPendingDocuments(ctx, kbdb.ListPendingDocumentsParams{OwnerID: ownerID, Limit: limit})
 	if err != nil {
 		return nil, err
 	}
@@ -268,7 +261,7 @@ func (s *SQLStore) ListPendingDocuments(ctx context.Context, ownerID int64, limi
 
 func (s *SQLStore) ListDocumentsWithUnembedded(ctx context.Context, ownerID int64, limit int32) ([]Document, error) {
 	rows, err := s.q.ListDocumentsWithUnembeddedChunks(ctx, kbdb.ListDocumentsWithUnembeddedChunksParams{
-		OwnerID: pgInt8(ownerID),
+		OwnerID: ownerID,
 		Limit:   limit,
 	})
 	if err != nil {
@@ -280,8 +273,7 @@ func (s *SQLStore) ListDocumentsWithUnembedded(ctx context.Context, ownerID int6
 func (s *SQLStore) UpsertFileDocument(ctx context.Context, d Document) (Document, error) {
 	row, err := s.q.UpsertFileDocument(ctx, kbdb.UpsertFileDocumentParams{
 		SourceID:    d.SourceID,
-		Scope:       d.Scope,
-		OwnerID:     ownerPtr(d.OwnerID),
+		OwnerID:     d.OwnerID,
 		RelPath:     d.RelPath,
 		Title:       d.Title,
 		DocType:     d.DocType,
@@ -298,7 +290,7 @@ func (s *SQLStore) UpsertFileDocument(ctx context.Context, d Document) (Document
 func (s *SQLStore) UpsertInlineDocument(ctx context.Context, d Document) (Document, error) {
 	row, err := s.q.UpsertInlineDocument(ctx, kbdb.UpsertInlineDocumentParams{
 		SourceID:    d.SourceID,
-		OwnerID:     pgInt8(d.OwnerID),
+		OwnerID:     d.OwnerID,
 		RelPath:     d.RelPath,
 		Title:       d.Title,
 		ContentHash: d.ContentHash,
@@ -372,8 +364,7 @@ func (s *SQLStore) DeleteAbsentFileDocuments(ctx context.Context, sourceID int64
 func (s *SQLStore) InsertChunk(ctx context.Context, c Chunk) (int64, error) {
 	id, err := s.q.InsertChunk(ctx, kbdb.InsertChunkParams{
 		DocumentID: c.DocumentID,
-		Scope:      c.Scope,
-		OwnerID:    ownerPtr(c.OwnerID),
+		OwnerID:    c.OwnerID,
 		SourceID:   c.SourceID,
 		Generation: c.Generation,
 		//nolint:gosec // G115: ordinal is a chunk index within one document.
@@ -474,8 +465,7 @@ func (s *SQLStore) RetrievePassages(ctx context.Context, params RetrievalParams)
 func sourceFromRow(row kbdb.KbSource) Source {
 	return Source{
 		ID:         row.ID,
-		Scope:      row.Scope,
-		OwnerID:    ownerValue(row.OwnerID),
+		OwnerID:    row.OwnerID,
 		Name:       row.Name,
 		Kind:       row.Kind,
 		RootPath:   textValue(row.RootPath),
@@ -499,8 +489,7 @@ func documentFromRow(row kbdb.KbDocument) Document {
 	return Document{
 		ID:          row.ID,
 		SourceID:    row.SourceID,
-		Scope:       row.Scope,
-		OwnerID:     ownerValue(row.OwnerID),
+		OwnerID:     row.OwnerID,
 		Origin:      row.Origin,
 		RelPath:     row.RelPath,
 		Title:       row.Title,
@@ -529,8 +518,7 @@ func chunkFromClaimRow(row kbdb.ClaimUnembeddedChunksRow) Chunk {
 	return Chunk{
 		ID:             row.ID,
 		DocumentID:     row.DocumentID,
-		Scope:          row.Scope,
-		OwnerID:        ownerValue(row.OwnerID),
+		OwnerID:        row.OwnerID,
 		SourceID:       row.SourceID,
 		Generation:     row.Generation,
 		Ordinal:        int(row.Ordinal),
@@ -544,29 +532,11 @@ func chunkFromClaimRow(row kbdb.ClaimUnembeddedChunksRow) Chunk {
 	}
 }
 
-func pgInt8(v int64) pgtype.Int8 {
-	return pgtype.Int8{Int64: v, Valid: true}
-}
-
 func pgInt8Ptr(v *int64) pgtype.Int8 {
 	if v == nil {
 		return pgtype.Int8{}
 	}
 	return pgtype.Int8{Int64: *v, Valid: true}
-}
-
-func ownerPtr(v int64) pgtype.Int8 {
-	if v == 0 {
-		return pgtype.Int8{}
-	}
-	return pgtype.Int8{Int64: v, Valid: true}
-}
-
-func ownerValue(v pgtype.Int8) int64 {
-	if !v.Valid {
-		return 0
-	}
-	return v.Int64
 }
 
 func nonNilStrings(v []string) []string {

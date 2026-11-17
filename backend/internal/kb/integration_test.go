@@ -45,11 +45,24 @@ func (e *keywordEmbedder) EmbedStrings(_ context.Context, inputs []string) ([][]
 func (e *keywordEmbedder) Model() string { return "integration-keyword-embedder" }
 
 func integrationIndexer(store Store, embedder *keywordEmbedder) *Indexer {
-	indexer := NewIndexer(store, embedder, ChunkOptions{
+	indexer := NewIndexer(store, ChunkOptions{
 		TargetTokens: 400, MaxTokens: 700, MinTokens: 20, OverlapTokens: 0,
 	}, ConnectorOptions{MaxFileBytes: 1 << 20, MaxFiles: 100, MaxDepth: 10})
+	indexer.SetEmbedderResolver(func(context.Context, int64) (Embedder, error) {
+		return embedder, nil
+	})
 	indexer.SetNormalizers(NewMarkdownNormalizer())
 	return indexer
+}
+
+func integrationUser(t *testing.T, pool *pgxpool.Pool, prefix string) int64 {
+	t.Helper()
+	repo := user.NewRepository(pool)
+	username := prefix + time.Now().Format("150405.000000")
+	require.NoError(t, repo.CreateUser(context.Background(), &user.User{Username: username, PasswordHash: "x"}))
+	created, err := repo.GetUserByUsername(context.Background(), username)
+	require.NoError(t, err)
+	return int64(created.ID)
 }
 
 func requireKBPgvector(t *testing.T) *pgxpool.Pool {
@@ -101,8 +114,9 @@ func TestIntegrationIngestAndRetrieve(t *testing.T) {
 	))
 
 	store := NewSQLStore(pool)
+	owner := integrationUser(t, pool, "kb_ingest_")
 	sourceName := "integration-kb-" + time.Now().Format("150405.000")
-	src, err := store.UpsertSharedSource(ctx, sourceName, root)
+	src, err := store.UpsertDirSource(ctx, owner, sourceName, root)
 	require.NoError(t, err)
 	t.Cleanup(func() {
 		_, _ = pool.Exec(context.Background(), `DELETE FROM kb_sources WHERE id = $1`, src.ID)
@@ -134,7 +148,7 @@ func TestIntegrationIngestAndRetrieve(t *testing.T) {
 	passages, err := store.RetrievePassages(ctx, RetrievalParams{
 		Embedding:      queryVec,
 		EmbeddingModel: embedder.Model(),
-		UserID:         0,
+		UserID:         owner,
 		Limit:          5,
 	})
 	require.NoError(t, err)
@@ -162,7 +176,8 @@ func TestIntegrationPendingGenerationKeepsPreviousContent(t *testing.T) {
 	path := filepath.Join(root, "note.md")
 	require.NoError(t, os.WriteFile(path, []byte("# 笔记\n\n版本一，校验口令是紫象四四七一。\n"), 0o600))
 	store := NewSQLStore(pool)
-	src, err := store.UpsertSharedSource(ctx, "integration-gen-"+time.Now().Format("150405.000"), root)
+	owner := integrationUser(t, pool, "kb_gen_")
+	src, err := store.UpsertDirSource(ctx, owner, "integration-gen-"+time.Now().Format("150405.000"), root)
 	require.NoError(t, err)
 	t.Cleanup(func() {
 		_, _ = pool.Exec(context.Background(), `DELETE FROM kb_sources WHERE id = $1`, src.ID)
@@ -172,7 +187,7 @@ func TestIntegrationPendingGenerationKeepsPreviousContent(t *testing.T) {
 
 	_, err = indexer.ScanSource(ctx, src)
 	require.NoError(t, err)
-	passages := integrationRetrieve(t, store, embedder, &src.ID, 10)
+	passages := integrationRetrieve(t, store, embedder, owner, &src.ID, 10)
 	require.NotEmpty(t, passages)
 	assert.Contains(t, passages[0].Content, "版本一")
 
@@ -185,7 +200,7 @@ func TestIntegrationPendingGenerationKeepsPreviousContent(t *testing.T) {
 	assert.Equal(t, StatusPending, doc.Status)
 	assert.Equal(t, int32(1), doc.Generation)
 
-	passages = integrationRetrieve(t, store, embedder, &src.ID, 10)
+	passages = integrationRetrieve(t, store, embedder, owner, &src.ID, 10)
 	require.NotEmpty(t, passages, "the previous generation must keep serving while the replacement is pending")
 	assert.Contains(t, passages[0].Content, "版本一")
 	for _, passage := range passages {
@@ -199,7 +214,7 @@ func TestIntegrationPendingGenerationKeepsPreviousContent(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, StatusIndexed, doc.Status)
 	assert.Equal(t, int32(2), doc.Generation)
-	passages = integrationRetrieve(t, store, embedder, &src.ID, 10)
+	passages = integrationRetrieve(t, store, embedder, owner, &src.ID, 10)
 	require.NotEmpty(t, passages)
 	assert.Contains(t, passages[0].Content, "版本二")
 	for _, passage := range passages {
@@ -207,12 +222,12 @@ func TestIntegrationPendingGenerationKeepsPreviousContent(t *testing.T) {
 	}
 }
 
-func integrationRetrieve(t *testing.T, store Store, embedder *keywordEmbedder, sourceID *int64, k int) []Passage {
+func integrationRetrieve(t *testing.T, store Store, embedder *keywordEmbedder, owner int64, sourceID *int64, k int) []Passage {
 	t.Helper()
 	passages, err := store.RetrievePassages(context.Background(), RetrievalParams{
 		Embedding:      integrationQuery(),
 		EmbeddingModel: embedder.Model(),
-		UserID:         0,
+		UserID:         owner,
 		SourceID:       sourceID,
 		Limit:          k,
 	})
@@ -236,24 +251,30 @@ func TestIntegrationVisibilityIsolationAndDesyncReassertion(t *testing.T) {
 	userA := makeUser("kb_a_")
 	userB := makeUser("kb_b_")
 
-	sharedRoot := t.TempDir()
-	require.NoError(t, os.WriteFile(filepath.Join(sharedRoot, "s.md"), []byte("# S\n\n紫象 共享内容。\n"), 0o600))
+	rootA := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(rootA, "a-dir.md"), []byte("# AD\n\n紫象 A 的目录内容。\n"), 0o600))
+	rootB := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(rootB, "b-dir.md"), []byte("# BD\n\n紫象 B 的目录内容。\n"), 0o600))
 
 	store := NewSQLStore(pool)
 	srcA, err := store.EnsureInlineSource(ctx, int64(userA))
 	require.NoError(t, err)
 	srcB, err := store.EnsureInlineSource(ctx, int64(userB))
 	require.NoError(t, err)
-	srcShared, err := store.UpsertSharedSource(ctx, "integration-shared-"+suffix, sharedRoot)
+	srcDirA, err := store.UpsertDirSource(ctx, int64(userA), "integration-dir-a-"+suffix, rootA)
+	require.NoError(t, err)
+	srcDirB, err := store.UpsertDirSource(ctx, int64(userB), "integration-dir-b-"+suffix, rootB)
 	require.NoError(t, err)
 	t.Cleanup(func() {
 		_, _ = pool.Exec(context.Background(), `DELETE FROM kb_sources WHERE id = ANY($1::bigint[])`,
-			[]int64{srcA.ID, srcB.ID, srcShared.ID})
+			[]int64{srcA.ID, srcB.ID, srcDirA.ID, srcDirB.ID})
 	})
 
 	embedder := &keywordEmbedder{keyword: "紫象"}
 	indexer := integrationIndexer(store, embedder)
-	_, scanErr := indexer.ScanSource(ctx, srcShared)
+	_, scanErr := indexer.ScanSource(ctx, srcDirA)
+	require.NoError(t, scanErr)
+	_, scanErr = indexer.ScanSource(ctx, srcDirB)
 	require.NoError(t, scanErr)
 
 	seedInlineDoc := func(owner int, relPath, body string) {
@@ -261,13 +282,13 @@ func TestIntegrationVisibilityIsolationAndDesyncReassertion(t *testing.T) {
 		src, srcErr := store.EnsureInlineSource(ctx, int64(owner))
 		require.NoError(t, srcErr)
 		doc, docErr := store.UpsertInlineDocument(ctx, Document{
-			SourceID: src.ID, Scope: ScopeUser, OwnerID: int64(owner), Origin: OriginInline,
+			SourceID: src.ID, OwnerID: int64(owner), Origin: OriginInline,
 			RelPath: relPath, Title: relPath, DocType: DocTypeMarkdown,
 			ContentHash: hashBytes([]byte(body)), ByteSize: int64(len(body)), Content: body,
 		})
 		require.NoError(t, docErr)
 		chunkID, insertErr := store.InsertChunk(ctx, Chunk{
-			DocumentID: doc.ID, Scope: ScopeUser, OwnerID: int64(owner), SourceID: src.ID,
+			DocumentID: doc.ID, OwnerID: int64(owner), SourceID: src.ID,
 			Generation: 1, Ordinal: 0, HeadingPath: []string{"Doc"}, Content: body,
 			EmbedText: relPath + "\n\n" + body, ContentHash: hashBytes([]byte(body)),
 			EmbeddingModel: embedder.Model(), TokenCount: 10,
@@ -289,9 +310,10 @@ func TestIntegrationVisibilityIsolationAndDesyncReassertion(t *testing.T) {
 	for _, passage := range passagesA {
 		seenA[passage.RelPath] = true
 		assert.NotEqual(t, "b.md", passage.RelPath)
+		assert.NotEqual(t, "b-dir.md", passage.RelPath)
 	}
 	assert.True(t, seenA["a.md"])
-	assert.True(t, seenA["s.md"])
+	assert.True(t, seenA["a-dir.md"])
 
 	passagesB, err := store.RetrievePassages(ctx, RetrievalParams{
 		Embedding: integrationQuery(), EmbeddingModel: embedder.Model(), UserID: int64(userB), Limit: 20,
@@ -299,12 +321,13 @@ func TestIntegrationVisibilityIsolationAndDesyncReassertion(t *testing.T) {
 	require.NoError(t, err)
 	for _, passage := range passagesB {
 		assert.NotEqual(t, "a.md", passage.RelPath)
+		assert.NotEqual(t, "a-dir.md", passage.RelPath)
 	}
 
 	docA, err := store.GetDocumentBySourcePath(ctx, srcA.ID, "a.md")
 	require.NoError(t, err)
 	desyncID, err := store.InsertChunk(ctx, Chunk{
-		DocumentID: docA.ID, Scope: ScopeUser, OwnerID: int64(userB), SourceID: srcA.ID,
+		DocumentID: docA.ID, OwnerID: int64(userB), SourceID: srcA.ID,
 		Generation: docA.Generation, Ordinal: 99, HeadingPath: []string{"Desync"},
 		Content: "DESYNC BODY", EmbedText: "紫象 DESYNC BODY",
 		ContentHash: hashBytes([]byte("DESYNC BODY")), EmbeddingModel: embedder.Model(),
@@ -323,6 +346,52 @@ func TestIntegrationVisibilityIsolationAndDesyncReassertion(t *testing.T) {
 	}
 }
 
+func TestIntegrationUpsertDirSourceRepointAndKindGuard(t *testing.T) {
+	pool := requireKBPgvector(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	owner := integrationUser(t, pool, "kb_upsert_")
+	store := NewSQLStore(pool)
+	t.Cleanup(func() {
+		_, _ = pool.Exec(context.Background(), `DELETE FROM kb_sources WHERE owner_id = $1`, owner)
+	})
+
+	firstRoot := t.TempDir()
+	src, err := store.UpsertDirSource(ctx, owner, "notes", firstRoot)
+	require.NoError(t, err)
+	require.Equal(t, firstRoot, src.RootPath)
+
+	_, err = store.SetSourceEnabled(ctx, src.ID, owner, false)
+	require.NoError(t, err)
+
+	secondRoot := t.TempDir()
+	repointed, err := store.UpsertDirSource(ctx, owner, "notes", secondRoot)
+	require.NoError(t, err)
+	assert.Equal(t, src.ID, repointed.ID)
+	assert.Equal(t, secondRoot, repointed.RootPath)
+	assert.True(t, repointed.Enabled, "operator re-index re-enables the source")
+
+	inline, err := store.EnsureInlineSource(ctx, owner)
+	require.NoError(t, err)
+	_, err = store.UpsertDirSource(ctx, owner, "inline", t.TempDir())
+	assert.ErrorIs(t, err, ErrSourceNameConflict)
+	again, err := store.EnsureInlineSource(ctx, owner)
+	require.NoError(t, err)
+	assert.Equal(t, inline.ID, again.ID)
+	assert.Equal(t, KindInline, again.Kind)
+
+	other := integrationUser(t, pool, "kb_upsert_other_")
+	t.Cleanup(func() {
+		_, _ = pool.Exec(context.Background(), `DELETE FROM kb_sources WHERE owner_id = $1`, other)
+	})
+	_, err = store.UpsertDirSource(ctx, other, "INLINE", t.TempDir())
+	assert.ErrorIs(t, err, ErrSourceNameConflict)
+	sources, err := store.ListSources(ctx, other)
+	require.NoError(t, err)
+	assert.Empty(t, sources, "a reserved-name registration must not create a source")
+}
+
 func TestIntegrationInlineDocumentWithoutHeadingsIndexes(t *testing.T) {
 	pool := requireKBPgvector(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
@@ -338,12 +407,12 @@ func TestIntegrationInlineDocumentWithoutHeadingsIndexes(t *testing.T) {
 	store := NewSQLStore(pool)
 	t.Cleanup(func() {
 		_, _ = pool.Exec(context.Background(),
-			`DELETE FROM kb_sources WHERE scope = 'user' AND owner_id = $1`, created.ID)
+			`DELETE FROM kb_sources WHERE owner_id = $1`, created.ID)
 	})
 
 	embedder := &keywordEmbedder{keyword: "紫象"}
 	indexer := integrationIndexer(store, embedder)
-	svc := NewService(store, indexer, Config{Enabled: true}, embedder,
+	svc := NewService(store, indexer, Config{Enabled: true},
 		noop.NewTracerProvider().Tracer("kb-integration"))
 
 	const body = "紫象 plain text without headings\n\nsecond paragraph"

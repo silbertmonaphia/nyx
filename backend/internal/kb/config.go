@@ -5,8 +5,6 @@ import "nyx/internal/platform/config"
 func ConfigFrom(c *config.Config) Config {
 	return Config{
 		Enabled:          c.KBEnabled,
-		Root:             c.KBRoot,
-		SharedSourceName: c.KBSharedSourceName,
 		Chunk:            ChunkOptionsFrom(c),
 		TopK:             c.KBTopK,
 		MaxContextChars:  c.KBMaxContextChars,

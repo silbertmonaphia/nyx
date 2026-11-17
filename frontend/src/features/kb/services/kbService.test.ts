@@ -26,13 +26,13 @@ describe('kbService', () => {
   });
 
   it('lists sources from the envelope', async () => {
-    mockedApi.get.mockResolvedValue({ data: { sources: [{ id: 1, name: 'shared' }] } });
+    mockedApi.get.mockResolvedValue({ data: { sources: [{ id: 1, name: 'posts' }] } });
     const sources = await kbService.listSources();
     expect(mockedApi.get).toHaveBeenCalledWith('/kb/sources', {
       skipErrorToast: true,
       skipSentry: true,
     });
-    expect(sources).toEqual([{ id: 1, name: 'shared' }]);
+    expect(sources).toEqual([{ id: 1, name: 'posts' }]);
   });
 
   it('passes document filters as query parameters', async () => {
@@ -81,12 +81,9 @@ describe('kbService', () => {
     expect(mockedApi.delete).toHaveBeenCalledWith('/kb/documents/5');
   });
 
-  it('triggers indexing and reads settings', async () => {
-    mockedApi.post.mockResolvedValue({ data: { sources: [] } });
+  it('reads settings', async () => {
     mockedApi.get.mockResolvedValue({ data: { enabled: true, embedding_model: 'm' } });
 
-    expect(await kbService.indexSources()).toEqual({ sources: [] });
-    expect(mockedApi.post).toHaveBeenCalledWith('/kb/index');
     expect(await kbService.getSettings()).toEqual({
       enabled: true,
       embedding_model: 'm',

@@ -5,9 +5,6 @@ import (
 )
 
 const (
-	ScopeShared = "shared"
-	ScopeUser   = "user"
-
 	KindDir    = "dir"
 	KindInline = "inline"
 
@@ -27,7 +24,6 @@ const (
 
 type Source struct {
 	ID         int64
-	Scope      string
 	OwnerID    int64
 	Name       string
 	Kind       string
@@ -42,7 +38,6 @@ type Source struct {
 type Document struct {
 	ID          int64
 	SourceID    int64
-	Scope       string
 	OwnerID     int64
 	Origin      string
 	RelPath     string
@@ -62,7 +57,6 @@ type Document struct {
 type Chunk struct {
 	ID             int64
 	DocumentID     int64
-	Scope          string
 	OwnerID        int64
 	SourceID       int64
 	Generation     int32
@@ -131,7 +125,6 @@ type SourceInfo struct {
 type OutlineSource struct {
 	ID          int64    `json:"id"`
 	Name        string   `json:"name"`
-	Scope       string   `json:"scope"`
 	Documents   int64    `json:"document_count"`
 	Chunks      int64    `json:"chunk_count"`
 	Directories []string `json:"directories"`

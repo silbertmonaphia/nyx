@@ -19,11 +19,11 @@ func TestRetrievePassagesPinsVisibilityGenerationAndIdentity(t *testing.T) {
 		"id", "document_id", "source_id", "source_name", "rel_path",
 		"heading_path", "content", "locator", "score",
 	}).AddRow(
-		int64(11), int64(7), int64(3), "shared", "B-Cook/2019-11-16-Cook-Diet.md",
+		int64(11), int64(7), int64(3), "posts", "B-Cook/2019-11-16-Cook-Diet.md",
 		[]string{"煮食记", "碳水列表"}, "一份碳水 + 一份蛋白", []byte(`{"line":12}`), float64(0.87),
 	)
 
-	mock.ExpectQuery(`(?is)FROM kb_chunks c.*JOIN kb_documents d.*JOIN kb_sources s.*c\.embedding IS NOT NULL.*c\.generation = d\.generation.*c\.embedding_model = \$2::text.*d\.generation > 0.*s\.enabled.*c\.scope = 'shared'.*c\.owner_id = \$3::bigint.*d\.scope = 'shared'.*d\.owner_id = \$3::bigint.*d\.scope = c\.scope.*d\.owner_id IS NOT DISTINCT FROM c\.owner_id.*d\.source_id = c\.source_id.*s\.scope = c\.scope.*s\.owner_id IS NOT DISTINCT FROM c\.owner_id`).
+	mock.ExpectQuery(`(?is)FROM kb_chunks c.*JOIN kb_documents d.*JOIN kb_sources s.*c\.embedding IS NOT NULL.*c\.generation = d\.generation.*c\.embedding_model = \$2::text.*d\.generation > 0.*s\.enabled.*c\.owner_id = \$3::bigint.*d\.owner_id = \$3::bigint.*s\.owner_id = \$3::bigint.*d\.owner_id = c\.owner_id.*d\.source_id = c\.source_id.*s\.owner_id = c\.owner_id`).
 		WithArgs(pgxmock.AnyArg(), "model-x", int64(42), pgtype.Int8{}, pgtype.Text{}, int32(5)).
 		WillReturnRows(rows)
 
@@ -38,7 +38,7 @@ func TestRetrievePassagesPinsVisibilityGenerationAndIdentity(t *testing.T) {
 	require.Len(t, passages, 1)
 	assert.Equal(t, int64(11), passages[0].ChunkID)
 	assert.Equal(t, int64(7), passages[0].DocID)
-	assert.Equal(t, "shared", passages[0].SourceName)
+	assert.Equal(t, "posts", passages[0].SourceName)
 	assert.Equal(t, "B-Cook/2019-11-16-Cook-Diet.md", passages[0].RelPath)
 	assert.Equal(t, []string{"煮食记", "碳水列表"}, passages[0].HeadingPath)
 	assert.Equal(t, 12, passages[0].Locator.Line)

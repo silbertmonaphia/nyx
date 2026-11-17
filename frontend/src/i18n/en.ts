@@ -314,9 +314,6 @@ export const en: Translation = {
     },
     kb: {
       title: 'Knowledge base',
-      index: 'Index now',
-      indexDone: 'Indexed {{documents}} documents ({{chunks}} chunks)',
-      indexFailed: 'Indexing failed',
       upload: 'Upload file',
       uploadDone: 'Document uploaded',
       uploadFailed: 'Upload failed',
@@ -361,10 +358,6 @@ export const en: Translation = {
         pending: 'Pending',
         indexed: 'Indexed',
         failed: 'Failed',
-      },
-      scope: {
-        shared: 'Shared',
-        user: 'Private',
       },
       kind: {
         dir: 'Directory',

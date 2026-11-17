@@ -6,11 +6,12 @@ not modified and `rag: true` still means "my feeds".
 
 ## What it does
 
-- **Sources.** One operator-managed *shared* directory readable by every user.
-  Each user also gets an `inline` source holding documents uploaded or typed
-  into the app. Excluding a source from search skips its scans and keeps it out
-  of retrieval, but leaves its documents listed and editable in the SPA so the
-  source can be re-enabled.
+- **Sources.** Every source belongs to exactly one user. A user's `inline`
+  source holds documents uploaded or typed into the app; directory (`dir`)
+  sources are registered per user by the operator CLI (`kb index --user`) and
+  are never exposed through the HTTP API. Excluding a source from search skips
+  its scans and keeps it out of retrieval, but leaves its documents listed and
+  editable in the SPA so the source can be re-enabled.
 - **Chunking.** Markdown is parsed into a heading-aware block sequence. A chunk
   never spans two heading paths; tables and fenced code blocks are never split;
   every embedded text starts with `relative/path › heading / path` while the
@@ -25,27 +26,28 @@ not modified and `rag: true` still means "my feeds".
   refuses edits and deletes with a static message and points at the source file.
   An `inline` document stores its body with the row and is editable in place,
   keeping its identifier.
-- **Visibility and identity.** Retrieval is scoped to the shared source plus the
-  caller's own sources on both sides of the join. Every chunk records the
-  embedding model that produced its vector; a caller only sees chunks indexed
-  with the same identity. A user whose BYOK model differs from the deployment's
-  sees their own corpus but not the shared one — the UI explains this instead of
-  showing an empty source.
+- **Visibility and identity.** Retrieval is scoped to the caller's own sources,
+  re-asserted across the chunk, document, and source rows. Every chunk records
+  the embedding model that produced its vector; a caller only sees chunks
+  indexed with the same identity. Changing the user's embedding model strands
+  the existing chunks: delete and re-register the directory source (or delete
+  and recreate inline documents) to re-index under the new model. The UI shows
+  the identity mismatch on the source card instead of an empty corpus.
 
 ## Endpoints
 
 | Method | Path | Purpose |
 |---|---|---|
-| `GET` | `/api/kb/sources` | Visible sources with counts, freshness, and indexed embedding identities |
-| `PATCH` | `/api/kb/sources/{id}` | Enable or disable the caller's inline source |
-| `DELETE` | `/api/kb/sources/{id}` | Remove the caller's inline source and everything indexed from it |
+| `GET` | `/api/kb/sources` | The caller's sources with counts, freshness, and indexed embedding identities |
+| `PATCH` | `/api/kb/sources/{id}` | Enable or disable a source the caller owns |
+| `DELETE` | `/api/kb/sources/{id}` | Remove a source the caller owns and everything indexed from it |
 | `GET` | `/api/kb/documents` | List documents (`source_id`, `origin`, `status`, `limit`, `offset`) |
 | `POST` | `/api/kb/documents` | Create a document: multipart (`file`) or JSON (`{name, content}`) |
 | `GET` | `/api/kb/documents/{id}` | Document detail, content and heading paths |
 | `PUT` | `/api/kb/documents/{id}` | Replace an inline document's content and re-index it |
 | `DELETE` | `/api/kb/documents/{id}` | Delete an inline document and its chunks |
-| `POST` | `/api/kb/index` | Index the caller's visible sources and fill pending documents |
-| `GET` | `/api/kb/settings` | Corpus switch and the caller's embedding identity |
+| `POST` | `/api/kb/index` | Index the caller's enabled sources and fill pending documents (API only; the SPA has no index button) |
+| `GET` | `/api/kb/settings` | Knowledge-base availability and the caller's embedding identity |
 | `GET` | `/internal/rag/outline` | Service-to-service outline (JWT bearer; not in OpenAPI) |
 
 `GET /internal/rag/retrieve` (the agent bridge) accepts `corpus=feeds|kb|both`,
@@ -53,17 +55,16 @@ plus optional `source` and `path` filters and `top_k`. `corpus=both` fuses the
 two ranked lists with Reciprocal Rank Fusion — scores from the two corpora are
 not comparable. A knowledge search also triggers the bounded lazy catch-up.
 
-`/internal/rag/outline` returns the caller's visible sources, counts, and
-top-level directory names for the planner; it carries no document content.
+`/internal/rag/outline` returns the caller's own sources, counts, and top-level
+directory names for the planner; it carries no document content and names no
+other user's source.
 
 ## Key environment variables
 
 | Var | Default | Purpose |
 |---|---|---|
 | `KB_ENABLED` | `false` | Master switch. Off means no scan, no KB write, no KB route |
-| `KB_ROOT` | empty | Shared directory; the source row is provisioned at boot, content is imported by `kb index` or the Index button |
-| `KB_SHARED_SOURCE_NAME` | `shared` | Display name of the shared source |
-| `KB_MAX_FILE_BYTES` | `2097152` | Per-file scan limit |
+| `KB_MAX_FILE_BYTES` | `2097152` | Per-file scan limit for directory sources |
 | `KB_MAX_FILES` / `KB_MAX_DEPTH` | `10000` / `20` | Per-scan bounds |
 | `KB_CHUNK_TARGET_TOKENS` / `KB_CHUNK_MAX_TOKENS` | `400` / `700` | Chunk packing budget and hard cap |
 | `KB_CHUNK_MIN_TOKENS` / `KB_CHUNK_OVERLAP_TOKENS` | `50` / `80` | Minimum section size (reserved) and overlap |
@@ -75,22 +76,29 @@ The numeric knobs are validated at boot: positive, bounded, and
 
 ## Operator import
 
-Bulk-import an existing corpus with the operator command. It shares the API
-trigger's ingest pipeline and indexes under the deployment's embedding identity.
+Register a directory as one user's private source and index it with that user's
+BYOK embedding configuration. The command shares the API ingest pipeline; the
+path never crosses the HTTP boundary, so there is no caller-facing source
+creation and no path confinement setting.
 
 ```bash
 cd backend
-KB_ENABLED=true KB_ROOT=/srv/nyx/kb/shared \
-  go run ./cmd/kb index --root /srv/nyx/kb/shared
+go run ./cmd/kb index --user <user-id> --root /srv/nyx/kb/posts_douban
 
 go run ./cmd/kb status
 ```
 
-`kb index` creates a shared source, which makes the directory readable by every
-user, so the command prints what it is about to expose before doing it. Without
-an embedding configuration the command refuses to index with a message naming
-the missing keys. `kb status` prints sources, document/chunk counts, pending
-counts, and the deployment embedding identity as JSON.
+`--name` defaults to the directory's base name and is unique per user; `inline`
+is reserved. Re-running the same name repoints that user's directory source.
+The CLI needs the same `DB_URL` and `USER_LLM_ENCRYPTION_KEY` as the backend,
+and the target user must have saved an embedding configuration — otherwise the
+command refuses to index. `kb status` prints `owner_id`, kind, and
+document/chunk/pending counts per source as JSON.
+
+Directory contents change on disk independently; re-run `kb index` (or call
+`POST /api/kb/index`, which is not surfaced by the SPA) to sync them. Unchanged
+files cost no embedding calls, and an interrupted run resumes from the database
+state when re-run.
 
 ## Recall baseline
 
@@ -131,10 +139,10 @@ feed retrieval passages, ordering, and context block are identical to before.
 The SPA probes `GET /api/kb/settings` and hides the Knowledge tab when the
 route is absent, so a deployment with the corpus off never renders the page.
 Feed citations gain the additive `kind: "feed"` discriminator required by the
-bridge delta. No KB table is written unless the operator explicitly runs
-`cmd/kb index` (an opt-in import). Enabling requires `LLM_ENABLED=true` (the KB
-indexer shares the feed embedder); `KB_ROOT` is needed for the shared directory
-source.
+bridge delta. No KB table is written unless a user uploads a document or the
+operator registers a directory with `cmd/kb index`. Enabling requires
+`LLM_ENABLED=true` because indexing uses each user's saved BYOK embedding
+configuration.
 
 The chat panel's knowledge toggle applies to the non-agent chat path, and its
 sibling feeds toggle sends `rag: true` on that same path. Under

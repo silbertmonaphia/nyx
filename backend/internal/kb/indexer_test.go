@@ -54,13 +54,14 @@ func (f *fakeStore) GetSource(_ context.Context, id int64) (Source, error) {
 	return src, nil
 }
 
-func (f *fakeStore) ListVisibleSources(_ context.Context, ownerID int64) ([]Source, error) {
+func (f *fakeStore) ListSources(_ context.Context, ownerID int64) ([]Source, error) {
 	out := make([]Source, 0, len(f.sources))
 	for _, src := range f.sources {
-		if src.Enabled && (src.Scope == ScopeShared || src.OwnerID == ownerID) {
+		if src.OwnerID == ownerID {
 			out = append(out, src)
 		}
 	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
 	return out, nil
 }
 
@@ -73,41 +74,33 @@ func (f *fakeStore) ListAllSources(_ context.Context) ([]Source, error) {
 	return out, nil
 }
 
-func (f *fakeStore) ListSourcesByOwner(_ context.Context, ownerID int64) ([]Source, error) {
-	out := make([]Source, 0, len(f.sources))
+func (f *fakeStore) UpsertDirSource(_ context.Context, ownerID int64, name, rootPath string) (Source, error) {
 	for _, src := range f.sources {
-		if src.OwnerID == ownerID {
-			out = append(out, src)
-		}
-	}
-	return out, nil
-}
-
-func (f *fakeStore) UpsertSharedSource(_ context.Context, name, rootPath string) (Source, error) {
-	for _, src := range f.sources {
-		if src.Scope == ScopeShared && src.Name == name {
+		if src.OwnerID == ownerID && src.Name == name {
+			if src.Kind != KindDir {
+				return Source{}, ErrSourceNameConflict
+			}
 			src.RootPath = rootPath
-			src.Kind = KindDir
 			src.Enabled = true
 			f.sources[src.ID] = src
 			return src, nil
 		}
 	}
-	return f.addSource(Source{Scope: ScopeShared, Name: name, Kind: KindDir, RootPath: rootPath, Enabled: true}), nil
+	return f.addSource(Source{OwnerID: ownerID, Name: name, Kind: KindDir, RootPath: rootPath, Enabled: true}), nil
 }
 
 func (f *fakeStore) EnsureInlineSource(_ context.Context, ownerID int64) (Source, error) {
 	for _, src := range f.sources {
-		if src.Scope == ScopeUser && src.OwnerID == ownerID && src.Kind == KindInline {
+		if src.OwnerID == ownerID && src.Kind == KindInline {
 			return src, nil
 		}
 	}
-	return f.addSource(Source{Scope: ScopeUser, OwnerID: ownerID, Name: "inline", Kind: KindInline, Enabled: true}), nil
+	return f.addSource(Source{OwnerID: ownerID, Name: "inline", Kind: KindInline, Enabled: true}), nil
 }
 
 func (f *fakeStore) SetSourceEnabled(_ context.Context, id, ownerID int64, enabled bool) (Source, error) {
 	src, ok := f.sources[id]
-	if !ok || src.Scope != ScopeUser || src.OwnerID != ownerID {
+	if !ok || src.OwnerID != ownerID {
 		return Source{}, ErrSourceNotFound
 	}
 	src.Enabled = enabled
@@ -115,9 +108,9 @@ func (f *fakeStore) SetSourceEnabled(_ context.Context, id, ownerID int64, enabl
 	return src, nil
 }
 
-func (f *fakeStore) DeleteUserSource(_ context.Context, id, ownerID int64) (int64, error) {
+func (f *fakeStore) DeleteSource(_ context.Context, id, ownerID int64) (int64, error) {
 	src, ok := f.sources[id]
-	if !ok || src.Scope != ScopeUser || src.OwnerID != ownerID {
+	if !ok || src.OwnerID != ownerID {
 		return 0, nil
 	}
 	delete(f.sources, id)
@@ -200,17 +193,9 @@ func (f *fakeStore) GetDocument(_ context.Context, id int64) (Document, error) {
 	return doc, nil
 }
 
-func (f *fakeStore) GetVisibleDocument(_ context.Context, id, ownerID int64) (Document, error) {
-	doc, ok := f.documents[id]
-	if !ok || (doc.Scope == ScopeUser && doc.OwnerID != ownerID) {
-		return Document{}, ErrDocumentNotFound
-	}
-	return doc, nil
-}
-
 func (f *fakeStore) GetOwnedDocument(_ context.Context, id, ownerID int64) (Document, error) {
 	doc, ok := f.documents[id]
-	if !ok || doc.Scope != ScopeUser || doc.OwnerID != ownerID {
+	if !ok || doc.OwnerID != ownerID {
 		return Document{}, ErrDocumentNotFound
 	}
 	return doc, nil
@@ -234,10 +219,10 @@ func (f *fakeStore) GetInlineDocumentByHash(_ context.Context, ownerID int64, ha
 	return Document{}, ErrDocumentNotFound
 }
 
-func (f *fakeStore) ListVisibleDocuments(_ context.Context, ownerID int64, sourceID *int64, origin, status string, limit, offset int32) ([]Document, error) {
+func (f *fakeStore) ListDocumentsByOwner(_ context.Context, ownerID int64, sourceID *int64, origin, status string, limit, offset int32) ([]Document, error) {
 	out := make([]Document, 0, len(f.documents))
 	for _, doc := range f.documents {
-		if doc.Scope == ScopeUser && doc.OwnerID != ownerID {
+		if doc.OwnerID != ownerID {
 			continue
 		}
 		if sourceID != nil && doc.SourceID != *sourceID {
@@ -288,7 +273,7 @@ func (f *fakeStore) ListPendingDocuments(_ context.Context, ownerID int64, limit
 		if doc.Status != StatusPending {
 			continue
 		}
-		if doc.Scope == ScopeUser && doc.OwnerID != ownerID {
+		if doc.OwnerID != ownerID {
 			continue
 		}
 		out = append(out, doc)
@@ -308,7 +293,7 @@ func (f *fakeStore) ListDocumentsWithUnembedded(_ context.Context, ownerID int64
 			continue
 		}
 		doc := f.documents[chunk.DocumentID]
-		if doc.Scope == ScopeUser && doc.OwnerID != ownerID {
+		if doc.OwnerID != ownerID {
 			continue
 		}
 		if !seen[doc.ID] {
@@ -626,18 +611,21 @@ func (n *countingNormalizer) Normalize(ctx context.Context, raw []byte, src Sour
 }
 
 func newTestIndexer(store Store, embedder Embedder) *Indexer {
-	indexer := NewIndexer(store, embedder, ChunkOptions{TargetTokens: 100, MaxTokens: 200, MinTokens: 5, OverlapTokens: 0}, ConnectorOptions{
+	indexer := NewIndexer(store, ChunkOptions{TargetTokens: 100, MaxTokens: 200, MinTokens: 5, OverlapTokens: 0}, ConnectorOptions{
 		MaxFileBytes: 1 << 20,
 		MaxFiles:     100,
 		MaxDepth:     10,
+	})
+	indexer.SetEmbedderResolver(func(context.Context, int64) (Embedder, error) {
+		return embedder, nil
 	})
 	indexer.SetNormalizers(&countingNormalizer{inner: NewMarkdownNormalizer()})
 	return indexer
 }
 
-func sharedDirSource(t *testing.T, store *fakeStore, root string) Source {
+func dirSource(t *testing.T, store *fakeStore, root string) Source {
 	t.Helper()
-	src, err := store.UpsertSharedSource(context.Background(), "shared", root)
+	src, err := store.UpsertDirSource(context.Background(), 7, "notes", root)
 	require.NoError(t, err)
 	return src
 }
@@ -646,7 +634,7 @@ func TestIndexerUnchangedFileCostsNoEmbeddingCall(t *testing.T) {
 	root := t.TempDir()
 	require.NoError(t, os.WriteFile(filepath.Join(root, "a.md"), []byte("# A\n\nhello world\n"), 0o600))
 	store := newFakeStore()
-	src := sharedDirSource(t, store, root)
+	src := dirSource(t, store, root)
 	embedder := &countingEmbedder{}
 	indexer := newTestIndexer(store, embedder)
 
@@ -671,7 +659,7 @@ func TestIndexerChangedFileReplacesChunks(t *testing.T) {
 	path := filepath.Join(root, "a.md")
 	require.NoError(t, os.WriteFile(path, []byte("# A\n\nalpha content\n"), 0o600))
 	store := newFakeStore()
-	src := sharedDirSource(t, store, root)
+	src := dirSource(t, store, root)
 	embedder := &countingEmbedder{}
 	indexer := newTestIndexer(store, embedder)
 
@@ -700,7 +688,7 @@ func TestIndexerDeletedFileStopsBeingIndexed(t *testing.T) {
 	require.NoError(t, os.WriteFile(path, []byte("# A\n\nbody\n"), 0o600))
 	require.NoError(t, os.WriteFile(filepath.Join(root, "keep.md"), []byte("# Keep\n\nkeep\n"), 0o600))
 	store := newFakeStore()
-	src := sharedDirSource(t, store, root)
+	src := dirSource(t, store, root)
 	indexer := newTestIndexer(store, &countingEmbedder{})
 
 	_, err := indexer.ScanSource(context.Background(), src)
@@ -723,7 +711,7 @@ func TestIndexerSkipsUnsupportedFileAndContinues(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(root, "a.md"), []byte("# A\n\nbody\n"), 0o600))
 	require.NoError(t, os.WriteFile(filepath.Join(root, "b.png"), []byte{0x89, 0x50, 0x4e, 0x47}, 0o600))
 	store := newFakeStore()
-	src := sharedDirSource(t, store, root)
+	src := dirSource(t, store, root)
 	indexer := newTestIndexer(store, &countingEmbedder{})
 
 	result, err := indexer.ScanSource(context.Background(), src)
@@ -738,7 +726,7 @@ func TestIndexerRecordsEmbeddingIdentityOnEveryChunk(t *testing.T) {
 	root := t.TempDir()
 	require.NoError(t, os.WriteFile(filepath.Join(root, "a.md"), []byte("# A\n\none\n\n## B\n\ntwo\n"), 0o600))
 	store := newFakeStore()
-	src := sharedDirSource(t, store, root)
+	src := dirSource(t, store, root)
 	indexer := newTestIndexer(store, &countingEmbedder{model: "model-x"})
 
 	_, err := indexer.ScanSource(context.Background(), src)
@@ -754,7 +742,7 @@ func TestIndexerFailedEmbedKeepsPreviousGenerationRetrievable(t *testing.T) {
 	path := filepath.Join(root, "a.md")
 	require.NoError(t, os.WriteFile(path, []byte("# A\n\nversion one\n"), 0o600))
 	store := newFakeStore()
-	src := sharedDirSource(t, store, root)
+	src := dirSource(t, store, root)
 	embedder := &countingEmbedder{}
 	indexer := newTestIndexer(store, embedder)
 	normalizer := indexer.normalizers[0].(*countingNormalizer)
@@ -802,7 +790,6 @@ func TestIndexerInlinePathKeepsDocumentIdentity(t *testing.T) {
 	body := "# Notes\n\nfirst body\n"
 	doc, err := store.UpsertInlineDocument(context.Background(), Document{
 		SourceID:    src.ID,
-		Scope:       ScopeUser,
 		OwnerID:     7,
 		Origin:      OriginInline,
 		RelPath:     "notes.md",
@@ -821,7 +808,6 @@ func TestIndexerInlinePathKeepsDocumentIdentity(t *testing.T) {
 	for _, chunk := range store.chunksForDoc(doc.ID) {
 		assert.Equal(t, doc.ID, chunk.DocumentID)
 		assert.Equal(t, src.ID, chunk.SourceID)
-		assert.Equal(t, ScopeUser, chunk.Scope)
 		assert.Equal(t, int64(7), chunk.OwnerID)
 		assert.Equal(t, int32(1), chunk.Generation)
 	}
@@ -855,7 +841,7 @@ func TestIndexerUnreadableRootPreservesDocuments(t *testing.T) {
 	root := t.TempDir()
 	require.NoError(t, os.WriteFile(filepath.Join(root, "a.md"), []byte("# A\n\na\n"), 0o600))
 	store := newFakeStore()
-	src := sharedDirSource(t, store, root)
+	src := dirSource(t, store, root)
 	indexer := newTestIndexer(store, &countingEmbedder{})
 
 	first, err := indexer.ScanSource(context.Background(), src)
@@ -878,7 +864,7 @@ func TestIndexerEmptyRootKeepsDocuments(t *testing.T) {
 	file := filepath.Join(root, "a.md")
 	require.NoError(t, os.WriteFile(file, []byte("# A\n\na\n"), 0o600))
 	store := newFakeStore()
-	src := sharedDirSource(t, store, root)
+	src := dirSource(t, store, root)
 	indexer := newTestIndexer(store, &countingEmbedder{})
 
 	first, err := indexer.ScanSource(context.Background(), src)
@@ -906,10 +892,10 @@ func TestIndexerCountLimitedScanDoesNotDeleteBeyondLimit(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(root, "b.md"), []byte("# B\n\nb\n"), 0o600))
 	require.NoError(t, os.WriteFile(filepath.Join(root, "c.md"), []byte("# C\n\nc\n"), 0o600))
 	store := newFakeStore()
-	src := sharedDirSource(t, store, root)
+	src := dirSource(t, store, root)
 	require.NoError(t, os.WriteFile(filepath.Join(root, "c.md"), []byte("# C\n\nold c\n"), 0o600))
 	existing, err := store.UpsertFileDocument(context.Background(), Document{
-		SourceID: src.ID, Scope: ScopeShared, Origin: OriginFile,
+		SourceID: src.ID, OwnerID: src.OwnerID, Origin: OriginFile,
 		RelPath: "c.md", Title: "c", DocType: DocTypeMarkdown,
 		ContentHash: hashBytes([]byte("# C\n\nold c\n")),
 	})

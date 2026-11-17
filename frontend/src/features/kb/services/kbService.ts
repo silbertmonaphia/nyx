@@ -2,7 +2,6 @@ import api from '~/services/api';
 import type {
   KbDocument,
   KbDocumentFilters,
-  KbIndexReport,
   KbSettings,
   KbSource,
 } from '../types/kb';
@@ -67,11 +66,6 @@ export const kbService = {
 
   async deleteDocument(id: number): Promise<void> {
     await api.delete(`/kb/documents/${id}`);
-  },
-
-  async indexSources(): Promise<KbIndexReport> {
-    const response = await api.post('/kb/index');
-    return response.data;
   },
 
   async getSettings(): Promise<KbSettings> {

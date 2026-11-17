@@ -79,40 +79,35 @@ has a default and is opt-in.
 | `MIGRATION_PATH` | no | `file://migrations` | Default already resolves inside the image |
 | `REDIS_ENABLED` / `REDIS_URL` | no | — | Cache is off by default; `GET /api/feeds` goes straight to Postgres |
 | `LLM_ENABLED` / `LLM_*` | no | — | Only needed for the chat path |
-| `KB_ENABLED` / `KB_*` | no | — | Knowledge corpus; off by default. Requires `LLM_ENABLED=true` and a readable `KB_ROOT` directory |
+| `KB_ENABLED` / `KB_*` | no | — | Knowledge corpus; off by default. Requires `LLM_ENABLED=true` so users can save their BYOK embedding configuration; directory sources are registered per user by the operator CLI |
 
 ### Knowledge base
 
 Off by default (`KB_ENABLED=false`): no KB table is written, no directory is
-scanned, and feed retrieval is unchanged. To enable document RAG, the operator
-provides one directory readable by the backend process and mounts it into
-the container:
-
-| Var | Example | Purpose |
-|---|---|---|
-| `KB_ROOT` | `/srv/nyx/kb/shared` | Shared corpus, visible to every user |
-| `KB_SHARED_SOURCE_NAME` | `shared` | Display name of the shared source |
-
-Compose example (backend service, opt-in):
+scanned, and feed retrieval is unchanged. To enable document RAG, mount an
+operator-chosen directory into the backend container read-only:
 
 ```yaml
     volumes:
-      - ${KB_SHARED_DIR:-./kb/shared}:/srv/nyx/kb/shared:ro
+      - ${KB_DIR:-./kb}:/srv/nyx/kb:ro
 ```
 
-Set `KB_ROOT` to the in-container path above in `backend/.env`. Import an
-existing corpus once with the operator command (it shares the API trigger's
-pipeline and records the deployment embedding identity):
+Register that directory as one user's private source and index it with that
+user's BYOK embedding configuration:
 
 ```bash
 cd backend
-go run ./cmd/kb index --root /srv/nyx/kb/shared
+go run ./cmd/kb index --user <user-id> --root /srv/nyx/kb/posts_douban
 go run ./cmd/kb status
 ```
 
-The command prints the directory it is about to expose before creating the
-shared source. Changing the deployment's embedding model invalidates the shared
-corpus's vectors; re-run the import.
+`--name` defaults to the directory's base name and is unique per user (`inline`
+is reserved). The CLI needs the backend's `DB_URL` and
+`USER_LLM_ENCRYPTION_KEY`; the target user must have saved an embedding
+configuration or the command refuses to index. The SPA has no index button:
+re-run `kb index` (or call `POST /api/kb/index`) after directory contents
+change. Changing the user's embedding model strands the existing vectors —
+delete the source in the KB page and re-run the import.
 
 ### Database
 

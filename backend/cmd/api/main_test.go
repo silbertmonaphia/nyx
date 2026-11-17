@@ -11,7 +11,7 @@ import (
 
 func TestMountKBStackIsNilWhenDisabled(t *testing.T) {
 	cfg := &config.Config{KBEnabled: false}
-	service := mountKBStack(cfg, nil, nil, nil, noop.NewTracerProvider())
+	service := mountKBStack(cfg, nil, nil, noop.NewTracerProvider())
 	if service != nil {
 		t.Fatal("mountKBStack() returned a service with KB_ENABLED=false, want nil (no route, no table write)")
 	}
