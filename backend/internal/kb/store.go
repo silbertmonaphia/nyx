@@ -378,7 +378,7 @@ func (s *SQLStore) InsertChunk(ctx context.Context, c Chunk) (int64, error) {
 		Generation: c.Generation,
 		//nolint:gosec // G115: ordinal is a chunk index within one document.
 		Ordinal:        int32(c.Ordinal),
-		HeadingPath:    c.HeadingPath,
+		HeadingPath:    nonNilStrings(c.HeadingPath),
 		Content:        c.Content,
 		EmbedText:      c.EmbedText,
 		ContentHash:    c.ContentHash,
@@ -567,6 +567,13 @@ func ownerValue(v pgtype.Int8) int64 {
 		return 0
 	}
 	return v.Int64
+}
+
+func nonNilStrings(v []string) []string {
+	if v == nil {
+		return []string{}
+	}
+	return v
 }
 
 func pgText(v string) pgtype.Text {

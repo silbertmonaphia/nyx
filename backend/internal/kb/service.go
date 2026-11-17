@@ -213,7 +213,10 @@ func (s *Service) CreateInlineDocument(ctx context.Context, userID int64, name, 
 	lock.Lock()
 	defer lock.Unlock()
 	if existing, lookupErr := s.store.GetInlineDocumentByHash(ctx, userID, hash); lookupErr == nil {
-		return existing, nil
+		existingLock := s.documentLock(existing.ID)
+		existingLock.Lock()
+		defer existingLock.Unlock()
+		return s.retryFailedInline(ctx, userID, existing), nil
 	}
 	doc, err := s.store.UpsertInlineDocument(ctx, Document{
 		SourceID:    src.ID,
@@ -251,7 +254,7 @@ func (s *Service) UpdateInlineDocument(ctx context.Context, userID, documentID i
 	}
 	hash := hashBytes([]byte(body))
 	if bytesEqual(doc.ContentHash, hash) {
-		return doc, nil
+		return s.retryFailedInline(ctx, userID, doc), nil
 	}
 	updated, err := s.store.UpdateInlineDocumentContent(ctx, documentID, body, hash, int64(len(body)))
 	if err != nil {
@@ -453,6 +456,15 @@ func (s *Service) resolveEmbedder(ctx context.Context, userID int64) Embedder {
 		}
 	}
 	return s.deploymentEmbedder
+}
+
+func (s *Service) retryFailedInline(ctx context.Context, userID int64, doc Document) Document {
+	if doc.Status != StatusFailed {
+		return doc
+	}
+	s.indexInline(ctx, doc)
+	s.ResetCatchUp(userID)
+	return s.refreshDocument(ctx, doc)
 }
 
 func (s *Service) indexInline(ctx context.Context, doc Document) {

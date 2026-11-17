@@ -246,6 +246,26 @@ func TestServiceInlineUpdateResetsConsumedCatchUp(t *testing.T) {
 	assert.Equal(t, StatusIndexed, store.documents[created.ID].Status)
 }
 
+func TestServiceInlineUpdateRetriesFailedDocument(t *testing.T) {
+	store := newFakeStore()
+	service := newTestService(store, &countingEmbedder{}, testConfig())
+
+	created, err := service.CreateInlineDocument(context.Background(), 1, "notes.md", "# Notes\n\nbody\n")
+	require.NoError(t, err)
+	require.Equal(t, StatusIndexed, created.Status)
+
+	failed := store.documents[created.ID]
+	failed.Status = StatusFailed
+	failed.ErrorDetail = "document could not be stored"
+	store.documents[created.ID] = failed
+
+	updated, err := service.UpdateInlineDocument(context.Background(), 1, created.ID, "# Notes\n\nbody\n")
+	require.NoError(t, err)
+	assert.Equal(t, created.ID, updated.ID)
+	assert.Equal(t, StatusIndexed, updated.Status)
+	assert.Empty(t, updated.ErrorDetail)
+}
+
 func TestServiceInlineCreateEditDelete(t *testing.T) {
 	store := newFakeStore()
 	service := newTestService(store, &countingEmbedder{}, testConfig())

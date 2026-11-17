@@ -12,6 +12,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.opentelemetry.io/otel/trace/noop"
 
 	"nyx/internal/user"
 	"nyx/test"
@@ -320,4 +321,50 @@ func TestIntegrationVisibilityIsolationAndDesyncReassertion(t *testing.T) {
 			assert.NotEqual(t, "DESYNC BODY", passage.Content)
 		}
 	}
+}
+
+func TestIntegrationInlineDocumentWithoutHeadingsIndexes(t *testing.T) {
+	pool := requireKBPgvector(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	repo := user.NewRepository(pool)
+	suffix := time.Now().Format("150405.000")
+	username := "kb_plain_" + suffix
+	require.NoError(t, repo.CreateUser(ctx, &user.User{Username: username, PasswordHash: "x"}))
+	created, err := repo.GetUserByUsername(ctx, username)
+	require.NoError(t, err)
+
+	store := NewSQLStore(pool)
+	t.Cleanup(func() {
+		_, _ = pool.Exec(context.Background(),
+			`DELETE FROM kb_sources WHERE scope = 'user' AND owner_id = $1`, created.ID)
+	})
+
+	embedder := &keywordEmbedder{keyword: "紫象"}
+	indexer := integrationIndexer(store, embedder)
+	svc := NewService(store, indexer, Config{Enabled: true}, embedder,
+		noop.NewTracerProvider().Tracer("kb-integration"))
+
+	const body = "紫象 plain text without headings\n\nsecond paragraph"
+	doc, err := svc.CreateInlineDocument(ctx, int64(created.ID), "plain.md", body)
+	require.NoError(t, err)
+	assert.Equal(t, StatusIndexed, doc.Status, "error_detail=%q", doc.ErrorDetail)
+
+	headings, err := store.ListDocumentHeadingPaths(ctx, doc.ID, doc.Generation)
+	require.NoError(t, err)
+	require.Len(t, headings, 1)
+	assert.Empty(t, headings[0])
+
+	stats, err := store.SourceStats(ctx, doc.SourceID)
+	require.NoError(t, err)
+	assert.Equal(t, int64(1), stats.Documents)
+	assert.Positive(t, stats.Chunks)
+	assert.Zero(t, stats.Pending)
+
+	require.NoError(t, store.MarkDocumentStatus(ctx, doc.ID, StatusFailed, "document could not be stored"))
+	recovered, err := svc.CreateInlineDocument(ctx, int64(created.ID), "plain.md", body)
+	require.NoError(t, err)
+	assert.Equal(t, doc.ID, recovered.ID)
+	assert.Equal(t, StatusIndexed, recovered.Status, "error_detail=%q", recovered.ErrorDetail)
 }

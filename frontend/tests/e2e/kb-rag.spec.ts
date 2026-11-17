@@ -74,6 +74,33 @@ test.describe('Knowledge base retrieval (live)', { tag: '@live' }, () => {
     });
   });
 
+  test('a heading-less inline document is indexed and retrievable', async ({ page }) => {
+    test.setTimeout(300_000);
+    const marker = `KB-PLAIN-${Date.now()}`;
+
+    await openKnowledgeBase(page);
+    await page.getByTestId('kb-new-document').click();
+    await page.getByTestId('kb-new-name').fill('kb-plain.md');
+    await page.getByTestId('kb-new-content').fill(`记录标签：${marker}，这段文字没有任何标题。\n`);
+    await page.getByTestId('kb-new-save').click();
+
+    const row = page
+      .getByTestId('kb-document-row')
+      .filter({ hasText: 'kb-plain.md' });
+    await expect(row).toBeVisible({ timeout: 30_000 });
+    await expect(row.getByTestId('kb-document-status')).toHaveText(/indexed/i, {
+      timeout: 30_000,
+    });
+
+    await openChat(page);
+    await sendMessage(page, '我的知识库里“kb-plain.md”这篇文档的记录标签是什么？');
+    await waitForStreamEnd(page);
+    await expect(page.getByTestId('chat-message-assistant').last()).toContainText(
+      marker,
+      { timeout: 30_000 },
+    );
+  });
+
   test('an inline document is retrievable after an edit, and gone after deletion', async ({
     page,
   }) => {
