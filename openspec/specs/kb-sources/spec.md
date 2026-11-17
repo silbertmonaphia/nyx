@@ -5,33 +5,52 @@ The registry of where knowledge content comes from and who may see it. A source 
 
 ## Requirements
 
-### Requirement: A source records its scope and owner
+### Requirement: A source records its owner
 
-Every knowledge source SHALL record a scope, an owner, a display name, a kind, and an enabled flag. A source's scope SHALL be `shared` — readable by every user — or `user`, in which case an owner is recorded and the content is readable only by that owner.
-
-#### Scenario: Shared source is readable by every user
-
-- **WHEN** a deployment configures one shared source and two different users retrieve knowledge
-- **THEN** both users' retrievals include documents indexed from that shared source
+Every knowledge source SHALL record an owner, a display name, a kind, and an enabled flag. A source SHALL belong to exactly one user, and its content SHALL be readable only by that owner.
 
 #### Scenario: A user-owned source is readable only by its owner
 
-- **WHEN** user A owns a user-scope source and user B retrieves knowledge
+- **WHEN** user A owns a source and user B retrieves knowledge
 - **THEN** user B's retrieval contains no document from user A's source, while user A's retrieval does
 
 ### Requirement: A source's kind and enabled flag decide its contribution
 
-A source's kind SHALL be `dir` — an operator-managed scanned directory carrying a root path — or `inline` — application-created documents with no root path. A disabled source SHALL contribute no documents to retrieval and SHALL be skipped by scans.
+A source's kind SHALL be `dir` — a scanned directory owned by one user and carrying a root path — or `inline` — application-created documents with no root path. A disabled source SHALL contribute no documents to retrieval and SHALL be skipped by scans. The source list SHALL still report a disabled source so its owner can re-enable it.
 
 #### Scenario: Disabled source contributes nothing
 
 - **WHEN** a source is disabled
 - **THEN** a scan skips it and a retrieval returns no document that was indexed from it
 
+#### Scenario: A disabled source remains listed
+
+- **WHEN** a caller's source is disabled
+- **THEN** it remains in the caller's source list so it can be re-enabled
+
 #### Scenario: An inline source has no root path
 
 - **WHEN** a user's inline source is listed
 - **THEN** it carries no root path and no directory scan is scheduled for it
+
+### Requirement: A directory source is registered for one user by the operator
+
+A directory source SHALL be created for exactly one user by an operator action that names the user, an existing readable directory, and a source name. Registering a name that already exists for that user SHALL repoint that user's directory source to the new directory, and SHALL NOT convert that user's inline source. A directory source SHALL NOT be creatable through the caller-facing API. Source names SHALL be unique per user, and the inline source name SHALL be reserved.
+
+#### Scenario: The directory is indexed into the user's own corpus
+
+- **WHEN** an operator registers a directory for user A and indexing runs
+- **THEN** the directory's documents are indexed into a source owned by user A, and user B's retrieval contains none of them
+
+#### Scenario: Re-registering the same name repoints the directory
+
+- **WHEN** an operator registers a different directory under a source name that already exists for the same user
+- **THEN** that user's existing directory source points at the new directory and the next scan indexes it
+
+#### Scenario: The inline source cannot be converted
+
+- **WHEN** a directory registration names the reserved inline source name
+- **THEN** the registration is refused and the inline source and its documents are unchanged
 
 ### Requirement: A source reports its freshness and content counts
 
@@ -88,9 +107,9 @@ An inline document SHALL be readable only by the user who owns it.
 - **WHEN** user A uploads a document and user B retrieves knowledge
 - **THEN** user B's retrieval contains no chunk from user A's uploaded document
 
-### Requirement: A caller can remove a source they own
+### Requirement: A caller can remove any source they own
 
-A caller SHALL be able to remove one of their own sources. Removing a source SHALL remove every document indexed from it and every chunk of those documents, and the source SHALL stop appearing in the caller's source list. A caller SHALL NOT be able to remove a shared source through the caller-facing API; the shared source is operator-managed and is removed only through the operator's own tooling.
+A caller SHALL be able to remove one of their own sources. Removing a source SHALL remove every document indexed from it and every chunk of those documents, and the source SHALL stop appearing in the caller's source list. A source owned by another user SHALL NOT be removable through the caller-facing API.
 
 #### Scenario: Removing a user-owned source removes its documents
 
@@ -102,7 +121,7 @@ A caller SHALL be able to remove one of their own sources. Removing a source SHA
 - **WHEN** a caller removes their inline source
 - **THEN** the source, its inline documents and their chunks are gone
 
-#### Scenario: The shared source is not removable by a caller
+#### Scenario: Another user's source is not removable
 
-- **WHEN** a caller attempts to remove the shared source
-- **THEN** the request is refused with a static message and the shared source and its documents remain
+- **WHEN** a caller attempts to remove a source owned by another user
+- **THEN** the request is refused and the source and its documents remain

@@ -174,12 +174,12 @@ A document SHALL advance to its newly indexed content only when the new chunks a
 
 ### Requirement: Indexing runs on an explicit trigger and on a bounded lazy catch-up
 
-Indexing SHALL run when the caller explicitly triggers it over the sources visible to that caller. Indexing SHALL ALSO run as a background catch-up when a chat request observes documents that are still pending or chunks that are still unembedded. The catch-up SHALL run on a detached context, SHALL be bounded in the work it performs per invocation, and SHALL NOT delay or fail the chat request that triggered it.
+Indexing SHALL run when the caller explicitly triggers it over the caller's own enabled sources. Indexing SHALL ALSO run as a background catch-up when a chat request observes documents that are still pending or chunks that are still unembedded. The catch-up SHALL run on a detached context, SHALL be bounded in the work it performs per invocation, and SHALL NOT delay or fail the chat request that triggered it.
 
 #### Scenario: Explicit trigger indexes the caller's visible sources
 
 - **WHEN** a user triggers indexing
-- **THEN** the caller's private sources and the shared source are scanned and their changed documents are indexed
+- **THEN** the caller's own enabled sources are scanned and their changed documents are indexed
 
 #### Scenario: Chat triggers a bounded catch-up
 

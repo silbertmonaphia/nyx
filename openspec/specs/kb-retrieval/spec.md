@@ -5,23 +5,18 @@ Retrieval over the knowledge corpus: which passages a caller may see, how a quer
 
 ## Requirements
 
-### Requirement: Knowledge retrieval is scoped to the caller's visible corpus
+### Requirement: Knowledge retrieval is scoped to the caller's own sources
 
-A knowledge retrieval SHALL return only passages from the shared source and from the caller's own private sources. A passage from another user's private source SHALL never be returned, and neither the presence nor the absence of such a passage SHALL be inferable from the response. The scope SHALL be enforced on the chunk row AND re-asserted against the joined document row, so a desynchronised ownership column cannot widen the result.
+A knowledge retrieval SHALL return only passages from the caller's own sources. A passage from another user's source SHALL never be returned, and neither the presence nor the absence of such a passage SHALL be inferable from the response. The scope SHALL be enforced on the chunk row, re-asserted against the joined document row, and re-asserted against the joined source row, so a desynchronised ownership column cannot widen the result.
 
-#### Scenario: Another user's private source never surfaces
+#### Scenario: Another user's source never surfaces
 
 - **WHEN** user B retrieves knowledge and user A has a private source
 - **THEN** no passage from user A's private source is returned
 
-#### Scenario: Shared passages are returned to every caller
-
-- **WHEN** a shared source is indexed and any user retrieves knowledge
-- **THEN** passages from that shared source are eligible to be returned
-
 #### Scenario: A desynchronised ownership column cannot widen the result
 
-- **WHEN** a chunk row claims shared scope while its joined document row is owned by a user
+- **WHEN** a chunk row claims one owner while its joined document or source row is owned by another user
 - **THEN** the passage is excluded from the result
 
 ### Requirement: Retrieval can be narrowed by source and by path prefix
@@ -98,23 +93,14 @@ Every indexed chunk SHALL record the identity of the embedding model that produc
 - **WHEN** a user's private corpus was indexed under the same embedding model the caller queries with
 - **THEN** those passages remain retrievable
 
-### Requirement: A caller in a different embedding space receives nothing from the shared corpus
-
-A shared corpus is indexed once under the deployment's embedding identity. A caller whose own embedding identity differs SHALL not receive its passages, and no shared passage's score SHALL be computed against the caller's vector.
-
-#### Scenario: A caller in a different embedding space receives nothing from the shared corpus
-
-- **WHEN** the shared corpus was indexed under embedding model A and the caller queries with a vector produced by embedding model B
-- **THEN** no shared passage is returned, and no shared passage's score is computed against the caller's vector
-
 ### Requirement: A knowledge outline describes the corpus to the caller
 
-The system SHALL expose a read model describing the visible knowledge corpus: for each visible source, its identifier, display name, scope, document count, chunk count, and the set of its top-level directory names. The outline SHALL contain no document content and no path outside the source's own relative naming.
+The system SHALL expose a read model describing the caller's knowledge corpus: for each of the caller's enabled sources, its identifier, display name, document count, chunk count, and the set of its top-level directory names. The outline SHALL contain no document content and no path outside the source's own relative naming, and SHALL list no other user's source.
 
 #### Scenario: Outline lists the visible sources
 
 - **WHEN** the outline is requested
-- **THEN** it lists the shared source and the caller's own private sources with their counts, and no other user's private source
+- **THEN** it lists the caller's own sources with their counts, and no other user's source
 
 #### Scenario: Outline exposes top-level directories
 
