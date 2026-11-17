@@ -3,6 +3,7 @@ package feed
 import (
 	"context"
 	"fmt"
+	"sync"
 	"testing"
 	"time"
 
@@ -120,6 +121,46 @@ func TestCreateFeedIdempotentReplaysStoredResult(t *testing.T) {
 	assert.Equal(t, first.Title, second.Title)
 	assert.Equal(t, 1, indexer.indexCalls, "replay must not call the embedding indexer")
 	assert.Equal(t, 1, countUserFeeds(t, pool, userID))
+	assert.Equal(t, 1, countIdempotencyRows(t, pool, userID, key))
+}
+
+func TestCreateFeedIdempotentRepeatedReplays(t *testing.T) {
+	svc, indexer, pool := newIdempotentService(t)
+	userID := insertFeedTestUser(t, pool)
+	ctx := ctxWithUser(t, userID)
+	key := fmt.Sprintf("repeat-%d", time.Now().UnixNano())
+
+	first := &Feed{Title: "once"}
+	require.NoError(t, svc.CreateFeedIdempotent(ctx, first, key))
+	indexCallsAfterFirst := indexer.indexCalls
+
+	for i := 0; i < 5; i++ {
+		replay := &Feed{Title: "once"}
+		require.NoError(t, svc.CreateFeedIdempotent(ctx, replay, key))
+		assert.Equal(t, first.ID, replay.ID)
+	}
+
+	const concurrent = 5
+	var wg sync.WaitGroup
+	errs := make([]error, concurrent)
+	outs := make([]Feed, concurrent)
+	for i := 0; i < concurrent; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			replay := &Feed{Title: "once"}
+			errs[i] = svc.CreateFeedIdempotent(ctx, replay, key)
+			outs[i] = *replay
+		}(i)
+	}
+	wg.Wait()
+
+	for i := 0; i < concurrent; i++ {
+		require.NoError(t, errs[i])
+		assert.Equal(t, first.ID, outs[i].ID)
+	}
+	assert.Equal(t, 1, countUserFeeds(t, pool, userID))
+	assert.Equal(t, indexCallsAfterFirst, indexer.indexCalls, "every replay must skip the embedding provider")
 	assert.Equal(t, 1, countIdempotencyRows(t, pool, userID, key))
 }
 

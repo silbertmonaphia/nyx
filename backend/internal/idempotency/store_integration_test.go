@@ -123,7 +123,7 @@ func TestStoreDoConcurrentDuplicateExecutesOnce(t *testing.T) {
 	key := uniqueKey(t)
 
 	var runs atomic.Int32
-	const callers = 2
+	const callers = 5
 	outs := make([]testResult, callers)
 	errs := make([]error, callers)
 
