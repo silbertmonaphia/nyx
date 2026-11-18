@@ -259,7 +259,7 @@ if $detach; then
     if needs_vllm_main; then
       spawn vllm-main . "$VLLM_MAIN_LOG" "$VLLM_MAIN_PID" env VLLM_WSL2_ENABLE_PIN_MEMORY=1 "$vllm_bin" serve Qwen/Qwen3-4B-Instruct-2507-FP8 \
         --host 0.0.0.0 --port 8000 --tensor-parallel-size 1 \
-        --gpu-memory-utilization 0.75 --max-model-len 4096 \
+        --gpu-memory-utilization 0.72 --max-model-len 4096 \
         --enable-auto-tool-choice --tool-call-parser hermes
     fi
     if needs_vllm_embed; then
@@ -327,7 +327,7 @@ if $detach; then
       started_pid_files+=("$VLLM_MAIN_PID")
       ( echo $BASHPID > "$VLLM_MAIN_PID" && exec setsid env VLLM_WSL2_ENABLE_PIN_MEMORY=1 "$vllm_bin" serve Qwen/Qwen3-4B-Instruct-2507-FP8 \
           --host 0.0.0.0 --port 8000 --tensor-parallel-size 1 \
-          --gpu-memory-utilization 0.75 --max-model-len 4096 \
+          --gpu-memory-utilization 0.72 --max-model-len 4096 \
           --enable-auto-tool-choice --tool-call-parser hermes ) \
         2>&1 | tee "$VLLM_MAIN_LOG" &
     fi
@@ -445,7 +445,7 @@ else
     echo ">> vllm-main starting in foreground (Ctrl+C to stop; first run downloads the model)"
     exec env VLLM_WSL2_ENABLE_PIN_MEMORY=1 "$vllm_bin" serve Qwen/Qwen3-4B-Instruct-2507-FP8 \
       --host 0.0.0.0 --port 8000 --tensor-parallel-size 1 \
-      --gpu-memory-utilization 0.75 --max-model-len 4096 \
+      --gpu-memory-utilization 0.72 --max-model-len 4096 \
       --enable-auto-tool-choice --tool-call-parser hermes
   fi
 

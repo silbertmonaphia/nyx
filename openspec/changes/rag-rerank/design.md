@@ -77,10 +77,10 @@ GPU budget on the dev box (RTX 5080 Laptop, 16303 MiB). `--gpu-memory-utilizatio
 
 | Runtime | chat | embedding | rerank | Total |
 |---|---|---|---|---|
-| Host (`make dev-vllm-*`) | 0.75 (was 0.90) | 0.10 | 0.15 | 1.00 |
+| Host (`make dev-vllm-*`) | 0.72 (was 0.90) | 0.10 | 0.15 | 0.97 + headroom |
 | Compose (`--profile vllm --profile embed --profile rerank`) | 0.70 (unchanged) | 0.15 (unchanged) | 0.15 | 1.00 |
 
-The host chat fraction drops from 0.90 because the current host pair already sums to 1.00; 0.75 leaves the 4B-FP8 model ample room (weights + KV ≈ 7 GB). The reranker gets more than the embedder's 0.10 because it scores up to 20 (query, document) pairs at 4096 tokens, so its activation peak is higher; 0.10 (≈1.63 GB) is too tight for 0.6B weights plus WSL2 overhead. Host runs set `VLLM_WSL2_ENABLE_PIN_MEMORY=1`. OOM fallback: chat 0.72 or rerank 0.12. Verify with `nvidia-smi` after all three start and leave ≥1 GB headroom.
+The host chat fraction drops from 0.90 because the current host pair already sums to 1.00; 0.72 leaves the 4B-FP8 model ample room (weights + KV ≈ 7 GB) and keeps ~0.5 GB unclaimed while all three run. The reranker gets more than the embedder's 0.10 because it scores up to 20 (query, document) pairs at 4096 tokens, so its activation peak is higher; 0.10 (≈1.63 GB) is too tight for 0.6B weights plus WSL2 overhead. Host runs set `VLLM_WSL2_ENABLE_PIN_MEMORY=1`. Measured on the 16303 MiB dev card: 0.75/0.10/0.15 left only ~10 MiB free; 0.72/0.10/0.15 leaves ~0.5 GB. OOM fallback: rerank 0.12 or chat 0.70.
 
 Model risk: the Qwen3-Reranker needs vLLM's original-reranker config path; the smoke test must verify it serves on the installed version. If it does not, `BAAI/bge-reranker-v2-m3` is the registry-native fallback — the wire contract is model-agnostic, and the served model is recorded in this design and the docs. Running all three vLLM services simultaneously is tight on a 16 GB card; the profile is opt-in and the operator sizes it.
 

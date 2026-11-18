@@ -17,7 +17,7 @@ export HUGGING_FACE_HUB_TOKEN=
 
 vllm serve Qwen/Qwen3-8B-FP8 --host 0.0.0.0 --port 8000 --tensor-parallel-size 1 --gpu-memory-utilization 0.7 --max-model-len 4096 --enable-auto-tool-choice --tool-call-parser hermes # 14043MiB - 3224MiB = 10,819MiB vram
 
-vllm serve Qwen/Qwen3-4B-Instruct-2507-FP8 --host 0.0.0.0 --port 8000 --tensor-parallel-size 1 --gpu-memory-utilization 0.75 --max-model-len 4096 --enable-auto-tool-choice --tool-call-parser hermes #  6970MiB vram
+vllm serve Qwen/Qwen3-4B-Instruct-2507-FP8 --host 0.0.0.0 --port 8000 --tensor-parallel-size 1 --gpu-memory-utilization 0.72 --max-model-len 4096 --enable-auto-tool-choice --tool-call-parser hermes #  6970MiB vram
 
 vllm serve Qwen/Qwen3-Embedding-0.6B --port 8001 --enforce-eager --gpu-memory-utilization 0.1 --max-model-len 2048 # 3224MiB vram
 
