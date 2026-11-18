@@ -51,6 +51,7 @@ const unconfigured: LlmConfigStatus = {
   configured: false,
   llm: null,
   embedding: null,
+  rerank: null,
   tavily: null,
   fallback: null,
 };
@@ -67,6 +68,7 @@ const configuredStatus: LlmConfigStatus = {
     model: 'Qwen/Qwen3-Embedding-0.6B',
     api_key_masked: '••••ef12',
   },
+  rerank: null,
   tavily: {
     base_url: 'https://api.tavily.com/search',
     api_key_masked: '••••tvly',
@@ -323,6 +325,7 @@ describe('LlmConfigModal', () => {
         api_key: '',
         model: 'Qwen/Qwen3-Embedding-0.6B',
       },
+      rerank: { base_url: '', api_key: '', model: '' },
       tavily: {
         base_url: 'https://api.tavily.com/search',
         api_key: '',
@@ -524,6 +527,7 @@ describe('LlmConfigModal', () => {
         model: 'model-b',
       },
       embedding: { base_url: '', api_key: '', model: '' },
+      rerank: { base_url: '', api_key: '', model: '' },
       tavily: { base_url: '', api_key: '' },
     });
   });
@@ -884,6 +888,92 @@ describe('LlmConfigModal probe result lifecycle', () => {
     rerender(<LlmConfigModal open={false} onOpenChange={vi.fn()} />);
     await vi.waitFor(() => {
       expect(clearProbeResults).toHaveBeenCalled();
+    });
+  });
+
+  it('keeps the rerank section collapsed with its red impact note', () => {
+    mockHook({ status: unconfigured });
+    renderModal();
+
+    expect(screen.getByTestId('llm-rerank-toggle')).toHaveAttribute(
+      'aria-expanded',
+      'false',
+    );
+    expect(document.getElementById('rerank-base-url')).toBeNull();
+    expect(
+      screen.getAllByText(/the first result is less accurate/).length,
+    ).toBeGreaterThan(0);
+  });
+
+  it('renders a configured rerank section expanded with the masked key', () => {
+    mockHook({
+      status: {
+        ...configuredStatus,
+        rerank: {
+          base_url: 'http://localhost:8002',
+          model: 'Qwen/Qwen3-Reranker-0.6B',
+          api_key_masked: '••••wxyz',
+        },
+      },
+    });
+    renderModal();
+
+    expect(screen.getByTestId('llm-rerank-toggle')).toHaveAttribute(
+      'aria-expanded',
+      'true',
+    );
+    expect(input('rerank-base-url').value).toBe('http://localhost:8002');
+    expect(input('rerank-api-key').placeholder).toContain('••••wxyz');
+  });
+
+  it('saves a loopback rerank group', async () => {
+    const { save } = mockHook({ status: unconfigured });
+    renderModal();
+
+    await userEvent.type(input('llm-base-url'), 'https://api.deepseek.com/v1');
+    await userEvent.type(input('llm-model'), 'deepseek-chat');
+    await userEvent.type(input('llm-api-key'), 'sk-llm');
+    await userEvent.click(screen.getByTestId('llm-rerank-toggle'));
+    await userEvent.type(input('rerank-base-url'), 'http://localhost:8002');
+    await userEvent.type(
+      input('rerank-model'),
+      'Qwen/Qwen3-Reranker-0.6B',
+    );
+
+    await userEvent.click(screen.getByTestId('llm-config-save'));
+
+    await vi.waitFor(() => {
+      expect(save.mutateAsync).toHaveBeenCalledTimes(1);
+    });
+    expect(save.mutateAsync.mock.calls[0][0]).toMatchObject({
+      rerank: {
+        base_url: 'http://localhost:8002',
+        api_key: '',
+        model: 'Qwen/Qwen3-Reranker-0.6B',
+      },
+    });
+  });
+
+  it('probes only the rerank section with its current values', async () => {
+    mockHook({ status: unconfigured });
+    const probeAsync = vi.fn().mockResolvedValue(undefined);
+    mockSlotProbes({ rerank: { probeAsync } });
+    renderModal();
+
+    await userEvent.click(screen.getByTestId('llm-rerank-toggle'));
+    await userEvent.type(input('rerank-base-url'), 'http://localhost:8002');
+    await userEvent.type(input('rerank-model'), 'Qwen/Qwen3-Reranker-0.6B');
+    await userEvent.click(screen.getByTestId('llm-probe-rerank-button'));
+
+    await vi.waitFor(() => {
+      expect(probeAsync).toHaveBeenCalledTimes(1);
+    });
+    expect(probeAsync).toHaveBeenCalledWith({
+      rerank: {
+        base_url: 'http://localhost:8002',
+        api_key: '',
+        model: 'Qwen/Qwen3-Reranker-0.6B',
+      },
     });
   });
 });

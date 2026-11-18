@@ -232,6 +232,20 @@ export const en: Translation = {
           modelLocked:
             'The model is locked after the first save — switching it would invalidate every stored feed vector. To use a different model, clear the embedding configuration first.',
         },
+        rerank: {
+          title: 'Rerank (optional)',
+          drives:
+            'Reorders retrieved passages before they reach the agent or the single-turn RAG context.',
+          impact:
+            'Optional — leave this empty and retrieval still works, but the first result is less accurate: passages keep their dense (embedding-only) order.',
+          expand: 'Show rerank fields',
+          collapse: 'Hide rerank fields',
+          credentials:
+            'Point at a Jina/Cohere-compatible rerank API, or run a local vLLM reranker (e.g. BAAI/bge-reranker-v2-m3 via make dev-vllm-rerank on port 8002).',
+          docsLabel: 'vLLM rerank API documentation',
+          endpointShape:
+            'Must expose POST /rerank with {model, query, documents, top_n} and return scored results — Jina, Cohere v2 and vLLM all match. The base URL is the prefix before /rerank (e.g. http://localhost:8002).',
+        },
         tavily: {
           title: 'Tavily search (optional)',
           drives: "Drives the agent's web_search tool.",

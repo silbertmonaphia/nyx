@@ -214,6 +214,20 @@ export const zh = {
           modelLocked:
             '模型一经保存即锁定 —— 更换模型会让所有已存 feed 向量失效。确需更换请先清除 Embedding 配置，再重新填写。',
         },
+        rerank: {
+          title: 'Rerank 重排序（可选）',
+          drives:
+            '在检索结果进入 agent 或单轮 RAG 上下文之前重新排序。',
+          impact:
+            '选填 —— 留空检索仍可用，但首条结果精度较低：片段保持纯向量（dense）顺序。',
+          expand: '展开 Rerank 字段',
+          collapse: '收起 Rerank 字段',
+          credentials:
+            '可填写 Jina/Cohere 兼容的 rerank API，或运行本地 vLLM 重排序服务（如 make dev-vllm-rerank 启动的 BAAI/bge-reranker-v2-m3，端口 8002）。',
+          docsLabel: 'vLLM rerank API 文档',
+          endpointShape:
+            '需暴露 POST /rerank：请求 {model, query, documents, top_n}，返回带分数的 results —— Jina、Cohere v2、vLLM 均兼容。base URL 为 /rerank 之前的路径前缀（如 http://localhost:8002）。',
+        },
         tavily: {
           title: 'Tavily 搜索（可选）',
           drives: '驱动 Agent 的 web_search 工具。',

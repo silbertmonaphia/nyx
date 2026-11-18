@@ -65,6 +65,7 @@ const unconfiguredStatus: LlmConfigStatus = {
   configured: false,
   llm: null,
   embedding: null,
+  rerank: null,
   tavily: null,
   fallback: null,
 };
@@ -81,6 +82,7 @@ const configuredStatus: LlmConfigStatus = {
     model: 'Qwen/Qwen3-Embedding-0.6B',
     api_key_masked: '••••ef12',
   },
+  rerank: null,
   tavily: {
     base_url: 'https://api.tavily.com/search',
     api_key_masked: '••••tvly',

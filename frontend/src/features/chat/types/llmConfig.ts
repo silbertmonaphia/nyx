@@ -13,6 +13,7 @@ export interface LlmConfigStatus {
   configured: boolean;
   llm: LlmEndpointSection | null;
   embedding: LlmEndpointSection | null;
+  rerank: LlmEndpointSection | null;
   tavily: TavilySection | null;
   fallback: LlmEndpointSection | null;
 }
@@ -31,11 +32,12 @@ export interface LlmConfigTavilyInput {
 export interface LlmConfigUpdateInput {
   llm: LlmConfigEndpointInput;
   embedding: LlmConfigEndpointInput;
+  rerank?: LlmConfigEndpointInput | null;
   tavily: LlmConfigTavilyInput;
   fallback?: LlmConfigEndpointInput | null;
 }
 
-export type LlmSlotName = "chat" | "embedding" | "fallback" | "tavily";
+export type LlmSlotName = "chat" | "embedding" | "rerank" | "fallback" | "tavily";
 
 export type LlmSlotProbeStatus =
   | "ok"
@@ -66,6 +68,7 @@ export interface LlmSlotProbeResult {
 export interface LlmConfigValidateInput {
   llm?: Partial<LlmConfigEndpointInput>;
   embedding?: Partial<LlmConfigEndpointInput>;
+  rerank?: Partial<LlmConfigEndpointInput>;
   tavily?: Partial<LlmConfigTavilyInput>;
   fallback?: Partial<LlmConfigEndpointInput>;
   slots?: LlmSlotName[];
@@ -75,6 +78,7 @@ export interface LlmConfigValidateResponse {
   slots: {
     chat: LlmSlotProbeResult | null;
     embedding: LlmSlotProbeResult | null;
+    rerank: LlmSlotProbeResult | null;
     fallback: LlmSlotProbeResult | null;
     tavily: LlmSlotProbeResult | null;
   };

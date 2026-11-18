@@ -25,17 +25,20 @@ import type {
 const EXAMPLE_BASE_URLS = {
   llm: "https://api.deepseek.com/v1",
   embedding: "https://api.siliconflow.cn/v1",
+  rerank: "http://localhost:8002",
   tavily: "https://api.tavily.com/search",
 };
 
 const EXAMPLE_MODELS = {
   llm: "deepseek-flash",
   embedding: "Qwen/Qwen3-Embedding-0.6B",
+  rerank: "BAAI/bge-reranker-v2-m3",
 };
 
 const DOCS_URLS = {
   llm: "https://api-docs.deepseek.com/",
   embedding: "https://docs.siliconflow.cn/",
+  rerank: "https://docs.vllm.ai/",
   tavily: "https://docs.tavily.com/documentation/api-reference/endpoint/search",
 };
 
@@ -53,6 +56,7 @@ interface TavilyFormValues {
 interface LlmConfigFormValues {
   llm: EndpointFormValues;
   embedding: EndpointFormValues;
+  rerank: EndpointFormValues;
   tavily: TavilyFormValues;
 }
 
@@ -159,6 +163,39 @@ function buildLlmConfigSchema(requireKeys: boolean) {
           });
         }
       }),
+    rerank: z
+      .object({
+        base_url: optionalBaseUrl,
+        api_key: z.string(),
+        model: z.string(),
+      })
+      .superRefine((value, ctx) => {
+        const url = value.base_url.trim();
+        if (url === "") {
+          if (value.api_key.trim() !== "" || value.model.trim() !== "") {
+            ctx.addIssue({
+              code: "custom",
+              path: ["base_url"],
+              message: required(),
+            });
+          }
+          return;
+        }
+        if (value.model.trim() === "") {
+          ctx.addIssue({
+            code: "custom",
+            path: ["model"],
+            message: required(),
+          });
+        }
+        if (requireKeys && value.api_key.trim() === "" && !isLoopbackUrl(url)) {
+          ctx.addIssue({
+            code: "custom",
+            path: ["api_key"],
+            message: required(),
+          });
+        }
+      }),
     tavily: z
       .object({
         base_url: optionalBaseUrl,
@@ -177,6 +214,7 @@ function buildLlmConfigSchema(requireKeys: boolean) {
     const hasAny =
       value.llm.base_url.trim() !== "" ||
       value.embedding.base_url.trim() !== "" ||
+      value.rerank.base_url.trim() !== "" ||
       value.tavily.base_url.trim() !== "";
     if (!hasAny) {
       ctx.addIssue({
@@ -203,12 +241,14 @@ function toFormValues(status: LlmConfigStatus | null): LlmConfigFormValues {
     return {
       llm: emptyEndpoint(),
       embedding: emptyEndpoint(),
+      rerank: emptyEndpoint(),
       tavily: { base_url: "", api_key: "" },
     };
   }
   return {
     llm: endpoint(status.llm),
     embedding: endpoint(status.embedding),
+    rerank: endpoint(status.rerank),
     tavily: tavily(status.tavily),
   };
 }
@@ -228,6 +268,9 @@ function sameFormValues(
     a.embedding?.base_url === b.embedding?.base_url &&
     a.embedding?.api_key === b.embedding?.api_key &&
     a.embedding?.model === b.embedding?.model &&
+    a.rerank?.base_url === b.rerank?.base_url &&
+    a.rerank?.api_key === b.rerank?.api_key &&
+    a.rerank?.model === b.rerank?.model &&
     a.tavily?.base_url === b.tavily?.base_url &&
     a.tavily?.api_key === b.tavily?.api_key
   );
@@ -244,6 +287,11 @@ function toUpdateInput(values: LlmConfigFormValues): LlmConfigUpdateInput {
       base_url: values.embedding.base_url.trim(),
       api_key: values.embedding.api_key.trim(),
       model: values.embedding.model.trim(),
+    },
+    rerank: {
+      base_url: values.rerank.base_url.trim(),
+      api_key: values.rerank.api_key.trim(),
+      model: values.rerank.model.trim(),
     },
     tavily: {
       base_url: values.tavily.base_url.trim(),
@@ -533,6 +581,7 @@ export const LlmConfigModal = ({
   const [embeddingOverride, setEmbeddingOverride] = useState<boolean | null>(
     null,
   );
+  const [rerankOverride, setRerankOverride] = useState<boolean | null>(null);
   const [tavilyOverride, setTavilyOverride] = useState<boolean | null>(null);
   const embeddingError = Boolean(
     errors.embedding?.base_url ||
@@ -541,6 +590,13 @@ export const LlmConfigModal = ({
   );
   const showEmbedding =
     embeddingOverride ?? (status?.embedding != null || embeddingError);
+  const rerankError = Boolean(
+    errors.rerank?.base_url ||
+      errors.rerank?.api_key ||
+      errors.rerank?.model,
+  );
+  const showRerank =
+    rerankOverride ?? (status?.rerank != null || rerankError);
   const tavilyError = Boolean(errors.tavily?.base_url || errors.tavily?.api_key);
   const showTavily =
     tavilyOverride ?? (status?.tavily != null || tavilyError);
@@ -553,6 +609,7 @@ export const LlmConfigModal = ({
       previousUserIdRef.current = userId;
       if (replacesSignedInUser) {
         setEmbeddingOverride(null);
+        setRerankOverride(null);
         setTavilyOverride(null);
         setConfirmClearOpen(false);
         clearProbeResults();
@@ -598,6 +655,16 @@ export const LlmConfigModal = ({
         base_url: v.embedding.base_url.trim(),
         api_key: v.embedding.api_key.trim(),
         model: v.embedding.model.trim(),
+      },
+    };
+  };
+  const probeRerankValues = (): LlmConfigValidateInput => {
+    const v = getValues();
+    return {
+      rerank: {
+        base_url: v.rerank.base_url.trim(),
+        api_key: v.rerank.api_key.trim(),
+        model: v.rerank.model.trim(),
       },
     };
   };
@@ -782,6 +849,68 @@ export const LlmConfigModal = ({
                   slot="embedding"
                   buildValues={probeEmbeddingValues}
                 />
+              </div>
+            ) : null}
+          </fieldset>
+
+          <fieldset className="space-y-3 rounded-md border border-dashed p-4">
+            <div className="flex items-center justify-between gap-2">
+              <div className="text-sm font-semibold text-muted-foreground">
+                {t("llmConfig.sections.rerank.title")}
+              </div>
+              <button
+                type="button"
+                aria-expanded={showRerank}
+                data-testid="llm-rerank-toggle"
+                onClick={() => setRerankOverride(!showRerank)}
+                className="text-xs font-medium text-primary hover:underline"
+              >
+                {showRerank
+                  ? t("llmConfig.sections.rerank.collapse")
+                  : t("llmConfig.sections.rerank.expand")}
+              </button>
+            </div>
+            <p className="text-xs font-medium text-destructive">
+              {t("llmConfig.sections.rerank.impact")}
+            </p>
+            {showRerank ? (
+              <div className="space-y-3">
+                <Guidance
+                  lines={[
+                    t("llmConfig.sections.rerank.drives"),
+                    t("llmConfig.sections.rerank.endpointShape"),
+                    t("llmConfig.sections.rerank.credentials"),
+                  ]}
+                  docs={{
+                    href: DOCS_URLS.rerank,
+                    label: t("llmConfig.sections.rerank.docsLabel"),
+                  }}
+                />
+                <ConfigField
+                  id="rerank-base-url"
+                  label={t("llmConfig.fields.baseUrl")}
+                  placeholder={EXAMPLE_BASE_URLS.rerank}
+                  error={errors.rerank?.base_url?.message}
+                  registration={register("rerank.base_url")}
+                />
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <ConfigField
+                    id="rerank-api-key"
+                    label={t("llmConfig.fields.apiKey")}
+                    placeholder={keyPlaceholder(status?.rerank)}
+                    type="password"
+                    error={errors.rerank?.api_key?.message}
+                    registration={register("rerank.api_key")}
+                  />
+                  <ConfigField
+                    id="rerank-model"
+                    label={t("llmConfig.fields.model")}
+                    placeholder={EXAMPLE_MODELS.rerank}
+                    error={errors.rerank?.model?.message}
+                    registration={register("rerank.model")}
+                  />
+                </div>
+                <SlotProbePanel slot="rerank" buildValues={probeRerankValues} />
               </div>
             ) : null}
           </fieldset>

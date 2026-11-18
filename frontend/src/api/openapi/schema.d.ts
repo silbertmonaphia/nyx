@@ -315,7 +315,7 @@ export interface paths {
         get: operations["get-llm-config"];
         /**
          * Save LLM configuration
-         * @description Validates and upserts the authenticated caller's optional main LLM, optional embedding, optional Tavily, and optional retry-model configuration. API keys are write-only: a blank key on update keeps the stored key; on create a key is required unless the endpoint is loopback. Omitting Tavily disables web search for the agent. Responds with the masked configuration.
+         * @description Validates and upserts the authenticated caller's optional main LLM, optional embedding, optional rerank, optional Tavily, and optional retry-model configuration. API keys are write-only: a blank key on update keeps the stored key; on create a key is required unless the endpoint is loopback. Omitting Tavily disables web search for the agent; omitting rerank keeps retrieval in dense order. Responds with the masked configuration.
          */
         put: operations["update-llm-config"];
         post?: never;
@@ -340,7 +340,7 @@ export interface paths {
         put?: never;
         /**
          * Probe LLM configuration connectivity
-         * @description Runs one minimal live request per filled slot (main LLM, embedding, fallback, Tavily) using the submitted values, resolving a blank key against the stored key exactly as PUT does. Returns a classified per-slot result plus the exact outbound request with credentials masked to their last four characters. Saves nothing.
+         * @description Runs one minimal live request per filled slot (main LLM, embedding, rerank, fallback, Tavily) using the submitted values, resolving a blank key against the stored key exactly as PUT does. Returns a classified per-slot result plus the exact outbound request with credentials masked to their last four characters. Saves nothing.
          */
         post: operations["validate-llm-config"];
         delete?: never;
@@ -415,6 +415,7 @@ export interface components {
             embedding: components["schemas"]["LlmEndpointResponse"];
             fallback: components["schemas"]["LlmEndpointResponse"];
             llm: components["schemas"]["LlmEndpointResponse"];
+            rerank: components["schemas"]["LlmEndpointResponse"];
             tavily: components["schemas"]["TavilyResponse"];
         };
         ConfigUpdateInput: {
@@ -424,6 +425,8 @@ export interface components {
             fallback?: components["schemas"]["LlmEndpointInput"];
             /** @description Optional main-LLM group. Required for the AI Agent; without it feeds and other features keep working. */
             llm?: components["schemas"]["LlmEndpointInput"];
+            /** @description Optional rerank group (Jina/Cohere-compatible POST /rerank endpoint). When omitted retrieval returns dense order. */
+            rerank?: components["schemas"]["LlmEndpointInput"];
             /** @description Optional search provider group. When omitted the agent does not plan web searches. */
             tavily?: components["schemas"]["TavilyInput"];
         };
@@ -639,7 +642,9 @@ export interface components {
             fallback?: components["schemas"]["LlmEndpointInput"];
             /** @description Optional main-LLM group to probe. Blank api_key resolves to the stored key exactly as PUT does. */
             llm?: components["schemas"]["LlmEndpointInput"];
-            /** @description Optional subset of slots to probe: chat, embedding, fallback, tavily. Absent probes every filled slot. */
+            /** @description Optional rerank group to probe. Sends one short query and one short document to the configured /rerank endpoint. */
+            rerank?: components["schemas"]["LlmEndpointInput"];
+            /** @description Optional subset of slots to probe: chat, embedding, rerank, fallback, tavily. Absent probes every filled slot. */
             slots?: string[] | null;
             /** @description Optional search-provider group to probe. Blank api_key probes the provider's keyless tier when no key is stored. */
             tavily?: components["schemas"]["TavilyInput"];
@@ -648,6 +653,7 @@ export interface components {
             chat: components["schemas"]["ValidateSlotResponse"];
             embedding: components["schemas"]["ValidateSlotResponse"];
             fallback: components["schemas"]["ValidateSlotResponse"];
+            rerank: components["schemas"]["ValidateSlotResponse"];
             tavily: components["schemas"]["ValidateSlotResponse"];
         };
         ValidateSlotResponse: {

@@ -43,6 +43,7 @@ function toStatus(raw: unknown): LlmConfigStatus {
     configured: row?.configured === true,
     llm: toEndpointSection(row?.llm),
     embedding: toEndpointSection(row?.embedding),
+    rerank: toEndpointSection(row?.rerank),
     tavily: toTavilySection(row?.tavily),
     fallback: toEndpointSection(row?.fallback),
   };

@@ -15,6 +15,7 @@ const UNCONFIGURED: LlmConfigStatus = {
   configured: false,
   llm: null,
   embedding: null,
+  rerank: null,
   tavily: null,
   fallback: null,
 };

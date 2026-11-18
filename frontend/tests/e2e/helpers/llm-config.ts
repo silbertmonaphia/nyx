@@ -24,6 +24,7 @@ export interface LlmTavilySeed {
 export interface LlmConfigSeedOverrides {
   llm?: Partial<LlmEndpointSeed>;
   embedding?: Partial<LlmEndpointSeed>;
+  rerank?: LlmEndpointSeed | null;
   tavily?: Partial<LlmTavilySeed>;
   fallback?: LlmEndpointSeed | null;
 }
@@ -93,6 +94,7 @@ export function llmConfigSeedBody(overrides: LlmConfigSeedOverrides = {}) {
       model: env('E2E_EMBEDDING_MODEL', 'Qwen/Qwen3-Embedding-0.6B'),
       ...overrides.embedding,
     },
+    rerank: overrides.rerank ?? { base_url: '', api_key: '', model: '' },
     tavily: {
       base_url: env('E2E_TAVILY_BASE_URL', 'https://api.tavily.com/search'),
       api_key: env('E2E_TAVILY_API_KEY', DEFAULT_API_KEY),
