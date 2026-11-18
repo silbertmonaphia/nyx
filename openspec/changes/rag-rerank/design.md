@@ -90,7 +90,7 @@ Model risk: the Qwen3-Reranker needs vLLM's original-reranker config path; the s
 - Backend integration: `rag.Service` with an `httptest` reranker through `RetrieveCorpus` for `feeds`, `kb`, and `both`, plus the bridge handler asserting reordered citations with an unchanged envelope; the KB recall suite stays dense-only and untouched.
 - Frontend unit: modal renders the rerank section, saves, masks keys, test-connection states, i18n en/zh parity; generated OpenAPI types updated.
 - E2E: a committed Playwright spec against a side stack (`E2E_STACK_SUFFIX` convention) whose backend points at a deterministic rerank stub, with a seeded user carrying a rerank group; assert the chat citation order differs from dense order and that stopping the stub falls back to dense order. This satisfies the mandatory e2e gate.
-- Measurement: an opt-in KB recall run (`NYX_KB_RECALL_RERANK_URL`) against the local model records recall@1/@5/@10 per scenario in `docs/knowledge-base.md`; the default CI suite remains model-free.
+- Measurement: opt-in rerank passes on both corpora — KB (`NYX_KB_RECALL_RERANK_URL`) and feeds (`NYX_RAG_RECALL_RERANK_URL`) — record dense versus rerank metrics plus a same-candidate dense control in `docs/knowledge-base.md`; both passes skip without an endpoint and the default CI suite remains model-free.
 - Smoke gate: serve the model on the host, call `/rerank` with a real query and documents, then run the e2e before the change is considered done.
 
 ## Risks / Trade-offs

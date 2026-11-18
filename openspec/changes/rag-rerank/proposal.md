@@ -15,7 +15,7 @@ Dense retrieval is strong at recall@5 but weak at top-1: the hardened KB baselin
 - Deployment-level operational bounds only: `RERANK_CANDIDATES` (default 20), `RERANK_TIMEOUT` (default 2s), `RERANK_MAX_DOC_CHARS` (default 4000); the endpoint, key, and model are per-user.
 - Reranking is best-effort: timeout or upstream failure falls back to dense order and never fails retrieval or chat; consecutive failures open a short cooldown so a down reranker does not add its full timeout to every request.
 - Config modal gains a collapsible Rerank section in both languages, with guidance, a red impact warning, and an independent test-connection control; the config validate endpoint gains a rerank slot.
-- The default recall baseline stays dense-only and model-free; an opt-in rerank measurement reuses the checked-in KB corpus and reports the same metric family against a live reranker.
+- The default recall baselines stay dense-only and model-free; opt-in rerank measurements reuse the checked-in KB and feed corpora, report the same metric family against a live reranker, and include a same-candidate dense control so the rerank effect is isolated from the over-fetch.
 - Documentation: `docs/knowledge-base.md`, `.env.example` operational knobs, deployment notes, README env/feature lists, and the `FUTURE_BACKEND.md` retrieval entry.
 
 ## Capabilities

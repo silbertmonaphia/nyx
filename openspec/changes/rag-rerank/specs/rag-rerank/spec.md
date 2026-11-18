@@ -144,6 +144,25 @@ The deployment SHALL provide the candidate count, request timeout, and per-docum
 - **WHEN** a user configures a rerank endpoint
 - **THEN** the candidate count, timeout, and byte cap remain the deployment's values
 
+### Requirement: Rerank quality is measurable on both corpora
+
+An opt-in rerank measurement SHALL exist for the feed corpus in addition to the knowledge corpus, reusing each corpus's checked-in labels and frozen vectors. Each pass SHALL run the production rerank stage and report the same recall family as its dense baseline, including a same-candidate dense control so the rerank effect is isolated from candidate over-fetch. Both passes SHALL be skipped unless a reranker endpoint is configured for the run, and the default runs SHALL remain dense-only.
+
+#### Scenario: Default runs stay dense-only
+
+- **WHEN** a recall baseline runs without a reranker endpoint configured
+- **THEN** no reranker call is made and the existing dense floors apply unchanged
+
+#### Scenario: Feed pass isolates the reranker
+
+- **WHEN** the feed recall harness runs with a reranker endpoint configured
+- **THEN** it reports the dense control over the same candidate pool and the reranked metrics, so a rank change is attributable to the reranker rather than the over-fetch
+
+#### Scenario: Missing endpoint skips cleanly
+
+- **WHEN** the feed harness is asked for the rerank pass but no endpoint is configured
+- **THEN** the pass is skipped without failing the dense baseline
+
 ### Requirement: Rerank outcomes are observable
 
 Each rerank attempt SHALL produce a trace span carrying the model, candidate count, returned count, and whether the dense fallback was used, plus a metric counter distinguishing success, fallback, and cooldown skips. The span and metric MUST NOT carry passage text or the API key.

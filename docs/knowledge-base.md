@@ -227,6 +227,31 @@ Per category, reranking raises `exact_term` recall@1 (0.750 → 0.875) and
 synthetic corpus, not a generalization claim; the rerank group stays optional
 per user and the dense floors are unchanged.
 
+The feed corpus has its own opt-in pass in the same harness. It runs the
+production rerank stage over 20 candidates and reports a same-candidate dense
+control so the rerank effect is isolated from the over-fetch:
+
+```bash
+cd backend
+NYX_RAG_RECALL_CONTAINER=1 \
+NYX_RAG_RECALL_RERANK_URL=http://127.0.0.1:8002 \
+NYX_RAG_RECALL_RERANK_MODEL=BAAI/bge-reranker-v2-m3 \
+  go test ./internal/rag -run TestRetrieveRecallBaseline -v
+```
+
+Measured 2026-11-19 on the feed corpus (75 feeds / 62 labelled queries):
+
+| Scenario | Dense recall@1 / @5 / @10 | Rerank recall@1 / @5 / @10 | hit@5 | mrr@5 |
+|---|---|---|---|---|
+| `corpus_only` | 0.758 / 0.944 / 0.970 | **0.831 / 0.952 / 0.987** | 0.952 → **0.984** | 0.905 → **0.914** |
+| `scaled_noise` | 0.758 / 0.944 / 0.970 | **0.831 / 0.952 / 0.987** | 0.952 → **0.984** | 0.905 → **0.914** |
+| `scaled_near` | 0.758 / 0.944 / 0.970 | **0.831 / 0.965 / 0.970** | 0.952 → **0.984** | 0.905 → **0.918** |
+
+The same-candidate dense control matches the pinned k=10 baseline exactly in
+every scenario (0.758 / 0.944 / 0.970), so the delta is the reranker, not the
+over-fetch. Per category, `semantic` recall@5 rises 0.750 → 0.833;
+`multi_relevant` falls 0.700 → 0.600; every other category stays at 1.000.
+
 `Qwen/Qwen3-Reranker-0.6B`'s base HF checkpoint is a causal LM without the
 converted classifier head, so vLLM 0.17.1 cannot serve it as a reranker
 (`--convert classify` fails on the missing `score.weight`; `--convert embed`

@@ -29,20 +29,21 @@ import (
 )
 
 const (
-	recallVectorDims      = 1024
-	recallDBName          = "nyx_ragtest"
-	recallCorpusFile      = "recall_corpus.json"
-	recallVectorsFile     = "recall_vectors.json"
-	recallK               = 10
-	recallMinLabeledQuery = 15
-	decoySeed             = 0x5eed
-	decoyCosLo            = 0.40
-	decoyCosHi            = 0.75
-	decoyBatch            = 500
-	annExercisedMinRow    = 1000
-	recallKOffsets        = 5
-	recallFloor5          = 0.60
-	skipTrue              = "true"
+	recallVectorDims       = 1024
+	recallDBName           = "nyx_ragtest"
+	recallCorpusFile       = "recall_corpus.json"
+	recallVectorsFile      = "recall_vectors.json"
+	recallK                = 10
+	recallRerankCandidates = 20
+	recallMinLabeledQuery  = 15
+	decoySeed              = 0x5eed
+	decoyCosLo             = 0.40
+	decoyCosHi             = 0.75
+	decoyBatch             = 500
+	annExercisedMinRow     = 1000
+	recallKOffsets         = 5
+	recallFloor5           = 0.60
+	skipTrue               = "true"
 )
 
 type recallFeedSpec struct {
@@ -76,24 +77,45 @@ type recallVectorSet struct {
 }
 
 type recallQueryResult struct {
-	Key            string  `json:"key"`
-	Category       string  `json:"category"`
-	Relevant       []int   `json:"relevant_feed_ids"`
-	Retrieved      []int   `json:"retrieved_feed_ids"`
-	ExactRetrieved []int   `json:"exact_retrieved_feed_ids"`
-	Hits           int     `json:"hits_at_10"`
-	HitsAt5        int     `json:"hits_at_5"`
-	RecallAt1      float64 `json:"recall_at_1"`
-	RecallAt3      float64 `json:"recall_at_3"`
-	RecallAt5      float64 `json:"recall_at_5"`
-	RecallAt10     float64 `json:"recall_at_10"`
-	FirstRank      int     `json:"first_relevant_rank"`
-	MinRelScore    float64 `json:"min_relevant_score"`
-	HasRelScore    bool    `json:"has_relevant_score"`
-	MaxIrrelScore  float64 `json:"max_irrelevant_score"`
-	HasIrrelScore  bool    `json:"has_irrelevant_score"`
-	TopScore       float64 `json:"top1_score"`
-	RandomHits     int     `json:"random_control_hits"`
+	Key             string  `json:"key"`
+	Category        string  `json:"category"`
+	Relevant        []int   `json:"relevant_feed_ids"`
+	Retrieved       []int   `json:"retrieved_feed_ids"`
+	ExactRetrieved  []int   `json:"exact_retrieved_feed_ids"`
+	RerankRetrieved []int   `json:"rerank_retrieved_feed_ids,omitempty"`
+	RerankRecallAt5 float64 `json:"rerank_recall_at_5,omitempty"`
+	Hits            int     `json:"hits_at_10"`
+	HitsAt5         int     `json:"hits_at_5"`
+	RecallAt1       float64 `json:"recall_at_1"`
+	RecallAt3       float64 `json:"recall_at_3"`
+	RecallAt5       float64 `json:"recall_at_5"`
+	RecallAt10      float64 `json:"recall_at_10"`
+	FirstRank       int     `json:"first_relevant_rank"`
+	MinRelScore     float64 `json:"min_relevant_score"`
+	HasRelScore     bool    `json:"has_relevant_score"`
+	MaxIrrelScore   float64 `json:"max_irrelevant_score"`
+	HasIrrelScore   bool    `json:"has_irrelevant_score"`
+	TopScore        float64 `json:"top1_score"`
+	RandomHits      int     `json:"random_control_hits"`
+}
+
+type recallRerankReport struct {
+	Model                  string             `json:"model"`
+	Candidates             int                `json:"candidates"`
+	LabeledQueries         int                `json:"labeled_queries"`
+	RecallAt1              float64            `json:"recall_at_1"`
+	RecallAt3              float64            `json:"recall_at_3"`
+	RecallAt5              float64            `json:"recall_at_5"`
+	RecallAt10             float64            `json:"recall_at_10"`
+	HitRateAt5             float64            `json:"hit_rate_at_5"`
+	MRRAt5                 float64            `json:"mrr_at_5"`
+	DistinctTop1           int                `json:"distinct_top1_across_labeled_queries"`
+	PerCategoryRecall      map[string]float64 `json:"per_category_recall_at_5"`
+	DenseControlRecallAt1  float64            `json:"dense_control_recall_at_1"`
+	DenseControlRecallAt5  float64            `json:"dense_control_recall_at_5"`
+	DenseControlRecallAt10 float64            `json:"dense_control_recall_at_10"`
+	DenseControlHitRateAt5 float64            `json:"dense_control_hit_rate_at_5"`
+	DenseControlMRRAt5     float64            `json:"dense_control_mrr_at_5"`
 }
 
 type recallProvenance struct {
@@ -138,6 +160,7 @@ type recallScenarioReport struct {
 	MeanIrrelScore        float64             `json:"mean_irrelevant_score"`
 	NegativeTop1Mean      float64             `json:"negative_query_mean_top1_score"`
 	PerCategoryRecall     map[string]float64  `json:"per_category_recall_at_5"`
+	Rerank                *recallRerankReport `json:"rerank,omitempty"`
 	Queries               []recallQueryResult `json:"queries"`
 }
 
@@ -635,7 +658,7 @@ func readProvenance(ctx context.Context, pool *pgxpool.Pool, model string) recal
 	return p
 }
 
-func runRecallScenario(t *testing.T, pool *pgxpool.Pool, corpus recallCorpus, vectors recallVectorSet, name string, decoys int, mode decoyMode) {
+func runRecallScenario(t *testing.T, pool *pgxpool.Pool, corpus recallCorpus, vectors recallVectorSet, name string, decoys int, mode decoyMode, reranker Reranker) {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Minute)
 	defer cancel()
 
@@ -656,6 +679,14 @@ func runRecallScenario(t *testing.T, pool *pgxpool.Pool, corpus recallCorpus, ve
 
 	tracer := noop.NewTracerProvider().Tracer("rag-recall")
 	retriever := NewRetriever(pool, tracer)
+
+	var rerankService *Service
+	rerankModel := ""
+	if reranker != nil {
+		rerankModel = reranker.Model()
+		rerankService = NewService(nil, retriever, nil, nil, recallK, 4000, 0, tracer)
+		rerankService.SetReranker(func(context.Context, int) (Reranker, error) { return reranker, nil }, recallRerankCandidates, 4000)
+	}
 
 	exactTx, err := pool.Begin(ctx)
 	require.NoError(t, err)
@@ -710,7 +741,7 @@ func runRecallScenario(t *testing.T, pool *pgxpool.Pool, corpus recallCorpus, ve
 		PerCategoryRecall: map[string]float64{},
 	}
 
-	collector := newRecallCollector(&report, corpus, vectors, feedIDByKey, ownerFeedIDs, retriever, exactRetriever, owner, randomVec)
+	collector := newRecallCollector(&report, corpus, vectors, feedIDByKey, ownerFeedIDs, retriever, exactRetriever, owner, randomVec, rerankService, reranker, recallRerankCandidates, rerankModel)
 	for _, q := range corpus.Queries {
 		collector.collect(ctx, t, q)
 	}
@@ -756,6 +787,11 @@ type recallCollector struct {
 	owner          int
 	randomVec      []float32
 
+	rerankService    *Service
+	reranker         Reranker
+	rerankCandidates int
+	rerank           *recallRerankAccumulator
+
 	recalls1, recalls3, recalls5, recalls10 []float64
 	exact5, hitsAny, rr                     []float64
 	relScores, irrelScores                  []float64
@@ -765,34 +801,76 @@ type recallCollector struct {
 	distinctTop1                            map[int]struct{}
 }
 
-func newRecallCollector(report *recallScenarioReport, corpus recallCorpus, vectors recallVectorSet, feedIDByKey map[string]int, ownerFeedIDs map[int]struct{}, retriever, exactRetriever *Retriever, owner int, randomVec []float32) *recallCollector {
+type recallRerankAccumulator struct {
+	model             string
+	candidates        int
+	recalls1          []float64
+	recalls3          []float64
+	recalls5          []float64
+	recalls10         []float64
+	hitsAny           []float64
+	rr                []float64
+	dense1            []float64
+	dense5            []float64
+	dense10           []float64
+	denseHit          []float64
+	denseRR           []float64
+	catHits, catTotal map[string]int
+	distinctTop1      map[int]struct{}
+}
+
+func newRecallCollector(report *recallScenarioReport, corpus recallCorpus, vectors recallVectorSet, feedIDByKey map[string]int, ownerFeedIDs map[int]struct{}, retriever, exactRetriever *Retriever, owner int, randomVec []float32, rerankService *Service, reranker Reranker, rerankCandidates int, rerankModel string) *recallCollector {
 	n := len(corpus.Queries)
-	return &recallCollector{
-		report:         report,
-		vectors:        vectors,
-		feedIDByKey:    feedIDByKey,
-		ownerFeedIDs:   ownerFeedIDs,
-		retriever:      retriever,
-		exactRetriever: exactRetriever,
-		owner:          owner,
-		randomVec:      randomVec,
-		recalls1:       make([]float64, 0, n),
-		recalls3:       make([]float64, 0, n),
-		recalls5:       make([]float64, 0, n),
-		recalls10:      make([]float64, 0, n),
-		exact5:         make([]float64, 0, n),
-		hitsAny:        make([]float64, 0, n),
-		rr:             make([]float64, 0, n),
-		relScores:      make([]float64, 0, n),
-		irrelScores:    make([]float64, 0, n),
-		negTop1:        make([]float64, 0, n),
-		negMaxScore:    make([]float64, 0, n),
-		random5:        make([]float64, 0, n),
-		random10:       make([]float64, 0, n),
-		catHits:        map[string]int{},
-		catTotal:       map[string]int{},
-		distinctTop1:   map[int]struct{}{},
+	c := &recallCollector{
+		report:           report,
+		vectors:          vectors,
+		feedIDByKey:      feedIDByKey,
+		ownerFeedIDs:     ownerFeedIDs,
+		retriever:        retriever,
+		exactRetriever:   exactRetriever,
+		owner:            owner,
+		randomVec:        randomVec,
+		rerankService:    rerankService,
+		reranker:         reranker,
+		rerankCandidates: rerankCandidates,
+		recalls1:         make([]float64, 0, n),
+		recalls3:         make([]float64, 0, n),
+		recalls5:         make([]float64, 0, n),
+		recalls10:        make([]float64, 0, n),
+		exact5:           make([]float64, 0, n),
+		hitsAny:          make([]float64, 0, n),
+		rr:               make([]float64, 0, n),
+		relScores:        make([]float64, 0, n),
+		irrelScores:      make([]float64, 0, n),
+		negTop1:          make([]float64, 0, n),
+		negMaxScore:      make([]float64, 0, n),
+		random5:          make([]float64, 0, n),
+		random10:         make([]float64, 0, n),
+		catHits:          map[string]int{},
+		catTotal:         map[string]int{},
+		distinctTop1:     map[int]struct{}{},
 	}
+	if reranker != nil {
+		c.rerank = &recallRerankAccumulator{
+			model:        rerankModel,
+			candidates:   rerankCandidates,
+			recalls1:     make([]float64, 0, n),
+			recalls3:     make([]float64, 0, n),
+			recalls5:     make([]float64, 0, n),
+			recalls10:    make([]float64, 0, n),
+			hitsAny:      make([]float64, 0, n),
+			rr:           make([]float64, 0, n),
+			dense1:       make([]float64, 0, n),
+			dense5:       make([]float64, 0, n),
+			dense10:      make([]float64, 0, n),
+			denseHit:     make([]float64, 0, n),
+			denseRR:      make([]float64, 0, n),
+			catHits:      map[string]int{},
+			catTotal:     map[string]int{},
+			distinctTop1: map[int]struct{}{},
+		}
+	}
+	return c
 }
 
 func (c *recallCollector) collect(ctx context.Context, t *testing.T, q recallQuerySpec) {
@@ -817,7 +895,7 @@ func (c *recallCollector) collect(ctx context.Context, t *testing.T, q recallQue
 		c.collectNegative(q, passages, exactPassages)
 		return
 	}
-	c.collectLabeled(ctx, t, q, passages, exactPassages)
+	c.collectLabeled(ctx, t, q, vec, passages, exactPassages)
 }
 
 func (c *recallCollector) collectNegative(q recallQuerySpec, passages, exactPassages []Passage) {
@@ -828,12 +906,27 @@ func (c *recallCollector) collectNegative(q recallQuerySpec, passages, exactPass
 	c.report.Queries = append(c.report.Queries, res)
 }
 
-func (c *recallCollector) collectLabeled(ctx context.Context, t *testing.T, q recallQuerySpec, passages, exactPassages []Passage) {
+func (c *recallCollector) collectLabeled(ctx context.Context, t *testing.T, q recallQuerySpec, vec []float32, passages, exactPassages []Passage) {
 	relevantIDs := make([]int, 0, len(q.Relevant))
 	for _, key := range q.Relevant {
 		relevantIDs = append(relevantIDs, c.feedIDByKey[key])
 	}
 	res := evaluateQuery(q, relevantIDs, passages, passageFeedIDs(exactPassages))
+
+	if c.rerank != nil {
+		candidates, err := c.retriever.Retrieve(ctx, c.owner, vec, c.rerankCandidates)
+		require.NoErrorf(t, err, "rerank candidates for %s", q.Key)
+		denseCandidates := candidates
+		if len(denseCandidates) > recallK {
+			denseCandidates = denseCandidates[:recallK]
+		}
+		denseRes := evaluateQuery(q, relevantIDs, denseCandidates, nil)
+		reranked := c.rerankService.rerankFeedPassages(ctx, c.owner, q.Text, c.reranker, candidates, recallK)
+		rrRes := evaluateQuery(q, relevantIDs, reranked, nil)
+		res.RerankRetrieved = rrRes.Retrieved
+		res.RerankRecallAt5 = rrRes.RecallAt5
+		c.collectRerank(rrRes, denseRes, relevantIDs, q.Category)
+	}
 
 	randomPassages, err := c.retriever.Retrieve(ctx, c.owner, c.randomVec, recallK)
 	require.NoError(t, err)
@@ -878,6 +971,66 @@ func (c *recallCollector) collectLabeled(ctx context.Context, t *testing.T, q re
 	}
 }
 
+func (c *recallCollector) collectRerank(res, denseControl recallQueryResult, relevantIDs []int, category string) {
+	acc := c.rerank
+	exactRelevant := make(map[int]struct{}, len(relevantIDs))
+	for _, id := range relevantIDs {
+		exactRelevant[id] = struct{}{}
+	}
+	acc.recalls1 = append(acc.recalls1, res.RecallAt1)
+	acc.recalls3 = append(acc.recalls3, res.RecallAt3)
+	acc.recalls5 = append(acc.recalls5, res.RecallAt5)
+	acc.recalls10 = append(acc.recalls10, res.RecallAt10)
+	acc.catHits[category] += hitsWithin(res.Retrieved, exactRelevant, recallKOffsets)
+	acc.catTotal[category] += len(relevantIDs)
+	if res.HitsAt5 > 0 {
+		acc.hitsAny = append(acc.hitsAny, 1)
+	}
+	if res.FirstRank > 0 && res.FirstRank <= recallKOffsets {
+		acc.rr = append(acc.rr, 1/float64(res.FirstRank))
+	}
+	if len(res.Retrieved) > 0 {
+		acc.distinctTop1[res.Retrieved[0]] = struct{}{}
+	}
+	acc.dense1 = append(acc.dense1, denseControl.RecallAt1)
+	acc.dense5 = append(acc.dense5, denseControl.RecallAt5)
+	acc.dense10 = append(acc.dense10, denseControl.RecallAt10)
+	if denseControl.HitsAt5 > 0 {
+		acc.denseHit = append(acc.denseHit, 1)
+	}
+	if denseControl.FirstRank > 0 && denseControl.FirstRank <= recallKOffsets {
+		acc.denseRR = append(acc.denseRR, 1/float64(denseControl.FirstRank))
+	}
+}
+
+func (a *recallRerankAccumulator) report(label int) *recallRerankReport {
+	out := &recallRerankReport{
+		Model:             a.model,
+		Candidates:        a.candidates,
+		LabeledQueries:    label,
+		RecallAt1:         meanOf(a.recalls1),
+		RecallAt3:         meanOf(a.recalls3),
+		RecallAt5:         meanOf(a.recalls5),
+		RecallAt10:        meanOf(a.recalls10),
+		MRRAt5:            meanOf(a.rr),
+		DistinctTop1:      len(a.distinctTop1),
+		PerCategoryRecall: map[string]float64{},
+
+		DenseControlRecallAt1:  meanOf(a.dense1),
+		DenseControlRecallAt5:  meanOf(a.dense5),
+		DenseControlRecallAt10: meanOf(a.dense10),
+		DenseControlMRRAt5:     meanOf(a.denseRR),
+	}
+	if label > 0 {
+		out.HitRateAt5 = float64(len(a.hitsAny)) / float64(label)
+		out.DenseControlHitRateAt5 = float64(len(a.denseHit)) / float64(label)
+	}
+	for cat, hits := range a.catHits {
+		out.PerCategoryRecall[cat] = float64(hits) / float64(a.catTotal[cat])
+	}
+	return out
+}
+
 func (c *recallCollector) finalize(ownerRows int) {
 	r := c.report
 	r.RecallAt1 = meanOf(c.recalls1)
@@ -897,6 +1050,9 @@ func (c *recallCollector) finalize(ownerRows int) {
 	r.DistinctTop1 = len(c.distinctTop1)
 	for cat, hits := range c.catHits {
 		r.PerCategoryRecall[cat] = float64(hits) / float64(c.catTotal[cat])
+	}
+	if c.rerank != nil {
+		r.Rerank = c.rerank.report(r.LabeledQueries)
 	}
 }
 
@@ -948,6 +1104,15 @@ func emitRecallReport(t *testing.T, r recallScenarioReport) {
 	for _, cat := range sortedKeys(r.PerCategoryRecall) {
 		t.Logf("  category %-22s recall@%d=%.3f", cat, r.ProductionK, r.PerCategoryRecall[cat])
 	}
+	if rr := r.Rerank; rr != nil {
+		t.Logf("  rerank model=%s candidates=%d recall@1=%.3f recall@3=%.3f recall@5=%.3f recall@10=%.3f hit@5=%.3f mrr@5=%.3f distinct_top1=%d/%d",
+			rr.Model, rr.Candidates, rr.RecallAt1, rr.RecallAt3, rr.RecallAt5, rr.RecallAt10, rr.HitRateAt5, rr.MRRAt5, rr.DistinctTop1, rr.LabeledQueries)
+		t.Logf("  rerank dense-control (same candidates, no rerank) recall@1=%.3f recall@5=%.3f recall@10=%.3f hit@5=%.3f mrr@5=%.3f",
+			rr.DenseControlRecallAt1, rr.DenseControlRecallAt5, rr.DenseControlRecallAt10, rr.DenseControlHitRateAt5, rr.DenseControlMRRAt5)
+		for _, cat := range sortedKeys(rr.PerCategoryRecall) {
+			t.Logf("  rerank category %-22s recall@%d=%.3f", cat, r.ProductionK, rr.PerCategoryRecall[cat])
+		}
+	}
 	for _, q := range r.Queries {
 		t.Logf("    %-30s %-22s hits@5=%d/%d hits@10=%d first_rank=%d top1=%.4f min_rel=%.4f max_irrel=%.4f",
 			q.Key, q.Category, q.HitsAt5, len(q.Relevant), q.Hits, q.FirstRank, q.TopScore, q.MinRelScore, q.MaxIrrelScore)
@@ -960,9 +1125,34 @@ func emitRecallReport(t *testing.T, r recallScenarioReport) {
 	}
 }
 
+func newRecallReranker(t *testing.T) Reranker {
+	t.Helper()
+	baseURL := strings.TrimSpace(os.Getenv("NYX_RAG_RECALL_RERANK_URL"))
+	if baseURL == "" {
+		return nil
+	}
+	model := strings.TrimSpace(os.Getenv("NYX_RAG_RECALL_RERANK_MODEL"))
+	require.NotEmpty(t, model, "NYX_RAG_RECALL_RERANK_URL requires NYX_RAG_RECALL_RERANK_MODEL")
+	tracer := noop.NewTracerProvider().Tracer("rag-recall-rerank")
+	client := NewHTTPReranker(
+		baseURL,
+		strings.TrimSpace(os.Getenv("NYX_RAG_RECALL_RERANK_KEY")),
+		model,
+		30*time.Second,
+		true,
+		tracer,
+	)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	_, err := client.Rerank(ctx, "rerank connectivity probe", []string{"probe document"})
+	require.NoError(t, err, "the reranker endpoint must answer before the recall rerank pass runs")
+	return client
+}
+
 func TestRetrieveRecallBaseline(t *testing.T) {
 	pool := requireRecallDB(t)
 	corpus, vectors := loadRecallFixtures(t)
+	reranker := newRecallReranker(t)
 
 	scenarios := []struct {
 		name   string
@@ -975,7 +1165,7 @@ func TestRetrieveRecallBaseline(t *testing.T) {
 	}
 	for _, sc := range scenarios {
 		t.Run(sc.name, func(t *testing.T) {
-			runRecallScenario(t, pool, corpus, vectors, sc.name, sc.decoys, sc.mode)
+			runRecallScenario(t, pool, corpus, vectors, sc.name, sc.decoys, sc.mode, reranker)
 		})
 	}
 }
