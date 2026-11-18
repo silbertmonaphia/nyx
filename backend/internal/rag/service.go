@@ -40,6 +40,8 @@ type RetrieverIface interface {
 
 type EmbedderResolver func(ctx context.Context, userID int) (*Embedder, error)
 
+type UserStackResolver func(ctx context.Context, userID int) (*Embedder, Reranker, error)
+
 // Service orchestrates the chat-side RAG path: embed the user's
 // query, retrieve the top-K passages, render a context block
 // sized to RAGMaxContextChars, and run the lazy backfill.
@@ -60,6 +62,12 @@ type Service struct {
 	knowledge         KnowledgeRetriever
 	tracer            trace.Tracer
 
+	rerankerResolver  RerankerResolver
+	rerankCandidates  int
+	rerankMaxDocChars int
+	breakMu           sync.Mutex
+	breakers          map[string]*rerankBreaker
+
 	// backfillInFlight serialises BackfillOnce per userID via the
 	// canonical LoadOrStore + sync.Once pattern. The map itself is
 	// never garbage collected (a future improvement: evict entries
@@ -70,6 +78,7 @@ type Service struct {
 	backfillInFlight sync.Map
 
 	embedderResolver EmbedderResolver
+	stackResolver    UserStackResolver
 }
 
 // NewService wires the chat-side rag facade. The pool is shared
@@ -98,11 +107,26 @@ func (s *Service) SetEmbedderResolver(fn EmbedderResolver) {
 	s.embedderResolver = fn
 }
 
+func (s *Service) SetUserStackResolver(fn UserStackResolver) {
+	s.stackResolver = fn
+}
+
 func (s *Service) resolveEmbedder(ctx context.Context, userID int) (*Embedder, error) {
 	if s.embedderResolver != nil {
 		return s.embedderResolver(ctx, userID)
 	}
 	return s.embedder, nil
+}
+
+func (s *Service) resolveUser(ctx context.Context, userID int) (*Embedder, Reranker, error) {
+	if s.stackResolver != nil {
+		return s.stackResolver(ctx, userID)
+	}
+	embedder, err := s.resolveEmbedder(ctx, userID)
+	if err != nil {
+		return nil, nil, err
+	}
+	return embedder, s.resolveReranker(ctx, userID), nil
 }
 
 // Retrieve is the chat-side hot path. Returns the passages + a
@@ -123,7 +147,7 @@ func (s *Service) Retrieve(ctx context.Context, userID int, query string) ([]Pas
 	)
 	defer span.End()
 
-	embedder, err := s.resolveEmbedder(ctx, userID)
+	embedder, reranker, err := s.resolveUser(ctx, userID)
 	if err != nil {
 		span.RecordError(err)
 		return nil, "", err
@@ -145,11 +169,12 @@ func (s *Service) Retrieve(ctx context.Context, userID int, query string) ([]Pas
 		return nil, "", nil
 	}
 
-	passages, err := s.retriever.Retrieve(ctx, userID, vecs[0], s.topK)
+	passages, err := s.retriever.Retrieve(ctx, userID, vecs[0], s.fetchK(s.topK, reranker))
 	if err != nil {
 		span.RecordError(err)
 		return nil, "", err
 	}
+	passages = s.rerankFeedPassages(ctx, userID, query, reranker, passages, s.topK)
 	if len(passages) == 0 {
 		span.SetStatus(codes.Ok, "")
 		return nil, "", nil

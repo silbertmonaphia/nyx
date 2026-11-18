@@ -297,6 +297,32 @@ func TestHandler_PutFallbackRoundTrips(t *testing.T) {
 	assert.Equal(t, "…0009", got.Fallback.APIKeyMasked)
 }
 
+func TestHandler_PutRerankRoundTrips(t *testing.T) {
+	router, _, _, tokens := setupConfigRouter(t)
+	tok := mustToken(t, tokens, 1)
+
+	body := validPutBody()
+	body["rerank"] = map[string]any{
+		"base_url": "http://localhost:8002",
+		"api_key":  "",
+		"model":    "BAAI/bge-reranker-v2-m3",
+	}
+
+	rr := configRequest(t, router, http.MethodPut, tok, body)
+	require.Equal(t, http.StatusOK, rr.Code, rr.Body.String())
+	got := decodeConfig(t, rr)
+	require.NotNil(t, got.Rerank)
+	assert.Equal(t, "http://localhost:8002", got.Rerank.BaseURL)
+	assert.Equal(t, "BAAI/bge-reranker-v2-m3", got.Rerank.Model)
+	assert.Equal(t, "", got.Rerank.APIKeyMasked)
+
+	rr = configRequest(t, router, http.MethodGet, tok, nil)
+	require.Equal(t, http.StatusOK, rr.Code)
+	got = decodeConfig(t, rr)
+	require.NotNil(t, got.Rerank)
+	assert.Equal(t, "BAAI/bge-reranker-v2-m3", got.Rerank.Model)
+}
+
 func TestHandler_PutLoopbackWithoutKeys(t *testing.T) {
 	router, _, _, tokens := setupConfigRouter(t)
 	tok := mustToken(t, tokens, 1)

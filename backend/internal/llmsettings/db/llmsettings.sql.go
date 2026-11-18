@@ -22,7 +22,7 @@ func (q *Queries) DeleteUserLLMSettings(ctx context.Context, userID int32) (int6
 }
 
 const getUserLLMSettings = `-- name: GetUserLLMSettings :one
-SELECT user_id, llm_base_url, llm_api_key_enc, llm_model, embedding_base_url, embedding_api_key_enc, embedding_model, tavily_base_url, tavily_api_key_enc, fallback_base_url, fallback_api_key_enc, fallback_model, created_at, updated_at FROM user_llm_settings WHERE user_id = $1
+SELECT user_id, llm_base_url, llm_api_key_enc, llm_model, embedding_base_url, embedding_api_key_enc, embedding_model, tavily_base_url, tavily_api_key_enc, fallback_base_url, fallback_api_key_enc, fallback_model, created_at, updated_at, rerank_base_url, rerank_api_key_enc, rerank_model FROM user_llm_settings WHERE user_id = $1
 `
 
 func (q *Queries) GetUserLLMSettings(ctx context.Context, userID int32) (UserLlmSetting, error) {
@@ -43,6 +43,9 @@ func (q *Queries) GetUserLLMSettings(ctx context.Context, userID int32) (UserLlm
 		&i.FallbackModel,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.RerankBaseURL,
+		&i.RerankAPIKeyEnc,
+		&i.RerankModel,
 	)
 	return i, err
 }
@@ -60,7 +63,10 @@ INSERT INTO user_llm_settings (
     tavily_api_key_enc,
     fallback_base_url,
     fallback_api_key_enc,
-    fallback_model
+    fallback_model,
+    rerank_base_url,
+    rerank_api_key_enc,
+    rerank_model
 ) VALUES (
     $1,
     $2,
@@ -73,7 +79,10 @@ INSERT INTO user_llm_settings (
     $9,
     $10,
     $11,
-    $12
+    $12,
+    $13,
+    $14,
+    $15
 )
 ON CONFLICT (user_id) DO UPDATE SET
     llm_base_url          = EXCLUDED.llm_base_url,
@@ -87,8 +96,11 @@ ON CONFLICT (user_id) DO UPDATE SET
     fallback_base_url     = EXCLUDED.fallback_base_url,
     fallback_api_key_enc  = EXCLUDED.fallback_api_key_enc,
     fallback_model        = EXCLUDED.fallback_model,
+    rerank_base_url       = EXCLUDED.rerank_base_url,
+    rerank_api_key_enc    = EXCLUDED.rerank_api_key_enc,
+    rerank_model          = EXCLUDED.rerank_model,
     updated_at            = now()
-RETURNING user_id, llm_base_url, llm_api_key_enc, llm_model, embedding_base_url, embedding_api_key_enc, embedding_model, tavily_base_url, tavily_api_key_enc, fallback_base_url, fallback_api_key_enc, fallback_model, created_at, updated_at
+RETURNING user_id, llm_base_url, llm_api_key_enc, llm_model, embedding_base_url, embedding_api_key_enc, embedding_model, tavily_base_url, tavily_api_key_enc, fallback_base_url, fallback_api_key_enc, fallback_model, created_at, updated_at, rerank_base_url, rerank_api_key_enc, rerank_model
 `
 
 type UpsertUserLLMSettingsParams struct {
@@ -104,6 +116,9 @@ type UpsertUserLLMSettingsParams struct {
 	FallbackBaseURL    string
 	FallbackAPIKeyEnc  string
 	FallbackModel      string
+	RerankBaseURL      string
+	RerankAPIKeyEnc    string
+	RerankModel        string
 }
 
 func (q *Queries) UpsertUserLLMSettings(ctx context.Context, arg UpsertUserLLMSettingsParams) (UserLlmSetting, error) {
@@ -120,6 +135,9 @@ func (q *Queries) UpsertUserLLMSettings(ctx context.Context, arg UpsertUserLLMSe
 		arg.FallbackBaseURL,
 		arg.FallbackAPIKeyEnc,
 		arg.FallbackModel,
+		arg.RerankBaseURL,
+		arg.RerankAPIKeyEnc,
+		arg.RerankModel,
 	)
 	var i UserLlmSetting
 	err := row.Scan(
@@ -137,6 +155,9 @@ func (q *Queries) UpsertUserLLMSettings(ctx context.Context, arg UpsertUserLLMSe
 		&i.FallbackModel,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.RerankBaseURL,
+		&i.RerankAPIKeyEnc,
+		&i.RerankModel,
 	)
 	return i, err
 }

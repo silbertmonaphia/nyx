@@ -33,4 +33,7 @@ type UserLlmSetting struct {
 	FallbackModel      string
 	CreatedAt          pgtype.Timestamptz
 	UpdatedAt          pgtype.Timestamptz
+	RerankBaseURL      string
+	RerankAPIKeyEnc    string
+	RerankModel        string
 }

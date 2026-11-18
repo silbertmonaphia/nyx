@@ -81,7 +81,7 @@ func (s *Service) RetrieveCorpus(ctx context.Context, userID int, query string, 
 	if strings.TrimSpace(query) == "" {
 		return RetrievalResult{}, nil
 	}
-	embedder, err := s.resolveEmbedder(ctx, userID)
+	embedder, reranker, err := s.resolveUser(ctx, userID)
 	if err != nil {
 		return RetrievalResult{}, err
 	}
@@ -101,19 +101,12 @@ func (s *Service) RetrieveCorpus(ctx context.Context, userID int, query string, 
 		feedK = opts.TopK
 		knowledgeK = opts.TopK
 	}
-	var feedPassages []Passage
-	var knowledgePassages []kb.Passage
-	switch corpus {
-	case CorpusFeeds:
-		feedPassages, err = s.retriever.Retrieve(ctx, userID, vectors[0], feedK)
-	case CorpusKB:
-		knowledgePassages, err = s.retrieveKnowledge(ctx, userID, vectors[0], embedder.Model(), knowledgeK, opts)
-	case CorpusBoth:
-		feedPassages, err = s.retriever.Retrieve(ctx, userID, vectors[0], feedK)
-		if err == nil {
-			knowledgePassages, err = s.retrieveKnowledge(ctx, userID, vectors[0], embedder.Model(), knowledgeK, opts)
-		}
-	}
+	feedFetchK := s.fetchK(feedK, reranker)
+	knowledgeFetchK := s.fetchK(knowledgeK, reranker)
+	feedPassages, knowledgePassages, err := s.retrieveCorpusPassages(
+		ctx, userID, query, vectors[0], embedder.Model(), corpus, opts, reranker,
+		feedK, knowledgeK, feedFetchK, knowledgeFetchK,
+	)
 	if err != nil {
 		return RetrievalResult{}, err
 	}
@@ -135,6 +128,44 @@ func (s *Service) RetrieveCorpus(ctx context.Context, userID int, query string, 
 			ContextBlock: renderFusedContext(fused, s.maxCtxChars),
 		}, nil
 	}
+}
+
+func (s *Service) retrieveCorpusPassages(
+	ctx context.Context,
+	userID int,
+	query string,
+	vec []float32,
+	model string,
+	corpus Corpus,
+	opts RetrievalOptions,
+	reranker Reranker,
+	feedK, knowledgeK, feedFetchK, knowledgeFetchK int,
+) ([]Passage, []kb.Passage, error) {
+	var feedPassages []Passage
+	var knowledgePassages []kb.Passage
+	var err error
+	switch corpus {
+	case CorpusFeeds:
+		feedPassages, err = s.retriever.Retrieve(ctx, userID, vec, feedFetchK)
+		if err == nil {
+			feedPassages = s.rerankFeedPassages(ctx, userID, query, reranker, feedPassages, feedK)
+		}
+	case CorpusKB:
+		knowledgePassages, err = s.retrieveKnowledge(ctx, userID, vec, model, knowledgeFetchK, opts)
+		if err == nil {
+			knowledgePassages = s.rerankKnowledgePassages(ctx, userID, query, reranker, knowledgePassages, knowledgeK)
+		}
+	case CorpusBoth:
+		feedPassages, err = s.retriever.Retrieve(ctx, userID, vec, feedFetchK)
+		if err == nil {
+			feedPassages = s.rerankFeedPassages(ctx, userID, query, reranker, feedPassages, feedK)
+			knowledgePassages, err = s.retrieveKnowledge(ctx, userID, vec, model, knowledgeFetchK, opts)
+			if err == nil {
+				knowledgePassages = s.rerankKnowledgePassages(ctx, userID, query, reranker, knowledgePassages, knowledgeK)
+			}
+		}
+	}
+	return feedPassages, knowledgePassages, err
 }
 
 func (s *Service) RetrieveKnowledge(ctx context.Context, userID int, query string) ([]kb.Passage, string, error) {

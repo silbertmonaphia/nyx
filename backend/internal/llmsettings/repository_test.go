@@ -19,12 +19,14 @@ func settingsRow(userID int32, llmKeyEnc string) *pgxmock.Rows {
 		"tavily_base_url", "tavily_api_key_enc",
 		"fallback_base_url", "fallback_api_key_enc", "fallback_model",
 		"created_at", "updated_at",
+		"rerank_base_url", "rerank_api_key_enc", "rerank_model",
 	}).AddRow(
 		userID, "http://localhost:8000/v1", llmKeyEnc, "Qwen/Qwen3-4B-Instruct-2507-FP8",
 		"http://localhost:8001/v1", "v1:embed-ciphertext", "Qwen/Qwen3-Embedding-0.6B",
 		"https://api.tavily.com/search", "v1:tavily-ciphertext",
 		"http://fallback:8000/v1", "v1:fallback-ciphertext", "Qwen/Qwen2.5-3B-Instruct",
 		time.Now(), time.Now(),
+		"http://rerank:8002", "v1:rerank-ciphertext", "Qwen/Qwen3-Reranker-0.6B",
 	)
 }
 
@@ -71,6 +73,9 @@ func TestRepository_Get_RoundTripsColumns(t *testing.T) {
 	assert.Equal(t, "http://fallback:8000/v1", got.FallbackBaseURL)
 	assert.Equal(t, "v1:fallback-ciphertext", got.FallbackAPIKeyEnc)
 	assert.Equal(t, "Qwen/Qwen2.5-3B-Instruct", got.FallbackModel)
+	assert.Equal(t, "http://rerank:8002", got.RerankBaseURL)
+	assert.Equal(t, "v1:rerank-ciphertext", got.RerankAPIKeyEnc)
+	assert.Equal(t, "Qwen/Qwen3-Reranker-0.6B", got.RerankModel)
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
@@ -84,6 +89,7 @@ func TestRepository_Upsert_RoundTripScopedToCaller(t *testing.T) {
 			"http://u9-embed:8001/v1", "v1:u9-embed-key", "u9-embed-model",
 			"https://tavily.example", "v1:u9-tavily-key",
 			"", "", "",
+			"http://u9-rerank:8002", "v1:u9-rerank-key", "u9-rerank-model",
 		).
 		WillReturnRows(settingsRow(9, "v1:u9-key"))
 
@@ -97,11 +103,16 @@ func TestRepository_Upsert_RoundTripScopedToCaller(t *testing.T) {
 		EmbeddingModel:     "u9-embed-model",
 		TavilyBaseURL:      "https://tavily.example",
 		TavilyAPIKeyEnc:    "v1:u9-tavily-key",
+		RerankBaseURL:      "http://u9-rerank:8002",
+		RerankAPIKeyEnc:    "v1:u9-rerank-key",
+		RerankModel:        "u9-rerank-model",
 	}
 	got, err := repo.Upsert(context.Background(), in)
 	require.NoError(t, err)
 	assert.Equal(t, 9, got.UserID)
 	assert.Equal(t, "v1:u9-key", got.LLMAPIKeyEnc)
+	assert.Equal(t, "http://rerank:8002", got.RerankBaseURL)
+	assert.Equal(t, "Qwen/Qwen3-Reranker-0.6B", got.RerankModel)
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
@@ -143,6 +154,7 @@ func TestRepository_UserScoping_EveryQueryBindsCallerID(t *testing.T) {
 			"http://u5:8000/v1", "v1:k", "u5-model",
 			"http://u5-embed:8001/v1", "v1:e", "u5-embed-model",
 			"https://tavily.example", "v1:tv",
+			"", "", "",
 			"", "", "",
 		).
 		WillReturnRows(settingsRow(5, "v1:k"))

@@ -72,6 +72,9 @@
           "llm": {
             "$ref": "#/components/schemas/LlmEndpointResponse"
           },
+          "rerank": {
+            "$ref": "#/components/schemas/LlmEndpointResponse"
+          },
           "tavily": {
             "$ref": "#/components/schemas/TavilyResponse"
           }
@@ -80,6 +83,7 @@
           "configured",
           "llm",
           "embedding",
+          "rerank",
           "tavily",
           "fallback"
         ],
@@ -99,6 +103,10 @@
           "llm": {
             "$ref": "#/components/schemas/LlmEndpointInput",
             "description": "Optional main-LLM group. Required for the AI Agent; without it feeds and other features keep working."
+          },
+          "rerank": {
+            "$ref": "#/components/schemas/LlmEndpointInput",
+            "description": "Optional rerank group (Jina/Cohere-compatible POST /rerank endpoint). When omitted retrieval returns dense order."
           },
           "tavily": {
             "$ref": "#/components/schemas/TavilyInput",
@@ -818,8 +826,12 @@
             "$ref": "#/components/schemas/LlmEndpointInput",
             "description": "Optional main-LLM group to probe. Blank api_key resolves to the stored key exactly as PUT does."
           },
+          "rerank": {
+            "$ref": "#/components/schemas/LlmEndpointInput",
+            "description": "Optional rerank group to probe. Sends one short query and one short document to the configured /rerank endpoint."
+          },
           "slots": {
-            "description": "Optional subset of slots to probe: chat, embedding, fallback, tavily. Absent probes every filled slot.",
+            "description": "Optional subset of slots to probe: chat, embedding, rerank, fallback, tavily. Absent probes every filled slot.",
             "items": {
               "type": "string"
             },
@@ -847,6 +859,9 @@
           "fallback": {
             "$ref": "#/components/schemas/ValidateSlotResponse"
           },
+          "rerank": {
+            "$ref": "#/components/schemas/ValidateSlotResponse"
+          },
           "tavily": {
             "$ref": "#/components/schemas/ValidateSlotResponse"
           }
@@ -854,6 +869,7 @@
         "required": [
           "chat",
           "embedding",
+          "rerank",
           "fallback",
           "tavily"
         ],
@@ -1958,7 +1974,7 @@
         ]
       },
       "put": {
-        "description": "Validates and upserts the authenticated caller's optional main LLM, optional embedding, optional Tavily, and optional retry-model configuration. API keys are write-only: a blank key on update keeps the stored key; on create a key is required unless the endpoint is loopback. Omitting Tavily disables web search for the agent. Responds with the masked configuration.",
+        "description": "Validates and upserts the authenticated caller's optional main LLM, optional embedding, optional rerank, optional Tavily, and optional retry-model configuration. API keys are write-only: a blank key on update keeps the stored key; on create a key is required unless the endpoint is loopback. Omitting Tavily disables web search for the agent; omitting rerank keeps retrieval in dense order. Responds with the masked configuration.",
         "operationId": "update-llm-config",
         "requestBody": {
           "content": {
@@ -2005,7 +2021,7 @@
     },
     "/api/me/llm-config/validate": {
       "post": {
-        "description": "Runs one minimal live request per filled slot (main LLM, embedding, fallback, Tavily) using the submitted values, resolving a blank key against the stored key exactly as PUT does. Returns a classified per-slot result plus the exact outbound request with credentials masked to their last four characters. Saves nothing.",
+        "description": "Runs one minimal live request per filled slot (main LLM, embedding, rerank, fallback, Tavily) using the submitted values, resolving a blank key against the stored key exactly as PUT does. Returns a classified per-slot result plus the exact outbound request with credentials masked to their last four characters. Saves nothing.",
         "operationId": "validate-llm-config",
         "requestBody": {
           "content": {

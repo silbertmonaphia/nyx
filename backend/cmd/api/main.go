@@ -698,6 +698,10 @@ func mountRAGFacade(cfg *config.Config, db *pgxpool.Pool, feedRepo feed.Reposito
 		ragSvc.SetEmbedderResolver(perUserEmbedder)
 		ragIndexer.SetEmbedderResolver(perUserEmbedder)
 	}
+	if userLLMResolver != nil {
+		ragSvc.SetUserStackResolver(newPerUserStackResolver(cfg, userLLMResolver, tracerProvider))
+		ragSvc.SetReranker(nil, cfg.RerankCandidates, cfg.RerankMaxDocChars)
+	}
 	kbSvc := mountKBStack(cfg, db, perUserEmbedder, tracerProvider)
 	if kbSvc != nil {
 		ragSvc.SetKnowledgeRetriever(kbSvc, cfg.KBTopK, cfg.KBMaxContextChars)
@@ -730,13 +734,37 @@ func newPerUserEmbedderResolver(cfg *config.Config, userLLMResolver *llmsettings
 			}
 			return nil, err
 		}
-		if stack.Embed == nil || stack.EmbedModel == "" {
+		embedder := ragEmbedderFromStack(cfg, stack, tracerProvider)
+		if embedder == nil {
 			return nil, rag.ErrNoEmbedder
 		}
-		embedder := rag.NewEmbedder(stack.Embed, stack.EmbedModel, tracerProvider.Tracer("nyx.rag.user"))
-		embedder.SetDimensions(cfg.EmbeddingDimensions)
 		return embedder, nil
 	}
+}
+
+func newPerUserStackResolver(cfg *config.Config, userLLMResolver *llmsettings.Resolver, tracerProvider trace.TracerProvider) rag.UserStackResolver {
+	if userLLMResolver == nil {
+		return nil
+	}
+	return func(ctx context.Context, userID int) (*rag.Embedder, rag.Reranker, error) {
+		stack, err := userLLMResolver.Resolve(ctx, userID)
+		if err != nil {
+			if errors.Is(err, llmsettings.ErrNotFound) {
+				return nil, nil, nil
+			}
+			return nil, nil, err
+		}
+		return ragEmbedderFromStack(cfg, stack, tracerProvider), stack.Rerank, nil
+	}
+}
+
+func ragEmbedderFromStack(cfg *config.Config, stack *llmsettings.UserStack, tracerProvider trace.TracerProvider) *rag.Embedder {
+	if stack.Embed == nil || stack.EmbedModel == "" {
+		return nil
+	}
+	embedder := rag.NewEmbedder(stack.Embed, stack.EmbedModel, tracerProvider.Tracer("nyx.rag.user"))
+	embedder.SetDimensions(cfg.EmbeddingDimensions)
+	return embedder
 }
 
 func mountKBStack(cfg *config.Config, db *pgxpool.Pool, perUserEmbedder rag.EmbedderResolver, tracerProvider trace.TracerProvider) *kb.Service {

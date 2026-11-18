@@ -14,7 +14,10 @@ INSERT INTO user_llm_settings (
     tavily_api_key_enc,
     fallback_base_url,
     fallback_api_key_enc,
-    fallback_model
+    fallback_model,
+    rerank_base_url,
+    rerank_api_key_enc,
+    rerank_model
 ) VALUES (
     @user_id,
     @llm_base_url,
@@ -27,7 +30,10 @@ INSERT INTO user_llm_settings (
     @tavily_api_key_enc,
     @fallback_base_url,
     @fallback_api_key_enc,
-    @fallback_model
+    @fallback_model,
+    @rerank_base_url,
+    @rerank_api_key_enc,
+    @rerank_model
 )
 ON CONFLICT (user_id) DO UPDATE SET
     llm_base_url          = EXCLUDED.llm_base_url,
@@ -41,6 +47,9 @@ ON CONFLICT (user_id) DO UPDATE SET
     fallback_base_url     = EXCLUDED.fallback_base_url,
     fallback_api_key_enc  = EXCLUDED.fallback_api_key_enc,
     fallback_model        = EXCLUDED.fallback_model,
+    rerank_base_url       = EXCLUDED.rerank_base_url,
+    rerank_api_key_enc    = EXCLUDED.rerank_api_key_enc,
+    rerank_model          = EXCLUDED.rerank_model,
     updated_at            = now()
 RETURNING *;
 

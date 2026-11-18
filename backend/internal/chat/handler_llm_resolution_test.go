@@ -244,6 +244,8 @@ func TestHandler_AgentForwardsResolvedPerUserConfig(t *testing.T) {
 	require.Contains(t, decoded, "llm_config")
 	require.Contains(t, decoded, "tavily_config")
 	assert.NotContains(t, decoded, "fallback")
+	assert.NotContains(t, decoded, "rerank")
+	assert.NotContains(t, string(decoded["llm_config"]), "rerank")
 
 	var llmCfg AgentLLMConfig
 	require.NoError(t, json.Unmarshal(decoded["llm_config"], &llmCfg))

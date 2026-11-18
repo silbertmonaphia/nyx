@@ -1,0 +1,31 @@
+{
+  "id": "rerank-2f5f1c9e",
+  "model": "Qwen/Qwen3-Reranker-0.6B",
+  "usage": {
+    "prompt_tokens": 42,
+    "total_tokens": 42
+  },
+  "results": [
+    {
+      "index": 0,
+      "document": {
+        "text": "doc zero"
+      },
+      "relevance_score": 0.93
+    },
+    {
+      "index": 2,
+      "document": {
+        "text": "doc two"
+      },
+      "relevance_score": 0.41
+    },
+    {
+      "index": 1,
+      "document": {
+        "text": "doc one"
+      },
+      "relevance_score": 0.12
+    }
+  ]
+}

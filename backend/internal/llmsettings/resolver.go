@@ -15,6 +15,7 @@ import (
 	"nyx/internal/llm/openai"
 	"nyx/internal/llm/ssrf"
 	"nyx/internal/platform/config"
+	"nyx/internal/rag"
 )
 
 const (
@@ -28,6 +29,7 @@ type UserStack struct {
 	Chat       llm.Provider
 	Embed      llm.Provider
 	EmbedModel string
+	Rerank     rag.Reranker
 
 	LLMBaseURL       string
 	LLMAPIKey        string
@@ -47,8 +49,9 @@ type Resolver struct {
 	base    *config.Config
 	tp      trace.TracerProvider
 
-	mu    sync.Mutex
-	cache map[string]llm.Provider
+	mu          sync.Mutex
+	cache       map[string]llm.Provider
+	rerankCache map[string]rag.Reranker
 }
 
 func NewResolver(service *Service, baseCfg *config.Config, tp trace.TracerProvider) *Resolver {
@@ -56,10 +59,11 @@ func NewResolver(service *Service, baseCfg *config.Config, tp trace.TracerProvid
 		baseCfg = &config.Config{}
 	}
 	return &Resolver{
-		service: service,
-		base:    baseCfg,
-		tp:      tp,
-		cache:   map[string]llm.Provider{},
+		service:     service,
+		base:        baseCfg,
+		tp:          tp,
+		cache:       map[string]llm.Provider{},
+		rerankCache: map[string]rag.Reranker{},
 	}
 }
 
@@ -77,11 +81,16 @@ func (r *Resolver) Resolve(ctx context.Context, userID int) (*UserStack, error) 
 	if err != nil {
 		return nil, err
 	}
+	rerank, err := r.rerankSlot(s)
+	if err != nil {
+		return nil, err
+	}
 
 	return &UserStack{
 		Chat:             chat,
 		Embed:            embed,
 		EmbedModel:       s.EmbeddingModel,
+		Rerank:           rerank,
 		LLMBaseURL:       s.LLMBaseURL,
 		LLMAPIKey:        s.LLMAPIKey,
 		LLMModel:         s.LLMModel,
@@ -149,6 +158,44 @@ func (r *Resolver) embedSlot(s *Settings) (llm.Provider, error) {
 	return r.cached(key, func() (llm.Provider, error) {
 		return r.buildClient(s.EmbeddingBaseURL, s.EmbeddingAPIKey, s.EmbeddingModel)
 	})
+}
+
+const defaultRerankResolverTimeout = 2 * time.Second
+
+func (r *Resolver) rerankSlot(s *Settings) (rag.Reranker, error) {
+	if s.RerankBaseURL == "" || s.RerankModel == "" {
+		return nil, nil
+	}
+	key := slotKey("rerank", s.RerankBaseURL, s.RerankAPIKey, s.RerankModel)
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if cached, ok := r.rerankCache[key]; ok {
+		return cached, nil
+	}
+	client := rag.NewHTTPReranker(
+		s.RerankBaseURL,
+		s.RerankAPIKey,
+		s.RerankModel,
+		r.rerankTimeout(),
+		r.base.BYOKAllowPrivateURL,
+		r.tp.Tracer("nyx.rag.rerank"),
+	)
+	if len(r.rerankCache) >= maxResolverCacheEntries {
+		for existing := range r.rerankCache {
+			delete(r.rerankCache, existing)
+			break
+		}
+	}
+	r.rerankCache[key] = client
+	return client, nil
+}
+
+func (r *Resolver) rerankTimeout() time.Duration {
+	d, err := time.ParseDuration(r.base.RerankTimeout)
+	if err != nil || d <= 0 {
+		return defaultRerankResolverTimeout
+	}
+	return d
 }
 
 func (r *Resolver) clientConfig(baseURL, apiKey, model string) *config.Config {

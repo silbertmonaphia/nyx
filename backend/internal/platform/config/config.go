@@ -186,6 +186,9 @@ type Config struct {
 	RAGTopK                     int    `mapstructure:"RAG_TOP_K"`
 	RAGMaxContextChars          int    `mapstructure:"RAG_MAX_CONTEXT_CHARS"`
 	RAGMaxBackfillPerRequest    int    `mapstructure:"RAG_MAX_BACKFILL_PER_REQUEST"`
+	RerankCandidates            int    `mapstructure:"RERANK_CANDIDATES"`
+	RerankTimeout               string `mapstructure:"RERANK_TIMEOUT"`
+	RerankMaxDocChars           int    `mapstructure:"RERANK_MAX_DOC_CHARS"`
 
 	KBEnabled            bool  `mapstructure:"KB_ENABLED"`
 	KBMaxFileBytes       int64 `mapstructure:"KB_MAX_FILE_BYTES"`
@@ -414,6 +417,9 @@ func setDefaults() {
 	viper.SetDefault("RAG_TOP_K", 5)
 	viper.SetDefault("RAG_MAX_CONTEXT_CHARS", 4000)
 	viper.SetDefault("RAG_MAX_BACKFILL_PER_REQUEST", 20)
+	viper.SetDefault("RERANK_CANDIDATES", 20)
+	viper.SetDefault("RERANK_TIMEOUT", "2s")
+	viper.SetDefault("RERANK_MAX_DOC_CHARS", 4000)
 
 	viper.SetDefault("KB_ENABLED", false)
 	viper.SetDefault("KB_MAX_FILE_BYTES", 2<<20)
@@ -481,6 +487,7 @@ func bindEnvVars() {
 		"LLM_EMBEDDING_API_KEY", "LLM_EMBEDDING_ALLOW_PRIVATE_URL",
 		"EMBEDDING_DIMENSIONS",
 		"RAG_TOP_K", "RAG_MAX_CONTEXT_CHARS", "RAG_MAX_BACKFILL_PER_REQUEST",
+		"RERANK_CANDIDATES", "RERANK_TIMEOUT", "RERANK_MAX_DOC_CHARS",
 		"KB_ENABLED",
 		"KB_MAX_FILE_BYTES", "KB_MAX_FILES", "KB_MAX_DEPTH",
 		"KB_CHUNK_TARGET_TOKENS", "KB_CHUNK_MAX_TOKENS", "KB_CHUNK_MIN_TOKENS",
@@ -555,8 +562,42 @@ func validateDurations(cfg *Config) error {
 	return errors.Join(
 		validateAgentRunTokenTTL(cfg),
 		validateRAGBackfillSize(cfg),
+		validateRerankBounds(cfg),
 		validateIdempotencyRetention(cfg),
 	)
+}
+
+const (
+	maxRerankCandidates  = 100
+	maxRerankTimeout     = 30 * time.Second
+	minRerankMaxDocChars = 100
+	maxRerankMaxDocChars = 32000
+)
+
+func validateRerankBounds(cfg *Config) error {
+	if cfg.RerankCandidates < 1 || cfg.RerankCandidates > maxRerankCandidates {
+		return fmt.Errorf(
+			"RERANK_CANDIDATES must be between 1 and %d, got %d",
+			maxRerankCandidates, cfg.RerankCandidates,
+		)
+	}
+	timeout, err := time.ParseDuration(cfg.RerankTimeout)
+	if err != nil {
+		return fmt.Errorf("invalid RERANK_TIMEOUT: %w", err)
+	}
+	if timeout <= 0 || timeout > maxRerankTimeout {
+		return fmt.Errorf(
+			"RERANK_TIMEOUT must be positive and at most %v, got %v",
+			maxRerankTimeout, timeout,
+		)
+	}
+	if cfg.RerankMaxDocChars < minRerankMaxDocChars || cfg.RerankMaxDocChars > maxRerankMaxDocChars {
+		return fmt.Errorf(
+			"RERANK_MAX_DOC_CHARS must be between %d and %d, got %d",
+			minRerankMaxDocChars, maxRerankMaxDocChars, cfg.RerankMaxDocChars,
+		)
+	}
+	return nil
 }
 
 const agentRunDetachedEnvelope = 10 * time.Minute

@@ -52,6 +52,7 @@ type configResponse struct {
 	Configured bool                 `json:"configured"`
 	LLM        *llmEndpointResponse `json:"llm"`
 	Embedding  *llmEndpointResponse `json:"embedding"`
+	Rerank     *llmEndpointResponse `json:"rerank"`
 	Tavily     *tavilyResponse      `json:"tavily"`
 	Fallback   *llmEndpointResponse `json:"fallback"`
 }
@@ -110,6 +111,17 @@ func embeddingResponseFor(s *Settings) *llmEndpointResponse {
 	}
 }
 
+func rerankResponseFor(s *Settings) *llmEndpointResponse {
+	if s.RerankBaseURL == "" {
+		return nil
+	}
+	return &llmEndpointResponse{
+		BaseURL:      s.RerankBaseURL,
+		Model:        s.RerankModel,
+		APIKeyMasked: MaskKey(s.RerankAPIKey),
+	}
+}
+
 func derefTavilyBaseURL(in *tavilyInput) string {
 	if in == nil {
 		return ""
@@ -137,6 +149,7 @@ func tavilyResponseFor(s *Settings) *tavilyResponse {
 type configUpdateInput struct {
 	LLM       *llmEndpointInput `json:"llm" required:"false" doc:"Optional main-LLM group. Required for the AI Agent; without it feeds and other features keep working."`
 	Embedding *llmEndpointInput `json:"embedding" required:"false" doc:"Optional embedding group. When omitted the agent runs without feed retrieval (RAG) and feed indexing is skipped."`
+	Rerank    *llmEndpointInput `json:"rerank,omitempty" required:"false" doc:"Optional rerank group (Jina/Cohere-compatible POST /rerank endpoint). When omitted retrieval returns dense order."`
 	Tavily    *tavilyInput      `json:"tavily" required:"false" doc:"Optional search provider group. When omitted the agent does not plan web searches."`
 	Fallback  *llmEndpointInput `json:"fallback,omitempty" required:"false" doc:"Optional retry-model group. Supply all three fields or omit the section entirely."`
 }
@@ -144,9 +157,10 @@ type configUpdateInput struct {
 type validateRequestBody struct {
 	LLM       *llmEndpointInput `json:"llm" required:"false" doc:"Optional main-LLM group to probe. Blank api_key resolves to the stored key exactly as PUT does."`
 	Embedding *llmEndpointInput `json:"embedding" required:"false" doc:"Optional embedding group to probe. Blank api_key resolves to the stored key exactly as PUT does."`
+	Rerank    *llmEndpointInput `json:"rerank,omitempty" required:"false" doc:"Optional rerank group to probe. Sends one short query and one short document to the configured /rerank endpoint."`
 	Tavily    *tavilyInput      `json:"tavily" required:"false" doc:"Optional search-provider group to probe. Blank api_key probes the provider's keyless tier when no key is stored."`
 	Fallback  *llmEndpointInput `json:"fallback,omitempty" required:"false" doc:"Optional retry-model group to probe."`
-	Slots     []string          `json:"slots,omitempty" required:"false" doc:"Optional subset of slots to probe: chat, embedding, fallback, tavily. Absent probes every filled slot."`
+	Slots     []string          `json:"slots,omitempty" required:"false" doc:"Optional subset of slots to probe: chat, embedding, rerank, fallback, tavily. Absent probes every filled slot."`
 }
 
 type validateRequestInput struct {
@@ -164,6 +178,7 @@ type validateSlotResponse struct {
 type validateResponseSlots struct {
 	Chat      *validateSlotResponse `json:"chat"`
 	Embedding *validateSlotResponse `json:"embedding"`
+	Rerank    *validateSlotResponse `json:"rerank"`
 	Fallback  *validateSlotResponse `json:"fallback"`
 	Tavily    *validateSlotResponse `json:"tavily"`
 }
@@ -217,7 +232,7 @@ func RegisterLLMConfigOpsTest(api huma.API, h *Handler, tokens auth.TokenService
 		Method:      http.MethodPut,
 		Path:        "/api/me/llm-config",
 		Summary:     "Save LLM configuration",
-		Description: "Validates and upserts the authenticated caller's optional main LLM, optional embedding, optional Tavily, and optional retry-model configuration. API keys are write-only: a blank key on update keeps the stored key; on create a key is required unless the endpoint is loopback. Omitting Tavily disables web search for the agent. Responds with the masked configuration.",
+		Description: "Validates and upserts the authenticated caller's optional main LLM, optional embedding, optional rerank, optional Tavily, and optional retry-model configuration. API keys are write-only: a blank key on update keeps the stored key; on create a key is required unless the endpoint is loopback. Omitting Tavily disables web search for the agent; omitting rerank keeps retrieval in dense order. Responds with the masked configuration.",
 		Tags:        []string{"llm-config"},
 		Security:    []map[string][]string{{"BearerAuth": {}}},
 		Middlewares: llmConfigMiddlewares(tokens, withAuth),
@@ -239,7 +254,7 @@ func RegisterLLMConfigOpsTest(api huma.API, h *Handler, tokens auth.TokenService
 		Method:      http.MethodPost,
 		Path:        "/api/me/llm-config/validate",
 		Summary:     "Probe LLM configuration connectivity",
-		Description: "Runs one minimal live request per filled slot (main LLM, embedding, fallback, Tavily) using the submitted values, resolving a blank key against the stored key exactly as PUT does. Returns a classified per-slot result plus the exact outbound request with credentials masked to their last four characters. Saves nothing.",
+		Description: "Runs one minimal live request per filled slot (main LLM, embedding, rerank, fallback, Tavily) using the submitted values, resolving a blank key against the stored key exactly as PUT does. Returns a classified per-slot result plus the exact outbound request with credentials masked to their last four characters. Saves nothing.",
 		Tags:        []string{"llm-config"},
 		Security:    []map[string][]string{{"BearerAuth": {}}},
 		Middlewares: llmConfigMiddlewares(tokens, withAuth),
@@ -312,6 +327,7 @@ func (h *Handler) ValidateConfig(ctx context.Context, in *validateRequestInput) 
 	res, err := h.validator(ctx, userID, updateInputFrom(configUpdateInput{
 		LLM:       in.Body.LLM,
 		Embedding: in.Body.Embedding,
+		Rerank:    in.Body.Rerank,
 		Tavily:    in.Body.Tavily,
 		Fallback:  in.Body.Fallback,
 	}), in.Body.Slots)
@@ -324,6 +340,9 @@ func (h *Handler) ValidateConfig(ctx context.Context, in *validateRequestInput) 
 	}
 	if res.Slots.Embedding != nil {
 		out.Embedding = slotResponseFor(res.Slots.Embedding)
+	}
+	if res.Slots.Rerank != nil {
+		out.Rerank = slotResponseFor(res.Slots.Rerank)
 	}
 	if res.Slots.Fallback != nil {
 		out.Fallback = slotResponseFor(res.Slots.Fallback)
@@ -349,6 +368,7 @@ func responseFrom(s *Settings) configResponse {
 		Configured: true,
 		LLM:        llmResponseFor(s),
 		Embedding:  embeddingResponseFor(s),
+		Rerank:     rerankResponseFor(s),
 		Tavily:     tavilyResponseFor(s),
 	}
 	if s.FallbackBaseURL != "" {
@@ -369,6 +389,9 @@ func updateInputFrom(in configUpdateInput) UpdateInput {
 		EmbeddingBaseURL: derefEndpointBaseURL(in.Embedding),
 		EmbeddingAPIKey:  derefEndpointAPIKey(in.Embedding),
 		EmbeddingModel:   derefEndpointModel(in.Embedding),
+		RerankBaseURL:    derefEndpointBaseURL(in.Rerank),
+		RerankAPIKey:     derefEndpointAPIKey(in.Rerank),
+		RerankModel:      derefEndpointModel(in.Rerank),
 		TavilyBaseURL:    derefTavilyBaseURL(in.Tavily),
 		TavilyAPIKey:     derefTavilyAPIKey(in.Tavily),
 	}

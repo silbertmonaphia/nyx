@@ -46,6 +46,9 @@ type UpdateInput struct {
 	FallbackBaseURL  string
 	FallbackAPIKey   string
 	FallbackModel    string
+	RerankBaseURL    string
+	RerankAPIKey     string
+	RerankModel      string
 }
 
 func (s *Service) Get(ctx context.Context, userID int) (*Settings, error) {
@@ -88,6 +91,9 @@ func (s *Service) SaveTrackingEmbedding(ctx context.Context, userID int, in Upda
 		return false, err
 	}
 	if err = s.applyTavily(out, &in, existing); err != nil {
+		return false, err
+	}
+	if err = s.applyRerank(out, &in, existing); err != nil {
 		return false, err
 	}
 
@@ -186,6 +192,25 @@ func (s *Service) applyEmbedding(out *EncryptedSettings, in *UpdateInput, existi
 	return nil
 }
 
+func (s *Service) applyRerank(out *EncryptedSettings, in *UpdateInput, existing *EncryptedSettings) error {
+	if in.RerankBaseURL == "" {
+		out.RerankBaseURL, out.RerankModel, out.RerankAPIKeyEnc = "", "", ""
+		return nil
+	}
+	out.RerankBaseURL = in.RerankBaseURL
+	out.RerankModel = in.RerankModel
+	if in.RerankAPIKey != "" {
+		enc, err := s.cipher.Encrypt(in.RerankAPIKey)
+		if err != nil {
+			return err
+		}
+		out.RerankAPIKeyEnc = enc
+	} else if existing != nil {
+		out.RerankAPIKeyEnc = existing.RerankAPIKeyEnc
+	}
+	return nil
+}
+
 func (s *Service) applyTavily(out *EncryptedSettings, in *UpdateInput, existing *EncryptedSettings) error {
 	if in.TavilyBaseURL == "" {
 		out.TavilyBaseURL, out.TavilyAPIKeyEnc = "", ""
@@ -214,6 +239,8 @@ func existingEncFor(field string, e *EncryptedSettings) string {
 		return e.TavilyAPIKeyEnc
 	case "fallback_api_key":
 		return e.FallbackAPIKeyEnc
+	case "rerank_api_key":
+		return e.RerankAPIKeyEnc
 	}
 	return ""
 }
@@ -247,6 +274,13 @@ func (s *Service) decrypt(e *EncryptedSettings) (*Settings, error) {
 			return nil, fmt.Errorf("fallback_api_key: %w", err)
 		}
 	}
+	rerankKey := ""
+	if e.RerankAPIKeyEnc != "" {
+		var err error
+		if rerankKey, err = s.cipher.Decrypt(e.RerankAPIKeyEnc); err != nil {
+			return nil, fmt.Errorf("rerank_api_key: %w", err)
+		}
+	}
 	return &Settings{
 		UserID:           e.UserID,
 		LLMBaseURL:       e.LLMBaseURL,
@@ -260,6 +294,9 @@ func (s *Service) decrypt(e *EncryptedSettings) (*Settings, error) {
 		FallbackBaseURL:  e.FallbackBaseURL,
 		FallbackAPIKey:   fallbackKey,
 		FallbackModel:    e.FallbackModel,
+		RerankBaseURL:    e.RerankBaseURL,
+		RerankAPIKey:     rerankKey,
+		RerankModel:      e.RerankModel,
 	}, nil
 }
 
@@ -302,6 +339,9 @@ func validateRequiredConfig(in *UpdateInput, existing *EncryptedSettings, allowP
 	if err := validateTavilyGroup(in, allowPrivate); err != nil {
 		return err
 	}
+	if err := validateRerankGroup(in, existing, allowPrivate); err != nil {
+		return err
+	}
 	if !anyGroupSet(in) && in.FallbackBaseURL == "" && in.FallbackModel == "" {
 		return invalidField("llm_base_url")
 	}
@@ -309,7 +349,27 @@ func validateRequiredConfig(in *UpdateInput, existing *EncryptedSettings, allowP
 }
 
 func anyGroupSet(in *UpdateInput) bool {
-	return in.LLMBaseURL != "" || in.EmbeddingBaseURL != "" || in.TavilyBaseURL != ""
+	return in.LLMBaseURL != "" || in.EmbeddingBaseURL != "" || in.TavilyBaseURL != "" || in.RerankBaseURL != ""
+}
+
+func validateRerankGroup(in *UpdateInput, existing *EncryptedSettings, allowPrivate bool) error {
+	if in.RerankBaseURL == "" {
+		if in.RerankAPIKey != "" || in.RerankModel != "" {
+			return invalidField("rerank_base_url")
+		}
+		return nil
+	}
+	if in.RerankModel == "" {
+		return invalidField("rerank_model")
+	}
+	rerankKey := in.RerankAPIKey
+	if rerankKey == "" && existing != nil {
+		rerankKey = existing.RerankAPIKeyEnc
+	}
+	if rerankKey == "" && !isLoopbackBaseURL(in.RerankBaseURL) {
+		return invalidField("rerank_api_key")
+	}
+	return validateUserURL(in.RerankBaseURL, "rerank_base_url", allowPrivate)
 }
 
 func validateLLMGroup(in *UpdateInput, allowPrivate bool) error {
@@ -385,6 +445,7 @@ func validateProvidedKeys(in *UpdateInput) error {
 		{in.LLMAPIKey, "llm_api_key"},
 		{in.EmbeddingAPIKey, "embedding_api_key"},
 		{in.TavilyAPIKey, "tavily_api_key"},
+		{in.RerankAPIKey, "rerank_api_key"},
 	} {
 		if k.raw == "" {
 			continue

@@ -65,6 +65,9 @@ func (r *sqlRepository) Upsert(ctx context.Context, s *EncryptedSettings) (*Encr
 		FallbackBaseURL:    s.FallbackBaseURL,
 		FallbackAPIKeyEnc:  s.FallbackAPIKeyEnc,
 		FallbackModel:      s.FallbackModel,
+		RerankBaseURL:      s.RerankBaseURL,
+		RerankAPIKeyEnc:    s.RerankAPIKeyEnc,
+		RerankModel:        s.RerankModel,
 	})
 	if err != nil {
 		return nil, err
@@ -91,6 +94,9 @@ func toEncrypted(d db.UserLlmSetting) EncryptedSettings {
 		FallbackBaseURL:    d.FallbackBaseURL,
 		FallbackAPIKeyEnc:  d.FallbackAPIKeyEnc,
 		FallbackModel:      d.FallbackModel,
+		RerankBaseURL:      d.RerankBaseURL,
+		RerankAPIKeyEnc:    d.RerankAPIKeyEnc,
+		RerankModel:        d.RerankModel,
 	}
 }
 

@@ -314,6 +314,55 @@ func TestLoadAcceptsInRangeRAGMaxBackfillPerRequest(t *testing.T) {
 	}
 }
 
+func TestLoadRerankDefaults(t *testing.T) {
+	t.Setenv("DB_URL", "postgres://x")
+	t.Setenv("JWT_SECRET", auth.TestSecret)
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg.RerankCandidates != 20 {
+		t.Errorf("RerankCandidates = %d, want 20", cfg.RerankCandidates)
+	}
+	if cfg.RerankTimeout != "2s" {
+		t.Errorf("RerankTimeout = %q, want 2s", cfg.RerankTimeout)
+	}
+	if cfg.RerankMaxDocChars != 4000 {
+		t.Errorf("RerankMaxDocChars = %d, want 4000", cfg.RerankMaxDocChars)
+	}
+}
+
+func TestLoadRejectsInvalidRerankBounds(t *testing.T) {
+	cases := []struct {
+		key   string
+		value string
+		want  string
+	}{
+		{"RERANK_CANDIDATES", "0", "RERANK_CANDIDATES"},
+		{"RERANK_CANDIDATES", "101", "RERANK_CANDIDATES"},
+		{"RERANK_TIMEOUT", "0s", "RERANK_TIMEOUT"},
+		{"RERANK_TIMEOUT", "31s", "RERANK_TIMEOUT"},
+		{"RERANK_TIMEOUT", "not-a-duration", "RERANK_TIMEOUT"},
+		{"RERANK_MAX_DOC_CHARS", "99", "RERANK_MAX_DOC_CHARS"},
+		{"RERANK_MAX_DOC_CHARS", "32001", "RERANK_MAX_DOC_CHARS"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.key+"="+tc.value, func(t *testing.T) {
+			t.Setenv("DB_URL", "postgres://x")
+			t.Setenv("JWT_SECRET", auth.TestSecret)
+			t.Setenv(tc.key, tc.value)
+			_, err := Load()
+			if err == nil {
+				t.Fatalf("Load() error = nil for %s=%s, want an error", tc.key, tc.value)
+			}
+			if !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("Load() error = %v, want it to name %s", err, tc.want)
+			}
+		})
+	}
+}
+
 func TestLoadKBDefaults(t *testing.T) {
 	t.Setenv("DB_URL", "postgres://x")
 	t.Setenv("JWT_SECRET", auth.TestSecret)

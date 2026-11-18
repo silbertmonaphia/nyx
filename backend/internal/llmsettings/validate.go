@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strings"
 	"time"
 
 	"github.com/rs/zerolog/log"
@@ -19,6 +20,7 @@ import (
 	"nyx/internal/llm"
 	"nyx/internal/llm/openai"
 	"nyx/internal/llm/ssrf"
+	"nyx/internal/rag"
 )
 
 const (
@@ -33,6 +35,8 @@ const (
 	ProbeSlowResponse  = "slow_response"
 
 	probeQueryText            = "nyx connectivity probe"
+	probeRerankDocument       = "nyx rerank connectivity probe document"
+	detailInvalidProbeBaseURL = "base URL must be http(s) without embedded credentials"
 	defaultConfigProbeTimeout = 30 * time.Second
 )
 
@@ -47,6 +51,7 @@ type SlotProbeResult struct {
 type SlotResults struct {
 	Chat      *SlotProbeResult `json:"chat"`
 	Embedding *SlotProbeResult `json:"embedding"`
+	Rerank    *SlotProbeResult `json:"rerank"`
 	Fallback  *SlotProbeResult `json:"fallback"`
 	Tavily    *SlotProbeResult `json:"tavily"`
 }
@@ -100,6 +105,13 @@ func (r *Resolver) Validate(ctx context.Context, userID int, in ValidateInput) (
 		}
 		res.Slots.Tavily = r.probeTavilySlot(ctx, tracer, in.Values.TavilyBaseURL, tavilyKey, timeout)
 	}
+	if wantsSlot(in.Slots, "rerank") {
+		rerankKey := in.Values.RerankAPIKey
+		if rerankKey == "" && stored != nil {
+			rerankKey = stored.RerankAPIKey
+		}
+		res.Slots.Rerank = r.probeRerankSlot(ctx, tracer, in.Values.RerankBaseURL, rerankKey, in.Values.RerankModel, timeout)
+	}
 	return res, nil
 }
 
@@ -151,7 +163,7 @@ func (r *Resolver) probeOpenAISlot(ctx context.Context, tracer trace.Tracer, p o
 	}
 	if err := validateProbeURL(p.baseURL); err != nil {
 		res.Status = ProbeInvalidConfig
-		res.Detail = "base URL must be http(s) without embedded credentials"
+		res.Detail = detailInvalidProbeBaseURL
 		return finish()
 	}
 	if p.model == "" {
@@ -243,7 +255,7 @@ func (r *Resolver) probeTavilySlot(ctx context.Context, tracer trace.Tracer, bas
 	}
 	if err := validateProbeURL(baseURL); err != nil {
 		res.Status = ProbeInvalidConfig
-		res.Detail = "base URL must be http(s) without embedded credentials"
+		res.Detail = detailInvalidProbeBaseURL
 		return finish()
 	}
 
@@ -292,6 +304,134 @@ func (r *Resolver) probeTavilySlot(ctx context.Context, tracer trace.Tracer, bas
 		res.Status = ProbeUnreachable
 	}
 	return finish()
+}
+
+func (r *Resolver) probeRerankSlot(ctx context.Context, tracer trace.Tracer, baseURL, apiKey, model string, timeout time.Duration) *SlotProbeResult {
+	ctx, span := tracer.Start(ctx, "validate.rerank")
+	defer span.End()
+	start := time.Now()
+
+	res := &SlotProbeResult{Probed: true}
+	finish := func() *SlotProbeResult {
+		span.SetAttributes(attribute.String("slot", "rerank"), attribute.String("status", res.Status))
+		if res.Status != ProbeOK && res.Status != "" {
+			span.SetStatus(codes.Error, res.Status)
+		}
+		logProbeOutcome("rerank", res, start)
+		return res
+	}
+	if baseURL == "" {
+		res.Probed = false
+		return finish()
+	}
+	if !rerankProbeTargetValid(baseURL, apiKey, model, res) {
+		return finish()
+	}
+
+	payload, err := rag.RerankPayload(model, probeQueryText, []string{probeRerankDocument})
+	if err != nil {
+		res.Status = ProbeInvalidConfig
+		res.Detail = "rerank payload could not be encoded"
+		return finish()
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimRight(baseURL, "/")+"/rerank", bytes.NewReader(payload))
+	if err != nil {
+		res.Status = ProbeInvalidConfig
+		res.Detail = "base URL is not a valid URL"
+		return finish()
+	}
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set("Content-Type", "application/json")
+	if apiKey != "" {
+		req.Header.Set("Authorization", "Bearer "+apiKey)
+	}
+
+	capture := &llm.RequestCapture{}
+	httpClient := &http.Client{
+		Transport: capture.Wrap(ssrf.NewTransport(r.base.BYOKAllowPrivateURL, "rerank_base_url")),
+		Timeout:   timeout,
+	}
+
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		res.Request = capture.Captured()
+		res.Status = classifyTransportErr(err)
+		return finish()
+	}
+	defer resp.Body.Close()
+	body, readErr := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+
+	res.Request = capture.Captured()
+	res.HTTPStatus = resp.StatusCode
+	classifyRerankProbeResponse(res, body, readErr)
+	return finish()
+}
+
+func rerankProbeTargetValid(baseURL, apiKey, model string, res *SlotProbeResult) bool {
+	if err := validateProbeURL(baseURL); err != nil {
+		res.Status = ProbeInvalidConfig
+		res.Detail = detailInvalidProbeBaseURL
+		return false
+	}
+	if model == "" {
+		res.Status = ProbeInvalidConfig
+		res.Detail = "model is required for this slot"
+		return false
+	}
+	if apiKey == "" && !isLoopbackBaseURL(baseURL) {
+		res.Status = ProbeInvalidConfig
+		res.Detail = "api key is required for a non-loopback endpoint"
+		return false
+	}
+	return true
+}
+
+func classifyRerankProbeResponse(res *SlotProbeResult, body []byte, readErr error) {
+	switch {
+	case res.HTTPStatus >= 200 && res.HTTPStatus < 300:
+		if readErr != nil {
+			res.Status = ProbeSlowResponse
+			if classifyTransportErr(readErr) != ProbeTimeout {
+				res.Status = ProbeUnreachable
+			}
+			res.Detail = "response body did not complete"
+			return
+		}
+		if !rerankProbeScored(body) {
+			res.Status = ProbeInvalidConfig
+			res.Detail = "endpoint returned no scored result"
+			return
+		}
+		res.Status = ProbeOK
+	case res.HTTPStatus == http.StatusUnauthorized || res.HTTPStatus == http.StatusForbidden:
+		res.Status = ProbeAuthFailed
+	case res.HTTPStatus == http.StatusTooManyRequests:
+		res.Status = ProbeRateLimited
+	case res.HTTPStatus == http.StatusNotFound:
+		res.Status = ProbeInvalidModel
+	case res.HTTPStatus == http.StatusBadRequest:
+		res.Status = ProbeInvalidConfig
+	default:
+		res.Status = ProbeUnreachable
+	}
+}
+
+func rerankProbeScored(body []byte) bool {
+	var out struct {
+		Results []struct {
+			Index          *int     `json:"index"`
+			RelevanceScore *float64 `json:"relevance_score"`
+		} `json:"results"`
+	}
+	if err := json.Unmarshal(body, &out); err != nil {
+		return false
+	}
+	for _, result := range out.Results {
+		if result.Index != nil && result.RelevanceScore != nil {
+			return true
+		}
+	}
+	return false
 }
 
 func classifyConstructErr(err error) string {

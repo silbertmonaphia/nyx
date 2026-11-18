@@ -107,6 +107,10 @@ type Passage struct {
 	Score       float64
 }
 
+func RerankText(p Passage) string {
+	return chunkPrefix(p.RelPath, p.HeadingPath) + p.Content
+}
+
 type SourceStats struct {
 	Documents int64
 	Chunks    int64

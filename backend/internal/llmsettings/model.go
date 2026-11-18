@@ -23,6 +23,9 @@ type Settings struct {
 	FallbackBaseURL  string
 	FallbackAPIKey   string
 	FallbackModel    string
+	RerankBaseURL    string
+	RerankAPIKey     string
+	RerankModel      string
 }
 
 type EncryptedSettings struct {
@@ -38,6 +41,9 @@ type EncryptedSettings struct {
 	FallbackBaseURL    string
 	FallbackAPIKeyEnc  string
 	FallbackModel      string
+	RerankBaseURL      string
+	RerankAPIKeyEnc    string
+	RerankModel        string
 }
 
 type InvalidFieldError struct {
