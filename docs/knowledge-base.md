@@ -37,7 +37,8 @@ not modified and `rag: true` still means "my feeds".
   carries a rerank group (base URL, optional key, model), retrieval
   over-fetches candidates (`RERANK_CANDIDATES`, default 20) and reorders them
   with a cross-encoder before returning the requested `top_k`; each corpus is
-  reranked independently before the `both` fusion. The endpoint must expose a
+  reranked independently before the `both` fusion, and the two corpora's
+  retrieval pipelines run concurrently. The endpoint must expose a
   Jina/Cohere-compatible `POST /rerank`; the local `make dev-vllm-rerank` target
   serves `BAAI/bge-reranker-v2-m3` on `:8002`. With no rerank group the result is
   byte-identical dense order. A reranker timeout or error falls back to dense

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"sync"
 	"unicode/utf8"
 
 	"nyx/internal/kb"
@@ -156,13 +157,28 @@ func (s *Service) retrieveCorpusPassages(
 			knowledgePassages = s.rerankKnowledgePassages(ctx, userID, query, reranker, knowledgePassages, knowledgeK)
 		}
 	case CorpusBoth:
-		feedPassages, err = s.retriever.Retrieve(ctx, userID, vec, feedFetchK)
-		if err == nil {
-			feedPassages = s.rerankFeedPassages(ctx, userID, query, reranker, feedPassages, feedK)
-			knowledgePassages, err = s.retrieveKnowledge(ctx, userID, vec, model, knowledgeFetchK, opts)
-			if err == nil {
+		var feedErr, knowledgeErr error
+		var wg sync.WaitGroup
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			feedPassages, feedErr = s.retriever.Retrieve(ctx, userID, vec, feedFetchK)
+			if feedErr == nil {
+				feedPassages = s.rerankFeedPassages(ctx, userID, query, reranker, feedPassages, feedK)
+			}
+		}()
+		go func() {
+			defer wg.Done()
+			knowledgePassages, knowledgeErr = s.retrieveKnowledge(ctx, userID, vec, model, knowledgeFetchK, opts)
+			if knowledgeErr == nil {
 				knowledgePassages = s.rerankKnowledgePassages(ctx, userID, query, reranker, knowledgePassages, knowledgeK)
 			}
+		}()
+		wg.Wait()
+		if feedErr != nil {
+			err = feedErr
+		} else {
+			err = knowledgeErr
 		}
 	}
 	return feedPassages, knowledgePassages, err

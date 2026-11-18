@@ -37,7 +37,7 @@ Alternatives considered and rejected: rerank inside `kb.Service` (leaves feeds o
 
 ### D3 — Per-corpus rerank, then RRF
 
-Each corpus is reranked independently on its own candidate list; `both` then fuses the two post-rerank lists with the existing RRF. This preserves the "fusion is by rank" contract and avoids comparing reranker scores across different passage shapes and models. Reranking the already-fused list was rejected: RRF scores are not relevance scores and the fused list mixes corpora before relevance is measured.
+Each corpus is reranked independently on its own candidate list; `both` then fuses the two post-rerank lists with the existing RRF. The feed and knowledge pipelines (ANN plus rerank) run concurrently for `both`, and fusion waits for both, so the stage costs the slower corpus rather than their sum. This preserves the "fusion is by rank" contract and avoids comparing reranker scores across different passage shapes and models. Reranking the already-fused list was rejected: RRF scores are not relevance scores and the fused list mixes corpora before relevance is measured.
 
 ### D4 — vLLM `/rerank` wire contract, dedicated client
 
