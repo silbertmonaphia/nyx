@@ -86,13 +86,13 @@ done
 #    leave the compose-managed network in an inconsistent state, and
 #    `up` then fails with "network X not found"). Tolerate the down
 #    failing — it returns non-zero when nothing is running.
-docker compose --profile vllm --profile embed down --remove-orphans 2>/dev/null || true
-docker compose --profile vllm --profile embed up --build -d
+docker compose --profile vllm --profile embed --profile rerank down --remove-orphans 2>/dev/null || true
+docker compose --profile vllm --profile embed --profile rerank up --build -d
 # `docker compose ps` without a service arg also shows the `backend`
 # container with `Skipped: optional dependency "vllm"` (compose.yml:137
 # sets `required: false`), which is just backend waiting for vllm and
 # unrelated to vllm's own health. Filter to vllm only.
-docker compose ps vllm vllm-embed
+docker compose ps vllm vllm-embed vllm-rerank
 
 # 7. Wait for vLLM to become healthy (compose healthcheck on /v1/models).
 #    Compose healthcheck total budget = start_period (600s) + retries (60) ×
@@ -138,4 +138,6 @@ wait_healthy vllm 25 || exit 1
 # affecting it (separate container, separate memory slice), so we
 # don't gate the embed wait on the chat one.
 wait_healthy vllm-embed 10 || exit 1
+# Reranker: small cross-encoder, cold start comparable to embed.
+wait_healthy vllm-rerank 10 || exit 1
 exit 0

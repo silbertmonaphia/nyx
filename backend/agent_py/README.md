@@ -345,9 +345,10 @@ contract: one 4B vLLM serves every sample (`make eval-golden` pins `--max-concur
 Playwright set pins `--workers=1`). Never run two live suites against the same model concurrently.
 
 1. **Infra.** `make up` starts Postgres `:5433`, Redis `:6380`, and Jaeger `:16686`.
-2. **Models.** In separate terminals run `make dev-vllm-main` (chat `:8000`) and `make dev-vllm-embed`
-   (embeddings `:8001`), then wait for `curl -fsS http://localhost:8000/v1/models` and
-   `curl -fsS http://localhost:8001/v1/models`. Do not race the cold start.
+2. **Models.** In separate terminals run `make dev-vllm-main` (chat `:8000`), `make dev-vllm-embed`
+   (embeddings `:8001`), and optionally `make dev-vllm-rerank` (reranker `:8002`), then wait for
+   `curl -fsS http://localhost:8000/v1/models`, `curl -fsS http://localhost:8001/v1/models` (and
+   `curl -fsS http://localhost:8002/v1/models` when the reranker is used). Do not race the cold start.
 3. **Tavily stub.** `backend/agent_py/.venv/bin/python evals/stubs/tavily_stub.py --port 8899 &`, then
    export `PYTHON_AGENT_WEB_SEARCH_ENABLED=true`,
    `PYTHON_AGENT_WEB_SEARCH_ALLOW_PRIVATE=true` (the stub is loopback on a non-80/443 port), and

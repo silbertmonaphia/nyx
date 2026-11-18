@@ -119,8 +119,8 @@ cp frontend/.env.example    frontend/.env    # frontend: VITE_API_URL, VITE_OTEL
 
 # 3. Start the stack (db + redis + jaeger). Backend and frontend run
 #    locally — see the Local Development section below. To bring them
-#    up via compose instead, use `--profile app` (combine with
-#    `--profile vllm` to also start the LLM container).
+#    up via compose instead, use `--profile app` (add `--profile vllm
+#    --profile embed` for the LLM stack, and optionally `--profile rerank`).
 sudo docker compose up --build -d
 ```
 
@@ -223,6 +223,9 @@ sudo docker compose --profile vllm up -d
 # path and the agent's semantic search):
 sudo docker compose --profile embed up -d
 
+# Optional: the reranker behind per-user BYOK rerank (own GPU slice).
+sudo docker compose --profile rerank up -d
+
 # Watch the vLLM container finish model load — a first cold start can
 # take ~10-15 min on WSL2/GPU-PV (cudagraph capture); restarts are quicker.
 sudo docker compose logs -f vllm
@@ -241,8 +244,9 @@ curl -N -X POST http://localhost:8080/api/chat \
 # (single-turn path; with AGENT_ENABLED=true expect plan / step_* frames first)
 ```
 
-`make dev-vllm-main` / `make dev-vllm-embed` run the same two models on the **host** instead —
-a faster dev loop (needs a local vLLM install + GPU). Both the compose service and the host
+`make dev-vllm-main` / `make dev-vllm-embed` / `make dev-vllm-rerank` run the same models on the
+**host** instead — a faster dev loop (needs a local vLLM install + GPU). The reranker is optional
+and serves `BAAI/bge-reranker-v2-m3` on `:8002` with `--runner pooling`. Both the compose service and the host
 target configure vLLM's `hermes` tool-call parser, which the agent's planner/executor need in
 order to receive tool calls from the Qwen3-Instruct model.
 
@@ -268,6 +272,7 @@ Tuning knobs (all `backend/.env` overrides — the vLLM service itself reads `VL
 | `LLM_CONFIG_PROBE_TIMEOUT` | `30s` | Per-slot budget of the `POST /api/me/llm-config/validate` connectivity probe (kept separate from the router's `LLM_PROBE_TIMEOUT`, which is a tighter failover health check) |
 | `VLLM_MODEL` | `Qwen/Qwen3-4B-Instruct-2507` | HuggingFace repo id passed to `vllm serve --model` |
 | `VLLM_EMBED_MODEL` | `Qwen/Qwen3-Embedding-0.6B` | HF repo id for the `embed` profile — 1024-dim vectors feeding RAG |
+| `VLLM_RERANK_MODEL` | `BAAI/bge-reranker-v2-m3` | HF repo id for the optional `rerank` profile — Jina/Cohere-compatible `POST /rerank` |
 | `HUGGING_FACE_HUB_TOKEN` | — (required) | Required for **every** vLLM weight download (HF's CAS endpoint demands a token even for ungated models); also needed to access gated ones (Llama, Mistral) |
 
 `LLM_BASE_URL` and `LLM_MODEL` have no defaults — the backend refuses to start with `LLM_ENABLED=true` until both are set. Gated-model caveat: on top of the always-required token, Llama / Mistral / Gemma additionally need (a) a HuggingFace account and (b) accepting the model's license on the model card — otherwise vLLM fails the download with `403 Forbidden`.
@@ -322,6 +327,7 @@ Run it in dev:
 ```bash
 make dev-vllm-main    # chat model on the host — Qwen3-4B-Instruct-2507-FP8, :8000, hermes tool parser
 make dev-vllm-embed   # embedding model on the host — Qwen3-Embedding-0.6B, :8001 (RAG)
+make dev-vllm-rerank  # optional reranker on the host — BAAI/bge-reranker-v2-m3, :8002
 make dev              # backend + frontend + agent (the agent service always starts under `make dev`; AGENT_ENABLED gates whether the Go backend proxies chat to it)
 ```
 

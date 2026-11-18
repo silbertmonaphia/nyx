@@ -8,8 +8,10 @@
 #   Vite SPA     :5273   (VITE_API_URL=http://localhost:8180)
 #
 # Assumes the shared infra is already up (`make up`: Postgres :5433,
-# Redis :6380) and the host vLLM is serving the chat model on :8000
-# (`make dev-vllm-main`) — this script starts NOTHING in docker.
+# Redis :6380) and the host vLLM is serving chat on :8000 (`make dev-vllm-main`),
+# embeddings on :8001 (`make dev-vllm-embed`), and optionally the reranker on
+# :8002 (`make dev-vllm-rerank`; needed by chat-rerank-live.spec.ts). This
+# script starts NOTHING in docker.
 #
 # Usage:
 #   ./scripts/e2e-side-stack.sh up            # start all three, wait for health

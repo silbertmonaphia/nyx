@@ -7,6 +7,9 @@
 #   LLM_EMBEDDING_MODEL=Qwen/Qwen3-Embedding-0.6B
 #   LLM_EMBEDDING_ALLOW_PRIVATE_URL=true
 #   EMBEDDING_DIMENSIONS=1024
+#
+# Optional reranker on :8002 — BAAI/bge-reranker-v2-m3 (--runner pooling).
+# Qwen3-Reranker-0.6B's base checkpoint cannot be served as a classifier on vLLM 0.17.1.
 
 export HF_ENDPOINT=https://hf-mirror.com # not work in wsl2 unset it works
 export HF_HUB_DISABLE_IPV6=1
@@ -14,9 +17,12 @@ export HUGGING_FACE_HUB_TOKEN=
 
 vllm serve Qwen/Qwen3-8B-FP8 --host 0.0.0.0 --port 8000 --tensor-parallel-size 1 --gpu-memory-utilization 0.7 --max-model-len 4096 --enable-auto-tool-choice --tool-call-parser hermes # 14043MiB - 3224MiB = 10,819MiB vram
 
-vllm serve Qwen/Qwen3-4B-Instruct-2507-FP8 --host 0.0.0.0 --port 8000 --tensor-parallel-size 1 --gpu-memory-utilization 0.9 --max-model-len 4096 --enable-auto-tool-choice --tool-call-parser hermes #  6970MiB vram
+vllm serve Qwen/Qwen3-4B-Instruct-2507-FP8 --host 0.0.0.0 --port 8000 --tensor-parallel-size 1 --gpu-memory-utilization 0.75 --max-model-len 4096 --enable-auto-tool-choice --tool-call-parser hermes #  6970MiB vram
 
 vllm serve Qwen/Qwen3-Embedding-0.6B --port 8001 --enforce-eager --gpu-memory-utilization 0.1 --max-model-len 2048 # 3224MiB vram
+
+# If the mirror cannot resolve BAAI/bge-reranker-v2-m3, launch with HF_ENDPOINT=https://huggingface.co.
+vllm serve BAAI/bge-reranker-v2-m3 --host 0.0.0.0 --port 8002 --runner pooling --enforce-eager --gpu-memory-utilization 0.15 --max-model-len 4096 --max-num-seqs 32 # ~2.5-3GiB vram
 
 # Suggested second vllm (different shell / different port):
 # vllm serve Qwen/Qwen3-Embedding-0.6B --host 0.0.0.0 --port 8001 --tensor-parallel-size 1 --gpu-memory-utilization 0.15 --max-model-len 2048 --enforce-eager
@@ -33,3 +39,6 @@ curl -s -X POST http://127.0.0.1:8000/v1/embeddings -H "Content-Type: applicatio
 # test the seperated embedding model is working
 curl localhost:8001/v1/embeddings -d '{"model":"Qwen/Qwen3-Embedding-0.6B","input":["你好"]}'
 curl -fsS http://127.0.0.1:8001/v1/models | python3 -c "import json,sys; print(json.load(sys.stdin)['data'][0]['id'])"
+
+# test the reranker is working
+curl -s -X POST http://127.0.0.1:8002/rerank -H "Content-Type: application/json" -d '{"model":"BAAI/bge-reranker-v2-m3","query":"跑步后膝盖疼怎么办","documents":["膝盖外侧疼痛的处理与恢复","今天晚饭吃番茄牛腩"],"top_n":2}'

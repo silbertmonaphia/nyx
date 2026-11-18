@@ -4,6 +4,7 @@ sudo docker compose up -d # `-d`` run as background
 # LLM
 make dev-vllm-main
 make dev-vllm-embed
+make dev-vllm-rerank
 
 # App
 make dev-agent
