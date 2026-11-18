@@ -104,12 +104,15 @@ state when re-run.
 
 `backend/internal/kb/recall_integration_test.go` pins a hand-labelled Chinese
 corpus (`testdata/kb_recall_docs/`, 26 documents / 89 chunks) with frozen
-1024-dim vectors (`testdata/kb_recall_vectors.json`). The corpus has 60 labelled
+1024-dim vectors (`testdata/kb_recall_vectors.json`). The corpus has 64 labelled
 queries and 12 negative queries across path-scoped, heading-scoped, exact-term,
 semantic, paraphrase, same-topic distractor, multi-relevant, buried,
 vague-referential, cluster-confusable, opaque-identifier, and symptom
 categories. Category split: path 5, heading 6, exact 4, semantic 6, paraphrase
-6, distractor 3, multi 5, buried 6, vague 5, cluster 5, opaque 4, symptom 5.
+6, distractor 3, multi 5, buried 6, vague 5, cluster 5, opaque 8, symptom 5.
+The `opaque_id` set has four contextual queries and four bare-identifier
+probes (`Op.27 No.2`, `哈农第 39 条`, `配方 B-12`, `P-0412`); the bare probes
+carry no topical context, so the identifier alone must carry the retrieval.
 Four negatives target topics adjacent to the corpus (supplements, knee braces,
 coffee-machine descaling, sleep-mask brands). A labelled query is rejected at
 fixture-validation time when its retrieval scope holds at most `top_k = 5`
@@ -136,15 +139,17 @@ Measured baseline (frozen vectors, `Qwen/Qwen3-Embedding-0.6B`):
 
 | Scenario | Recall@1 | Recall@5 | Recall@10 | Hit@5 | Mean first rank | Random@5 | Negative top-1 | Rows | Distinct top-1 |
 |---|---|---|---|---|---|---|---|---|---|
-| `corpus_only` | 0.825 | 0.992 | 1.000 | 1.000 | 1.183 | 0.108 | 0.426 | 89 | 46/60 |
-| `scaled_noise` | 0.825 | 0.992 | 1.000 | 1.000 | 1.183 | 0.000 | 0.426 | 2089 | 46/60 |
-| `scaled_near` | 0.825 | 0.983 | 1.000 | 1.000 | 1.183 | 0.000 | 0.426 | 2089 | 46/60 |
+| `corpus_only` | 0.836 | 0.992 | 1.000 | 1.000 | 1.172 | 0.102 | 0.426 | 89 | 46/64 |
+| `scaled_noise` | 0.836 | 0.992 | 1.000 | 1.000 | 1.172 | 0.000 | 0.426 | 2089 | 46/64 |
+| `scaled_near` | 0.836 | 0.984 | 1.000 | 1.000 | 1.172 | 0.000 | 0.426 | 2089 | 46/64 |
 
 Per-category `recall@5` is 1.000 for every category except multi-relevant:
 0.900 in `corpus_only`/`scaled_noise` and 0.800 in `scaled_near`, where the
 second gold chunks of `q-multi-mealprep` (all scenarios) and `q-multi-insurance`
-(`scaled_near` only) rank 6–10; `recall@10` is 1.000 everywhere. The pinned
-`recall@5` floor is **0.95** (worst measured scenario 0.983 minus a 0.033
+(`scaled_near` only) rank 6–10; `recall@10` is 1.000 everywhere. The eight
+opaque-identifier queries all rank 1 in every scenario, including the four
+bare-identifier probes, whose top-1 scores are 0.455–0.669. The pinned
+`recall@5` floor is **0.95** (worst measured scenario 0.984 minus a 0.034
 margin) and applies to every scenario. The negative top-1 ceiling is **0.48**
 (measured 0.426 with the near-miss negatives).
 

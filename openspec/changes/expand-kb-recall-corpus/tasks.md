@@ -15,7 +15,7 @@
 
 ## 3. Queries and labels
 
-- [x] 3.1 Add the 29 new labelled queries to reach 60: semantic +2, paraphrase +2, same-topic distractor +1, multi-relevant +1, buried +4, vague-referential +5, cluster-confusable +5, opaque-id +4, symptom +5. Verify: fixture validation passes with every category above its floor and 60 labelled queries total.
+- [x] 3.1 Add the 29 planned labelled queries plus four bare-identifier probes to reach 64: semantic +2, paraphrase +2, same-topic distractor +1, multi-relevant +1, buried +4, vague-referential +5, cluster-confusable +5, opaque-id +8 (four contextual, four bare), symptom +5. Verify: fixture validation passes with every category above its floor and 64 labelled queries total.
 - [x] 3.2 Add four near-miss negatives (protein powder/creatine, knee-brace selection, coffee-machine descaling, sleep-mask brands) to reach 12 negatives and mark them with `near_miss: true`. Verify: each answer is absent from the corpus, every negative has an empty relevant list, the near-miss count floor passes, and a `near_miss` marker on a labelled query fails validation.
 - [x] 3.3 Confirm every path-scoped query still has more eligible chunks than `top_k` after the corpus growth, and every new label references an existing chunk key. Verify: candidate-set validation passes for all path queries and no relevant/exclude key is unknown.
 

@@ -6,7 +6,8 @@ The hardened KB recall baseline measures `recall@5 = 0.984` with only one miss, 
 
 ## What Changes
 
-- Grow labelled queries from 31 to 55–60 and negative queries from 8 to 12, including four near-miss negatives whose topics are adjacent to the corpus (for example supplements and running shoes) rather than wholly unrelated.
+- Grow labelled queries from 31 to 55–65 and negative queries from 8 to 12, including four near-miss negatives whose topics are adjacent to the corpus (for example supplements and knee braces) rather than wholly unrelated.
+- Add four bare-identifier probes (`Op.27 No.2`, `哈农第 39 条`, `配方 B-12`, `P-0412`) whose text carries no topical context, so the exact token alone must carry the retrieval; these test whether dense-only recall has a BM25-shaped gap.
 - Add four required categories previously absent from the KB corpus: `vague_referential`, `cluster_confusable`, `opaque_id`, and `symptom`. Expand `semantic`, `paraphrase`, and `buried` by 4–6 labelled queries each. Keep every existing category.
 - Grow the fixture corpus from 18 to 24–28 documents to support the new queries, including same-topic multi-document clusters and long documents with several similar sections.
 - Extend fixture validation to require the expanded category set and the new labelled/negative floors, while keeping the existing label invariants (unique keys/texts, no empty relevant sets, relevant count ≤ `top_k`, path prefix shape, no relevant/exclude overlap, duplicate-key rejection).

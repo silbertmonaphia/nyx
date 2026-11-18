@@ -2,11 +2,12 @@
 useDefault = true
 
 [allowlist]
-description = "Reviewed placeholders and fixtures (SECURITY.md): k8s dev/example secret files, the CI e2e JWT fixture, the foobarbaz-signed JWT in the redaction-test fixture, and the deterministic tool-call idempotency wire fixture. Singular global form so the entry parses on gitleaks 8.24.3 (the CI binary, which ignores the plural [[allowlists]] at top level); criteria combine with the default OR."
+description = "Reviewed placeholders and fixtures (SECURITY.md): k8s dev/example secret files, the CI e2e JWT fixture, the foobarbaz-signed JWT in the redaction-test fixture, the deterministic tool-call idempotency wire fixture, and the synthetic KB recall corpus whose query keys are labelled `key`. Singular global form so the entry parses on gitleaks 8.24.3 (the CI binary, which ignores the plural [[allowlists]] at top level); criteria combine with the default OR."
 paths = [
   '''^k8s/secrets\.yaml$''',
   '''^k8s/secrets\.yaml\.example$''',
   '''^backend/agent_py/tests/fixtures/tool_call_idempotency\.json$''',
+  '''^backend/internal/kb/testdata/kb_recall_corpus\.json$''',
 ]
 regexes = [
   '''ci-secret-0123456789-0123456789-abcdef''',

@@ -10,7 +10,7 @@ Feed's composition is the reference for difficulty coverage: 75 feeds, 68 querie
 
 **Goals:**
 
-- Reach 60 labelled queries and 12 negatives while keeping every existing category.
+- Reach 64 labelled queries and 12 negatives while keeping every existing category.
 - Cover the four missing difficulty classes with real corpus support, not just labels.
 - Make the `recall@5` metric granular enough that one boundary miss does not dominate the floor signal.
 - Keep the run deterministic, model-free at measurement time, and CI-runnable.
@@ -39,7 +39,7 @@ The existing 18 documents already support path/heading/exact coverage. Add docum
 
 Target: 26 documents, roughly 85–95 chunks. Each added section stays inside the chunk budget so one heading path keeps one chunk.
 
-### D2 — Query distribution targets 60 labelled + 12 negative
+### D2 — Query distribution targets 64 labelled + 12 negative
 
 | Category | Current | Target |
 |---|---|---|
@@ -53,16 +53,16 @@ Target: 26 documents, roughly 85–95 chunks. Each added section stays inside th
 | buried | 2 | 6 |
 | vague_referential | 0 | 5 |
 | cluster_confusable | 0 | 5 |
-| opaque_id | 0 | 4 |
+| opaque_id | 0 | 8 |
 | symptom | 0 | 5 |
-| **labelled total** | **31** | **60** |
+| **labelled total** | **31** | **64** |
 | negative | 8 | 12 |
 
 The four new classes get concrete query shapes:
 
 - `vague_referential`: "上次说的那个煮饭的方子", "之前那篇讲睡眠的", "有个说配速的" — no topic nouns, the label resolves the referent.
 - `cluster_confusable`: one topic spread across several documents (coffee/tea/water, running/cycling/swimming, music/piano); the query targets one document while its sibling documents are valid near-misses.
-- `opaque_id`: rare identifiers (`Op.27 No.2`, a recipe code, a Hanon number) that only one chunk contains.
+- `opaque_id`: rare identifiers (`Op.27 No.2`, a recipe code, a Hanon number) that only one chunk contains. Four of the eight are bare-identifier probes whose text is only the identifier (`Op.27 No.2`, `哈农第 39 条`, `配方 B-12`, `P-0412`), denying context rescue so the exact token alone must carry the retrieval.
 - `symptom`: "面团发不起来", "膝盖外侧疼", "皮肤又干又痒" — a described symptom that must map to a troubleshooting section.
 
 Near-miss negatives (4) target adjacent but not answered topics: protein powder/creatine, knee-brace selection, coffee-machine descaling, sleep-mask brands. The answers stay absent from the corpus while adjacent vocabulary remains (蛋白, 眼罩, 膝盖, 咖啡), which is what makes them near-miss; running-shoe replacement was rejected because the existing `B-Sport/running.md` already answers it. Each near-miss query carries `near_miss: true`, and validation requires at least four such markers and rejects one on a labelled query.
@@ -94,17 +94,19 @@ Update the recall-baseline section in `docs/knowledge-base.md`: document/chunk c
 
 ## Measured Baseline
 
-Expanded corpus: 26 documents, 89 chunks, 60 labelled queries, 12 negatives (4 near-miss). Frozen vectors from `Qwen/Qwen3-Embedding-0.6B`; decoys unchanged at 2000 per scaled scenario.
+Expanded corpus: 26 documents, 89 chunks, 64 labelled queries, 12 negatives (4 near-miss). Frozen vectors from `Qwen/Qwen3-Embedding-0.6B`; decoys unchanged at 2000 per scaled scenario.
 
 | Scenario | Recall@1 | Recall@5 | Recall@10 | Hit@5 | Mean first rank | Random@5 | Negative top-1 | Rows | Distinct top-1 |
 |---|---|---|---|---|---|---|---|---|---|
-| `corpus_only` | 0.825 | 0.992 | 1.000 | 1.000 | 1.183 | 0.108 | 0.426 | 89 | 46/60 |
-| `scaled_noise` | 0.825 | 0.992 | 1.000 | 1.000 | 1.183 | 0.000 | 0.426 | 2089 | 46/60 |
-| `scaled_near` | 0.825 | 0.983 | 1.000 | 1.000 | 1.183 | 0.000 | 0.426 | 2089 | 46/60 |
+| `corpus_only` | 0.836 | 0.992 | 1.000 | 1.000 | 1.172 | 0.102 | 0.426 | 89 | 46/64 |
+| `scaled_noise` | 0.836 | 0.992 | 1.000 | 1.000 | 1.172 | 0.000 | 0.426 | 2089 | 46/64 |
+| `scaled_near` | 0.836 | 0.984 | 1.000 | 1.000 | 1.172 | 0.000 | 0.426 | 2089 | 46/64 |
 
 Noise-decoy cosine range `[-0.111, 0.101]`; near-decoy range `[0.350, 0.749]`. Per-category `recall@5` is 1.000 except multi-relevant: 0.900 in `corpus_only`/`scaled_noise` and 0.800 in `scaled_near`; the misses are `q-multi-mealprep` (all scenarios) and `q-multi-insurance` (`scaled_near`), all recovered by `recall@10`.
 
-Pinned floor: **0.95** = worst scenario `0.983` minus a `0.033` margin. Negative top-1 ceiling: **0.48** = measured aggregate `0.426` with near-miss negatives plus a `0.054` margin. The ceiling is aggregate-only by design: three of the four near-miss negatives individually exceed `0.48` while the 12-negative mean stays below it. The near-miss negatives raised the mean from the previous `0.348`, which is why the ceiling moves with them.
+Pinned floor: **0.95** = worst scenario `0.984` minus a `0.034` margin. Negative top-1 ceiling: **0.48** = measured aggregate `0.426` with near-miss negatives plus a `0.054` margin. The ceiling is aggregate-only by design: three of the four near-miss negatives individually exceed `0.48` while the 12-negative mean stays below it. The near-miss negatives raised the mean from the previous `0.348`, which is why the ceiling moves with them.
+
+The four bare-identifier probes all rank 1 in every scenario. Their top-1 scores (`P-0412` 0.455, `哈农第 39 条` 0.534, `Op.27 No.2` 0.619, `配方 B-12` 0.669) are the thinnest margins in the opaque set, but dense-only recall still retrieves them; this is the KB-side evidence that a bare exact token does not, on this model and corpus, create a BM25-shaped gap.
 
 ## Migration Plan
 

@@ -402,6 +402,30 @@
       "relevant": ["B-Drink/water.md::饮水笔记 / 净水器"]
     },
     {
+      "key": "q-opaque-bare-op27",
+      "category": "opaque_id",
+      "text": "Op.27 No.2",
+      "relevant": ["A-Art/piano.md::钢琴笔记 / 夜曲"]
+    },
+    {
+      "key": "q-opaque-bare-hanon",
+      "category": "opaque_id",
+      "text": "哈农第 39 条",
+      "relevant": ["A-Art/piano.md::钢琴笔记 / 基本功"]
+    },
+    {
+      "key": "q-opaque-bare-b12",
+      "category": "opaque_id",
+      "text": "配方 B-12",
+      "relevant": ["B-Cook/baking.md::烘焙笔记 / 配方编号"]
+    },
+    {
+      "key": "q-opaque-bare-p0412",
+      "category": "opaque_id",
+      "text": "P-0412",
+      "relevant": ["B-Drink/water.md::饮水笔记 / 净水器"]
+    },
+    {
       "key": "q-sym-dough",
       "category": "symptom",
       "text": "面团发了两个小时还是没变大",
