@@ -113,7 +113,7 @@ The stage SHALL treat the reranker response as untrusted: it SHALL accept at mos
 
 ### Requirement: Rerank inputs are bounded and stay within the caller's scope
 
-The stage SHALL send only passages already selected by the scoped vector search, so it cannot introduce a passage from outside the caller's visible corpus. Each passage's rerank text SHALL be truncated to a configured character cap, and the query plus the capped texts SHALL be the only content sent to the reranker.
+The stage SHALL send only passages already selected by the scoped vector search, so it cannot introduce a passage from outside the caller's visible corpus. Each passage's rerank text SHALL be truncated to a configured UTF-8-safe byte cap, and the query plus the capped texts SHALL be the only content sent to the reranker.
 
 #### Scenario: Only scoped candidates are sent
 
@@ -127,7 +127,7 @@ The stage SHALL send only passages already selected by the scoped vector search,
 
 ### Requirement: Rerank operational bounds are validated at startup
 
-The deployment SHALL provide the candidate count, request timeout, and per-document character cap as configuration with defaults of 20 candidates, 2 seconds, and 4000 characters. Each SHALL be positive and bounded; an invalid value SHALL fail startup with an error naming the variable. These bounds SHALL apply uniformly to every caller and MUST NOT be settable per user.
+The deployment SHALL provide the candidate count, request timeout, and per-document byte cap as configuration with defaults of 20 candidates, 2 seconds, and 4000 bytes. Each SHALL be positive and bounded; an invalid value SHALL fail startup with an error naming the variable. These bounds SHALL apply uniformly to every caller and MUST NOT be settable per user.
 
 #### Scenario: Invalid timeout is refused
 
@@ -142,7 +142,7 @@ The deployment SHALL provide the candidate count, request timeout, and per-docum
 #### Scenario: Bounds are deployment-wide
 
 - **WHEN** a user configures a rerank endpoint
-- **THEN** the candidate count, timeout, and character cap remain the deployment's values
+- **THEN** the candidate count, timeout, and byte cap remain the deployment's values
 
 ### Requirement: Rerank outcomes are observable
 

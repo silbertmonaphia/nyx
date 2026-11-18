@@ -61,8 +61,8 @@ off by default. Full production topology → [`README_FULL.md` § Architecture](
   them, and the chat UI renders each one as it happens (`plan` → `step_start` → `tool_call` →
   `tool_result` → …) over SSE.
 - **Tools** — your feed entries (list / get / create / update / delete via the MCP tool surface),
-  semantic search over your own entries and knowledge documents (RAG, pgvector), web search,
-  and SSRF-guarded web fetch
+  semantic search over your own entries and knowledge documents (RAG, pgvector, optional
+  cross-encoder reranking), web search, and SSRF-guarded web fetch
   with untrusted-content framing.
 - **Built for production** — runs persisted in Postgres (with a stale-run sweeper and retention
   GC), per-user token budget, rate limiting, bounded retries with a partial-failure banner in
@@ -86,6 +86,9 @@ off by default. Full production topology → [`README_FULL.md` § Architecture](
   documents stay read-only. Every source is visible only to its owner and is
   indexed with that owner's BYOK embedding configuration. Default off
   (`KB_ENABLED=false`); see [`docs/knowledge-base.md`](docs/knowledge-base.md).
+- **Reranking (optional)** — a per-user BYOK rerank group (Jina/Cohere-compatible
+  `POST /rerank`) reorders over-fetched passages before they reach the model. Leave it
+  unset and retrieval keeps its dense order; a failing reranker falls back to dense order.
 - **Light / dark theme** — the navbar toggle sits beside the `Nyx` brand; until you use it the app
   follows the OS scheme (live), and your pick is stored in `localStorage["nyx.theme"]`
   (`"light"` | `"dark"`; absent = follow the OS) and applied before first paint.
@@ -137,6 +140,7 @@ For real answers the agent needs an LLM — self-host vLLM on a GPU box with:
 ```bash
 make dev-vllm-main    # chat model  (Qwen3-4B-Instruct-2507-FP8, :8000, hermes tool parser)
 make dev-vllm-embed   # embeddings  (Qwen3-Embedding-0.6B, :8001, powers RAG)
+make dev-vllm-rerank  # reranker    (bge-reranker-v2-m3, :8002, optional rerank)
 ```
 
 Then open:

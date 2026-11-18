@@ -53,7 +53,7 @@ flowchart TB
 ## Agent
 
 - **Plan-and-Execute 循环** —— planner 把你的请求拆解成带类型的步骤，executor 逐步执行，聊天 UI 通过 SSE 实时渲染每一步（`plan` → `step_start` → `tool_call` → `tool_result` → …）。
-- **工具** —— 你的 feed 条目（通过 MCP 工具面做 list / get / create / update / delete）、对自己条目和知识文档的语义检索（RAG，pgvector）、web 搜索，以及带 SSRF 防护、按不可信内容封装的 web fetch。
+- **工具** —— 你的 feed 条目（通过 MCP 工具面做 list / get / create / update / delete）、对自己条目和知识文档的语义检索（RAG，pgvector，可选 cross-encoder 重排序）、web 搜索，以及带 SSRF 防护、按不可信内容封装的 web fetch。
 - **按生产标准打造** —— 运行状态持久化在 Postgres（配有 stale-run sweeper 与 retention GC）、每用户 token 预算、限流、有界重试并在 UI 中显示部分失败横幅、最终回答文本本身也会报告失败的步骤而非声称成功、结构化 planner 输出配合有界 re-prompt。
 - **断线可自愈** —— 一次 run 的生命不再系于那条 SSE 连接：客户端断开不再杀死正在执行的工作，浏览器会自动重新挂上活着的 run；而“用户主动停止”是一个明确的动作，而不是靠摔断连接。
 - **可观测** —— 端到端 OpenTelemetry span、Prometheus 指标、可选的 Langfuse LLM tracing。
@@ -64,6 +64,7 @@ flowchart TB
 - **账号** —— JWT access token，加上带 reuse detection 的轮转 refresh token。
 - **你的 feed** —— 创建、编辑、删除、搜索、分页；所有查询都限定在你自己的账号范围内。
 - **知识库** —— 与 feed 并列的私有语料库：应用内上传或编写的文档，以及运维用 `kb index --user` 为你注册的目录来源，按标题切分并以路径引用。上传/编写的文档可编辑，文件来源的文档保持只读。每个来源只对属主可见，并使用属主自己的 BYOK embedding 配置建立索引。默认关闭（`KB_ENABLED=false`）；详见 [`docs/knowledge-base.md`](docs/knowledge-base.md)。
+- **重排序（可选）** —— 每用户 BYOK rerank 组（Jina/Cohere 兼容的 `POST /rerank`）对过取的候选片段重新排序后再交给模型。不配置则保持纯向量顺序；reranker 故障时自动回退到 dense 顺序。
 - **白天/夜间主题** —— 导航栏切换按钮位于 `Nyx` 字标右侧；未选择前实时跟随系统，选择后记住（`localStorage["nyx.theme"]`，缺省 = 跟随系统）并在首帧前应用（无闪烁）。
 - **双语界面（中文 / English）** —— 语言切换按钮位于主题开关旁。每次访问默认中文（不看浏览器语言）；显式选择会存到 `localStorage["nyx.locale"]`（`"zh"` | `"en"`）并长期记住，`<html lang>` 跟随当前语言。
 - **可选基础设施**，默认关闭 —— Redis 缓存、Jaeger 链路追踪、Sentry、MCP server。（Prometheus `/metrics` 始终开启。）
@@ -107,6 +108,7 @@ make dev   # 后端 + 前端 + agent，一次 Ctrl+C 全部停止
 ```bash
 make dev-vllm-main    # chat 模型  (Qwen3-4B-Instruct-2507-FP8, :8000, hermes tool parser)
 make dev-vllm-embed   # 向量模型  (Qwen3-Embedding-0.6B, :8001, 支撑 RAG)
+make dev-vllm-rerank  # 重排序模型 (bge-reranker-v2-m3, :8002, 可选 rerank)
 ```
 
 然后打开：

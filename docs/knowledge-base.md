@@ -33,6 +33,16 @@ not modified and `rag: true` still means "my feeds".
   the existing chunks: delete and re-register the directory source (or delete
   and recreate inline documents) to re-index under the new model. The UI shows
   the identity mismatch on the source card instead of an empty corpus.
+- **Reranking (optional, per user).** When the caller's BYOK configuration
+  carries a rerank group (base URL, optional key, model), retrieval
+  over-fetches candidates (`RERANK_CANDIDATES`, default 20) and reorders them
+  with a cross-encoder before returning the requested `top_k`; each corpus is
+  reranked independently before the `both` fusion. The endpoint must expose a
+  Jina/Cohere-compatible `POST /rerank`; the local `make dev-vllm-rerank` target
+  serves `BAAI/bge-reranker-v2-m3` on `:8002`. With no rerank group the result is
+  byte-identical dense order. A reranker timeout or error falls back to dense
+  order and never fails retrieval; repeated failures skip the reranker for a
+  short cooldown.
 
 ## Endpoints
 
@@ -70,9 +80,14 @@ other user's source.
 | `KB_CHUNK_MIN_TOKENS` / `KB_CHUNK_OVERLAP_TOKENS` | `50` / `80` | Minimum section size (reserved) and overlap |
 | `KB_TOP_K` / `KB_MAX_CONTEXT_CHARS` | `5` / `4000` | Retrieval result and rendered context size |
 | `KB_INDEX_CONCURRENCY` | `2` | Concurrent source scans on the explicit Index path; chat catch-up remains sequential |
+| `RERANK_CANDIDATES` | `20` | Candidates over-fetched before reranking (at least the requested `top_k`) |
+| `RERANK_TIMEOUT` | `2s` | Per-request reranker timeout; expiry falls back to dense order |
+| `RERANK_MAX_DOC_CHARS` | `4000` | Per-passage UTF-8-safe byte cap sent to the reranker |
 
 The numeric knobs are validated at boot: positive, bounded, and
 `KB_CHUNK_MAX_TOKENS >= KB_CHUNK_TARGET_TOKENS > KB_CHUNK_OVERLAP_TOKENS`.
+The rerank endpoint, key, and model are per-user BYOK settings, not env vars —
+there is no deployment-level reranker and no env fallback.
 
 ## Operator import
 
@@ -181,6 +196,43 @@ model-dependent suite:
 cd frontend
 npm run test:e2e:live -- tests/e2e/kb-rag.spec.ts
 ```
+
+### Rerank measurement (opt-in)
+
+The default baseline measures the dense leg only and never calls a live model.
+To measure the rerank stage, point the opt-in test at a live reranker:
+
+```bash
+cd backend
+NYX_KB_RECALL_RERANK_URL=http://127.0.0.1:8002 \
+NYX_KB_RECALL_RERANK_MODEL=BAAI/bge-reranker-v2-m3 \
+  go test ./internal/rag -run TestKbRecallRerankBaseline -v
+```
+
+The run reuses the same corpus, labels, and frozen query vectors and reports the
+dense control and the reranked result for the same 20→10 candidate pipeline.
+Measured 2026-11-18 with `BAAI/bge-reranker-v2-m3` on vLLM 0.17.1:
+
+| Metric | Dense 20→10 | Rerank 20→10 |
+|---|---|---|
+| recall@1 | 0.836 | 0.820 |
+| recall@5 | 0.992 | 1.000 |
+| recall@10 | 1.000 | 1.000 |
+| hit@5 | 1.000 | 1.000 |
+| mean first rank | 1.172 | 1.234 |
+
+Per category, reranking raises `exact_term` recall@1 (0.750 → 0.875) and
+`multi_relevant` recall@1 (0.300 → 0.400) and recall@5 (0.900 → 1.000), while
+`paraphrase` recall@1 drops (1.000 → 0.667). This is a comparison gate for the
+synthetic corpus, not a generalization claim; the rerank group stays optional
+per user and the dense floors are unchanged.
+
+`Qwen/Qwen3-Reranker-0.6B`'s base HF checkpoint is a causal LM without the
+converted classifier head, so vLLM 0.17.1 cannot serve it as a reranker
+(`--convert classify` fails on the missing `score.weight`; `--convert embed`
+produces wrong scores). The local target defaults to
+`BAAI/bge-reranker-v2-m3`, a native cross-encoder; any Jina/Cohere-compatible
+`POST /rerank` endpoint works per user.
 
 ## Default-off behaviour
 

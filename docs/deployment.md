@@ -109,6 +109,18 @@ re-run `kb index` (or call `POST /api/kb/index`) after directory contents
 change. Changing the user's embedding model strands the existing vectors —
 delete the source in the KB page and re-run the import.
 
+### Reranking
+
+Off per user by default. Each user can save an optional BYOK rerank group
+(Jina/Cohere-compatible `POST /rerank` base URL, optional key, model) in the
+LLM settings modal; when present, retrieval over-fetches `RERANK_CANDIDATES`
+and reorders before returning `top_k`. There is no deployment-level reranker
+and no env fallback — a user without the group keeps dense order. A reranker
+timeout, error, or malformed response falls back to dense order, so the stage
+never fails a request. To offer a shared model, run a vLLM reranker (e.g.
+`BAAI/bge-reranker-v2-m3` with `--runner pooling` on port 8002) and let users
+point their own group at it; document the URL and model in your user guidance.
+
 ### Database
 
 The database is **external** — the blueprint declares no `databases:`

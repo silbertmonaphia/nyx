@@ -69,7 +69,9 @@ Feeds use `ChunkText` (`Title + "\n\n" + Description`) — exactly what the embe
 
 ### D9 — Local serving mirrors the embed service
 
-`docker-compose.yml` gains a `vllm-rerank` service under a `rerank` profile: the pinned vLLM image, `VLLM_RERANK_MODEL` defaulting to `Qwen/Qwen3-Reranker-0.6B`, the `score` task so `/rerank` is mounted, host port 8002 (loopback only), `--max-model-len 4096`, `--max-num-seqs 32`, `--enforce-eager`, the shared HF cache, and the same GPU reservation. `scripts/dev.sh` and the `Makefile` gain `vllm-rerank` / `make dev-vllm-rerank` with the same log, pid, stop, and status conventions as the embed target. A developer then configures their own rerank group with base URL `http://localhost:8002`, no key, and the model id.
+`docker-compose.yml` gains a `vllm-rerank` service under a `rerank` profile: the pinned vLLM image, `VLLM_RERANK_MODEL` defaulting to `BAAI/bge-reranker-v2-m3`, the `pooling` runner so `/rerank` is mounted, host port 8002 (loopback only), `--max-model-len 4096`, `--max-num-seqs 32`, `--enforce-eager`, the shared HF cache, and the same GPU reservation. `scripts/dev.sh` and the `Makefile` gain `vllm-rerank` / `make dev-vllm-rerank` with the same log, pid, stop, and status conventions as the embed target. A developer then configures their own rerank group with base URL `http://localhost:8002`, no key, and the model id.
+
+Implementation smoke (2026-11-18, host vLLM 0.17.1): `Qwen/Qwen3-Reranker-0.6B` does not serve correctly from its base HF checkpoint — vLLM resolves it as `Qwen3ForCausalLM`, `--convert classify` fails on the missing `score.weight`, and `--convert embed` scores badly (measured recall@1 0.297 on the KB corpus). `BAAI/bge-reranker-v2-m3` serves natively as `XLMRobertaForSequenceClassification` with `--runner pooling`; a 20-document batch returns scored results and the KB rerank measurement gives dense 20→10 recall@1/@5 = 0.836/0.992 versus rerank 0.820/1.000 (first rank 1.234 vs 1.172; exact-term and multi-relevant improve, paraphrase recall@1 drops). The default model is therefore BAAI, with the failure recorded here and in `docs/knowledge-base.md`.
 
 GPU budget on the dev box (RTX 5080 Laptop, 16303 MiB). `--gpu-memory-utilization` is a per-process vLLM target, not a hard partition, so three services must budget sum ≤ 1.0 plus WSL2 overhead (CUDA context and pin memory sit outside vLLM's accounting):
 
@@ -110,5 +112,4 @@ Model risk: the Qwen3-Reranker needs vLLM's original-reranker config path; the s
 
 ## Open Questions
 
-- Final candidate count and timeout come from the opt-in measurement; both are deployment config, not spec.
-- Which reranker model a deployment serves is an operator choice; the contract is model-agnostic and the local default is validated by the smoke gate.
+- None blocking. The candidate count (20) and timeout (2s) are deployment config; the smoke and opt-in measurement recorded in `docs/knowledge-base.md` are the tuning baseline. The local default model is `BAAI/bge-reranker-v2-m3` because the Qwen3-Reranker base checkpoint cannot be served by the available vLLM classifier path; the wire contract stays model-agnostic so an operator can swap the model or endpoint per user.

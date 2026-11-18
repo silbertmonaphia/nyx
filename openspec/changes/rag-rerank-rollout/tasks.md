@@ -5,7 +5,7 @@
 ## 1. Deployed-stack smoke
 
 - [ ] 1.1 Deploy the backend + SPA and confirm the `000022` migration applied on boot (rerank columns present, existing users report `rerank: null`).
-- [ ] 1.2 Configure a test user's rerank group against the deployment's reranker (base URL, model, key as applicable) and verify `POST /api/me/llm-config/validate` reports `ok` for the rerank slot.
+- [ ] 1.2 Configure a test user's rerank group against the deployment's reranker (base URL, model, key as applicable; the local/dev reference is `BAAI/bge-reranker-v2-m3` on port 8002 with `--runner pooling`) and verify `POST /api/me/llm-config/validate` reports `ok` for the rerank slot.
 - [ ] 1.3 From the SPA chat and from the agent path (`corpus=both`), verify citations are reordered relative to a recorded dense-order control, with the citation envelope unchanged.
 - [ ] 1.4 Clear the test user's rerank group and verify the next retrieval returns dense order with no reranker call and no error.
 
@@ -22,7 +22,7 @@
 
 ## 4. Operator handoff
 
-- [ ] 4.1 Publish the operator section for offering a shared reranker: serving command, VRAM sizing beside chat + embedding, the per-user base URL/model to hand out, and the Prometheus/Jaeger signals for rerank success/fallback/cooldown.
+- [ ] 4.1 Publish the operator section for offering a shared reranker: serving command (`vllm serve BAAI/bge-reranker-v2-m3 --runner pooling --port 8002`, or a Jina/Cohere-compatible vendor endpoint), VRAM sizing beside chat + embedding, the per-user base URL/model to hand out, and the Prometheus/Jaeger signals for rerank success/fallback/cooldown. Record that the local measurement showed recall@5 0.992 → 1.000 but recall@1 0.836 → 0.820 on the synthetic KB corpus, so the publish decision is quality-guided, not automatic.
 - [ ] 4.2 Archive this change once 1.x–4.1 are checked (PM/operator only).
 
 ## References

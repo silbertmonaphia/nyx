@@ -120,6 +120,14 @@ chat-tuned models serve no `/v1/embeddings` — feeds stay unindexed
 `backend/.env.example` for the dedicated-embedpoint recipe and the
 `/v1`-suffix asymmetry.
 
+Reranking is per-user BYOK and needs no backend env: each user may save a
+rerank group in the LLM settings modal. To offer a shared model, run
+`vllm serve BAAI/bge-reranker-v2-m3 --runner pooling --port 8002` on the GPU
+host (or use the compose `rerank` profile) and hand users that base URL and
+model id; `RERANK_CANDIDATES` / `RERANK_TIMEOUT` / `RERANK_MAX_DOC_CHARS` tune
+the deployment-wide bounds. Without a rerank group retrieval stays on dense
+order.
+
 **`frontend/.env`**: `cp frontend/.env.example frontend/.env`
 (compose requires the file to exist; the `VITE_*` build args read the
 root `.env`).
