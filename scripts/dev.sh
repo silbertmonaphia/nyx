@@ -3,7 +3,7 @@
 # and/or the frontend (Vite) against the local docker-compose infra
 # (db / redis / jaeger).
 #
-# Usage: ./scripts/dev.sh [backend|frontend|agent|vllm-main|vllm-embed|both|all] [--detach]
+# Usage: ./scripts/dev.sh [backend|frontend|agent|vllm-main|vllm-embed|vllm-rerank|both|all] [--detach]
 #
 # Default is foreground — the started process attaches to your
 # terminal so output streams live and Ctrl+C kills it cleanly. Pass
@@ -26,7 +26,8 @@
 # the in-network hostname `backend:8080`) to their localhost
 # equivalents so everything talks over the loopback.
 #
-# The `vllm-main` / `vllm-embed` modes run the chat and embedding
+# The `vllm-main` / `vllm-embed` / `vllm-rerank` modes run the chat, embedding,
+# and reranking models on the HOST instead of in compose.
 # models on the HOST instead of in compose — much faster iteration
 # and easier debugging than the `vllm` / `embed` profiles. They
 # need a local vLLM install (`vllm` or `llm` on PATH) and a GPU.
@@ -46,11 +47,13 @@ FRONTEND_LOG="$LOG_DIR/nyx-frontend.log"
 AGENT_LOG="$LOG_DIR/nyx-agent.log"
 VLLM_MAIN_LOG="$LOG_DIR/nyx-vllm-main.log"
 VLLM_EMBED_LOG="$LOG_DIR/nyx-vllm-embed.log"
+VLLM_RERANK_LOG="$LOG_DIR/nyx-vllm-rerank.log"
 BACKEND_PID="$LOG_DIR/nyx-backend.pid"
 FRONTEND_PID="$LOG_DIR/nyx-frontend.pid"
 AGENT_PID="$LOG_DIR/nyx-agent.pid"
 VLLM_MAIN_PID="$LOG_DIR/nyx-vllm-main.pid"
 VLLM_EMBED_PID="$LOG_DIR/nyx-vllm-embed.pid"
+VLLM_RERANK_PID="$LOG_DIR/nyx-vllm-rerank.pid"
 
 mode="${1:-both}"
 detach=false
@@ -59,14 +62,14 @@ case "$#" in
   1) ;;
   2) case "${2}" in
        --detach) detach=true ;;
-       *) echo "usage: $0 [backend|frontend|agent|vllm-main|vllm-embed|both|all] [--detach]" >&2; exit 2 ;;
+       *) echo "usage: $0 [backend|frontend|agent|vllm-main|vllm-embed|vllm-rerank|both|all] [--detach]" >&2; exit 2 ;;
      esac ;;
-  *) echo "usage: $0 [backend|frontend|agent|vllm-main|vllm-embed|both|all] [--detach]" >&2; exit 2 ;;
+  *) echo "usage: $0 [backend|frontend|agent|vllm-main|vllm-embed|vllm-rerank|both|all] [--detach]" >&2; exit 2 ;;
 esac
 
 case "$mode" in
-  backend|frontend|agent|vllm-main|vllm-embed|both|all) ;;
-  *) echo "usage: $0 [backend|frontend|agent|vllm-main|vllm-embed|both|all] [--detach]" >&2; exit 2 ;;
+  backend|frontend|agent|vllm-main|vllm-embed|vllm-rerank|both|all) ;;
+  *) echo "usage: $0 [backend|frontend|agent|vllm-main|vllm-embed|vllm-rerank|both|all] [--detach]" >&2; exit 2 ;;
 esac
 
 if [[ "$mode" == "both" || "$mode" == "all" ]] && [[ "$detach" != "true" ]]; then
@@ -86,6 +89,7 @@ needs_frontend()    { [[ "$mode" == frontend || "$mode" == both || "$mode" == al
 needs_agent()       { [[ "$mode" == agent    || "$mode" == all ]]; }
 needs_vllm_main()   { [[ "$mode" == vllm-main ]]; }
 needs_vllm_embed()  { [[ "$mode" == vllm-embed ]]; }
+needs_vllm_rerank() { [[ "$mode" == vllm-rerank ]]; }
 
 # --- backend preflight -------------------------------------------------
 if needs_backend; then
@@ -211,9 +215,9 @@ if needs_agent || $agent_enabled_in_env; then
   fi
 fi
 
-# --- vllm preflight (host-run chat / embedding models) --------------------
+# --- vllm preflight (host-run chat / embedding / rerank models) -----------
 vllm_bin=""
-if needs_vllm_main || needs_vllm_embed; then
+if needs_vllm_main || needs_vllm_embed || needs_vllm_rerank; then
   # `vllm` is vLLM's canonical CLI; some installs only expose `llm`
   # (and vice versa). Prefer `vllm`, fall back, fail loudly otherwise.
   for candidate in vllm llm; do
@@ -232,7 +236,7 @@ fi
 if $detach; then
   started_pid_files=()
   single=false
-  case "$mode" in backend|frontend|agent|vllm-main|vllm-embed) single=true ;; esac
+  case "$mode" in backend|frontend|agent|vllm-main|vllm-embed|vllm-rerank) single=true ;; esac
 
   if $single; then
     spawn() {
@@ -253,14 +257,19 @@ if $detach; then
       spawn agent backend/agent_py "$AGENT_LOG" "$AGENT_PID" .venv/bin/python -m agent.main
     fi
     if needs_vllm_main; then
-      spawn vllm-main . "$VLLM_MAIN_LOG" "$VLLM_MAIN_PID" "$vllm_bin" serve Qwen/Qwen3-4B-Instruct-2507-FP8 \
+      spawn vllm-main . "$VLLM_MAIN_LOG" "$VLLM_MAIN_PID" env VLLM_WSL2_ENABLE_PIN_MEMORY=1 "$vllm_bin" serve Qwen/Qwen3-4B-Instruct-2507-FP8 \
         --host 0.0.0.0 --port 8000 --tensor-parallel-size 1 \
-        --gpu-memory-utilization 0.9 --max-model-len 4096 \
+        --gpu-memory-utilization 0.75 --max-model-len 4096 \
         --enable-auto-tool-choice --tool-call-parser hermes
     fi
     if needs_vllm_embed; then
-      spawn vllm-embed . "$VLLM_EMBED_LOG" "$VLLM_EMBED_PID" "$vllm_bin" serve Qwen/Qwen3-Embedding-0.6B \
+      spawn vllm-embed . "$VLLM_EMBED_LOG" "$VLLM_EMBED_PID" env VLLM_WSL2_ENABLE_PIN_MEMORY=1 "$vllm_bin" serve Qwen/Qwen3-Embedding-0.6B \
         --port 8001 --enforce-eager --gpu-memory-utilization 0.1 --max-model-len 2048
+    fi
+    if needs_vllm_rerank; then
+      spawn vllm-rerank . "$VLLM_RERANK_LOG" "$VLLM_RERANK_PID" env VLLM_WSL2_ENABLE_PIN_MEMORY=1 "$vllm_bin" serve BAAI/bge-reranker-v2-m3 \
+        --port 8002 --runner pooling --enforce-eager --gpu-memory-utilization 0.15 \
+        --max-model-len 4096 --max-num-seqs 32
     fi
   else
     # Detached supervisor (both/all only): each child is a backgrounded
@@ -316,9 +325,9 @@ if $detach; then
     if needs_vllm_main; then
       echo ">> vllm-main → $VLLM_MAIN_LOG  (first run downloads the model)"
       started_pid_files+=("$VLLM_MAIN_PID")
-      ( echo $BASHPID > "$VLLM_MAIN_PID" && exec setsid "$vllm_bin" serve Qwen/Qwen3-4B-Instruct-2507-FP8 \
+      ( echo $BASHPID > "$VLLM_MAIN_PID" && exec setsid env VLLM_WSL2_ENABLE_PIN_MEMORY=1 "$vllm_bin" serve Qwen/Qwen3-4B-Instruct-2507-FP8 \
           --host 0.0.0.0 --port 8000 --tensor-parallel-size 1 \
-          --gpu-memory-utilization 0.9 --max-model-len 4096 \
+          --gpu-memory-utilization 0.75 --max-model-len 4096 \
           --enable-auto-tool-choice --tool-call-parser hermes ) \
         2>&1 | tee "$VLLM_MAIN_LOG" &
     fi
@@ -326,9 +335,18 @@ if $detach; then
     if needs_vllm_embed; then
       echo ">> vllm-embed → $VLLM_EMBED_LOG  (first run downloads the model)"
       started_pid_files+=("$VLLM_EMBED_PID")
-      ( echo $BASHPID > "$VLLM_EMBED_PID" && exec setsid "$vllm_bin" serve Qwen/Qwen3-Embedding-0.6B \
+      ( echo $BASHPID > "$VLLM_EMBED_PID" && exec setsid env VLLM_WSL2_ENABLE_PIN_MEMORY=1 "$vllm_bin" serve Qwen/Qwen3-Embedding-0.6B \
           --port 8001 --enforce-eager --gpu-memory-utilization 0.1 --max-model-len 2048 ) \
         2>&1 | tee "$VLLM_EMBED_LOG" &
+    fi
+
+    if needs_vllm_rerank; then
+      echo ">> vllm-rerank → $VLLM_RERANK_LOG  (first run downloads the model)"
+      started_pid_files+=("$VLLM_RERANK_PID")
+      ( echo $BASHPID > "$VLLM_RERANK_PID" && exec setsid env VLLM_WSL2_ENABLE_PIN_MEMORY=1 "$vllm_bin" serve BAAI/bge-reranker-v2-m3 \
+          --port 8002 --runner pooling --enforce-eager --gpu-memory-utilization 0.15 \
+          --max-model-len 4096 --max-num-seqs 32 ) \
+        2>&1 | tee "$VLLM_RERANK_LOG" &
     fi
   fi
 
@@ -352,6 +370,10 @@ if $detach; then
   if needs_vllm_embed; then
     echo "    vllm-embed: http://localhost:8001/v1  (embeddings)"
     echo "    tail vllm-embed : tail -f $VLLM_EMBED_LOG"
+  fi
+  if needs_vllm_rerank; then
+    echo "    vllm-rerank: http://localhost:8002  (POST /rerank)"
+    echo "    tail vllm-rerank : tail -f $VLLM_RERANK_LOG"
   fi
   echo
 
@@ -380,7 +402,7 @@ if $detach; then
   exit_code=0
   for entry in \
     "backend:$BACKEND_PID" "frontend:$FRONTEND_PID" "agent:$AGENT_PID" \
-    "vllm-main:$VLLM_MAIN_PID" "vllm-embed:$VLLM_EMBED_PID"; do
+    "vllm-main:$VLLM_MAIN_PID" "vllm-embed:$VLLM_EMBED_PID" "vllm-rerank:$VLLM_RERANK_PID"; do
     name="${entry%%:*}"
     file="${entry#*:}"
     [[ -f "$file" ]] || continue
@@ -421,15 +443,22 @@ else
 
   if needs_vllm_main; then
     echo ">> vllm-main starting in foreground (Ctrl+C to stop; first run downloads the model)"
-    exec "$vllm_bin" serve Qwen/Qwen3-4B-Instruct-2507-FP8 \
+    exec env VLLM_WSL2_ENABLE_PIN_MEMORY=1 "$vllm_bin" serve Qwen/Qwen3-4B-Instruct-2507-FP8 \
       --host 0.0.0.0 --port 8000 --tensor-parallel-size 1 \
-      --gpu-memory-utilization 0.9 --max-model-len 4096 \
+      --gpu-memory-utilization 0.75 --max-model-len 4096 \
       --enable-auto-tool-choice --tool-call-parser hermes
   fi
 
   if needs_vllm_embed; then
     echo ">> vllm-embed starting in foreground (Ctrl+C to stop; first run downloads the model)"
-    exec "$vllm_bin" serve Qwen/Qwen3-Embedding-0.6B \
+    exec env VLLM_WSL2_ENABLE_PIN_MEMORY=1 "$vllm_bin" serve Qwen/Qwen3-Embedding-0.6B \
       --port 8001 --enforce-eager --gpu-memory-utilization 0.1 --max-model-len 2048
+  fi
+
+  if needs_vllm_rerank; then
+    echo ">> vllm-rerank starting in foreground (Ctrl+C to stop; first run downloads the model)"
+    exec env VLLM_WSL2_ENABLE_PIN_MEMORY=1 "$vllm_bin" serve BAAI/bge-reranker-v2-m3 \
+      --port 8002 --runner pooling --enforce-eager --gpu-memory-utilization 0.15 \
+      --max-model-len 4096 --max-num-seqs 32
   fi
 fi

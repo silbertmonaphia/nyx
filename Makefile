@@ -1,11 +1,11 @@
 # Root dev orchestrator. `make dev` runs backend + frontend + agent in
 # the background with shared Ctrl+C cleanup. The `make dev-*` singles
-# (backend / frontend / agent / vllm-main / vllm-embed) run one process
+# (backend / frontend / agent / vllm-main / vllm-embed / vllm-rerank) run one process
 # in the foreground by default — output streams live to your terminal
 # and Ctrl+C kills it. DETACH=1 on a single daemonizes it: the prompt
-# comes back, output goes to /tmp/nyx-*.log, `make stop` halts. The two vllm targets
-# serve the chat / embedding models on the HOST for a faster dev loop
-# than the compose `vllm` / `embed` profiles (needs a local vLLM
+# comes back, output goes to /tmp/nyx-*.log, `make stop` halts. The three vllm targets
+# serve the chat / embedding / rerank models on the HOST for a faster dev loop
+# than the compose `vllm` / `embed` / `rerank` profiles (needs a local vLLM
 # install + GPU; do not run alongside the compose profiles).
 # `dev-infra` runs the infra containers (db + redis + jaeger) in the
 # foreground — Ctrl+C stops them; `up` is the detached, idempotent
@@ -17,7 +17,7 @@
 # the `docker compose` plugin on PATH. Backend invocations assume
 # `make up` has been run.
 
-.PHONY: dev dev-backend dev-frontend dev-agent bootstrap dev-vllm-main dev-vllm-embed dev-infra dev-pgsql-inspect dev-redis-inspect dev-gpu-inspect dev-gpu-watch up down up-vllm down-vllm dev-up-langfuse dev-down-langfuse logs status stop help eval-golden eval-security eval-run e2e-agent-auth
+.PHONY: dev dev-backend dev-frontend dev-agent bootstrap dev-vllm-main dev-vllm-embed dev-vllm-rerank dev-infra dev-pgsql-inspect dev-redis-inspect dev-gpu-inspect dev-gpu-watch up down up-vllm down-vllm dev-up-langfuse dev-down-langfuse logs status stop help eval-golden eval-security eval-run e2e-agent-auth
 
 COMPOSE := docker compose
 
@@ -35,13 +35,13 @@ help:
 	  /^[a-z][a-z0-9-]*:/{ if (desc!="") { printf "  \033[36m%-7s\033[0m %s\n", $$1, desc; desc="" } }' $(MAKEFILE_LIST)
 	@echo
 	@echo "dev logs:      tail -f /tmp/nyx-backend.log /tmp/nyx-frontend.log /tmp/nyx-agent.log"
-	@echo "vllm logs:     tail -f /tmp/nyx-vllm-main.log /tmp/nyx-vllm-embed.log"
-	@echo "DETACH=1:      background the dev-{backend,frontend,agent,vllm-main,vllm-embed} target instead of foreground."
+	@echo "vllm logs:     tail -f /tmp/nyx-vllm-main.log /tmp/nyx-vllm-embed.log /tmp/nyx-vllm-rerank.log"
+	@echo "DETACH=1:      background the dev-{backend,frontend,agent,vllm-main,vllm-embed,vllm-rerank} target instead of foreground."
 
 #: Stop the dev backend + frontend + agent + host vLLM processes started by any `make dev*` target. No-op if nothing is running.
 stop:
 	@for f in /tmp/nyx-backend.pid /tmp/nyx-frontend.pid /tmp/nyx-agent.pid \
-	          /tmp/nyx-vllm-main.pid /tmp/nyx-vllm-embed.pid; do \
+	          /tmp/nyx-vllm-main.pid /tmp/nyx-vllm-embed.pid /tmp/nyx-vllm-rerank.pid; do \
 	  [ -f "$$f" ] || continue; \
 	  pid=$$(cat "$$f" 2>/dev/null); \
 	  pgid=$$(ps -o pgid= -p "$$pid" 2>/dev/null | tr -d '[:space:]'); \
@@ -90,6 +90,10 @@ dev-vllm-main:
 dev-vllm-embed:
 	@./scripts/dev.sh vllm-embed $(DETACH_FLAG)
 
+#: Run the vLLM reranker on the host (port 8002, BAAI/bge-reranker-v2-m3, pooling runner, ~2.5–3 GiB VRAM). Foreground by default (DETACH=1 to background); host-run alternative to the compose rerank profile — don't run both.
+dev-vllm-rerank:
+	@./scripts/dev.sh vllm-rerank $(DETACH_FLAG)
+
 #: Bring the infra containers (db + redis + jaeger) up in the foreground; Ctrl+C stops them. Run `make up` to detach instead.
 dev-infra:
 	$(COMPOSE) up db redis jaeger
@@ -106,13 +110,13 @@ dev-up-langfuse:
 dev-down-langfuse:
 	$(COMPOSE) --profile langfuse down langfuse-web langfuse-worker langfuse-db langfuse-redis langfuse-clickhouse langfuse-minio
 
-#: Start the vLLM chat + embed containers (full local LLM stack). Requires `make up` already running.
+#: Start the vLLM chat + embed + rerank containers (full local LLM stack). Requires `make up` already running.
 up-vllm:
-	$(COMPOSE) --profile vllm --profile embed up -d
+	$(COMPOSE) --profile vllm --profile embed --profile rerank up -d
 
-#: Stop the vLLM chat + embed containers only (preserves volumes; db/redis/jaeger keep running).
+#: Stop the vLLM chat + embed + rerank containers only (preserves volumes; db/redis/jaeger keep running).
 down-vllm:
-	$(COMPOSE) --profile vllm --profile embed down vllm vllm-embed
+	$(COMPOSE) --profile vllm --profile embed --profile rerank down vllm vllm-embed vllm-rerank
 
 #: Stop the infra containers (preserves volumes).
 down:

@@ -878,6 +878,67 @@ services:
     # profile is opt-in, but its network membership is the same shape.
     networks: [default, internal]
 
+  vllm-rerank:
+    image: vllm/vllm-openai:v0.29.0
+    mem_limit: 4g
+    cpus: "2.00"
+    profiles: ["rerank"]
+    restart: always
+    command:
+      - "--model"
+      - "${VLLM_RERANK_MODEL:-BAAI/bge-reranker-v2-m3}"
+      - "--served-model-name"
+      - "${VLLM_RERANK_MODEL:-BAAI/bge-reranker-v2-m3}"
+      - "--host"
+      - "0.0.0.0"
+      - "--port"
+      - "8000"
+      # Pooling runner mounts the Jina/Cohere-compatible POST /rerank
+      # endpoint the Go rerank client consumes.
+      - "--runner"
+      - "pooling"
+      - "--enforce-eager"
+      # 0.6B weights (~1.2 GB) plus rerank activations for one
+      # request's document batch; 0.15 leaves headroom for the
+      # chat + embed services on a 16 GB card.
+      - "--gpu-memory-utilization"
+      - "0.15"
+      - "--max-model-len"
+      - "4096"
+      # One retrieval reranks up to RERANK_CANDIDATES (default 20)
+      # documents in a single request; cap the batch so activation
+      # memory stays bounded.
+      - "--max-num-seqs"
+      - "32"
+    environment:
+      - HUGGING_FACE_HUB_TOKEN=${HUGGING_FACE_HUB_TOKEN:-}
+      - HF_ENDPOINT=${HF_ENDPOINT:-https://hf-mirror.com}
+      - HF_HUB_DISABLE_IPV6=${HF_HUB_DISABLE_IPV6:-1}
+      - VLLM_WSL2_ENABLE_PIN_MEMORY=${VLLM_WSL2_ENABLE_PIN_MEMORY:-1}
+    ports:
+      # Loopback only — same posture as the chat and embed containers.
+      - "127.0.0.1:8002:8000"
+    volumes:
+      - vllm_cache:/root/.cache/huggingface
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:8000/v1/models > /dev/null || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 300s
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    tmpfs:
+      - /tmp
+    networks: [default, internal]
+
 # Network topology: the Python agent service is reachable ONLY by the
 # Go backend in this compose topology. Every hop is authenticated with
 # the shared AGENT_SERVICE_TOKEN (X-Nyx-Service-Token); Python does not
