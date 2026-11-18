@@ -16,10 +16,10 @@ The labelled query set SHALL cover path-scoped, heading-scoped, exact-term, para
 - **WHEN** negative queries are evaluated
 - **THEN** their top-1 similarity scores are aggregated separately and asserted below the pinned negative ceiling, and they are excluded from every recall figure
 
-#### Scenario: Near-miss negatives stay below the ceiling
+#### Scenario: Near-miss negatives feed the aggregate ceiling
 
 - **WHEN** a negative query targets a topic adjacent to the corpus
-- **THEN** it carries no relevant chunks, contributes no recall, and its top-1 score is included in the same negative-ceiling assertion
+- **THEN** it carries no relevant chunks, contributes no recall, and its top-1 score is included in the aggregate negative-ceiling assertion
 
 #### Scenario: Duplicate relevant entry is rejected
 

@@ -1,19 +1,27 @@
 {
   "version": 1,
-  "note": "Hand-labelled Chinese retrieval baseline for the knowledge corpus. Documents are synthetic notes under four directory families; queries are grouped into path-scoped, heading-scoped, exact-term, semantic, paraphrase, same-topic distractor, multi-relevant, buried, and negative categories. Chunk keys are rel_path::heading path and resolve against the production Markdown normalizer and chunker. Every non-negative query must filter to more candidate chunks than top_k.",
+  "note": "Hand-labelled Chinese retrieval baseline for the knowledge corpus. Documents are synthetic notes under four directory families; queries are grouped into path-scoped, heading-scoped, exact-term, semantic, paraphrase, same-topic distractor, multi-relevant, buried, vague-referential, cluster-confusable, opaque-identifier, symptom, and negative categories, with four negatives targeting topics adjacent to the corpus. Chunk keys are rel_path::heading path and resolve against the production Markdown normalizer and chunker. Every non-negative query must filter to more candidate chunks than top_k.",
   "top_k": 5,
   "documents": [
     { "path": "A-Art/music.md" },
+    { "path": "A-Art/piano.md" },
     { "path": "B-BodyCare/eyes.md" },
+    { "path": "B-BodyCare/skin.md" },
     { "path": "B-BodyCare/teeth.md" },
+    { "path": "B-Cook/baking.md" },
     { "path": "B-Cook/diet.md" },
     { "path": "B-Cook/kitchen.md" },
     { "path": "B-Cook/mealprep.md" },
     { "path": "B-Drink/coffee.md" },
+    { "path": "B-Drink/tea.md" },
+    { "path": "B-Drink/water.md" },
     { "path": "B-Sleep/nap.md" },
     { "path": "B-Sleep/sleep.md" },
+    { "path": "B-Sport/cycling.md" },
     { "path": "B-Sport/gym.md" },
+    { "path": "B-Sport/injury.md" },
     { "path": "B-Sport/running.md" },
+    { "path": "B-Sport/swimming.md" },
     { "path": "P-Polyglot/japanese.md" },
     { "path": "P-Travel/japan.md" },
     { "path": "P-Travel/sea.md" },
@@ -246,6 +254,184 @@
       "relevant": ["B-BodyCare/teeth.md::口腔护理 / 牙线"]
     },
     {
+      "key": "q-sem-skin",
+      "category": "semantic",
+      "text": "换季时皮肤起皮屑，涂什么能锁住水分",
+      "relevant": ["B-BodyCare/skin.md::皮肤护理 / 保湿"]
+    },
+    {
+      "key": "q-sem-swim",
+      "category": "semantic",
+      "text": "在水里怎么把气吐干净",
+      "relevant": ["B-Sport/swimming.md::游泳笔记 / 换气"]
+    },
+    {
+      "key": "q-para-water",
+      "category": "paraphrase",
+      "text": "一天要喝多少水",
+      "relevant": ["B-Drink/water.md::饮水笔记 / 每日饮水"]
+    },
+    {
+      "key": "q-para-cycling",
+      "category": "paraphrase",
+      "text": "骑车时间长了怎么省力",
+      "relevant": ["B-Sport/cycling.md::骑行笔记 / 踏频"]
+    },
+    {
+      "key": "q-distract-brew",
+      "category": "same_topic_distractor",
+      "text": "绿茶用多少度的水泡",
+      "relevant": ["B-Drink/tea.md::茶笔记 / 冲泡"],
+      "exclude": ["B-Drink/coffee.md::咖啡 / 手冲参数"]
+    },
+    {
+      "key": "q-multi-cycling",
+      "category": "multi_relevant",
+      "text": "长途骑行要带哪些装备和补给",
+      "relevant": [
+        "B-Sport/cycling.md::骑行笔记 / 装备",
+        "B-Sport/cycling.md::骑行笔记 / 补给"
+      ]
+    },
+    {
+      "key": "q-buried-rice",
+      "category": "buried",
+      "text": "煮糙米饭要提前泡多久",
+      "relevant": ["B-Cook/kitchen.md::厨房技巧 / 煮米饭"]
+    },
+    {
+      "key": "q-buried-leftover",
+      "category": "buried",
+      "text": "冰箱里的熟食最多能放几天",
+      "relevant": ["B-Cook/mealprep.md::备餐笔记 / 冷冻保存"]
+    },
+    {
+      "key": "q-buried-fund",
+      "category": "buried",
+      "text": "下跌时忍不住天天看账户怎么办",
+      "relevant": ["W-Invest/fund.md::基金笔记 / 心理建设"]
+    },
+    {
+      "key": "q-buried-sleep",
+      "category": "buried",
+      "text": "睡前总是胡思乱想怎么办",
+      "relevant": ["B-Sleep/sleep.md::睡眠改善 / 情绪管理"]
+    },
+    {
+      "key": "q-vague-coffee",
+      "category": "vague_referential",
+      "text": "之前记的咖啡参数那篇",
+      "relevant": ["B-Drink/coffee.md::咖啡 / 手冲参数"]
+    },
+    {
+      "key": "q-vague-sleep",
+      "category": "vague_referential",
+      "text": "那篇讲怎么睡好的笔记",
+      "relevant": ["B-Sleep/sleep.md::睡眠改善 / 作息"]
+    },
+    {
+      "key": "q-vague-pace",
+      "category": "vague_referential",
+      "text": "有个说跑步配速的，翻出来",
+      "relevant": ["B-Sport/running.md::跑步笔记 / 配速"]
+    },
+    {
+      "key": "q-vague-piano",
+      "category": "vague_referential",
+      "text": "上次说的练琴方法那个",
+      "relevant": ["A-Art/music.md::音乐 / 练习"]
+    },
+    {
+      "key": "q-vague-tea",
+      "category": "vague_referential",
+      "text": "之前记的茶叶怎么放的那个",
+      "relevant": ["B-Drink/tea.md::茶笔记 / 存放"]
+    },
+    {
+      "key": "q-cluster-carb",
+      "category": "cluster_confusable",
+      "text": "减脂期主食怎么选",
+      "relevant": ["B-Cook/diet.md::饮食笔记 / 碳水列表"]
+    },
+    {
+      "key": "q-cluster-recovery",
+      "category": "cluster_confusable",
+      "text": "训练后怎么恢复最快",
+      "relevant": ["B-Sport/gym.md::健身计划 / 恢复"]
+    },
+    {
+      "key": "q-cluster-practice",
+      "category": "cluster_confusable",
+      "text": "每天练琴先练什么",
+      "relevant": ["A-Art/music.md::音乐 / 练习"]
+    },
+    {
+      "key": "q-cluster-caffeine",
+      "category": "cluster_confusable",
+      "text": "下午喝什么容易睡不着",
+      "relevant": ["B-Sleep/sleep.md::睡眠改善 / 咖啡因"]
+    },
+    {
+      "key": "q-cluster-brew",
+      "category": "cluster_confusable",
+      "text": "泡茶的水温多少合适",
+      "relevant": ["B-Drink/tea.md::茶笔记 / 冲泡"]
+    },
+    {
+      "key": "q-opaque-op27",
+      "category": "opaque_id",
+      "text": "Op.27 No.2 这首夜曲的难点",
+      "relevant": ["A-Art/piano.md::钢琴笔记 / 夜曲"]
+    },
+    {
+      "key": "q-opaque-hanon",
+      "category": "opaque_id",
+      "text": "哈农第 39 条怎么练",
+      "relevant": ["A-Art/piano.md::钢琴笔记 / 基本功"]
+    },
+    {
+      "key": "q-opaque-b12",
+      "category": "opaque_id",
+      "text": "配方 B-12 的含水量怎么算",
+      "relevant": ["B-Cook/baking.md::烘焙笔记 / 配方编号"]
+    },
+    {
+      "key": "q-opaque-p0412",
+      "category": "opaque_id",
+      "text": "P-0412 滤芯多久换一次",
+      "relevant": ["B-Drink/water.md::饮水笔记 / 净水器"]
+    },
+    {
+      "key": "q-sym-dough",
+      "category": "symptom",
+      "text": "面团发了两个小时还是没变大",
+      "relevant": ["B-Cook/baking.md::烘焙笔记 / 发酵失败"]
+    },
+    {
+      "key": "q-sym-cake",
+      "category": "symptom",
+      "text": "蛋糕烤完中间塌下去",
+      "relevant": ["B-Cook/baking.md::烘焙笔记 / 蛋糕塌陷"]
+    },
+    {
+      "key": "q-sym-knee",
+      "category": "symptom",
+      "text": "跑步后膝盖外侧疼",
+      "relevant": ["B-Sport/injury.md::运动损伤 / 膝盖"]
+    },
+    {
+      "key": "q-sym-foot",
+      "category": "symptom",
+      "text": "早上起床第一步脚底疼",
+      "relevant": ["B-Sport/injury.md::运动损伤 / 足底"]
+    },
+    {
+      "key": "q-sym-skin",
+      "category": "symptom",
+      "text": "皮肤干痒，越抓越痒",
+      "relevant": ["B-BodyCare/skin.md::皮肤护理 / 干痒处理"]
+    },
+    {
       "key": "q-negative-fish",
       "category": "negative",
       "text": "热带鱼白点病怎么治疗",
@@ -291,6 +477,34 @@
       "key": "q-neg-pet",
       "category": "negative",
       "text": "猫为什么总是吐毛球",
+      "relevant": []
+    },
+    {
+      "key": "q-neg-protein-powder",
+      "category": "negative",
+      "near_miss": true,
+      "text": "蛋白粉和肌酸怎么选",
+      "relevant": []
+    },
+    {
+      "key": "q-neg-knee-brace",
+      "category": "negative",
+      "near_miss": true,
+      "text": "护膝怎么选，跑步需要戴吗",
+      "relevant": []
+    },
+    {
+      "key": "q-neg-descale",
+      "category": "negative",
+      "near_miss": true,
+      "text": "咖啡机怎么除垢",
+      "relevant": []
+    },
+    {
+      "key": "q-neg-mask",
+      "category": "negative",
+      "near_miss": true,
+      "text": "眼罩哪个牌子遮光好",
       "relevant": []
     }
   ]

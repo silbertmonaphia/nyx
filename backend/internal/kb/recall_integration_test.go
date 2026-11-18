@@ -28,26 +28,27 @@ import (
 )
 
 const (
-	kbRecallVersion            = 1
-	kbRecallCorpusFile         = "kb_recall_corpus.json"
-	kbRecallVectorsFile        = "kb_recall_vectors.json"
-	kbRecallDocsDir            = "kb_recall_docs"
-	kbRecallTopK               = 5
-	kbRecallFetchK             = 10
-	kbRecallMinLabelledQueries = 30
-	kbRecallMinNegativeQueries = 8
-	kbRecallDims               = 1024
-	kbRecallFloor5             = 0.94
-	kbRecallNegativeCeiling    = 0.40
-	kbRecallRandomSeed         = 0x6b62
-	kbRecallDecoySeed          = 0x6b63
-	kbRecallDecoyCount         = 2000
-	kbRecallDecoyBatch         = 500
-	kbRecallDecoyCosLo         = 0.35
-	kbRecallDecoyCosHi         = 0.75
-	kbRecallAnnFloor           = 1000
-	kbRecallDecoySourcePrefix  = "kb_recall_decoys"
-	skipTrue                   = "true"
+	kbRecallVersion              = 1
+	kbRecallCorpusFile           = "kb_recall_corpus.json"
+	kbRecallVectorsFile          = "kb_recall_vectors.json"
+	kbRecallDocsDir              = "kb_recall_docs"
+	kbRecallTopK                 = 5
+	kbRecallFetchK               = 10
+	kbRecallMinLabelledQueries   = 55
+	kbRecallMinNegativeQueries   = 12
+	kbRecallMinNearMissNegatives = 4
+	kbRecallDims                 = 1024
+	kbRecallFloor5               = 0.95
+	kbRecallNegativeCeiling      = 0.48
+	kbRecallRandomSeed           = 0x6b62
+	kbRecallDecoySeed            = 0x6b63
+	kbRecallDecoyCount           = 2000
+	kbRecallDecoyBatch           = 500
+	kbRecallDecoyCosLo           = 0.35
+	kbRecallDecoyCosHi           = 0.75
+	kbRecallAnnFloor             = 1000
+	kbRecallDecoySourcePrefix    = "kb_recall_decoys"
+	skipTrue                     = "true"
 )
 
 const (
@@ -59,6 +60,10 @@ const (
 	kbRecallCategoryDistractor = "same_topic_distractor"
 	kbRecallCategoryMulti      = "multi_relevant"
 	kbRecallCategoryBuried     = "buried"
+	kbRecallCategoryVague      = "vague_referential"
+	kbRecallCategoryCluster    = "cluster_confusable"
+	kbRecallCategoryOpaque     = "opaque_id"
+	kbRecallCategorySymptom    = "symptom"
 	kbRecallCategoryNegative   = "negative"
 )
 
@@ -69,6 +74,7 @@ type kbRecallDocument struct {
 type kbRecallQuery struct {
 	Key      string   `json:"key"`
 	Category string   `json:"category"`
+	NearMiss bool     `json:"near_miss,omitempty"`
 	Text     string   `json:"text"`
 	Path     string   `json:"path,omitempty"`
 	Relevant []string `json:"relevant"`
@@ -542,7 +548,9 @@ func validateKbRecallQueries(t *testing.T, corpus kbRecallCorpus) {
 		switch query.Category {
 		case kbRecallCategoryPath, kbRecallCategoryHeading, kbRecallCategoryExact,
 			kbRecallCategorySemantic, kbRecallCategoryParaphrase, kbRecallCategoryDistractor,
-			kbRecallCategoryMulti, kbRecallCategoryBuried, kbRecallCategoryNegative:
+			kbRecallCategoryMulti, kbRecallCategoryBuried, kbRecallCategoryVague,
+			kbRecallCategoryCluster, kbRecallCategoryOpaque, kbRecallCategorySymptom,
+			kbRecallCategoryNegative:
 		default:
 			require.Failf(t, "unknown category", "query %s has category %s", query.Key, query.Category)
 		}
@@ -551,6 +559,7 @@ func validateKbRecallQueries(t *testing.T, corpus kbRecallCorpus) {
 			require.Emptyf(t, query.Relevant, "negative query %s labels relevant chunks", query.Key)
 			negatives++
 		} else {
+			require.Falsef(t, query.NearMiss, "query %s marks near_miss outside the negative category", query.Key)
 			require.NotEmptyf(t, query.Relevant, "query %s has no labelled chunks", query.Key)
 			require.LessOrEqualf(t, len(query.Relevant), kbRecallTopK, "query %s labels more than top_k chunks", query.Key)
 			labelled++
@@ -568,14 +577,28 @@ func validateKbRecallQueries(t *testing.T, corpus kbRecallCorpus) {
 	}
 	require.GreaterOrEqual(t, labelled, kbRecallMinLabelledQueries)
 	require.GreaterOrEqual(t, negatives, kbRecallMinNegativeQueries)
+	require.GreaterOrEqual(t, kbRecallNearMissCount(corpus), kbRecallMinNearMissNegatives)
 	require.Positive(t, categories[kbRecallCategoryPath])
 	require.Positive(t, categories[kbRecallCategoryHeading])
 	require.Positive(t, categories[kbRecallCategoryExact])
-	require.Positive(t, categories[kbRecallCategorySemantic])
-	require.Positive(t, categories[kbRecallCategoryParaphrase])
 	require.Positive(t, categories[kbRecallCategoryDistractor])
 	require.Positive(t, categories[kbRecallCategoryMulti])
-	require.Positive(t, categories[kbRecallCategoryBuried])
+	for _, shortfall := range kbRecallCategoryShortfalls(corpus, kbRecallCategoryMinimums()) {
+		require.Failf(t, "category below minimum",
+			"category %s has %d labelled queries, below the minimum %d", shortfall.Category, shortfall.Count, shortfall.Minimum)
+	}
+}
+
+func kbRecallCategoryMinimums() map[string]int {
+	return map[string]int{
+		kbRecallCategorySemantic:   6,
+		kbRecallCategoryParaphrase: 6,
+		kbRecallCategoryBuried:     6,
+		kbRecallCategoryVague:      4,
+		kbRecallCategoryCluster:    4,
+		kbRecallCategoryOpaque:     4,
+		kbRecallCategorySymptom:    4,
+	}
 }
 
 func requireKbRecallPgvector(t *testing.T) *pgxpool.Pool {

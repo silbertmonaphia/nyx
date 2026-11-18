@@ -103,14 +103,19 @@ state when re-run.
 ## Recall baseline
 
 `backend/internal/kb/recall_integration_test.go` pins a hand-labelled Chinese
-corpus (`testdata/kb_recall_docs/`, 18 documents / 63 chunks) with frozen
-1024-dim vectors (`testdata/kb_recall_vectors.json`). The corpus has 31 labelled
-queries and 8 negative queries across path-scoped, heading-scoped, exact-term,
-semantic, paraphrase, same-topic distractor, multi-relevant, and buried
-categories. A labelled query is rejected at fixture-validation time when its
-retrieval scope holds at most `top_k = 5` chunks, because `LIMIT 5` would then
-return the whole candidate set and recall would be 1.0 regardless of ranking.
-The fixture validates without a database; the retrieval run needs pgvector.
+corpus (`testdata/kb_recall_docs/`, 26 documents / 89 chunks) with frozen
+1024-dim vectors (`testdata/kb_recall_vectors.json`). The corpus has 60 labelled
+queries and 12 negative queries across path-scoped, heading-scoped, exact-term,
+semantic, paraphrase, same-topic distractor, multi-relevant, buried,
+vague-referential, cluster-confusable, opaque-identifier, and symptom
+categories. Category split: path 5, heading 6, exact 4, semantic 6, paraphrase
+6, distractor 3, multi 5, buried 6, vague 5, cluster 5, opaque 4, symptom 5.
+Four negatives target topics adjacent to the corpus (supplements, knee braces,
+coffee-machine descaling, sleep-mask brands). A labelled query is rejected at
+fixture-validation time when its retrieval scope holds at most `top_k = 5`
+chunks, because `LIMIT 5` would then return the whole candidate set and recall
+would be 1.0 regardless of ranking. The fixture validates without a database;
+the retrieval run needs pgvector.
 
 Measurement uses `k = 10` with the production result width left at `top_k = 5`.
 Each scenario reports `recall@1`, `recall@5`, `recall@10`, `hit@5`, mean
@@ -131,15 +136,17 @@ Measured baseline (frozen vectors, `Qwen/Qwen3-Embedding-0.6B`):
 
 | Scenario | Recall@1 | Recall@5 | Recall@10 | Hit@5 | Mean first rank | Random@5 | Negative top-1 | Rows | Distinct top-1 |
 |---|---|---|---|---|---|---|---|---|---|
-| `corpus_only` | 0.774 | 0.984 | 1.000 | 1.000 | 1.129 | 0.226 | 0.348 | 63 | 26/31 |
-| `scaled_noise` | 0.774 | 0.984 | 1.000 | 1.000 | 1.129 | 0.000 | 0.348 | 2063 | 26/31 |
-| `scaled_near` | 0.774 | 0.984 | 1.000 | 1.000 | 1.129 | 0.000 | 0.348 | 2063 | 26/31 |
+| `corpus_only` | 0.825 | 0.992 | 1.000 | 1.000 | 1.183 | 0.108 | 0.426 | 89 | 46/60 |
+| `scaled_noise` | 0.825 | 0.992 | 1.000 | 1.000 | 1.183 | 0.000 | 0.426 | 2089 | 46/60 |
+| `scaled_near` | 0.825 | 0.983 | 1.000 | 1.000 | 1.183 | 0.000 | 0.426 | 2089 | 46/60 |
 
-Per-category `recall@5` is 1.000 for path-scoped, heading-scoped, exact-term,
-paraphrase, same-topic distractor, and buried; multi-relevant is 0.875 (the
-second gold chunk of `q-multi-mealprep` ranks 6–10). The pinned `recall@5` floor
-is **0.94** (worst measured scenario 0.984 minus a 0.044 margin) and applies to
-every scenario. The negative top-1 ceiling is **0.40** (measured 0.348).
+Per-category `recall@5` is 1.000 for every category except multi-relevant:
+0.900 in `corpus_only`/`scaled_noise` and 0.800 in `scaled_near`, where the
+second gold chunks of `q-multi-mealprep` (all scenarios) and `q-multi-insurance`
+(`scaled_near` only) rank 6–10; `recall@10` is 1.000 everywhere. The pinned
+`recall@5` floor is **0.95** (worst measured scenario 0.983 minus a 0.033
+margin) and applies to every scenario. The negative top-1 ceiling is **0.48**
+(measured 0.426 with the near-miss negatives).
 
 The retrieval run needs pgvector; the baseline fails closed when `CI` is set and
 `DB_URL` or pgvector is missing, and skips locally. An explicit

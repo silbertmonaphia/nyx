@@ -2,6 +2,7 @@ package kb_test
 
 import (
 	"os"
+	"sort"
 	"strings"
 	"testing"
 
@@ -84,6 +85,60 @@ func kbRecallVacuousQueries(corpus kbRecallCorpus, chunks []kbRecallChunk, topK 
 	return out
 }
 
+type kbRecallCategoryShortfall struct {
+	Category string
+	Count    int
+	Minimum  int
+}
+
+func kbRecallQueryCounts(corpus kbRecallCorpus) (labelled, negatives int) {
+	for _, query := range corpus.Queries {
+		if query.Category == kbRecallCategoryNegative {
+			negatives++
+			continue
+		}
+		labelled++
+	}
+	return labelled, negatives
+}
+
+func kbRecallNearMissCount(corpus kbRecallCorpus) int {
+	count := 0
+	for _, query := range corpus.Queries {
+		if query.NearMiss {
+			count++
+		}
+	}
+	return count
+}
+
+func kbRecallCategoryShortfalls(corpus kbRecallCorpus, minimums map[string]int) []kbRecallCategoryShortfall {
+	counts := make(map[string]int, len(minimums))
+	for _, query := range corpus.Queries {
+		if query.Category == kbRecallCategoryNegative {
+			continue
+		}
+		counts[query.Category]++
+	}
+	categories := make([]string, 0, len(minimums))
+	for category := range minimums {
+		categories = append(categories, category)
+	}
+	sort.Strings(categories)
+	shortfalls := make([]kbRecallCategoryShortfall, 0)
+	for _, category := range categories {
+		minimum := minimums[category]
+		if counts[category] < minimum {
+			shortfalls = append(shortfalls, kbRecallCategoryShortfall{
+				Category: category,
+				Count:    counts[category],
+				Minimum:  minimum,
+			})
+		}
+	}
+	return shortfalls
+}
+
 type kbRecallPrereqActionKind string
 
 const (
@@ -150,6 +205,59 @@ func TestKbRecallScoreMetrics(t *testing.T) {
 	require.Zero(t, recall10)
 	require.Zero(t, hit5)
 	require.Zero(t, firstRank)
+}
+
+func TestKbRecallCategoryFloors(t *testing.T) {
+	minimums := kbRecallCategoryMinimums()
+	corpus := kbRecallCorpus{}
+	for category, count := range minimums {
+		for i := 0; i < count; i++ {
+			corpus.Queries = append(corpus.Queries, kbRecallQuery{Category: category})
+		}
+	}
+	require.Empty(t, kbRecallCategoryShortfalls(corpus, minimums))
+
+	labelled, negatives := kbRecallQueryCounts(corpus)
+	require.Equal(t, 34, labelled)
+	require.Zero(t, negatives)
+
+	for i, query := range corpus.Queries {
+		if query.Category == kbRecallCategorySemantic {
+			corpus.Queries = append(corpus.Queries[:i], corpus.Queries[i+1:]...)
+			break
+		}
+	}
+	shortfalls := kbRecallCategoryShortfalls(corpus, minimums)
+	require.Len(t, shortfalls, 1)
+	require.Equal(t, kbRecallCategorySemantic, shortfalls[0].Category)
+	require.Equal(t, 5, shortfalls[0].Count)
+	require.Equal(t, 6, shortfalls[0].Minimum)
+
+	counted := kbRecallCorpus{}
+	for i := 0; i < 55; i++ {
+		counted.Queries = append(counted.Queries, kbRecallQuery{Category: kbRecallCategorySemantic})
+	}
+	for i := 0; i < 12; i++ {
+		counted.Queries = append(counted.Queries, kbRecallQuery{Category: kbRecallCategoryNegative})
+	}
+	labelled, negatives = kbRecallQueryCounts(counted)
+	require.Equal(t, 55, labelled)
+	require.Equal(t, 12, negatives)
+}
+
+func TestKbRecallNearMissCount(t *testing.T) {
+	corpus := kbRecallCorpus{Queries: []kbRecallQuery{
+		{Key: "a", Category: kbRecallCategoryNegative, NearMiss: true},
+		{Key: "b", Category: kbRecallCategoryNegative, NearMiss: true},
+		{Key: "c", Category: kbRecallCategoryNegative, NearMiss: true},
+		{Key: "d", Category: kbRecallCategoryNegative, NearMiss: true},
+		{Key: "e", Category: kbRecallCategoryNegative},
+		{Key: "f", Category: kbRecallCategorySemantic},
+	}}
+	require.Equal(t, 4, kbRecallNearMissCount(corpus))
+	labelled, negatives := kbRecallQueryCounts(corpus)
+	require.Equal(t, 1, labelled)
+	require.Equal(t, 5, negatives)
 }
 
 func TestKbRecallCandidateSets(t *testing.T) {

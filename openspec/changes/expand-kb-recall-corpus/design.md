@@ -2,7 +2,7 @@
 
 ## Context
 
-See `proposal.md` — Why. The hardened baseline (change `harden-kb-recall-baseline`, archived) has 18 documents, 63 chunks, 31 labelled queries, and 8 negatives. Its three scenarios (`corpus_only`, `scaled_noise`, `scaled_near`), 2000 decoys, 1000-row ANN floor, `k = 10` measurement width, and aggregate metrics are settled and stay unchanged. The category switch, count floors, and duplicate-key validation live in `backend/internal/kb/recall_integration_test.go`; category values live in `backend/internal/kb/testdata/kb_recall_corpus.json`; the 63 chunk vectors and 39 query vectors live in `kb_recall_vectors.json`.
+See `proposal.md` — Why. Before this change, the hardened baseline (change `harden-kb-recall-baseline`, archived) had 18 documents, 63 chunks, 31 labelled queries, and 8 negatives. Its three scenarios (`corpus_only`, `scaled_noise`, `scaled_near`), 2000 decoys, 1000-row ANN floor, `k = 10` measurement width, and aggregate metrics are settled and stay unchanged. The category switch, count floors, and duplicate-key validation live in `backend/internal/kb/recall_integration_test.go`; category values live in `backend/internal/kb/testdata/kb_recall_corpus.json`; the then-current 63 chunk vectors and 39 query vectors lived in `kb_recall_vectors.json`.
 
 Feed's composition is the reference for difficulty coverage: 75 feeds, 68 queries split across symptom, semantic, buried, vague-referential, cluster-confusable, exact-keyword, multi-relevant, opaque-id, same-topic-distractor, and negative. KB currently lacks vague-referential, cluster-confusable, opaque-id, and symptom, and has too few semantic, paraphrase, and buried cases.
 
@@ -65,7 +65,7 @@ The four new classes get concrete query shapes:
 - `opaque_id`: rare identifiers (`Op.27 No.2`, a recipe code, a Hanon number) that only one chunk contains.
 - `symptom`: "面团发不起来", "膝盖外侧疼", "皮肤又干又痒" — a described symptom that must map to a troubleshooting section.
 
-Near-miss negatives (4) target adjacent but absent topics: protein powder/creatine, running-shoe replacement, coffee-machine descaling, sleep-mask brands. They must remain absent from the corpus, so the added documents deliberately avoid those topics.
+Near-miss negatives (4) target adjacent but not answered topics: protein powder/creatine, knee-brace selection, coffee-machine descaling, sleep-mask brands. The answers stay absent from the corpus while adjacent vocabulary remains (蛋白, 眼罩, 膝盖, 咖啡), which is what makes them near-miss; running-shoe replacement was rejected because the existing `B-Sport/running.md` already answers it. Each near-miss query carries `near_miss: true`, and validation requires at least four such markers and rejects one on a labelled query.
 
 ### D3 — Validation encodes the new floors
 
@@ -91,6 +91,20 @@ Update the recall-baseline section in `docs/knowledge-base.md`: document/chunk c
 - **Vectors file roughly doubles** → acceptable; regen is seconds and CI runtime is dominated by decoy seeding, which is unchanged.
 - **New labels can be ambiguous** → each new query names a single gold chunk (or a small multi-relevant set), and validation rejects missing/unknown/duplicate labels.
 - **Cluster-confusable documents may rank too easily** → measure by category; if a cluster collapses to one document, add sibling sections that share vocabulary but not the answer.
+
+## Measured Baseline
+
+Expanded corpus: 26 documents, 89 chunks, 60 labelled queries, 12 negatives (4 near-miss). Frozen vectors from `Qwen/Qwen3-Embedding-0.6B`; decoys unchanged at 2000 per scaled scenario.
+
+| Scenario | Recall@1 | Recall@5 | Recall@10 | Hit@5 | Mean first rank | Random@5 | Negative top-1 | Rows | Distinct top-1 |
+|---|---|---|---|---|---|---|---|---|---|
+| `corpus_only` | 0.825 | 0.992 | 1.000 | 1.000 | 1.183 | 0.108 | 0.426 | 89 | 46/60 |
+| `scaled_noise` | 0.825 | 0.992 | 1.000 | 1.000 | 1.183 | 0.000 | 0.426 | 2089 | 46/60 |
+| `scaled_near` | 0.825 | 0.983 | 1.000 | 1.000 | 1.183 | 0.000 | 0.426 | 2089 | 46/60 |
+
+Noise-decoy cosine range `[-0.111, 0.101]`; near-decoy range `[0.350, 0.749]`. Per-category `recall@5` is 1.000 except multi-relevant: 0.900 in `corpus_only`/`scaled_noise` and 0.800 in `scaled_near`; the misses are `q-multi-mealprep` (all scenarios) and `q-multi-insurance` (`scaled_near`), all recovered by `recall@10`.
+
+Pinned floor: **0.95** = worst scenario `0.983` minus a `0.033` margin. Negative top-1 ceiling: **0.48** = measured aggregate `0.426` with near-miss negatives plus a `0.054` margin. The ceiling is aggregate-only by design: three of the four near-miss negatives individually exceed `0.48` while the 12-negative mean stays below it. The near-miss negatives raised the mean from the previous `0.348`, which is why the ceiling moves with them.
 
 ## Migration Plan
 
