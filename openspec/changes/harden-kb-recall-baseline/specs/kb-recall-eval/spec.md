@@ -60,7 +60,7 @@ The baseline SHALL retrieve `k = 10` results per query while the production resu
 #### Scenario: Aggregate reports every metric
 
 - **WHEN** a scenario completes
-- **THEN** the summary reports aggregate `recall@1`, `recall@5`, `recall@10`, `hit@5`, the random-vector control, and the eligible row count
+- **THEN** the summary reports aggregate `recall@1`, `recall@5`, `recall@10`, `hit@5`, mean `first_rank`, the random-vector control, and the eligible row count
 
 ### Requirement: Query difficulty and label invariants
 
@@ -92,7 +92,7 @@ The pinned `recall@5` floor SHALL be derived from a measured run of the hardened
 
 ### Requirement: CI executes, local absence may skip
 
-The baseline SHALL execute in the default backend CI job. When `DB_URL` is unset, or points at a Postgres without pgvector, a local run MAY skip; when `CI` is set, the same condition MUST fail the run rather than skip, so a misconfigured CI database cannot make the gate vacuous.
+The baseline SHALL execute in the default backend CI job. When `DB_URL` is unset, or points at a Postgres without pgvector, a local run MAY skip; when `CI` is set, the same condition MUST fail the run rather than skip, so a misconfigured CI database cannot make the gate vacuous. An explicit `SKIP_CONTAINERS=true` SHALL be honored as a deliberate opt-out and MAY skip even when `CI` is set; the coverage recipe relies on this, and the fail-closed rule applies to the implicit cases (empty `DB_URL` or a database without pgvector).
 
 #### Scenario: CI without pgvector fails
 
@@ -103,3 +103,8 @@ The baseline SHALL execute in the default backend CI job. When `DB_URL` is unset
 
 - **WHEN** `DB_URL` is unset on a local machine
 - **THEN** the retrieval scenarios skip while fixture validation still runs
+
+#### Scenario: Explicit container opt-out skips under CI
+
+- **WHEN** `CI` is set and `SKIP_CONTAINERS=true` is passed explicitly, as the coverage recipe does
+- **THEN** the retrieval scenarios skip without failing the coverage gate

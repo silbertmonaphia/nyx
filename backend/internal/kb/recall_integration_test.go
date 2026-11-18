@@ -28,21 +28,38 @@ import (
 )
 
 const (
-	kbRecallVersion           = 1
-	kbRecallCorpusFile        = "kb_recall_corpus.json"
-	kbRecallVectorsFile       = "kb_recall_vectors.json"
-	kbRecallDocsDir           = "kb_recall_docs"
-	kbRecallK                 = 5
-	kbRecallMinLabeledQueries = 15
-	kbRecallDims              = 1024
-	kbRecallFloor5            = 0.85
-	kbRecallNegativeCeiling   = 0.60
-	kbRecallRandomSeed        = 0x6b62
-	kbRecallCategoryPath      = "path_scope"
-	kbRecallCategoryHeading   = "heading_scope"
-	kbRecallCategoryExact     = "exact_term"
-	kbRecallCategorySemantic  = "semantic"
-	kbRecallCategoryNegative  = "negative"
+	kbRecallVersion            = 1
+	kbRecallCorpusFile         = "kb_recall_corpus.json"
+	kbRecallVectorsFile        = "kb_recall_vectors.json"
+	kbRecallDocsDir            = "kb_recall_docs"
+	kbRecallTopK               = 5
+	kbRecallFetchK             = 10
+	kbRecallMinLabelledQueries = 30
+	kbRecallMinNegativeQueries = 8
+	kbRecallDims               = 1024
+	kbRecallFloor5             = 0.94
+	kbRecallNegativeCeiling    = 0.40
+	kbRecallRandomSeed         = 0x6b62
+	kbRecallDecoySeed          = 0x6b63
+	kbRecallDecoyCount         = 2000
+	kbRecallDecoyBatch         = 500
+	kbRecallDecoyCosLo         = 0.35
+	kbRecallDecoyCosHi         = 0.75
+	kbRecallAnnFloor           = 1000
+	kbRecallDecoySourcePrefix  = "kb_recall_decoys"
+	skipTrue                   = "true"
+)
+
+const (
+	kbRecallCategoryPath       = "path_scope"
+	kbRecallCategoryHeading    = "heading_scope"
+	kbRecallCategoryExact      = "exact_term"
+	kbRecallCategorySemantic   = "semantic"
+	kbRecallCategoryParaphrase = "paraphrase"
+	kbRecallCategoryDistractor = "same_topic_distractor"
+	kbRecallCategoryMulti      = "multi_relevant"
+	kbRecallCategoryBuried     = "buried"
+	kbRecallCategoryNegative   = "negative"
 )
 
 type kbRecallDocument struct {
@@ -92,9 +109,53 @@ type kbRecallQueryResult struct {
 	Category  string
 	Relevant  []string
 	Retrieved []string
-	Hits      int
-	Recall    float64
+	Recall1   float64
+	Recall5   float64
+	Recall10  float64
+	Hit5      float64
+	FirstRank int
 	TopScore  float64
+}
+
+type kbRecallEvaluation struct {
+	Result        kbRecallQueryResult
+	RandomRecall5 float64
+	NegativeTop   *float64
+}
+
+type kbRecallScenario struct {
+	Name         string
+	Decoys       int
+	Mode         kbRecallDecoyMode
+	SourceScoped bool
+}
+
+type kbRecallCategoryReport struct {
+	Queries  int
+	Relevant int
+	Hits1    int
+	Hits5    int
+	Hits10   int
+}
+
+type kbRecallScenarioReport struct {
+	Name          string
+	Decoys        int
+	Mode          kbRecallDecoyMode
+	Rows          int
+	CosLo         float64
+	CosHi         float64
+	Labelled      int
+	Negatives     int
+	Recall1       float64
+	Recall5       float64
+	Recall10      float64
+	Hit5          float64
+	MeanFirstRank float64
+	RandomRecall5 float64
+	NegativeTop   float64
+	DistinctTop1  int
+	Categories    map[string]*kbRecallCategoryReport
 }
 
 type kbRecallEmbedder struct {
@@ -132,7 +193,7 @@ func TestKbRecallBaseline(t *testing.T) {
 	validateKbRecallFixture(t, corpus, vectors)
 	chunks := kbRecallAllChunks(t, corpus)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	defer cancel()
 
 	store := kb.NewSQLStore(pool)
@@ -165,66 +226,124 @@ func TestKbRecallBaseline(t *testing.T) {
 	require.Zero(t, stats.Pending)
 
 	randomVec := kbRecallRandomVector()
-	recalls := make([]float64, 0, len(corpus.Queries))
+	for _, scenario := range kbRecallScenarios() {
+		t.Run(scenario.Name, func(t *testing.T) {
+			kbRecallRunScenario(t, ctx, pool, store, owner, src.ID, corpus, chunks, vectors, scenario, randomVec)
+		})
+	}
+}
+
+func kbRecallScenarios() []kbRecallScenario {
+	decoys := kbRecallDecoyCountFromEnv()
+	return []kbRecallScenario{
+		{Name: "corpus_only", Decoys: 0, Mode: kbRecallDecoyNoise, SourceScoped: true},
+		{Name: "scaled_noise", Decoys: decoys, Mode: kbRecallDecoyNoise, SourceScoped: false},
+		{Name: "scaled_near", Decoys: decoys, Mode: kbRecallDecoyNear, SourceScoped: false},
+	}
+}
+
+func kbRecallRunScenario(t *testing.T, ctx context.Context, pool *pgxpool.Pool, store *kb.SQLStore, owner, fixtureSourceID int64, corpus kbRecallCorpus, chunks []kbRecallChunk, vectors kbRecallVectorSet, scenario kbRecallScenario, randomVec []float32) {
+	t.Helper()
+	cosLo, cosHi := 0.0, 0.0
+	if scenario.Decoys > 0 {
+		cosLo, cosHi = kbRecallSeedDecoys(t, ctx, pool, store, owner, corpus, chunks, vectors, scenario.Decoys, scenario.Mode)
+	}
+
+	var sourceID *int64
+	if scenario.SourceScoped {
+		sourceID = &fixtureSourceID
+	}
+	rows := kbRecallEligibleRows(t, ctx, pool, owner, vectors.Model, sourceID)
+	if !scenario.SourceScoped {
+		require.GreaterOrEqualf(t, rows, kbRecallAnnFloor,
+			"scenario %s has %d eligible chunk rows below the ANN floor %d", scenario.Name, rows, kbRecallAnnFloor)
+	}
+
+	recalls1 := make([]float64, 0, len(corpus.Queries))
+	recalls5 := make([]float64, 0, len(corpus.Queries))
+	recalls10 := make([]float64, 0, len(corpus.Queries))
+	hits5 := make([]float64, 0, len(corpus.Queries))
+	firstRanks := make([]float64, 0, len(corpus.Queries))
 	randomRecalls := make([]float64, 0, len(corpus.Queries))
-	negativeTopScores := make([]float64, 0)
+	negativeTops := make([]float64, 0)
 	distinctTop1 := map[string]struct{}{}
-	categoryHits := map[string]int{}
-	categoryTotal := map[string]int{}
+	categories := map[string]*kbRecallCategoryReport{}
 
 	for _, query := range corpus.Queries {
-		evaluation := kbRecallEvaluateQuery(t, ctx, store, owner, src.ID, vectors, query, randomVec)
+		evaluation := kbRecallEvaluateQuery(t, ctx, store, owner, sourceID, vectors, query, randomVec)
+		result := evaluation.Result
+		kbRecallLogQuery(t, result, evaluation.RandomRecall5)
 		if evaluation.NegativeTop != nil {
-			negativeTopScores = append(negativeTopScores, *evaluation.NegativeTop)
+			negativeTops = append(negativeTops, *evaluation.NegativeTop)
 			continue
 		}
-		if len(evaluation.Result.Retrieved) > 0 {
-			distinctTop1[evaluation.Result.Retrieved[0]] = struct{}{}
+		recalls1 = append(recalls1, result.Recall1)
+		recalls5 = append(recalls5, result.Recall5)
+		recalls10 = append(recalls10, result.Recall10)
+		hits5 = append(hits5, result.Hit5)
+		firstRanks = append(firstRanks, float64(result.FirstRank))
+		randomRecalls = append(randomRecalls, evaluation.RandomRecall5)
+		if len(result.Retrieved) > 0 {
+			distinctTop1[result.Retrieved[0]] = struct{}{}
 		}
-		recalls = append(recalls, evaluation.Result.Recall)
-		randomRecalls = append(randomRecalls, evaluation.RandomRecall)
-		categoryHits[query.Category] += evaluation.Result.Hits
-		categoryTotal[query.Category] += len(evaluation.Result.Relevant)
-		kbRecallLogQuery(t, evaluation.Result)
+		category := categories[result.Category]
+		if category == nil {
+			category = &kbRecallCategoryReport{}
+			categories[result.Category] = category
+		}
+		category.Queries++
+		category.Relevant += len(result.Relevant)
+		category.Hits1 += kbRecallHitsAt(result.Retrieved, result.Relevant, 1)
+		category.Hits5 += kbRecallHitsAt(result.Retrieved, result.Relevant, 5)
+		category.Hits10 += kbRecallHitsAt(result.Retrieved, result.Relevant, 10)
 	}
 
-	meanRecall := kbRecallMean(recalls)
-	randomRecall := kbRecallMean(randomRecalls)
-	negativeTop := kbRecallMean(negativeTopScores)
-	t.Logf("kb recall@%d=%.3f random_control=%.3f negatives=%d negative_top1_mean=%.3f chunks=%d",
-		kbRecallK, meanRecall, randomRecall, len(negativeTopScores), negativeTop, len(chunks))
-	for _, category := range kbRecallCategories(categoryHits) {
-		t.Logf("kb recall category %-14s %d/%d", category, categoryHits[category], categoryTotal[category])
+	report := kbRecallScenarioReport{
+		Name:          scenario.Name,
+		Decoys:        scenario.Decoys,
+		Mode:          scenario.Mode,
+		Rows:          rows,
+		CosLo:         cosLo,
+		CosHi:         cosHi,
+		Labelled:      len(recalls5),
+		Negatives:     len(negativeTops),
+		Recall1:       kbRecallMean(recalls1),
+		Recall5:       kbRecallMean(recalls5),
+		Recall10:      kbRecallMean(recalls10),
+		Hit5:          kbRecallMean(hits5),
+		MeanFirstRank: kbRecallMean(firstRanks),
+		RandomRecall5: kbRecallMean(randomRecalls),
+		NegativeTop:   kbRecallMean(negativeTops),
+		DistinctTop1:  len(distinctTop1),
+		Categories:    categories,
 	}
+	kbRecallLogScenario(t, report)
 
-	require.GreaterOrEqualf(t, meanRecall, kbRecallFloor5,
-		"recall@%d fell to %.3f against the pinned floor %.2f", kbRecallK, meanRecall, kbRecallFloor5)
-	require.Greaterf(t, meanRecall, randomRecall,
-		"a fixed random query vector recalls %.3f against a real-query %.3f", randomRecall, meanRecall)
-	require.Lessf(t, negativeTop, kbRecallNegativeCeiling,
-		"negative queries reached a top-1 score of %.3f against the pinned ceiling %.2f", negativeTop, kbRecallNegativeCeiling)
-	require.Greaterf(t, len(distinctTop1), len(recalls)/2,
-		"only %d distinct top-1 chunks across %d labelled queries", len(distinctTop1), len(recalls))
+	require.GreaterOrEqualf(t, report.Recall5, kbRecallFloor5,
+		"scenario %s recall@5 fell to %.3f against the pinned floor %.2f", scenario.Name, report.Recall5, kbRecallFloor5)
+	require.Greaterf(t, report.Recall5, report.RandomRecall5,
+		"scenario %s random control recalls %.3f against a real-query %.3f", scenario.Name, report.RandomRecall5, report.Recall5)
+	if report.Negatives > 0 {
+		require.Lessf(t, report.NegativeTop, kbRecallNegativeCeiling,
+			"scenario %s negative top-1 mean %.3f against the pinned ceiling %.2f", scenario.Name, report.NegativeTop, kbRecallNegativeCeiling)
+	}
+	require.Greaterf(t, report.DistinctTop1, report.Labelled/2,
+		"scenario %s has %d distinct top-1 chunks across %d labelled queries", scenario.Name, report.DistinctTop1, report.Labelled)
 }
 
-type kbRecallEvaluation struct {
-	Result       kbRecallQueryResult
-	RandomRecall float64
-	NegativeTop  *float64
-}
-
-func kbRecallEvaluateQuery(t *testing.T, ctx context.Context, store *kb.SQLStore, owner, sourceID int64, vectors kbRecallVectorSet, query kbRecallQuery, randomVec []float32) kbRecallEvaluation {
+func kbRecallEvaluateQuery(t *testing.T, ctx context.Context, store *kb.SQLStore, owner int64, sourceID *int64, vectors kbRecallVectorSet, query kbRecallQuery, randomVec []float32) kbRecallEvaluation {
 	t.Helper()
-	passages, err := store.RetrievePassages(ctx, kb.RetrievalParams{
+	params := kb.RetrievalParams{
 		Embedding:      vectors.Queries[query.Key],
 		EmbeddingModel: vectors.Model,
 		UserID:         owner,
-		SourceID:       &sourceID,
+		SourceID:       sourceID,
 		PathPrefix:     query.Path,
-		Limit:          kbRecallK,
-	})
+		Limit:          kbRecallFetchK,
+	}
+	passages, err := store.RetrievePassages(ctx, params)
 	require.NoErrorf(t, err, "query %s", query.Key)
-	require.LessOrEqual(t, len(passages), kbRecallK)
+	require.LessOrEqualf(t, len(passages), kbRecallFetchK, "query %s", query.Key)
 	if query.Path != "" {
 		for _, passage := range passages {
 			require.Truef(t, strings.HasPrefix(passage.RelPath, query.Path),
@@ -245,51 +364,35 @@ func kbRecallEvaluateQuery(t *testing.T, ctx context.Context, store *kb.SQLStore
 	if len(passages) > 0 {
 		result.TopScore = passages[0].Score
 	}
-	if len(query.Relevant) == 0 {
-		require.NotEmpty(t, passages)
+	if query.Category == kbRecallCategoryNegative {
+		require.NotEmptyf(t, passages, "negative query %s returned no passages", query.Key)
 		top := passages[0].Score
 		return kbRecallEvaluation{Result: result, NegativeTop: &top}
 	}
 
-	relevant := make(map[string]struct{}, len(query.Relevant))
-	for _, key := range query.Relevant {
-		relevant[key] = struct{}{}
-	}
-	for _, key := range retrieved {
-		if _, ok := relevant[key]; ok {
-			result.Hits++
-		}
-	}
+	goldRank := kbRecallFirstRank(retrieved, query.Relevant)
 	for _, excluded := range query.Exclude {
-		for _, key := range retrieved {
-			require.NotEqualf(t, excluded, key, "query %s retrieved excluded chunk %s", query.Key, excluded)
+		excludedRank := kbRecallFirstRank(retrieved, []string{excluded})
+		if excludedRank > 0 {
+			require.Truef(t, goldRank > 0 && goldRank < excludedRank,
+				"query %s ranks excluded chunk %s at %d before the gold at %d", query.Key, excluded, excludedRank, goldRank)
 		}
 	}
-	result.Recall = float64(result.Hits) / float64(len(query.Relevant))
-	return kbRecallEvaluation{
-		Result:       result,
-		RandomRecall: kbRecallRandomRecall(t, ctx, store, owner, sourceID, vectors.Model, query, relevant, randomVec),
-	}
-}
+	result.Recall1, result.Recall5, result.Recall10, result.Hit5, result.FirstRank = kbRecallScoreMetrics(retrieved, query.Relevant)
 
-func kbRecallRandomRecall(t *testing.T, ctx context.Context, store *kb.SQLStore, owner, sourceID int64, model string, query kbRecallQuery, relevant map[string]struct{}, randomVec []float32) float64 {
-	t.Helper()
-	passages, err := store.RetrievePassages(ctx, kb.RetrievalParams{
-		Embedding:      randomVec,
-		EmbeddingModel: model,
-		UserID:         owner,
-		SourceID:       &sourceID,
-		PathPrefix:     query.Path,
-		Limit:          kbRecallK,
-	})
+	randomParams := params
+	randomParams.Embedding = randomVec
+	randomPassages, err := store.RetrievePassages(ctx, randomParams)
 	require.NoErrorf(t, err, "random control for %s", query.Key)
-	hits := 0
-	for _, passage := range passages {
-		if _, ok := relevant[kbRecallChunkKey(passage.RelPath, passage.HeadingPath)]; ok {
-			hits++
-		}
+	randomRetrieved := make([]string, 0, len(randomPassages))
+	for _, passage := range randomPassages {
+		randomRetrieved = append(randomRetrieved, kbRecallChunkKey(passage.RelPath, passage.HeadingPath))
 	}
-	return float64(hits) / float64(len(query.Relevant))
+	randomRecall5 := 0.0
+	if len(query.Relevant) > 0 {
+		randomRecall5 = float64(kbRecallHitsAt(randomRetrieved, query.Relevant, 5)) / float64(len(query.Relevant))
+	}
+	return kbRecallEvaluation{Result: result, RandomRecall5: randomRecall5}
 }
 
 func TestRegenerateKbRecallVectors(t *testing.T) {
@@ -308,6 +411,7 @@ func TestRegenerateKbRecallVectors(t *testing.T) {
 	corpus := loadKbRecallCorpus(t)
 	chunks := kbRecallAllChunks(t, corpus)
 	validateKbRecallQueries(t, corpus)
+	kbRecallRequireNoVacuousQueries(t, corpus, chunks)
 
 	chunkTexts := make([]string, 0, len(chunks))
 	for _, chunk := range chunks {
@@ -371,9 +475,10 @@ func validateKbRecallFixture(t *testing.T, corpus kbRecallCorpus, vectors kbReca
 	require.Equal(t, corpus.Version, vectors.Version)
 	require.Equal(t, kbRecallDims, vectors.Dimensions)
 	require.NotEmpty(t, vectors.Model)
-	require.Equal(t, kbRecallK, corpus.TopK)
+	require.Equal(t, kbRecallTopK, corpus.TopK)
 
 	chunks := kbRecallAllChunks(t, corpus)
+	kbRecallRequireNoVacuousQueries(t, corpus, chunks)
 	byKey := make(map[string]kbRecallChunk, len(chunks))
 	for _, chunk := range chunks {
 		byKey[chunk.Key] = chunk
@@ -408,10 +513,19 @@ func validateKbRecallFixture(t *testing.T, corpus kbRecallCorpus, vectors kbReca
 	}
 }
 
+func kbRecallRequireNoVacuousQueries(t *testing.T, corpus kbRecallCorpus, chunks []kbRecallChunk) {
+	t.Helper()
+	for _, vacuous := range kbRecallVacuousQueries(corpus, chunks, kbRecallTopK) {
+		require.Failf(t, "vacuous recall query",
+			"query %s filters to %d eligible chunks (<= top_k %d) under %q; add corpus or move the query",
+			vacuous.Key, vacuous.Eligible, vacuous.TopK, vacuous.Path)
+	}
+}
+
 func validateKbRecallQueries(t *testing.T, corpus kbRecallCorpus) {
 	t.Helper()
 	require.NotEmpty(t, corpus.Note)
-	labeled := 0
+	labelled := 0
 	negatives := 0
 	categories := map[string]int{}
 	keys := map[string]struct{}{}
@@ -427,7 +541,8 @@ func validateKbRecallQueries(t *testing.T, corpus kbRecallCorpus) {
 		texts[query.Text] = struct{}{}
 		switch query.Category {
 		case kbRecallCategoryPath, kbRecallCategoryHeading, kbRecallCategoryExact,
-			kbRecallCategorySemantic, kbRecallCategoryNegative:
+			kbRecallCategorySemantic, kbRecallCategoryParaphrase, kbRecallCategoryDistractor,
+			kbRecallCategoryMulti, kbRecallCategoryBuried, kbRecallCategoryNegative:
 		default:
 			require.Failf(t, "unknown category", "query %s has category %s", query.Key, query.Category)
 		}
@@ -437,73 +552,61 @@ func validateKbRecallQueries(t *testing.T, corpus kbRecallCorpus) {
 			negatives++
 		} else {
 			require.NotEmptyf(t, query.Relevant, "query %s has no labelled chunks", query.Key)
-			require.LessOrEqual(t, len(query.Relevant), kbRecallK)
-			labeled++
+			require.LessOrEqualf(t, len(query.Relevant), kbRecallTopK, "query %s labels more than top_k chunks", query.Key)
+			labelled++
 		}
 		if query.Path != "" {
 			require.Truef(t, strings.HasSuffix(query.Path, "/"), "query %s path %q must be a directory prefix", query.Key, query.Path)
 		}
+		require.Emptyf(t, kbRecallDuplicateKeys(query.Relevant), "query %s labels duplicate chunks", query.Key)
+		require.Emptyf(t, kbRecallDuplicateKeys(query.Exclude), "query %s excludes duplicate chunks", query.Key)
 		for _, key := range query.Relevant {
 			for _, excluded := range query.Exclude {
 				require.NotEqualf(t, key, excluded, "query %s both labels and excludes %s", query.Key, key)
 			}
 		}
 	}
-	require.GreaterOrEqual(t, labeled, kbRecallMinLabeledQueries)
-	require.Positive(t, negatives)
+	require.GreaterOrEqual(t, labelled, kbRecallMinLabelledQueries)
+	require.GreaterOrEqual(t, negatives, kbRecallMinNegativeQueries)
 	require.Positive(t, categories[kbRecallCategoryPath])
 	require.Positive(t, categories[kbRecallCategoryHeading])
 	require.Positive(t, categories[kbRecallCategoryExact])
-}
-
-func loadKbRecallCorpus(t *testing.T) kbRecallCorpus {
-	t.Helper()
-	raw, err := os.ReadFile(kbRecallFixturePath(kbRecallCorpusFile))
-	require.NoErrorf(t, err, "corpus fixture %s is the labelled ground truth for the recall baseline", kbRecallCorpusFile)
-	var corpus kbRecallCorpus
-	require.NoError(t, json.Unmarshal(raw, &corpus))
-	return corpus
-}
-
-func loadKbRecallVectors(t *testing.T) kbRecallVectorSet {
-	t.Helper()
-	raw, err := os.ReadFile(kbRecallFixturePath(kbRecallVectorsFile))
-	require.NoErrorf(t, err, "vector fixture %s is missing; regenerate with NYX_KB_RECALL_REGEN=1 against a live embedder", kbRecallVectorsFile)
-	var vectors kbRecallVectorSet
-	require.NoError(t, json.Unmarshal(raw, &vectors))
-	return vectors
-}
-
-func kbRecallFixturePath(name string) string {
-	return filepath.Join("testdata", name)
+	require.Positive(t, categories[kbRecallCategorySemantic])
+	require.Positive(t, categories[kbRecallCategoryParaphrase])
+	require.Positive(t, categories[kbRecallCategoryDistractor])
+	require.Positive(t, categories[kbRecallCategoryMulti])
+	require.Positive(t, categories[kbRecallCategoryBuried])
 }
 
 func requireKbRecallPgvector(t *testing.T) *pgxpool.Pool {
 	t.Helper()
-	if os.Getenv("SKIP_CONTAINERS") == "true" {
-		t.Skip("SKIP_CONTAINERS=true; kb recall baseline requires pgvector Postgres")
+	ci := kbRecallCIEnabled()
+	switch kbRecallPrereqAction(ci, os.Getenv("SKIP_CONTAINERS") == skipTrue, os.Getenv("DB_URL")) {
+	case kbRecallPrereqFail:
+		t.Fatalf("CI requires a pgvector Postgres for the kb recall baseline; set DB_URL, or set SKIP_CONTAINERS=true to opt this gate out")
+	case kbRecallPrereqSkip:
+		t.Skip("kb recall baseline requires pgvector Postgres; set DB_URL, or set SKIP_CONTAINERS=true to skip")
 	}
 	url := os.Getenv("DB_URL")
-	if url == "" {
-		t.Skip("DB_URL is not set; kb recall baseline requires pgvector Postgres")
-	}
 	ctx, cancel := context.WithTimeout(context.Background(), test.LockWaitTimeout)
 	defer cancel()
 	probe, err := pgxpool.New(ctx, url)
 	require.NoError(t, err)
+	t.Cleanup(probe.Close)
 	var hasVector bool
 	require.NoError(t, probe.QueryRow(ctx,
 		`SELECT EXISTS (SELECT 1 FROM pg_available_extensions WHERE name = 'vector')`,
 	).Scan(&hasVector))
 	if !hasVector {
-		probe.Close()
+		if ci {
+			t.Fatalf("DB_URL points at a Postgres without pgvector; CI requires it")
+		}
 		t.Skip("DB_URL points at a Postgres without pgvector")
 	}
 	release, err := test.AcquireIntegrationLock(ctx, url)
 	require.NoError(t, err)
 	t.Cleanup(release)
 	require.NoError(t, test.RunMigrationsForURL(ctx, url))
-	t.Cleanup(probe.Close)
 	return probe
 }
 
@@ -648,17 +751,64 @@ func kbRecallRandomVector() []float32 {
 	return vec
 }
 
-func kbRecallCategories(hits map[string]int) []string {
-	categories := make([]string, 0, len(hits))
-	for category := range hits {
-		categories = append(categories, category)
+func kbRecallCategories(categories map[string]*kbRecallCategoryReport) []string {
+	out := make([]string, 0, len(categories))
+	for category := range categories {
+		out = append(out, category)
 	}
-	sort.Strings(categories)
-	return categories
+	sort.Strings(out)
+	return out
 }
 
-func kbRecallLogQuery(t *testing.T, result kbRecallQueryResult) {
+func kbRecallRatio(hits, total int) float64 {
+	if total == 0 {
+		return 0
+	}
+	return float64(hits) / float64(total)
+}
+
+func kbRecallLogQuery(t *testing.T, result kbRecallQueryResult, randomRecall5 float64) {
 	t.Helper()
-	t.Logf("  %-22s %-14s hits=%d/%d recall=%.2f top1=%.4f",
-		result.Key, result.Category, result.Hits, len(result.Relevant), result.Recall, result.TopScore)
+	t.Logf("  %-24s %-22s recall@1=%.2f recall@5=%.2f recall@10=%.2f hit@5=%.0f first_rank=%d top1=%.4f random@5=%.2f",
+		result.Key, result.Category, result.Recall1, result.Recall5, result.Recall10, result.Hit5,
+		result.FirstRank, result.TopScore, randomRecall5)
+}
+
+func kbRecallLogScenario(t *testing.T, report kbRecallScenarioReport) {
+	t.Helper()
+	t.Logf("scenario=%s decoys=%d mode=%s cos_to_base=[%.3f,%.3f] eligible_rows=%d labelled=%d negatives=%d",
+		report.Name, report.Decoys, report.Mode, report.CosLo, report.CosHi, report.Rows, report.Labelled, report.Negatives)
+	t.Logf("  recall@1=%.3f recall@5=%.3f recall@10=%.3f hit@5=%.3f mean_first_rank=%.3f random_control_recall@5=%.3f negative_top1=%.3f distinct_top1=%d/%d",
+		report.Recall1, report.Recall5, report.Recall10, report.Hit5, report.MeanFirstRank,
+		report.RandomRecall5, report.NegativeTop, report.DistinctTop1, report.Labelled)
+	for _, category := range kbRecallCategories(report.Categories) {
+		stats := report.Categories[category]
+		t.Logf("  category %-22s queries=%d relevant=%d recall@1=%.3f recall@5=%.3f recall@10=%.3f",
+			category, stats.Queries, stats.Relevant,
+			kbRecallRatio(stats.Hits1, stats.Relevant),
+			kbRecallRatio(stats.Hits5, stats.Relevant),
+			kbRecallRatio(stats.Hits10, stats.Relevant))
+	}
+}
+
+func loadKbRecallCorpus(t *testing.T) kbRecallCorpus {
+	t.Helper()
+	raw, err := os.ReadFile(kbRecallFixturePath(kbRecallCorpusFile))
+	require.NoErrorf(t, err, "corpus fixture %s is the labelled ground truth for the recall baseline", kbRecallCorpusFile)
+	var corpus kbRecallCorpus
+	require.NoError(t, json.Unmarshal(raw, &corpus))
+	return corpus
+}
+
+func loadKbRecallVectors(t *testing.T) kbRecallVectorSet {
+	t.Helper()
+	raw, err := os.ReadFile(kbRecallFixturePath(kbRecallVectorsFile))
+	require.NoErrorf(t, err, "vector fixture %s is missing; regenerate with NYX_KB_RECALL_REGEN=1 against a live embedder", kbRecallVectorsFile)
+	var vectors kbRecallVectorSet
+	require.NoError(t, json.Unmarshal(raw, &vectors))
+	return vectors
+}
+
+func kbRecallFixturePath(name string) string {
+	return filepath.Join("testdata", name)
 }

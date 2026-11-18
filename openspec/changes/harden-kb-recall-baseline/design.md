@@ -53,7 +53,7 @@ The decoy source is deleted in `t.Cleanup` (cascade removes documents and chunks
 - `noise`: random unit vectors, as in the feed baseline.
 - `near`: take a randomly chosen fixture chunk vector as a base, add Gaussian noise scaled to a target cosine in `[0.35, 0.75]`, and normalize. This reproduces the feed baseline's `cos_to_base` band and forces the decoys to compete with real gold chunks in the top ranks.
 
-A deterministic PRNG (`kbRecallRandomSeed`) keeps both modes reproducible. The decoy mode and count are reported per scenario. The vector helpers are duplicated from the feed test rather than exported from `internal/rag`: they are test scaffolding in two independent test packages, and exporting them would add production-visible API surface for test-only code.
+A deterministic PRNG (`kbRecallDecoySeed`) keeps both modes reproducible. The decoy mode and count are reported per scenario. The vector helpers are duplicated from the feed test rather than exported from `internal/rag`: they are test scaffolding in two independent test packages, and exporting them would add production-visible API surface for test-only code.
 
 ### D5 — Three scenarios, owner-scoped for scaled runs
 
@@ -66,7 +66,7 @@ Each scenario asserts the eligible chunk row count. A pinned `kbRecallAnnFloor =
 
 ### D6 — Measurement width 10, headline recall@5
 
-Retrieve `k = 10` per query while the production result width stays `top_k = 5`. Per query compute `recall@1`, `recall@5`, `recall@10`, `hit@5` (binary any-hit within the first 5), and `first_rank` (1-based; 0 for a miss), plus the existing random-vector control. Aggregate by mean over labelled queries and by category. The regression gate is aggregate `recall@5` per scenario; `recall@10` and `first_rank` are diagnostic, so a gold chunk at rank 6–10 is distinguishable from one that was never retrieved.
+Retrieve `k = 10` per query while the production result width stays `top_k = 5`. Per query compute `recall@1`, `recall@5`, `recall@10`, `hit@5` (binary any-hit within the first 5), and `first_rank` (1-based; 0 for a miss), plus the existing random-vector control. Aggregate by mean over labelled queries and by category, including the mean `first_rank`. The regression gate is aggregate `recall@5` per scenario; `recall@10` and `first_rank` are diagnostic, so a gold chunk at rank 6–10 is distinguishable from one that was never retrieved.
 
 Negative queries stay out of every recall figure; their top-1 scores are aggregated separately and asserted below a pinned ceiling, re-derived under the decoy scenarios because near decoys can raise a negative's top score.
 
@@ -78,7 +78,7 @@ The measured baseline table and the regeneration commands go into `docs/knowledg
 
 ### D8 — CI fails, local skips
 
-`requireKbRecallPgvector` keeps its local skip behavior (`SKIP_CONTAINERS=true`, empty `DB_URL`, or a database without pgvector), but when `CI` is set it must fail instead of skip: GitHub Actions sets `CI=true`, and the `backend-test` job already provides a `pgvector/pgvector:pg17` service with `DB_URL`. This prevents a misconfigured CI database from turning the gate into a silent skip.
+`requireKbRecallPgvector` keeps its local skip behavior and treats an explicit `SKIP_CONTAINERS=true` as a deliberate opt-out that also skips under `CI`; the `backend-test` job's `make coverage-check` recipe sets it, so failing there would turn every CI run red after the race suite already passed. For the implicit cases — empty `DB_URL` or a database without pgvector — a `CI` run fails instead of skipping: GitHub Actions sets `CI=true`, and the full-suite step already provides a `pgvector/pgvector:pg17` service with `DB_URL`. This prevents a misconfigured CI database from turning the gate into a silent skip while keeping the coverage gate's container opt-out honest.
 
 ## Risks / Trade-offs
 
@@ -88,6 +88,20 @@ The measured baseline table and the regeneration commands go into `docs/knowledg
 - **Decoy seeding slows CI** → batched raw inserts (500 rows) keep both scaled scenarios in the same order of runtime as the feed baseline (which seeds 4000 rows in ~15 seconds).
 - **Floor overfits a single measurement run** → record the per-scenario and per-category table, pin the floor with a margin below the worst scenario, and keep the random control and distinct-top-1 assertions as independent sanity checks.
 - **The fixture is still synthetic and small relative to a real notes tree** → explicitly documented as a regression and comparability gate, not a generalization claim; a real-corpus opt-in eval remains a separate future change.
+
+## Measured Baseline
+
+Hardened corpus: 18 documents, 63 chunks, 31 labelled queries plus 8 negative queries. Frozen vectors from `Qwen/Qwen3-Embedding-0.6B` (1024 dims); decoys default to 2000 per scaled scenario with a 1000-row ANN floor.
+
+| Scenario | Recall@1 | Recall@5 | Recall@10 | Hit@5 | Mean first rank | Random@5 | Negative top-1 | Rows | Distinct top-1 |
+|---|---|---|---|---|---|---|---|---|---|
+| `corpus_only` | 0.774 | 0.984 | 1.000 | 1.000 | 1.129 | 0.226 | 0.348 | 63 | 26/31 |
+| `scaled_noise` | 0.774 | 0.984 | 1.000 | 1.000 | 1.129 | 0.000 | 0.348 | 2063 | 26/31 |
+| `scaled_near` | 0.774 | 0.984 | 1.000 | 1.000 | 1.129 | 0.000 | 0.348 | 2063 | 26/31 |
+
+Near-decoy cosine range: `[0.350, 0.749]`. Noise-decoy cosine range: `[-0.119, 0.094]`. The single `recall@5` miss is `q-multi-mealprep` (one of two gold chunks ranks 6–10), so `recall@10 = 1.000` records the rank-6–10 hit.
+
+Pinned floor: **0.94** = worst scenario `0.984` minus a `0.044` margin. Negative top-1 ceiling: **0.40** = measured `0.348` plus margin. Per-category `recall@5`: path, heading, exact, paraphrase, distractor, and buried all `1.000`; multi-relevant `0.875`.
 
 ## Migration Plan
 

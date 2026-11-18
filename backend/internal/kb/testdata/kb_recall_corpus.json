@@ -1,20 +1,26 @@
 {
   "version": 1,
-  "note": "Hand-labelled Chinese retrieval baseline for the knowledge corpus. Documents are synthetic notes under four directory families; queries are grouped into path-scoped, heading-scoped, exact-term, semantic, and negative categories. Chunk keys are rel_path::heading path and resolve against the production Markdown normalizer and chunker.",
+  "note": "Hand-labelled Chinese retrieval baseline for the knowledge corpus. Documents are synthetic notes under four directory families; queries are grouped into path-scoped, heading-scoped, exact-term, semantic, paraphrase, same-topic distractor, multi-relevant, buried, and negative categories. Chunk keys are rel_path::heading path and resolve against the production Markdown normalizer and chunker. Every non-negative query must filter to more candidate chunks than top_k.",
   "top_k": 5,
   "documents": [
     { "path": "A-Art/music.md" },
+    { "path": "B-BodyCare/eyes.md" },
     { "path": "B-BodyCare/teeth.md" },
     { "path": "B-Cook/diet.md" },
     { "path": "B-Cook/kitchen.md" },
+    { "path": "B-Cook/mealprep.md" },
     { "path": "B-Drink/coffee.md" },
+    { "path": "B-Sleep/nap.md" },
     { "path": "B-Sleep/sleep.md" },
     { "path": "B-Sport/gym.md" },
     { "path": "B-Sport/running.md" },
     { "path": "P-Polyglot/japanese.md" },
+    { "path": "P-Travel/japan.md" },
     { "path": "P-Travel/sea.md" },
+    { "path": "W-Invest/budget.md" },
     { "path": "W-Invest/estate.md" },
-    { "path": "W-Invest/fund.md" }
+    { "path": "W-Invest/fund.md" },
+    { "path": "W-Invest/insurance.md" }
   ],
   "queries": [
     {
@@ -154,6 +160,92 @@
       "relevant": ["B-Sport/gym.md::健身计划 / 增肌训练"]
     },
     {
+      "key": "q-para-caffeine",
+      "category": "paraphrase",
+      "text": "下午那杯喝多了，晚上翻来覆去睡不着",
+      "relevant": ["B-Sleep/sleep.md::睡眠改善 / 咖啡因"]
+    },
+    {
+      "key": "q-para-budget",
+      "category": "paraphrase",
+      "text": "怎么让刷卡消费不失控",
+      "relevant": ["W-Invest/budget.md::消费与预算 / 冲动消费"]
+    },
+    {
+      "key": "q-para-eye",
+      "category": "paraphrase",
+      "text": "盯屏幕久了眼睛发酸怎么办",
+      "relevant": ["B-BodyCare/eyes.md::用眼笔记 / 用眼休息"]
+    },
+    {
+      "key": "q-para-insurance",
+      "category": "paraphrase",
+      "text": "生了病住院的费用怎么报销",
+      "relevant": ["W-Invest/insurance.md::保险笔记 / 医疗险"]
+    },
+    {
+      "key": "q-distract-protein",
+      "category": "same_topic_distractor",
+      "text": "训练后半小时内吃什么帮助恢复",
+      "relevant": ["B-Sport/gym.md::健身计划 / 训练后营养"],
+      "exclude": ["B-Cook/diet.md::饮食笔记 / 蛋白列表"]
+    },
+    {
+      "key": "q-distract-caffeine",
+      "category": "same_topic_distractor",
+      "text": "下午几点后不该再喝咖啡",
+      "relevant": ["B-Sleep/sleep.md::睡眠改善 / 咖啡因"],
+      "exclude": ["B-Drink/coffee.md::咖啡 / 咖啡因含量"]
+    },
+    {
+      "key": "q-multi-japan",
+      "category": "multi_relevant",
+      "text": "去日本前要办什么手续，住哪里方便",
+      "relevant": [
+        "P-Travel/japan.md::日本旅行 / 签证",
+        "P-Travel/japan.md::日本旅行 / 住宿"
+      ]
+    },
+    {
+      "key": "q-multi-sleep",
+      "category": "multi_relevant",
+      "text": "改善睡眠要从作息和环境入手吗",
+      "relevant": [
+        "B-Sleep/sleep.md::睡眠改善 / 作息",
+        "B-Sleep/sleep.md::睡眠改善 / 睡眠环境"
+      ]
+    },
+    {
+      "key": "q-multi-mealprep",
+      "category": "multi_relevant",
+      "text": "工作日午饭怎么提前准备和保存",
+      "relevant": [
+        "B-Cook/mealprep.md::备餐笔记 / 周日备餐",
+        "B-Cook/mealprep.md::备餐笔记 / 冷冻保存"
+      ]
+    },
+    {
+      "key": "q-multi-insurance",
+      "category": "multi_relevant",
+      "text": "买保险应该先配哪些保障",
+      "relevant": [
+        "W-Invest/insurance.md::保险笔记 / 医疗险",
+        "W-Invest/insurance.md::保险笔记 / 意外险"
+      ]
+    },
+    {
+      "key": "q-buried-mealprep",
+      "category": "buried",
+      "text": "一次做五天便当怎么搭配菜色",
+      "relevant": ["B-Cook/mealprep.md::备餐笔记 / 便当搭配"]
+    },
+    {
+      "key": "q-buried-teeth",
+      "category": "buried",
+      "text": "牙缝里的食物残渣怎么清理",
+      "relevant": ["B-BodyCare/teeth.md::口腔护理 / 牙线"]
+    },
+    {
       "key": "q-negative-fish",
       "category": "negative",
       "text": "热带鱼白点病怎么治疗",
@@ -175,6 +267,30 @@
       "key": "q-negative-wedding",
       "category": "negative",
       "text": "婚礼请柬的措辞怎么写",
+      "relevant": []
+    },
+    {
+      "key": "q-neg-astronomy",
+      "category": "negative",
+      "text": "银河系里有多少颗行星",
+      "relevant": []
+    },
+    {
+      "key": "q-neg-law",
+      "category": "negative",
+      "text": "租房押金不退怎么起诉",
+      "relevant": []
+    },
+    {
+      "key": "q-neg-garden",
+      "category": "negative",
+      "text": "多肉叶子发软怎么救",
+      "relevant": []
+    },
+    {
+      "key": "q-neg-pet",
+      "category": "negative",
+      "text": "猫为什么总是吐毛球",
       "relevant": []
     }
   ]

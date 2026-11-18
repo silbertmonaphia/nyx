@@ -103,19 +103,57 @@ state when re-run.
 ## Recall baseline
 
 `backend/internal/kb/recall_integration_test.go` pins a hand-labelled Chinese
-corpus (`testdata/kb_recall_docs/`) with frozen 1024-dim vectors
-(`testdata/kb_recall_vectors.json`). It covers path-scoped, heading-scoped,
-exact-term, semantic, and negative queries, and recall@5 must stay at or above
-the pinned floor. The fixture validates without a database; the retrieval run
-needs pgvector.
+corpus (`testdata/kb_recall_docs/`, 18 documents / 63 chunks) with frozen
+1024-dim vectors (`testdata/kb_recall_vectors.json`). The corpus has 31 labelled
+queries and 8 negative queries across path-scoped, heading-scoped, exact-term,
+semantic, paraphrase, same-topic distractor, multi-relevant, and buried
+categories. A labelled query is rejected at fixture-validation time when its
+retrieval scope holds at most `top_k = 5` chunks, because `LIMIT 5` would then
+return the whole candidate set and recall would be 1.0 regardless of ranking.
+The fixture validates without a database; the retrieval run needs pgvector.
+
+Measurement uses `k = 10` with the production result width left at `top_k = 5`.
+Each scenario reports `recall@1`, `recall@5`, `recall@10`, `hit@5`, mean
+`first_rank`, a fixed random-vector control, the negative-query top-1 mean, and
+the distinct top-1 count. The headline regression metric is `recall@5`; the
+`recall@10`/`first_rank` pair separates a gold chunk at rank 6–10 from one that
+was not retrieved.
+
+Three scenarios run: `corpus_only` filters by the fixture source; `scaled_noise`
+and `scaled_near` add 2000 decoy chunks (override with
+`NYX_KB_RECALL_DECOYS`) and retrieve owner-scoped, so decoys compete. Decoys are
+distributed under the fixture's top-level directories; near decoys sit in a
+cosine band of `[0.35, 0.75]` against a fixture chunk. A scaled scenario with
+fewer than 1000 eligible chunk rows fails instead of reporting a recall measured
+on a table too small to exercise the index.
+
+Measured baseline (frozen vectors, `Qwen/Qwen3-Embedding-0.6B`):
+
+| Scenario | Recall@1 | Recall@5 | Recall@10 | Hit@5 | Mean first rank | Random@5 | Negative top-1 | Rows | Distinct top-1 |
+|---|---|---|---|---|---|---|---|---|---|
+| `corpus_only` | 0.774 | 0.984 | 1.000 | 1.000 | 1.129 | 0.226 | 0.348 | 63 | 26/31 |
+| `scaled_noise` | 0.774 | 0.984 | 1.000 | 1.000 | 1.129 | 0.000 | 0.348 | 2063 | 26/31 |
+| `scaled_near` | 0.774 | 0.984 | 1.000 | 1.000 | 1.129 | 0.000 | 0.348 | 2063 | 26/31 |
+
+Per-category `recall@5` is 1.000 for path-scoped, heading-scoped, exact-term,
+paraphrase, same-topic distractor, and buried; multi-relevant is 0.875 (the
+second gold chunk of `q-multi-mealprep` ranks 6–10). The pinned `recall@5` floor
+is **0.94** (worst measured scenario 0.984 minus a 0.044 margin) and applies to
+every scenario. The negative top-1 ceiling is **0.40** (measured 0.348).
+
+The retrieval run needs pgvector; the baseline fails closed when `CI` is set and
+`DB_URL` or pgvector is missing, and skips locally. An explicit
+`SKIP_CONTAINERS=true` is a deliberate opt-out that also skips under `CI`, as the
+`make coverage-check` recipe does.
 
 ```bash
 cd backend
 DB_URL=postgres://postgres:postgres@127.0.0.1:5433/nyx?sslmode=disable \
-  go test ./internal/kb -run 'TestKbRecall'
+  go test ./internal/kb -run 'TestKbRecall' -v
 ```
 
-Regenerate the frozen vectors after a chunker or embedding-model change:
+Regenerate the frozen vectors after a chunker, corpus, or embedding-model
+change:
 
 ```bash
 NYX_KB_RECALL_REGEN=1 \
