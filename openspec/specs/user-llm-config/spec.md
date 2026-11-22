@@ -8,7 +8,7 @@ Per-user BYOK LLM configuration: each user stores their own model endpoints, API
 
 ### Requirement: Per-user settings persisted and encrypted at rest
 
-The system SHALL persist one configuration row per user holding: optional main LLM base URL, API key, and model; optional embedding base URL, API key, and model; optional Tavily search base URL and API key; and optional retry-model LLM base URL, API key, and model. At least one group must carry a value on save. Every API key SHALL be encrypted at rest with AES-256-GCM under a server-side key, stored as versioned ciphertext (`v1:` prefix), and the row SHALL be deleted when its user is deleted.
+The system SHALL persist one configuration row per user holding: optional main LLM base URL, API key, and model; optional embedding base URL, API key, and model; optional Tavily search base URL and API key; optional retry-model LLM base URL, API key, and model; and optional rerank base URL, API key, and model. At least one group must carry a value on save. Every API key SHALL be encrypted at rest with AES-256-GCM under a server-side key, stored as versioned ciphertext (`v1:` prefix), and the row SHALL be deleted when its user is deleted.
 
 #### Scenario: Row survives across sessions
 
@@ -37,12 +37,12 @@ The API SHALL expose `GET /api/me/llm-config`, `PUT /api/me/llm-config`, and `DE
 #### Scenario: Unconfigured GET
 
 - **WHEN** a user with no saved configuration calls GET
-- **THEN** the response is `200 {"configured": false, "llm": null, "embedding": null, "tavily": null, "fallback": null}`
+- **THEN** the response is `200 {"configured": false, "llm": null, "embedding": null, "rerank": null, "tavily": null, "fallback": null}`
 
 #### Scenario: Configured GET masks keys
 
 - **WHEN** a configured user calls GET
-- **THEN** each section carries its base URL, model (where applicable), and an `api_key_masked` showing at most the tail 4 characters
+- **THEN** each section carries its base URL, model (where applicable), and an `api_key_masked` showing at most the tail 4 characters, including the rerank section when configured
 
 #### Scenario: Cross-user isolation
 
@@ -61,7 +61,7 @@ The API SHALL expose `GET /api/me/llm-config`, `PUT /api/me/llm-config`, and `DE
 
 ### Requirement: PUT validates and upserts
 
-PUT SHALL accept all eleven fields (Tavily and fallback optional as groups), validate supplied URLs parse as http/https with a host and no userinfo, reject placeholder API keys, and upsert the row. On create, a missing required key SHALL be rejected UNLESS the corresponding base URL's host is loopback (`localhost`, `127.0.0.0/8`, `::1`) — a local model server needs no credential, and the stored key column stays empty, so no placeholder value is ever persisted. On update, an empty key field SHALL mean "keep the stored key". The fallback fields SHALL be all-or-nothing on base URL and model; a blank fallback key is acceptable only when the fallback base URL is loopback or a stored key exists. User-supplied URLs MAY point at private or localhost addresses (self-hosted deployment).
+PUT SHALL accept all fourteen fields (Tavily, fallback, and rerank optional as groups), validate supplied URLs parse as http/https with a host and no userinfo, reject placeholder API keys, and upsert the row. On create, a missing required key SHALL be rejected UNLESS the corresponding base URL's host is loopback (`localhost`, `127.0.0.0/8`, `::1`) — a local model server needs no credential, and the stored key column stays empty, so no placeholder value is ever persisted. On update, an empty key field SHALL mean "keep the stored key". The fallback fields SHALL be all-or-nothing on base URL and model; the rerank fields SHALL be all-or-nothing on base URL and model. A blank fallback key is acceptable only when the fallback base URL is loopback or a stored key exists; a blank rerank key is acceptable only when the rerank base URL is loopback or a stored key exists. User-supplied URLs MAY point at private or localhost addresses (self-hosted deployment).
 
 #### Scenario: Create requires all eight
 
@@ -77,6 +77,16 @@ PUT SHALL accept all eleven fields (Tavily and fallback optional as groups), val
 
 - **WHEN** a PUT supplies only some of the three fallback fields
 - **THEN** the response is 400 and no row is written
+
+#### Scenario: Rerank all-or-nothing
+
+- **WHEN** a PUT supplies only some of the three rerank fields
+- **THEN** the response is 400 and no row is written
+
+#### Scenario: Rerank-only configuration is saved
+
+- **WHEN** a PUT supplies only the rerank group (loopback base URL, no key, model)
+- **THEN** the configuration is accepted and GET reports the rerank section with the other sections null
 
 #### Scenario: Non-http scheme rejected
 
@@ -145,7 +155,7 @@ PUT SHALL accept all eleven fields (Tavily and fallback optional as groups), val
 
 ### Requirement: Each slot reaches its own endpoint
 
-A user's main-LLM base URL and embedding base URL SHALL be honoured independently: chat traffic reaches the main-LLM endpoint and embedding traffic reaches the embedding endpoint. Resolving a user's configuration SHALL produce a client per slot — the embedding client is built from the embedding base URL, API key, and model, not reused from the chat client.
+A user's main-LLM base URL, embedding base URL, and rerank base URL SHALL be honoured independently: chat traffic reaches the main-LLM endpoint, embedding traffic reaches the embedding endpoint, and rerank traffic reaches the rerank endpoint. Resolving a user's configuration SHALL produce a client per slot — the embedding client is built from the embedding base URL, API key, and model, and the rerank client is built from the rerank base URL, API key, and model, never reused from another slot.
 
 #### Scenario: Embedding traffic uses the embedding endpoint
 
@@ -157,29 +167,41 @@ A user's main-LLM base URL and embedding base URL SHALL be honoured independentl
 - **WHEN** a configured user sends a chat message
 - **THEN** the chat request is sent to the user's main-LLM base URL with the user's main model
 
+#### Scenario: Rerank traffic uses the rerank endpoint
+
+- **WHEN** a configured user's retrieval reranks candidates
+- **THEN** the rerank request is sent to the user's rerank base URL with the user's rerank model
+
 ### Requirement: Strict BYOK — no server-env fallback on user paths
 
-The AI Agent SHALL require the main LLM group: with no configuration row OR no main-LLM group, chat returns 409 before streaming. RAG retrieval and feed embedding-indexing SHALL depend only on the embedding group, so a user with embedding configured but no main LLM still indexes and retrieves; a user with neither simply gets the empty envelope and skipped indexing. Server-level `LLM_*` environment configuration SHALL NOT serve as a fallback for any user's request. Clearing the configuration SHALL re-gate these paths immediately. A configuration row containing only optional groups SHALL be saved successfully and the AI Agent panel SHALL remain gated.
+The AI Agent SHALL require the main LLM group: with no configuration row OR no main-LLM group, chat returns 409 before streaming. RAG retrieval and feed embedding-indexing SHALL depend only on the embedding group, so a user with embedding configured but no main LLM still indexes and retrieves; a user with neither simply gets the empty envelope and skipped indexing. Reranking SHALL depend only on the rerank group: a user with retrieval configured but no rerank group retrieves with dense order, and clearing the rerank group SHALL return that user's retrieval to dense order immediately. Server-level `LLM_*` environment configuration SHALL NOT serve as a fallback for any user's request, including reranking. Clearing the configuration SHALL re-gate these paths immediately. A configuration row containing only optional groups SHALL be saved successfully and the AI Agent panel SHALL remain gated.
 
 #### Scenario: Clearing re-gates
 
 - **WHEN** a configured user deletes their configuration and then sends a chat message
 - **THEN** the chat request fails with the not-configured error, without calling any model
 
+#### Scenario: Clearing the rerank group returns dense order
+
+- **WHEN** a configured user removes only their rerank group
+- **THEN** the next retrieval returns dense order and contacts no reranker endpoint
+
 ### Requirement: In-modal guidance names the provider, where to obtain credentials, and the affected features
 
-The config modal SHALL show, per section (main LLM, embedding, Tavily), in both UI languages: one example placeholder per empty input (URL and model name), a short description of what the group drives, where to obtain the credentials (provider sign-up/console URLs, plus the local-vLLM option for the LLM and embedding groups), a link to that provider's own documentation, and the note that every group is optional — the main LLM enables the AI Agent while feeds and the rest of the app work without it — and that API keys may be left empty for localhost / 127.0.0.1 endpoints. The optional Embedding and Tavily sections SHALL each be collapsible (closed by default, auto-expanded when configured) and MUST show a red warning stating the concrete impact of leaving them empty: without Embedding the agent cannot retrieve the user's feeds (RAG / semantic search); without Tavily the agent will not plan web searches; chat and planning keep working either way. Each section's documentation link and guidance SHALL stand on its own — the embedding group is a separate provider on a separate endpoint with a separate failure mode, and its guidance MUST NOT be folded into the main-LLM group's text.
+The config modal SHALL show, per section (main LLM, embedding, rerank, Tavily), in both UI languages: one example placeholder per empty input (URL and model name), a short description of what the group drives, where to obtain the credentials (provider sign-up/console URLs, plus the local-vLLM option for the LLM, embedding, and rerank groups), a link to that provider's own documentation, and the note that every group is optional — the main LLM enables the AI Agent while feeds and the rest of the app work without it — and that API keys may be left empty for localhost / 127.0.0.1 endpoints. The optional Embedding, Rerank, and Tavily sections SHALL each be collapsible (closed by default, auto-expanded when configured) and MUST show a red warning stating the concrete impact of leaving them empty: without Embedding the agent cannot retrieve the user's feeds (RAG / semantic search); without Rerank retrieval still works but the first result is less accurate; without Tavily the agent will not plan web searches; chat and planning keep working either way. Each section's documentation link and guidance SHALL stand on its own — the embedding group is a separate provider on a separate endpoint with a separate failure mode, and its guidance MUST NOT be folded into the main-LLM group's text; the rerank group likewise names its own endpoint shape.
 
 The main-LLM section SHALL state the three provider capabilities AI Agent depends on — streaming chat completions, OpenAI-shaped tool calls, and structured (`json_schema`) output — and what is lost when each is missing: without tool calls the AI Agent is unavailable and only the single-turn chat path works, and without structured output the planner falls back to its legacy free-text path. That section SHALL also state that the base URL is an OpenAI-compatible endpoint whose path carries the provider's version prefix (e.g. a trailing `/v1`) with the placeholder showing that prefix, that the configured model must exist on the configured endpoint (the deployment does not probe at save time), and that an endpoint needing no credential still requires a non-placeholder value.
 
 The embedding section SHALL state, in its own text and behind its own documentation link, that the value must be a service exposing OpenAI-compatible embeddings (not every chat provider offers them, so this slot may point at a different service than the main LLM), that the deployment's embedding width is 1024 with an example compatible model, and that a model emitting a different width is refused at query time rather than at save time.
+
+The rerank section SHALL state, in its own text and behind its own documentation link, that the value must be a service exposing a Jina/Cohere-compatible rerank API (`POST /rerank` with a query and document list), that the local vLLM option serves an example reranker model, and that leaving the group empty keeps retrieval on dense ordering.
 
 The retry-model group SHALL be accepted by the API but MUST NOT be exposed in the config modal in v1 (the agent has no retry-model semantics yet; the Go single-turn fallback remains supported for direct clients and future re-exposure). The search section SHALL state that the slot is shaped for the deployment's search provider.
 
 #### Scenario: First-time user sees actionable guidance
 
 - **WHEN** a user with no configuration opens the modal from the blocking gate
-- **THEN** each section displays its example placeholders, credential-source description (e.g. Tavily console URL and its free tier), its own provider-documentation link, and the feature-impact note, localized to the UI language, with the Tavily impact rendered as a red warning
+- **THEN** each section displays its example placeholders, credential-source description (e.g. Tavily console URL and its free tier), its own provider-documentation link, and the feature-impact note, localized to the UI language, with the Rerank and Tavily impacts rendered as red warnings
 
 #### Scenario: Main-LLM section states what AI Agent needs from the provider
 
@@ -191,9 +213,14 @@ The retry-model group SHALL be accepted by the API but MUST NOT be exposed in th
 - **WHEN** the embedding section is rendered
 - **THEN** the 1024-dimension requirement, an example compatible model, the separate-provider note, and its own documentation link are shown alongside the input, without reference to the main-LLM section's capability list
 
+#### Scenario: Rerank section states the endpoint shape and its impact
+
+- **WHEN** the rerank section is rendered
+- **THEN** the Jina/Cohere-compatible `POST /rerank` shape, the local-vLLM option, and the dense-ordering fallback note are shown alongside the inputs, with its own documentation link
+
 ### Requirement: Config forwarded to the agent per run, never client-supplied
 
-When an authenticated, configured user's chat request is proxied to the Python agent, the Go handler SHALL include the user's decrypted LLM configuration and Tavily configuration in the `/agent/run` payload. These fields MUST NOT be accepted from the client request body, MUST NOT be logged, and the fallback fields MUST NOT be forwarded. The plaintext API key MUST NOT be written to durable storage by the agent runtime — in particular it MUST NOT travel inside the checkpointed graph state — and MUST NOT be attached to a trace span or log line.
+When an authenticated, configured user's chat request is proxied to the Python agent, the Go handler SHALL include the user's decrypted LLM configuration and Tavily configuration in the `/agent/run` payload. These fields MUST NOT be accepted from the client request body, MUST NOT be logged, and the fallback fields MUST NOT be forwarded. The rerank group MUST NOT be forwarded — retrieval and reranking run in the Go backend — and the rerank API key MUST NOT travel to the agent. The plaintext API key MUST NOT be written to durable storage by the agent runtime — in particular it MUST NOT travel inside the checkpointed graph state — and MUST NOT be attached to a trace span or log line.
 
 #### Scenario: Payload carries the owner's config only
 
@@ -210,9 +237,14 @@ When an authenticated, configured user's chat request is proxied to the Python a
 - **WHEN** an agent run completes and the agent's checkpoint tables and trace export are inspected
 - **THEN** no API key plaintext appears in either
 
+#### Scenario: Rerank configuration stays in Go
+
+- **WHEN** a chat request is proxied to the agent
+- **THEN** the payload contains no rerank base URL, model, or key, and the agent performs no rerank call
+
 ### Requirement: On-demand per-slot connectivity probe
 
-The API SHALL expose `POST /api/me/llm-config/validate`, authenticated by Bearer token with the user id taken exclusively from the verified JWT claim, routed on the same feature gate as the other three config endpoints. The request body SHALL use the same eleven-field shape as PUT. The endpoint SHALL probe exactly those slots whose base URL is non-empty — main LLM, embedding, fallback, and Tavily — and SHALL report slots with no base URL as skipped without treating them as an error. A blank key field SHALL resolve to the stored key for a configured user (mirroring the PUT contract); for an unconfigured user a blank key on a remote endpoint SHALL be probed on the provider's keyless path where one exists (Tavily) and reported as `invalid_config` otherwise. The response SHALL carry only per-slot results and MUST NOT contain stored or submitted API keys. Probing SHALL NOT create or modify the stored configuration row.
+The API SHALL expose `POST /api/me/llm-config/validate`, authenticated by Bearer token with the user id taken exclusively from the verified JWT claim, routed on the same feature gate as the other three config endpoints. The request body SHALL use the same fourteen-field shape as PUT. The endpoint SHALL probe exactly those slots whose base URL is non-empty — main LLM, embedding, rerank, fallback, and Tavily — and SHALL report slots with no base URL as skipped without treating them as an error. A blank key field SHALL resolve to the stored key for a configured user (mirroring the PUT contract); for an unconfigured user a blank key on a remote endpoint SHALL be probed on the provider's keyless path where one exists (Tavily) and reported as `invalid_config` otherwise. The response SHALL carry only per-slot results and MUST NOT contain stored or submitted API keys. Probing SHALL NOT create or modify the stored configuration row.
 
 #### Scenario: Wrong key is reported as authentication failure
 
@@ -226,13 +258,18 @@ The API SHALL expose `POST /api/me/llm-config/validate`, authenticated by Bearer
 
 #### Scenario: Empty slots are skipped, not errors
 
-- **WHEN** a user submits only the embedding group with the other three sections empty
-- **THEN** the chat, fallback, and Tavily slots are reported as skipped, and the response status is `200`
+- **WHEN** a user submits only the embedding group with the other four sections empty
+- **THEN** the chat, rerank, fallback, and Tavily slots are reported as skipped, and the response status is `200`
 
 #### Scenario: Blank key uses the stored key
 
 - **WHEN** a configured user submits their existing base URL and model with the key field left blank
 - **THEN** the probe authenticates with the stored decrypted key, and the response contains no key material
+
+#### Scenario: Rerank slot probes with a minimal rerank request
+
+- **WHEN** a user submits a rerank group and requests a probe
+- **THEN** the rerank slot sends one short query and one short document to the configured rerank endpoint and reports `ok` when the endpoint answers 2xx with a parseable score
 
 #### Scenario: Unauthenticated access refused
 
@@ -246,7 +283,7 @@ The API SHALL expose `POST /api/me/llm-config/validate`, authenticated by Bearer
 
 ### Requirement: Probe results are classified per slot
 
-Each probed slot SHALL return a status from the fixed set `ok`, `auth_failed`, `rate_limited`, `invalid_model`, `invalid_config`, `width_mismatch`, `unreachable`, `timeout`, `slow_response`, together with the upstream HTTP status code where the upstream produced one. Upstream `401` and `403` SHALL map to `auth_failed`; `429` SHALL map to `rate_limited`; `404` with a model-shaped cause SHALL map to `invalid_model`, and on a slot without model semantics (Tavily) a `404` SHALL map to `invalid_config` (the endpoint path is wrong); an upstream `400` SHALL map to `invalid_config` (the probe's request shape is fixed, so a schema rejection means the submitted values do not fit the endpoint); a request that never reached the upstream (DNS, dial, TLS) SHALL map to `unreachable`; exceeding the probe timeout without the upstream having produced a response SHALL map to `timeout`, and exceeding it after the upstream already returned response headers (the endpoint connected but did not finish the completion) SHALL map to `slow_response` with the captured HTTP status; and an embedding vector whose width differs from the deployment's embedding width SHALL map to `width_mismatch`. Classification SHALL be derived from a typed carrier of the upstream status, not from parsing error strings. The fixed set and each slot's meaning SHALL be identical across slots.
+Each probed slot SHALL return a status from the fixed set `ok`, `auth_failed`, `rate_limited`, `invalid_model`, `invalid_config`, `width_mismatch`, `unreachable`, `timeout`, `slow_response`, together with the upstream HTTP status code where the upstream produced one. Upstream `401` and `403` SHALL map to `auth_failed`; `429` SHALL map to `rate_limited`; `404` with a model-shaped cause SHALL map to `invalid_model`, and on a slot without model semantics (Tavily) a `404` SHALL map to `invalid_config` (the endpoint path is wrong); an upstream `400` SHALL map to `invalid_config` (the probe's request shape is fixed, so a schema rejection means the submitted values do not fit the endpoint); a request that never reached the upstream (DNS, dial, TLS) SHALL map to `unreachable`; exceeding the probe timeout without the upstream having produced a response SHALL map to `timeout`, and exceeding it after the upstream already returned response headers (the endpoint connected but did not finish the completion) SHALL map to `slow_response` with the captured HTTP status; and an embedding vector whose width differs from the deployment's embedding width SHALL map to `width_mismatch`. A rerank endpoint answering 2xx without a parseable scored result SHALL map to `invalid_config`. Classification SHALL be derived from a typed carrier of the upstream status, not from parsing error strings. The fixed set and each slot's meaning SHALL be identical across slots.
 
 #### Scenario: Upstream status is visible in the result
 
@@ -267,6 +304,11 @@ Each probed slot SHALL return a status from the fixed set `ok`, `auth_failed`, `
 
 - **WHEN** the upstream returns response headers but the completion does not finish within the probe timeout
 - **THEN** the slot's result is `slow_response` carrying the captured upstream HTTP status, not the contradictory pairing of `timeout` with a non-zero HTTP status
+
+#### Scenario: Rerank probe with an unparseable result is invalid_config
+
+- **WHEN** the rerank endpoint answers 2xx with a body containing no scored result
+- **THEN** the rerank slot's result is `invalid_config`, not `ok`
 
 ### Requirement: Probes are bounded and side-effect free
 
@@ -289,7 +331,7 @@ Each probe request SHALL pass the same SSRF validation and honour `BYOK_ALLOW_PR
 
 ### Requirement: Config modal exposes per-section test-connection controls
 
-The config modal SHALL provide a test-connection control per visible section (main LLM, embedding, Tavily), each probing only its own section's form values (with a blank key field resolved against the stored key as the API defines) without saving. A section's result SHALL render inline within that section, localized to the UI language, with a distinct state per status class: success, credential failure, network failure, and configuration problem. While a section's probe is in flight that section's control SHALL indicate the in-flight state and further clicks SHALL be suppressed, and other sections' controls SHALL remain usable. An empty section's control SHALL render no result (nothing probed), not a failure. The controls SHALL be independent of the save action — saving remains possible whether or not a probe has been run, and a probe MUST NOT write the configuration. Probing one section SHALL NOT send requests for any other section, so a mid-edit value in another section is never probed and no other provider's quota is spent.
+The config modal SHALL provide a test-connection control per visible section (main LLM, embedding, rerank, Tavily), each probing only its own section's form values (with a blank key field resolved against the stored key as the API defines) without saving. A section's result SHALL render inline within that section, localized to the UI language, with a distinct state per status class: success, credential failure, network failure, and configuration problem. While a section's probe is in flight that section's control SHALL indicate the in-flight state and further clicks SHALL be suppressed, and other sections' controls SHALL remain usable. An empty section's control SHALL render no result (nothing probed), not a failure. The controls SHALL be independent of the save action — saving remains possible whether or not a probe has been run, and a probe MUST NOT write the configuration. Probing one section SHALL NOT send requests for any other section, so a mid-edit value in another section is never probed and no other provider's quota is spent.
 
 #### Scenario: Wrong key shows a credential error inline
 

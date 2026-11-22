@@ -8,7 +8,7 @@ Lets the Python agent service invoke Go RAG without reimplementing it — a thin
 
 ### Requirement: Endpoint exposes rag.Service.Retrieve
 
-The service SHALL expose `GET /internal/rag/retrieve` with required `query` and `user_id` parameters, returning the rendered context envelope on success and the documented status codes on failure. It SHALL accept an optional corpus selector and knowledge scope parameters; citations SHALL carry a corpus discriminator and corpus-specific identity fields.
+The service SHALL expose `GET /internal/rag/retrieve` with required `query` and `user_id` parameters, returning the rendered context envelope on success and the documented status codes on failure. It SHALL accept an optional corpus selector and knowledge scope parameters; citations SHALL carry a corpus discriminator and corpus-specific identity fields. The envelope and citation fields SHALL be unchanged by the rerank stage; only passage order and the rendered context block may differ.
 
 #### Scenario: Response envelope carries tagged citations
 
@@ -38,7 +38,7 @@ The service SHALL expose `GET /internal/rag/retrieve` with required `query` and 
 #### Scenario: Absent corpus behaves as the feed corpus
 
 - **WHEN** a request arrives with `?query=hello` and no `corpus` parameter
-- **THEN** the endpoint searches the feed corpus and returns the same passages and citation shape it returned before the knowledge corpus existed
+- **THEN** the endpoint searches the feed corpus, returns the same citation shape it returned before the knowledge corpus existed, and returns the passages that corpus selects in its own order — its reranked order when the caller has a rerank group configured
 
 #### Scenario: Knowledge corpus selected
 
