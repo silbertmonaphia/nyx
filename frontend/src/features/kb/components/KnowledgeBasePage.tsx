@@ -1,6 +1,6 @@
 import React, { useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Loader2, Trash2, Upload } from 'lucide-react';
+import { FilePlus, Trash2, Upload } from 'lucide-react';
 import { Button } from '~/components/ui/Button';
 import { Input } from '~/components/ui/Input';
 import { Textarea } from '~/components/ui/Textarea';
@@ -323,6 +323,7 @@ export const KnowledgeBasePage: React.FC = () => {
           onClick={() => setShowNewDocument((value) => !value)}
           data-testid="kb-new-document"
         >
+          <FilePlus className="h-4 w-4" />
           {t('kb.newDocument')}
         </Button>
       </div>

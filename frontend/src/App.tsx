@@ -253,15 +253,20 @@ function App() {
             </div>
           </div>
           <div className="relative w-full max-w-3xl">
-            <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-            <Input
-              type="text"
-              placeholder={t('nav.searchPlaceholder')}
-              value={searchTerm}
-              maxLength={200}
-              onChange={(e) => setSearchTerm(e.target.value)}
-              className="pl-10 h-10"
-            />
+            {activeView === 'feeds' && (
+              <>
+                <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                <Input
+                  type="text"
+                  placeholder={t('nav.searchPlaceholder')}
+                  value={searchTerm}
+                  maxLength={200}
+                  onChange={(e) => setSearchTerm(e.target.value)}
+                  className="pl-10 h-10"
+                  data-testid="feed-search"
+                />
+              </>
+            )}
           </div>
           <div className="flex items-center gap-4 justify-self-end">
             {isAuthenticated ? (
