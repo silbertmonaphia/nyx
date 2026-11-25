@@ -432,7 +432,9 @@ function App() {
           </div>
         </div>
         ) : isAuthenticated && kbAvailable ? (
-          <KnowledgeBasePage key={user?.id} />
+          <div className="w-full flex-1 min-h-0 overflow-y-auto pb-8">
+            <KnowledgeBasePage key={user?.id} />
+          </div>
         ) : null}
       </section>
 

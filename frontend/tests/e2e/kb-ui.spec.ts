@@ -174,6 +174,26 @@ test.describe('Knowledge base UI (agent-free)', () => {
     expect(newDocumentIcon?.height).toBe(uploadIcon?.height);
   });
 
+  test('a long document list scrolls with the wheel to the last row', async ({ page }) => {
+    const documents = Array.from({ length: 30 }, (_, index) => ({
+      ...document,
+      id: 100 + index,
+      rel_path: `notes-${index}.md`,
+      title: `Notes ${index}`,
+    }));
+    await registerWithKb(page, { documents });
+    await openKb(page);
+
+    const rows = page.getByTestId('kb-document-row');
+    await expect(rows).toHaveCount(30);
+    const lastRow = rows.last();
+    await expect(lastRow).not.toBeInViewport();
+
+    await page.mouse.move(640, 400);
+    await page.mouse.wheel(0, 4000);
+    await expect(lastRow).toBeInViewport();
+  });
+
   test('shows the empty knowledge base', async ({ page }) => {
     await registerWithKb(page, { sources: [], documents: [] });
     await openKb(page);
