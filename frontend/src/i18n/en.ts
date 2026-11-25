@@ -260,10 +260,10 @@ export const en: Translation = {
           expand: 'Show rerank fields',
           collapse: 'Hide rerank fields',
           credentials:
-            'Point at a Jina/Cohere-compatible rerank API, or run a local vLLM reranker (e.g. BAAI/bge-reranker-v2-m3 via make dev-vllm-rerank on port 8002).',
-          docsLabel: 'vLLM rerank API documentation',
+            'Create a key in the SiliconFlow console (cloud.siliconflow.cn); models include BAAI/bge-reranker-v2-m3 and the Qwen/Qwen3-Reranker line. You can also run a local vLLM reranker (e.g. BAAI/bge-reranker-v2-m3 via make dev-vllm-rerank on port 8002).',
+          docsLabel: 'SiliconFlow rerank API documentation',
           endpointShape:
-            'Must expose POST /rerank with {model, query, documents, top_n} and return scored results — Jina, Cohere v2 and vLLM all match. The base URL is the prefix before /rerank (e.g. http://localhost:8002).',
+            'Must expose POST /rerank with {model, query, documents, top_n} and return scored results — SiliconFlow, Jina, Cohere v2 and vLLM all match. The base URL is the prefix before /rerank (e.g. https://api.siliconflow.cn/v1).',
         },
         tavily: {
           title: 'Tavily search (optional)',

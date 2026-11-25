@@ -257,12 +257,30 @@ describe('LlmConfigModal', () => {
     mockHook({ status: unconfigured });
     renderModal();
     await expandOptionalSections();
+    await userEvent.click(screen.getByTestId('llm-rerank-toggle'));
 
     expect(input('llm-base-url').placeholder).toBe('https://api.deepseek.com/v1');
     expect(input('llm-model').placeholder).toBe('deepseek-flash');
     expect(input('embedding-base-url').placeholder).toBe('https://api.siliconflow.cn/v1');
     expect(input('embedding-model').placeholder).toBe('Qwen/Qwen3-Embedding-0.6B');
+    expect(input('rerank-base-url').placeholder).toBe('https://api.siliconflow.cn/v1');
+    expect(input('rerank-model').placeholder).toBe('BAAI/bge-reranker-v2-m3');
     expect(input('tavily-base-url').placeholder).toBe('https://api.tavily.com/search');
+  });
+
+  it('links the rerank section to the SiliconFlow rerank API documentation', async () => {
+    mockHook({ status: unconfigured });
+    renderModal();
+    await userEvent.click(screen.getByTestId('llm-rerank-toggle'));
+
+    expect(
+      screen.getByRole('link', {
+        name: 'SiliconFlow rerank API documentation',
+      }),
+    ).toHaveAttribute(
+      'href',
+      'https://docs.siliconflow.cn/docs/api/rerank-post',
+    );
   });
 
   it('locks the embedding model once configured and explains why', () => {

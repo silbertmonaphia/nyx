@@ -25,7 +25,7 @@ import type {
 const EXAMPLE_BASE_URLS = {
   llm: "https://api.deepseek.com/v1",
   embedding: "https://api.siliconflow.cn/v1",
-  rerank: "http://localhost:8002",
+  rerank: "https://api.siliconflow.cn/v1",
   tavily: "https://api.tavily.com/search",
 };
 
@@ -38,7 +38,7 @@ const EXAMPLE_MODELS = {
 const DOCS_URLS = {
   llm: "https://api-docs.deepseek.com/",
   embedding: "https://docs.siliconflow.cn/",
-  rerank: "https://docs.vllm.ai/",
+  rerank: "https://docs.siliconflow.cn/docs/api/rerank-post",
   tavily: "https://docs.tavily.com/documentation/api-reference/endpoint/search",
 };
 
@@ -717,7 +717,7 @@ export const LlmConfigModal = ({
 
   return (
     <Dialog open={open} onOpenChange={handleDialogOpenChange}>
-      <DialogContent className="max-h-[85vh] overflow-y-auto sm:max-w-2xl">
+      <DialogContent className="flex max-h-[85vh] flex-col overflow-hidden sm:max-w-2xl">
         <DialogHeader>
           <DialogTitle>
             {blocking
@@ -731,248 +731,257 @@ export const LlmConfigModal = ({
           </DialogDescription>
         </DialogHeader>
 
-        <form onSubmit={submit} className="space-y-6" noValidate>
-          <fieldset className="space-y-3 rounded-md border p-4">
-            <div className="text-sm font-semibold">
-              {t("llmConfig.sections.llm.title")}
-            </div>
-            <Guidance
-              lines={[
-                t("llmConfig.sections.llm.drives"),
-                t("llmConfig.sections.llm.capabilities"),
-                t("llmConfig.sections.llm.credentials"),
-                t("llmConfig.sections.llm.urlConvention"),
-                t("llmConfig.sections.llm.modelNote"),
-              ]}
-              docs={{
-                href: DOCS_URLS.llm,
-                label: t("llmConfig.sections.llm.docsLabel"),
-              }}
-            />
-            <ConfigField
-              id="llm-base-url"
-              label={t("llmConfig.fields.baseUrl")}
-              placeholder={EXAMPLE_BASE_URLS.llm}
-              error={errors.llm?.base_url?.message}
-              registration={register("llm.base_url")}
-            />
-            <div className="grid gap-3 sm:grid-cols-2">
-              <ConfigField
-                id="llm-api-key"
-                label={t("llmConfig.fields.apiKey")}
-                placeholder={keyPlaceholder(status?.llm)}
-                type="password"
-                error={errors.llm?.api_key?.message}
-                registration={register("llm.api_key")}
+        <form
+          onSubmit={submit}
+          className="flex min-h-0 flex-1 flex-col gap-4"
+          noValidate
+        >
+          <div
+            className="min-h-0 flex-1 space-y-6 overflow-y-auto"
+            data-testid="llm-config-body"
+          >
+            <fieldset className="space-y-3 rounded-md border p-4">
+              <div className="text-sm font-semibold">
+                {t("llmConfig.sections.llm.title")}
+              </div>
+              <Guidance
+                lines={[
+                  t("llmConfig.sections.llm.drives"),
+                  t("llmConfig.sections.llm.capabilities"),
+                  t("llmConfig.sections.llm.credentials"),
+                  t("llmConfig.sections.llm.urlConvention"),
+                  t("llmConfig.sections.llm.modelNote"),
+                ]}
+                docs={{
+                  href: DOCS_URLS.llm,
+                  label: t("llmConfig.sections.llm.docsLabel"),
+                }}
               />
               <ConfigField
-                id="llm-model"
-                label={t("llmConfig.fields.model")}
-                placeholder={EXAMPLE_MODELS.llm}
-                error={errors.llm?.model?.message}
-                registration={register("llm.model")}
+                id="llm-base-url"
+                label={t("llmConfig.fields.baseUrl")}
+                placeholder={EXAMPLE_BASE_URLS.llm}
+                error={errors.llm?.base_url?.message}
+                registration={register("llm.base_url")}
               />
-            </div>
-            <SlotProbePanel slot="chat" buildValues={probeLlmValues} />
-          </fieldset>
-
-          <fieldset className="space-y-3 rounded-md border border-dashed p-4">
-            <div className="flex items-center justify-between gap-2">
-              <div className="text-sm font-semibold text-muted-foreground">
-                {t("llmConfig.sections.embedding.title")}
-              </div>
-              <button
-                type="button"
-                aria-expanded={showEmbedding}
-                data-testid="llm-embedding-toggle"
-                onClick={() => setEmbeddingOverride(!showEmbedding)}
-                className="text-xs font-medium text-primary hover:underline"
-              >
-                {showEmbedding
-                  ? t("llmConfig.sections.embedding.collapse")
-                  : t("llmConfig.sections.embedding.expand")}
-              </button>
-            </div>
-            <p className="text-xs font-medium text-destructive">
-              {t("llmConfig.sections.embedding.impact")}
-            </p>
-            {status?.embedding != null ? (
-              <p className="text-xs font-medium text-destructive">
-                {t("llmConfig.sections.embedding.removeHint")}
-              </p>
-            ) : null}
-            {showEmbedding ? (
-              <div className="space-y-3">
-                <Guidance
-                  lines={[
-                    t("llmConfig.sections.embedding.drives"),
-                    t("llmConfig.sections.embedding.separateProvider"),
-                    t("llmConfig.sections.embedding.credentials"),
-                    t("llmConfig.sections.embedding.urlConvention"),
-                  ]}
-                  docs={{
-                    href: DOCS_URLS.embedding,
-                    label: t("llmConfig.sections.embedding.docsLabel"),
-                  }}
-                />
+              <div className="grid gap-3 sm:grid-cols-2">
                 <ConfigField
-                  id="embedding-base-url"
-                  label={t("llmConfig.fields.baseUrl")}
-                  placeholder={EXAMPLE_BASE_URLS.embedding}
-                  error={errors.embedding?.base_url?.message}
-                  registration={register("embedding.base_url")}
-                />
-                <div className="grid gap-3 sm:grid-cols-2">
-                  <ConfigField
-                    id="embedding-api-key"
-                    label={t("llmConfig.fields.apiKey")}
-                    placeholder={keyPlaceholder(status?.embedding)}
-                    type="password"
-                    error={errors.embedding?.api_key?.message}
-                    registration={register("embedding.api_key")}
-                  />
-                  <ConfigField
-                    id="embedding-model"
-                    label={t("llmConfig.fields.model")}
-                    placeholder={EXAMPLE_MODELS.embedding}
-                    error={errors.embedding?.model?.message}
-                    registration={register("embedding.model")}
-                    disabled={status?.embedding != null}
-                    hint={
-                      status?.embedding != null
-                        ? `${t("llmConfig.sections.embedding.modelRequirement")} ${t("llmConfig.sections.embedding.modelLocked")}`
-                        : t("llmConfig.sections.embedding.modelRequirement")
-                    }
-                  />
-                </div>
-                <SlotProbePanel
-                  slot="embedding"
-                  buildValues={probeEmbeddingValues}
-                />
-              </div>
-            ) : null}
-          </fieldset>
-
-          <fieldset className="space-y-3 rounded-md border border-dashed p-4">
-            <div className="flex items-center justify-between gap-2">
-              <div className="text-sm font-semibold text-muted-foreground">
-                {t("llmConfig.sections.rerank.title")}
-              </div>
-              <button
-                type="button"
-                aria-expanded={showRerank}
-                data-testid="llm-rerank-toggle"
-                onClick={() => setRerankOverride(!showRerank)}
-                className="text-xs font-medium text-primary hover:underline"
-              >
-                {showRerank
-                  ? t("llmConfig.sections.rerank.collapse")
-                  : t("llmConfig.sections.rerank.expand")}
-              </button>
-            </div>
-            <p className="text-xs font-medium text-destructive">
-              {t("llmConfig.sections.rerank.impact")}
-            </p>
-            {showRerank ? (
-              <div className="space-y-3">
-                <Guidance
-                  lines={[
-                    t("llmConfig.sections.rerank.drives"),
-                    t("llmConfig.sections.rerank.endpointShape"),
-                    t("llmConfig.sections.rerank.credentials"),
-                  ]}
-                  docs={{
-                    href: DOCS_URLS.rerank,
-                    label: t("llmConfig.sections.rerank.docsLabel"),
-                  }}
-                />
-                <ConfigField
-                  id="rerank-base-url"
-                  label={t("llmConfig.fields.baseUrl")}
-                  placeholder={EXAMPLE_BASE_URLS.rerank}
-                  error={errors.rerank?.base_url?.message}
-                  registration={register("rerank.base_url")}
-                />
-                <div className="grid gap-3 sm:grid-cols-2">
-                  <ConfigField
-                    id="rerank-api-key"
-                    label={t("llmConfig.fields.apiKey")}
-                    placeholder={keyPlaceholder(status?.rerank)}
-                    type="password"
-                    error={errors.rerank?.api_key?.message}
-                    registration={register("rerank.api_key")}
-                  />
-                  <ConfigField
-                    id="rerank-model"
-                    label={t("llmConfig.fields.model")}
-                    placeholder={EXAMPLE_MODELS.rerank}
-                    error={errors.rerank?.model?.message}
-                    registration={register("rerank.model")}
-                  />
-                </div>
-                <SlotProbePanel slot="rerank" buildValues={probeRerankValues} />
-              </div>
-            ) : null}
-          </fieldset>
-
-          <fieldset className="space-y-3 rounded-md border border-dashed p-4">
-            <div className="flex items-center justify-between gap-2">
-              <div className="text-sm font-semibold text-muted-foreground">
-                {t("llmConfig.sections.tavily.title")}
-              </div>
-              <button
-                type="button"
-                aria-expanded={showTavily}
-                data-testid="llm-tavily-toggle"
-                onClick={() => setTavilyOverride(!showTavily)}
-                className="text-xs font-medium text-primary hover:underline"
-              >
-                {showTavily
-                  ? t("llmConfig.sections.tavily.collapse")
-                  : t("llmConfig.sections.tavily.expand")}
-              </button>
-            </div>
-            <p className="text-xs font-medium text-destructive">
-              {t("llmConfig.sections.tavily.impact")}
-            </p>
-            {showTavily ? (
-              <div className="space-y-3">
-                <Guidance
-                  lines={[
-                    t("llmConfig.sections.tavily.drives"),
-                    t("llmConfig.sections.tavily.credentials"),
-                    t("llmConfig.sections.tavily.shapeNote"),
-                  ]}
-                  docs={{
-                    href: DOCS_URLS.tavily,
-                    label: t("llmConfig.sections.tavily.docsLabel"),
-                  }}
-                />
-                <ConfigField
-                  id="tavily-base-url"
-                  label={t("llmConfig.fields.baseUrl")}
-                  placeholder={EXAMPLE_BASE_URLS.tavily}
-                  error={errors.tavily?.base_url?.message}
-                  registration={register("tavily.base_url")}
-                />
-                <ConfigField
-                  id="tavily-api-key"
+                  id="llm-api-key"
                   label={t("llmConfig.fields.apiKey")}
-                  placeholder={keyPlaceholder(status?.tavily)}
+                  placeholder={keyPlaceholder(status?.llm)}
                   type="password"
-                  error={errors.tavily?.api_key?.message}
-                  registration={register("tavily.api_key")}
+                  error={errors.llm?.api_key?.message}
+                  registration={register("llm.api_key")}
                 />
-                <SlotProbePanel slot="tavily" buildValues={probeTavilyValues} />
+                <ConfigField
+                  id="llm-model"
+                  label={t("llmConfig.fields.model")}
+                  placeholder={EXAMPLE_MODELS.llm}
+                  error={errors.llm?.model?.message}
+                  registration={register("llm.model")}
+                />
               </div>
-            ) : null}
-          </fieldset>
+              <SlotProbePanel slot="chat" buildValues={probeLlmValues} />
+            </fieldset>
 
-          <p className="text-xs text-muted-foreground">
-            {t("llmConfig.sections.agentNote")}
-          </p>
+            <fieldset className="space-y-3 rounded-md border border-dashed p-4">
+              <div className="flex items-center justify-between gap-2">
+                <div className="text-sm font-semibold text-muted-foreground">
+                  {t("llmConfig.sections.embedding.title")}
+                </div>
+                <button
+                  type="button"
+                  aria-expanded={showEmbedding}
+                  data-testid="llm-embedding-toggle"
+                  onClick={() => setEmbeddingOverride(!showEmbedding)}
+                  className="text-xs font-medium text-primary hover:underline"
+                >
+                  {showEmbedding
+                    ? t("llmConfig.sections.embedding.collapse")
+                    : t("llmConfig.sections.embedding.expand")}
+                </button>
+              </div>
+              <p className="text-xs font-medium text-destructive">
+                {t("llmConfig.sections.embedding.impact")}
+              </p>
+              {status?.embedding != null ? (
+                <p className="text-xs font-medium text-destructive">
+                  {t("llmConfig.sections.embedding.removeHint")}
+                </p>
+              ) : null}
+              {showEmbedding ? (
+                <div className="space-y-3">
+                  <Guidance
+                    lines={[
+                      t("llmConfig.sections.embedding.drives"),
+                      t("llmConfig.sections.embedding.separateProvider"),
+                      t("llmConfig.sections.embedding.credentials"),
+                      t("llmConfig.sections.embedding.urlConvention"),
+                    ]}
+                    docs={{
+                      href: DOCS_URLS.embedding,
+                      label: t("llmConfig.sections.embedding.docsLabel"),
+                    }}
+                  />
+                  <ConfigField
+                    id="embedding-base-url"
+                    label={t("llmConfig.fields.baseUrl")}
+                    placeholder={EXAMPLE_BASE_URLS.embedding}
+                    error={errors.embedding?.base_url?.message}
+                    registration={register("embedding.base_url")}
+                  />
+                  <div className="grid gap-3 sm:grid-cols-2">
+                    <ConfigField
+                      id="embedding-api-key"
+                      label={t("llmConfig.fields.apiKey")}
+                      placeholder={keyPlaceholder(status?.embedding)}
+                      type="password"
+                      error={errors.embedding?.api_key?.message}
+                      registration={register("embedding.api_key")}
+                    />
+                    <ConfigField
+                      id="embedding-model"
+                      label={t("llmConfig.fields.model")}
+                      placeholder={EXAMPLE_MODELS.embedding}
+                      error={errors.embedding?.model?.message}
+                      registration={register("embedding.model")}
+                      disabled={status?.embedding != null}
+                      hint={
+                        status?.embedding != null
+                          ? `${t("llmConfig.sections.embedding.modelRequirement")} ${t("llmConfig.sections.embedding.modelLocked")}`
+                          : t("llmConfig.sections.embedding.modelRequirement")
+                      }
+                    />
+                  </div>
+                  <SlotProbePanel
+                    slot="embedding"
+                    buildValues={probeEmbeddingValues}
+                  />
+                </div>
+              ) : null}
+            </fieldset>
 
-          <DialogFooter className="flex-row items-center justify-between gap-2 sm:justify-between">
+            <fieldset className="space-y-3 rounded-md border border-dashed p-4">
+              <div className="flex items-center justify-between gap-2">
+                <div className="text-sm font-semibold text-muted-foreground">
+                  {t("llmConfig.sections.rerank.title")}
+                </div>
+                <button
+                  type="button"
+                  aria-expanded={showRerank}
+                  data-testid="llm-rerank-toggle"
+                  onClick={() => setRerankOverride(!showRerank)}
+                  className="text-xs font-medium text-primary hover:underline"
+                >
+                  {showRerank
+                    ? t("llmConfig.sections.rerank.collapse")
+                    : t("llmConfig.sections.rerank.expand")}
+                </button>
+              </div>
+              <p className="text-xs font-medium text-destructive">
+                {t("llmConfig.sections.rerank.impact")}
+              </p>
+              {showRerank ? (
+                <div className="space-y-3">
+                  <Guidance
+                    lines={[
+                      t("llmConfig.sections.rerank.drives"),
+                      t("llmConfig.sections.rerank.endpointShape"),
+                      t("llmConfig.sections.rerank.credentials"),
+                    ]}
+                    docs={{
+                      href: DOCS_URLS.rerank,
+                      label: t("llmConfig.sections.rerank.docsLabel"),
+                    }}
+                  />
+                  <ConfigField
+                    id="rerank-base-url"
+                    label={t("llmConfig.fields.baseUrl")}
+                    placeholder={EXAMPLE_BASE_URLS.rerank}
+                    error={errors.rerank?.base_url?.message}
+                    registration={register("rerank.base_url")}
+                  />
+                  <div className="grid gap-3 sm:grid-cols-2">
+                    <ConfigField
+                      id="rerank-api-key"
+                      label={t("llmConfig.fields.apiKey")}
+                      placeholder={keyPlaceholder(status?.rerank)}
+                      type="password"
+                      error={errors.rerank?.api_key?.message}
+                      registration={register("rerank.api_key")}
+                    />
+                    <ConfigField
+                      id="rerank-model"
+                      label={t("llmConfig.fields.model")}
+                      placeholder={EXAMPLE_MODELS.rerank}
+                      error={errors.rerank?.model?.message}
+                      registration={register("rerank.model")}
+                    />
+                  </div>
+                  <SlotProbePanel slot="rerank" buildValues={probeRerankValues} />
+                </div>
+              ) : null}
+            </fieldset>
+
+            <fieldset className="space-y-3 rounded-md border border-dashed p-4">
+              <div className="flex items-center justify-between gap-2">
+                <div className="text-sm font-semibold text-muted-foreground">
+                  {t("llmConfig.sections.tavily.title")}
+                </div>
+                <button
+                  type="button"
+                  aria-expanded={showTavily}
+                  data-testid="llm-tavily-toggle"
+                  onClick={() => setTavilyOverride(!showTavily)}
+                  className="text-xs font-medium text-primary hover:underline"
+                >
+                  {showTavily
+                    ? t("llmConfig.sections.tavily.collapse")
+                    : t("llmConfig.sections.tavily.expand")}
+                </button>
+              </div>
+              <p className="text-xs font-medium text-destructive">
+                {t("llmConfig.sections.tavily.impact")}
+              </p>
+              {showTavily ? (
+                <div className="space-y-3">
+                  <Guidance
+                    lines={[
+                      t("llmConfig.sections.tavily.drives"),
+                      t("llmConfig.sections.tavily.credentials"),
+                      t("llmConfig.sections.tavily.shapeNote"),
+                    ]}
+                    docs={{
+                      href: DOCS_URLS.tavily,
+                      label: t("llmConfig.sections.tavily.docsLabel"),
+                    }}
+                  />
+                  <ConfigField
+                    id="tavily-base-url"
+                    label={t("llmConfig.fields.baseUrl")}
+                    placeholder={EXAMPLE_BASE_URLS.tavily}
+                    error={errors.tavily?.base_url?.message}
+                    registration={register("tavily.base_url")}
+                  />
+                  <ConfigField
+                    id="tavily-api-key"
+                    label={t("llmConfig.fields.apiKey")}
+                    placeholder={keyPlaceholder(status?.tavily)}
+                    type="password"
+                    error={errors.tavily?.api_key?.message}
+                    registration={register("tavily.api_key")}
+                  />
+                  <SlotProbePanel slot="tavily" buildValues={probeTavilyValues} />
+                </div>
+              ) : null}
+            </fieldset>
+
+            <p className="text-xs text-muted-foreground">
+              {t("llmConfig.sections.agentNote")}
+            </p>
+          </div>
+
+          <DialogFooter className="shrink-0 flex-row items-center justify-between gap-2 border-t pt-4 sm:justify-between">
             {configured ? (
               <Button
                 type="button"

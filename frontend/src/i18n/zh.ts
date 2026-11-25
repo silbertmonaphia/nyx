@@ -242,10 +242,10 @@ export const zh = {
           expand: '展开 Rerank 字段',
           collapse: '收起 Rerank 字段',
           credentials:
-            '可填写 Jina/Cohere 兼容的 rerank API，或运行本地 vLLM 重排序服务（如 make dev-vllm-rerank 启动的 BAAI/bge-reranker-v2-m3，端口 8002）。',
-          docsLabel: 'vLLM rerank API 文档',
+            '可在 SiliconFlow 控制台（cloud.siliconflow.cn）申请密钥，模型如 BAAI/bge-reranker-v2-m3 或 Qwen/Qwen3-Reranker 系列；也可运行本地 vLLM 重排序服务（如 make dev-vllm-rerank 启动的 BAAI/bge-reranker-v2-m3，端口 8002）。',
+          docsLabel: 'SiliconFlow 重排序 API 文档',
           endpointShape:
-            '需暴露 POST /rerank：请求 {model, query, documents, top_n}，返回带分数的 results —— Jina、Cohere v2、vLLM 均兼容。base URL 为 /rerank 之前的路径前缀（如 http://localhost:8002）。',
+            '需暴露 POST /rerank：请求 {model, query, documents, top_n}，返回带分数的 results —— SiliconFlow、Jina、Cohere v2、vLLM 均兼容。base URL 为 /rerank 之前的路径前缀（如 https://api.siliconflow.cn/v1）。',
         },
         tavily: {
           title: 'Tavily 搜索（可选）',
