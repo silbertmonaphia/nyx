@@ -256,6 +256,16 @@ describe('KnowledgeBasePage', () => {
     expect(screen.getByTestId('kb-upload-hint')).toHaveTextContent('1 MiB');
   });
 
+  it('renders the toolbar action icons at the same size', () => {
+    renderPage();
+    const uploadIcon = screen.getByTestId('kb-upload').querySelector('svg');
+    const newDocumentIcon = screen
+      .getByTestId('kb-new-document')
+      .querySelector('svg');
+    expect(uploadIcon).toHaveClass('lucide-upload', 'h-4', 'w-4');
+    expect(newDocumentIcon).toHaveClass('lucide-file-plus', 'h-4', 'w-4');
+  });
+
   it('creates a typed document', async () => {
     mockedService.createTextDocument.mockResolvedValue(document);
     renderPage();

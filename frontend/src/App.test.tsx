@@ -117,14 +117,17 @@ describe('App', () => {
     render(<App />);
     expect(screen.getByTestId('chat-panel-mock')).toBeInTheDocument();
     expect(screen.queryByTestId('kb-page-mock')).not.toBeInTheDocument();
+    expect(screen.getByTestId('feed-search')).toBeInTheDocument();
 
     await userEvent.click(screen.getByTestId('view-tab-knowledge'));
     expect(screen.getByTestId('kb-page-mock')).toBeInTheDocument();
     expect(screen.getByTestId('chat-panel-mock')).toBeInTheDocument();
+    expect(screen.queryByTestId('feed-search')).not.toBeInTheDocument();
 
     await userEvent.click(screen.getByTestId('view-tab-feeds'));
     expect(screen.queryByTestId('kb-page-mock')).not.toBeInTheDocument();
     expect(screen.getByTestId('chat-panel-mock')).toBeInTheDocument();
+    expect(screen.getByTestId('feed-search')).toBeInTheDocument();
   });
 
   it('passes the agent-mode flag to the chat panel', () => {
