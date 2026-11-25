@@ -18,6 +18,12 @@ SELECT id, username, password_hash, created_at, updated_at, deleted_at
 FROM users
 WHERE id = @id AND deleted_at IS NULL;
 
+-- name: UpdateUserPassword :execrows
+UPDATE users
+SET password_hash = @password_hash,
+    updated_at    = now()
+WHERE id = @id AND deleted_at IS NULL;
+
 -- name: InsertRefreshToken :one
 -- Step 1 of the self-stamp: insert with family_id = 0 as a placeholder.
 -- The Repository runs this inside a transaction with

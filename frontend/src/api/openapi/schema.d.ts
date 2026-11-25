@@ -4,6 +4,26 @@
  */
 
 export interface paths {
+    "/api/change-password": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Change password
+         * @description Verify the current password, replace it with the new one, and revoke every active refresh token for the caller. Sign in again with the new password. Requires a valid access token in the Authorization header. Returns 204.
+         */
+        post: operations["change-password"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/features": {
         parameters: {
             query?: never;
@@ -410,6 +430,10 @@ export interface components {
             method: string;
             url: string;
         };
+        ChangePasswordRequest: {
+            current_password: string;
+            new_password: string;
+        };
         ConfigResponse: {
             configured: boolean;
             embedding: components["schemas"]["LlmEndpointResponse"];
@@ -677,6 +701,37 @@ export interface components {
 }
 export type $defs = Record<string, never>;
 export interface operations {
+    "change-password": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ChangePasswordRequest"];
+            };
+        };
+        responses: {
+            /** @description No Content */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
     "get-features": {
         parameters: {
             query?: never;

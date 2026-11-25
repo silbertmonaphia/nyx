@@ -12,6 +12,8 @@ import { ToastContainer } from './components/app/ToastContainer';
 import { useUiStore } from './store/uiStore';
 import { useAuthStore } from './store/authStore';
 import { AuthForm } from './features/auth/components/AuthForm';
+import { ChangePasswordModal } from './features/auth/components/ChangePasswordModal';
+import { UserMenu } from './components/app/UserMenu';
 import { Button } from './components/ui/Button';
 import { Input } from './components/ui/Input';
 import {
@@ -22,7 +24,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from './components/ui/Dialog';
-import { Plus, X, Search, LogOut, User as UserIcon, MessageSquare, ArrowDownNarrowWide, ArrowUpNarrowWide, Users, Settings } from 'lucide-react';
+import { Plus, X, Search, LogOut, MessageSquare, ArrowDownNarrowWide, ArrowUpNarrowWide, Users, Settings } from 'lucide-react';
 import { PageMeta } from './components/app/PageMeta';
 import { ThemeToggle } from './components/app/ThemeToggle';
 import { LocaleToggle } from './components/app/LocaleToggle';
@@ -63,6 +65,7 @@ function App() {
   const chatOpen = isAuthenticated && !chatDismissed;
   const [showLogoutAll, setShowLogoutAll] = useState(false);
   const [loggingOutAll, setLoggingOutAll] = useState(false);
+  const [changePasswordOwner, setChangePasswordOwner] = useState<number | null>(null);
   const llmFeatureEnabled = import.meta.env.VITE_LLM_FEATURE_ENABLED !== 'false';
   const [llmSettingsOwner, setLlmSettingsOwner] = useState<number | null>(null);
   const llmSettingsOpen =
@@ -162,6 +165,7 @@ function App() {
     if (loggingOutAll) return;
     setLoggingOutAll(true);
     setLlmSettingsOwner(null);
+    setChangePasswordOwner(null);
     const ok = await logoutAll();
     setLoggingOutAll(false);
     setShowLogoutAll(false);
@@ -289,15 +293,16 @@ function App() {
                   <MessageSquare className="h-4 w-4" />
                   {t('nav.chat')}
                 </Button>
-                <div className="hidden md:flex items-center gap-2 text-sm font-medium text-muted-foreground">
-                  <UserIcon className="h-4 w-4" />
-                  <span>{user?.username}</span>
-                </div>
+                <UserMenu
+                  username={user?.username ?? ''}
+                  onChangePassword={() => setChangePasswordOwner(user?.id ?? null)}
+                />
                 <Button
                   variant="outline"
                   size="sm"
                   onClick={() => {
                     setLlmSettingsOwner(null);
+                    setChangePasswordOwner(null);
                     logout();
                   }}
                   className="gap-2"
@@ -493,6 +498,16 @@ function App() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {isAuthenticated && user && (
+        <ChangePasswordModal
+          key={user.id}
+          open={changePasswordOwner === user.id}
+          onOpenChange={(open) => {
+            if (!open) setChangePasswordOwner(null);
+          }}
+        />
+      )}
 
       <ChatPanel
         open={chatOpen && !llmModalBlocking}

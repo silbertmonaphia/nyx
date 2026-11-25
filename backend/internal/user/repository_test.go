@@ -433,3 +433,92 @@ func TestGetRefreshTokenByHash_NoRowsMapsToSentinel(t *testing.T) {
 		t.Errorf("expected ErrRefreshTokenNotFound, got %v", err)
 	}
 }
+
+var (
+	updateUserPasswordSQL = regexp.QuoteMeta("UPDATE users")
+	revokeTokensByUserSQL = regexp.QuoteMeta("UPDATE refresh_tokens")
+)
+
+func TestUpdatePasswordAndRevokeTokens_CommitsBothStatements(t *testing.T) {
+	mock, err := pgxmock.NewPool()
+	if err != nil {
+		t.Fatalf("pgxmock: %v", err)
+	}
+	defer mock.Close()
+
+	mock.ExpectBegin()
+	mock.ExpectExec(updateUserPasswordSQL).
+		WithArgs("$2a$10$hash", int32(7)).
+		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
+	mock.ExpectExec(revokeTokensByUserSQL).
+		WithArgs(int32(7)).
+		WillReturnResult(pgxmock.NewResult("UPDATE", 2))
+	mock.ExpectCommit()
+
+	repo := NewRepository(mock)
+	if err := repo.UpdatePasswordAndRevokeTokens(context.Background(), 7, "$2a$10$hash"); err != nil {
+		t.Fatalf("UpdatePasswordAndRevokeTokens: %v", err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Errorf("unmet pgxmock expectations: %v", err)
+	}
+}
+
+func TestUpdatePasswordAndRevokeTokens_NoRowsRollsBack(t *testing.T) {
+	mock, err := pgxmock.NewPool()
+	if err != nil {
+		t.Fatalf("pgxmock: %v", err)
+	}
+	defer mock.Close()
+
+	mock.ExpectBegin()
+	mock.ExpectExec(updateUserPasswordSQL).
+		WithArgs("$2a$10$hash", int32(999)).
+		WillReturnResult(pgxmock.NewResult("UPDATE", 0))
+	mock.ExpectRollback()
+
+	repo := NewRepository(mock)
+	err = repo.UpdatePasswordAndRevokeTokens(context.Background(), 999, "$2a$10$hash")
+	if !errors.Is(err, ErrUserNotFound) {
+		t.Errorf("UpdatePasswordAndRevokeTokens err = %v, want ErrUserNotFound", err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Errorf("unmet pgxmock expectations: %v", err)
+	}
+}
+
+func TestUpdatePasswordAndRevokeTokens_RevokeErrorRollsBack(t *testing.T) {
+	mock, err := pgxmock.NewPool()
+	if err != nil {
+		t.Fatalf("pgxmock: %v", err)
+	}
+	defer mock.Close()
+
+	sentinel := errors.New("connection reset")
+	mock.ExpectBegin()
+	mock.ExpectExec(updateUserPasswordSQL).
+		WithArgs("$2a$10$hash", int32(7)).
+		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
+	mock.ExpectExec(revokeTokensByUserSQL).
+		WithArgs(int32(7)).
+		WillReturnError(sentinel)
+	mock.ExpectRollback()
+
+	repo := NewRepository(mock)
+	err = repo.UpdatePasswordAndRevokeTokens(context.Background(), 7, "$2a$10$hash")
+	if !errors.Is(err, sentinel) {
+		t.Errorf("UpdatePasswordAndRevokeTokens err = %v, want %v", err, sentinel)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Errorf("unmet pgxmock expectations: %v", err)
+	}
+}
+
+func TestUpdatePasswordAndRevokeTokens_RequiresPool(t *testing.T) {
+	repo := NewRepositoryFromQuerier(db.New(&stubQuerier{}))
+
+	err := repo.UpdatePasswordAndRevokeTokens(context.Background(), 7, "$2a$10$hash")
+	if err == nil {
+		t.Error("UpdatePasswordAndRevokeTokens should fail without a pool")
+	}
+}

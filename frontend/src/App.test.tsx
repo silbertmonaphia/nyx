@@ -366,6 +366,30 @@ describe('App', () => {
     ).toBeInTheDocument();
   });
 
+  it('opens the change-password dialog from the user menu', async () => {
+    await i18n.changeLanguage('en');
+    mockUseAuthStore.mockReturnValue({
+      isAuthenticated: true,
+      user: { id: 1, username: 'testuser' },
+      logout: vi.fn(),
+      logoutAll: vi.fn(),
+    });
+
+    render(<App />);
+
+    expect(screen.queryByTestId('current-password-input')).not.toBeInTheDocument();
+
+    await userEvent.click(screen.getByTestId('user-menu-button'));
+    await userEvent.click(screen.getByTestId('user-menu-change-password'));
+
+    expect(
+      screen.getByRole('heading', { name: /change password/i }),
+    ).toBeInTheDocument();
+    expect(screen.getByTestId('current-password-input')).toBeInTheDocument();
+    expect(screen.getByTestId('new-password-input')).toBeInTheDocument();
+    expect(screen.getByTestId('confirm-password-input')).toBeInTheDocument();
+  });
+
   it('can start editing a feed (when authenticated)', async () => {
     mockUseAuthStore.mockReturnValue({
       isAuthenticated: true,

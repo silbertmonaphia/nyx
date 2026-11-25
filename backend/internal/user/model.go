@@ -16,10 +16,10 @@ type User struct {
 // Without these, a malformed payload reaches the service and bcrypt,
 // producing a 500 on inputs that should reject at the edge.
 //
-// Password length is bounded above as well as below: bcrypt itself
-// truncates at 72 bytes and bcrypt on a multi-KB input wastes CPU.
-// 128 bytes leaves headroom for a future shift to Argon2id or
-// scrypt without breaking clients (see SECURITY.md M7).
+// Password length is bounded above as well as below: bcrypt rejects
+// inputs beyond 72 bytes and a multi-KB input wastes CPU. The service
+// enforces the 72-byte cap; 128 runes leaves headroom for a future
+// shift to Argon2id or scrypt without breaking clients (see M7).
 type RegisterRequest struct {
 	Username string `json:"username" required:"true" minLength:"3" maxLength:"50"`
 	Password string `json:"password" required:"true" minLength:"6" maxLength:"128"`
@@ -28,6 +28,11 @@ type RegisterRequest struct {
 type LoginRequest struct {
 	Username string `json:"username" required:"true"`
 	Password string `json:"password" required:"true" maxLength:"128"`
+}
+
+type ChangePasswordRequest struct {
+	CurrentPassword string `json:"current_password" required:"true" maxLength:"128"`
+	NewPassword     string `json:"new_password" required:"true" minLength:"6" maxLength:"72"`
 }
 
 // AuthResponse is the JSON envelope returned by Login, Register, and

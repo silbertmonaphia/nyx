@@ -109,6 +109,17 @@ func RegisterUserOpsTest(api huma.API, h *Handler, tokens auth.TokenService) {
 		Middlewares: huma.Middlewares{middleware.NewHumaAuth(tokens)},
 	}, h.LogoutAll)
 
+	huma.Register(api, huma.Operation{
+		OperationID: "change-password",
+		Method:      http.MethodPost,
+		Path:        "/api/change-password",
+		Summary:     "Change password",
+		Description: "Verify the current password, replace it with the new one, and revoke every active refresh token for the caller. Sign in again with the new password. Requires a valid access token in the Authorization header. Returns 204.",
+		Tags:        []string{"auth"},
+		Security:    []map[string][]string{{"BearerAuth": {}}},
+		Middlewares: huma.Middlewares{middleware.DefaultAuthRateLimit(), middleware.NewHumaAuth(tokens)},
+	}, h.ChangePassword)
+
 	// /api/me returns the profile of the access token's subject.
 	// The SPA fires this on every page load so its persisted
 	// user can be reconciled against the server-truth (SECURITY.md L7).
@@ -163,6 +174,12 @@ type logoutInput struct{ Body LogoutRequest }
 // huma generates a 204 response with no content schema (mirroring
 // deleteFeedOutput in internal/feed/huma_handler.go).
 type logoutOutput struct {
+	Status int `status:"204"`
+}
+
+type changePasswordInput struct{ Body ChangePasswordRequest }
+
+type changePasswordOutput struct {
 	Status int `status:"204"`
 }
 
@@ -243,6 +260,15 @@ func (h *Handler) LogoutAll(ctx context.Context, _ *struct{}) (*logoutOutput, er
 		return nil, api.MapError(ctx, err, "Failed to logout all sessions")
 	}
 	return &logoutOutput{Status: http.StatusNoContent}, nil
+}
+
+//nolint:revive // unexported-return is huma's idiomatic op pattern
+func (h *Handler) ChangePassword(ctx context.Context, in *changePasswordInput) (*changePasswordOutput, error) {
+	id := reqctx.UserIDFromContext(ctx)
+	if err := h.service.ChangePassword(ctx, id, in.Body); err != nil {
+		return nil, api.MapError(ctx, err, "Failed to change password")
+	}
+	return &changePasswordOutput{Status: http.StatusNoContent}, nil
 }
 
 // Me returns the user profile for the access token's subject.

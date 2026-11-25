@@ -347,3 +347,23 @@ func (q *Queries) StampRefreshTokenFamily(ctx context.Context, id int64) (StampR
 	)
 	return i, err
 }
+
+const updateUserPassword = `-- name: UpdateUserPassword :execrows
+UPDATE users
+SET password_hash = $1,
+    updated_at    = now()
+WHERE id = $2 AND deleted_at IS NULL
+`
+
+type UpdateUserPasswordParams struct {
+	PasswordHash string
+	ID           int32
+}
+
+func (q *Queries) UpdateUserPassword(ctx context.Context, arg UpdateUserPasswordParams) (int64, error) {
+	result, err := q.db.Exec(ctx, updateUserPassword, arg.PasswordHash, arg.ID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}

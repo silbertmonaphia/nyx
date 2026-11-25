@@ -27,6 +27,9 @@ func (s *stubCleanupRepo) GetUserByUsername(context.Context, string) (*User, err
 func (s *stubCleanupRepo) GetUserByID(context.Context, int) (*User, error) {
 	return nil, errors.New("not used")
 }
+func (s *stubCleanupRepo) UpdatePasswordAndRevokeTokens(context.Context, int, string) error {
+	return errors.New("not used")
+}
 func (s *stubCleanupRepo) CreateRefreshToken(context.Context, int, []byte, time.Time) (*RefreshTokenRow, error) {
 	return nil, errors.New("not used")
 }

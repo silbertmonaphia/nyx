@@ -159,6 +159,36 @@ func TestCreateUser_UsernameConstraintIntegration(t *testing.T) {
 		"expected ErrUsernameTaken against real Postgres, got %v", err)
 }
 
+func TestUpdatePassword_Integration(t *testing.T) {
+	if dbURL == "" {
+		t.Skip("PostgreSQL container not available; set SKIP_CONTAINERS=false to run integration tests")
+	}
+	ctx := context.Background()
+
+	repo := setupRefreshIntegrationTest(t)
+
+	u := &User{Username: fmt.Sprintf("pw-update-%d", time.Now().UnixNano()), PasswordHash: "before"}
+	require.NoError(t, repo.CreateUser(ctx, u))
+
+	tokenHash := []byte("password-change-integration-hash")
+	_, err := repo.CreateRefreshToken(ctx, u.ID, tokenHash, time.Now().Add(time.Hour))
+	require.NoError(t, err)
+
+	require.NoError(t, repo.UpdatePasswordAndRevokeTokens(ctx, u.ID, "after"))
+
+	got, err := repo.GetUserByID(ctx, u.ID)
+	require.NoError(t, err)
+	assert.Equal(t, "after", got.PasswordHash)
+
+	stored, err := repo.GetRefreshTokenByHash(ctx, tokenHash)
+	require.NoError(t, err)
+	assert.NotNil(t, stored.RevokedAt, "refresh token must be revoked by the password change")
+
+	err = repo.UpdatePasswordAndRevokeTokens(ctx, 2147483647, "after")
+	assert.True(t, errors.Is(err, ErrUserNotFound),
+		"expected ErrUserNotFound for a missing user, got %v", err)
+}
+
 // TestRefreshTokensIntegration is the round-trip integration check for
 // the 000008 migration: it inserts a user, mints a refresh token,
 // fetches it by hash, rotates it, and revokes the family. The

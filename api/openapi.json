@@ -57,6 +57,25 @@
         ],
         "type": "object"
       },
+      "ChangePasswordRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "current_password": {
+            "maxLength": 128,
+            "type": "string"
+          },
+          "new_password": {
+            "maxLength": 72,
+            "minLength": 6,
+            "type": "string"
+          }
+        },
+        "required": [
+          "current_password",
+          "new_password"
+        ],
+        "type": "object"
+      },
       "ConfigResponse": {
         "additionalProperties": false,
         "properties": {
@@ -940,6 +959,46 @@
   },
   "openapi": "3.1.0",
   "paths": {
+    "/api/change-password": {
+      "post": {
+        "description": "Verify the current password, replace it with the new one, and revoke every active refresh token for the caller. Sign in again with the new password. Requires a valid access token in the Authorization header. Returns 204.",
+        "operationId": "change-password",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ChangePasswordRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "No Content"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Change password",
+        "tags": [
+          "auth"
+        ]
+      }
+    },
     "/api/features": {
       "get": {
         "description": "Reports operator-level feature switches the SPA renders conditionally. agent_enabled is true when the chat handler proxies to the Python agent.",

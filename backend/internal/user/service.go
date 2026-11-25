@@ -16,6 +16,10 @@ import (
 var (
 	ErrInvalidCredentials = errors.New("invalid username or password")
 
+	ErrInvalidCurrentPassword = errors.New("invalid current password")
+
+	ErrPasswordTooLong = errors.New("password too long")
+
 	// ErrInvalidRefreshToken — the refresh token either doesn't exist
 	// in the DB or its hash doesn't match a row. Distinguished from
 	// ErrRefreshTokenExpired (which is a real, formerly-valid token
@@ -71,6 +75,7 @@ type Service interface {
 	// revokes its family (this login chain only).
 	Logout(ctx context.Context, rawRefresh string) error
 	LogoutAll(ctx context.Context, userID int) error
+	ChangePassword(ctx context.Context, userID int, req ChangePasswordRequest) error
 	// GetByID returns the user profile identified by the access
 	// token. Used by /api/me so the SPA can reconcile its persisted
 	// user profile against the server-truth on every page load
@@ -185,8 +190,14 @@ func (s *service) Register(ctx context.Context, req RegisterRequest) (*AuthResul
 	ctx, span := s.tracer.Start(ctx, "user.Register", trace.WithSpanKind(trace.SpanKindInternal))
 	defer span.End()
 
+	if len(req.Password) > 72 {
+		return nil, ErrPasswordTooLong
+	}
 	hashedPassword, err := bcrypt.GenerateFromPassword([]byte(req.Password), bcrypt.DefaultCost)
 	if err != nil {
+		if errors.Is(err, bcrypt.ErrPasswordTooLong) {
+			return nil, ErrPasswordTooLong
+		}
 		return nil, err
 	}
 
@@ -381,6 +392,30 @@ func (s *service) LogoutAll(ctx context.Context, userID int) error {
 
 	_, err := s.repo.RevokeRefreshTokensByUser(ctx, userID)
 	return err
+}
+
+func (s *service) ChangePassword(ctx context.Context, userID int, req ChangePasswordRequest) error {
+	ctx, span := s.tracer.Start(ctx, "user.ChangePassword", trace.WithSpanKind(trace.SpanKindInternal))
+	defer span.End()
+
+	if len(req.NewPassword) > 72 {
+		return ErrPasswordTooLong
+	}
+	u, err := s.repo.GetUserByID(ctx, userID)
+	if err != nil {
+		return err
+	}
+	if err := bcrypt.CompareHashAndPassword([]byte(u.PasswordHash), []byte(req.CurrentPassword)); err != nil {
+		return ErrInvalidCurrentPassword
+	}
+	hashed, err := bcrypt.GenerateFromPassword([]byte(req.NewPassword), bcrypt.DefaultCost)
+	if err != nil {
+		if errors.Is(err, bcrypt.ErrPasswordTooLong) {
+			return ErrPasswordTooLong
+		}
+		return err
+	}
+	return s.repo.UpdatePasswordAndRevokeTokens(ctx, userID, string(hashed))
 }
 
 // GetByID returns the user profile for the access token's subject.

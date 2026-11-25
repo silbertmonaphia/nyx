@@ -3,6 +3,7 @@ package user
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -30,9 +31,10 @@ func newTestTokens(t *testing.T) auth.TokenService {
 // ("Register didn't return AuthResponse" rather than "mock expected X
 // calls but got Y").
 type stubRepo struct {
-	createFn        func(ctx context.Context, u *User) error
-	getByUsernameFn func(ctx context.Context, username string) (*User, error)
-	getByIDFn       func(ctx context.Context, id int) (*User, error)
+	createFn                  func(ctx context.Context, u *User) error
+	getByUsernameFn           func(ctx context.Context, username string) (*User, error)
+	getByIDFn                 func(ctx context.Context, id int) (*User, error)
+	updatePasswordAndRevokeFn func(ctx context.Context, id int, passwordHash string) error
 
 	// Refresh-token methods. Same "default error if unset" pattern as
 	// the user CRUD stubs above: any test path that hits an unstubbed
@@ -65,6 +67,12 @@ func (s *stubRepo) GetUserByID(ctx context.Context, id int) (*User, error) {
 		return nil, errors.New("GetUserByID not stubbed")
 	}
 	return s.getByIDFn(ctx, id)
+}
+func (s *stubRepo) UpdatePasswordAndRevokeTokens(ctx context.Context, id int, passwordHash string) error {
+	if s.updatePasswordAndRevokeFn == nil {
+		return errors.New("UpdatePasswordAndRevokeTokens not stubbed")
+	}
+	return s.updatePasswordAndRevokeFn(ctx, id, passwordHash)
 }
 func (s *stubRepo) CreateRefreshToken(ctx context.Context, userID int, tokenHash []byte, expiresAt time.Time) (*RefreshTokenRow, error) {
 	if s.createRefreshFn == nil {
@@ -765,5 +773,145 @@ func TestLogout_RequiresRefreshToken(t *testing.T) {
 
 	if err := svc.Logout(context.Background(), ""); err != nil {
 		t.Errorf("Logout with empty token should be nil (idempotent), got %v", err)
+	}
+}
+
+func TestChangePassword_UpdatesHashAndRevokesSessions(t *testing.T) {
+	oldHash, err := bcrypt.GenerateFromPassword([]byte("oldpass1"), bcrypt.MinCost)
+	if err != nil {
+		t.Fatalf("bcrypt.GenerateFromPassword: %v", err)
+	}
+	var updatedID int
+	var updatedHash string
+	repo := &stubRepo{
+		getByIDFn: func(_ context.Context, id int) (*User, error) {
+			return &User{ID: id, Username: "alice", PasswordHash: string(oldHash)}, nil
+		},
+		updatePasswordAndRevokeFn: func(_ context.Context, id int, hash string) error {
+			updatedID = id
+			updatedHash = hash
+			return nil
+		},
+	}
+	svc := NewService(repo, newTestTokens(t), 15*time.Minute, 7*24*time.Hour, noop.NewTracerProvider().Tracer("test"))
+
+	err = svc.ChangePassword(context.Background(), 7, ChangePasswordRequest{
+		CurrentPassword: "oldpass1",
+		NewPassword:     "newpass2",
+	})
+	if err != nil {
+		t.Fatalf("ChangePassword: %v", err)
+	}
+	if updatedID != 7 {
+		t.Errorf("UpdatePasswordAndRevokeTokens id = %d, want 7", updatedID)
+	}
+	if updatedHash == "" || updatedHash == "newpass2" || updatedHash[0] != '$' {
+		t.Errorf("UpdatePasswordAndRevokeTokens hash = %q, want a bcrypt hash", updatedHash)
+	}
+	if err := bcrypt.CompareHashAndPassword([]byte(updatedHash), []byte("newpass2")); err != nil {
+		t.Errorf("stored hash does not match the new password: %v", err)
+	}
+}
+
+func TestChangePassword_WrongCurrentPassword(t *testing.T) {
+	oldHash, err := bcrypt.GenerateFromPassword([]byte("oldpass1"), bcrypt.MinCost)
+	if err != nil {
+		t.Fatalf("bcrypt.GenerateFromPassword: %v", err)
+	}
+	repo := &stubRepo{
+		getByIDFn: func(_ context.Context, id int) (*User, error) {
+			return &User{ID: id, Username: "alice", PasswordHash: string(oldHash)}, nil
+		},
+		updatePasswordAndRevokeFn: func(_ context.Context, _ int, _ string) error {
+			t.Error("UpdatePasswordAndRevokeTokens must not be reached when the current password is wrong")
+			return nil
+		},
+	}
+	svc := NewService(repo, newTestTokens(t), 15*time.Minute, 7*24*time.Hour, noop.NewTracerProvider().Tracer("test"))
+
+	err = svc.ChangePassword(context.Background(), 7, ChangePasswordRequest{
+		CurrentPassword: "wrongpass",
+		NewPassword:     "newpass2",
+	})
+	if !errors.Is(err, ErrInvalidCurrentPassword) {
+		t.Errorf("ChangePassword err = %v, want ErrInvalidCurrentPassword", err)
+	}
+}
+
+func TestChangePassword_UserNotFound(t *testing.T) {
+	repo := &stubRepo{
+		getByIDFn: func(_ context.Context, _ int) (*User, error) {
+			return nil, ErrUserNotFound
+		},
+	}
+	svc := NewService(repo, newTestTokens(t), 15*time.Minute, 7*24*time.Hour, noop.NewTracerProvider().Tracer("test"))
+
+	err := svc.ChangePassword(context.Background(), 7, ChangePasswordRequest{
+		CurrentPassword: "oldpass1",
+		NewPassword:     "newpass2",
+	})
+	if !errors.Is(err, ErrUserNotFound) {
+		t.Errorf("ChangePassword err = %v, want ErrUserNotFound", err)
+	}
+}
+
+func TestChangePassword_UpdateErrorPropagates(t *testing.T) {
+	oldHash, err := bcrypt.GenerateFromPassword([]byte("oldpass1"), bcrypt.MinCost)
+	if err != nil {
+		t.Fatalf("bcrypt.GenerateFromPassword: %v", err)
+	}
+	sentinel := errors.New("connection reset")
+	repo := &stubRepo{
+		getByIDFn: func(_ context.Context, id int) (*User, error) {
+			return &User{ID: id, Username: "alice", PasswordHash: string(oldHash)}, nil
+		},
+		updatePasswordAndRevokeFn: func(_ context.Context, _ int, _ string) error {
+			return sentinel
+		},
+	}
+	svc := NewService(repo, newTestTokens(t), 15*time.Minute, 7*24*time.Hour, noop.NewTracerProvider().Tracer("test"))
+
+	err = svc.ChangePassword(context.Background(), 7, ChangePasswordRequest{
+		CurrentPassword: "oldpass1",
+		NewPassword:     "newpass2",
+	})
+	if !errors.Is(err, sentinel) {
+		t.Errorf("ChangePassword err = %v, want %v", err, sentinel)
+	}
+}
+
+func TestChangePassword_TooLongNewPassword(t *testing.T) {
+	repo := &stubRepo{
+		getByIDFn: func(_ context.Context, _ int) (*User, error) {
+			t.Error("GetUserByID must not be reached when the new password exceeds bcrypt's 72-byte limit")
+			return nil, ErrUserNotFound
+		},
+	}
+	svc := NewService(repo, newTestTokens(t), 15*time.Minute, 7*24*time.Hour, noop.NewTracerProvider().Tracer("test"))
+
+	err := svc.ChangePassword(context.Background(), 7, ChangePasswordRequest{
+		CurrentPassword: "oldpass1",
+		NewPassword:     strings.Repeat("a", 73),
+	})
+	if !errors.Is(err, ErrPasswordTooLong) {
+		t.Errorf("ChangePassword err = %v, want ErrPasswordTooLong", err)
+	}
+}
+
+func TestRegister_TooLongPassword(t *testing.T) {
+	repo := &stubRepo{
+		createFn: func(_ context.Context, _ *User) error {
+			t.Error("CreateUser must not be reached when the password exceeds bcrypt's 72-byte limit")
+			return nil
+		},
+	}
+	svc := NewService(repo, newTestTokens(t), 15*time.Minute, 7*24*time.Hour, noop.NewTracerProvider().Tracer("test"))
+
+	_, err := svc.Register(context.Background(), RegisterRequest{
+		Username: "alice",
+		Password: strings.Repeat("a", 73),
+	})
+	if !errors.Is(err, ErrPasswordTooLong) {
+		t.Errorf("Register err = %v, want ErrPasswordTooLong", err)
 	}
 }

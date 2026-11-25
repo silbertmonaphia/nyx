@@ -52,6 +52,8 @@ func init() {
 	api.RegisterSentinel(ErrInvalidRefreshToken, http.StatusUnauthorized, "Invalid refresh token")
 	api.RegisterSentinel(ErrRefreshTokenReuse, http.StatusUnauthorized, "Refresh token revoked")
 	api.RegisterSentinel(ErrRefreshTokenExpired, http.StatusUnauthorized, "Refresh token expired")
+	api.RegisterSentinel(ErrInvalidCurrentPassword, http.StatusBadRequest, "Current password is incorrect")
+	api.RegisterSentinel(ErrPasswordTooLong, http.StatusBadRequest, "Password is too long")
 
 	// Register pgerr matchers for the user-domain unique constraints.
 	// Switched on ConstraintName (not Code) so other domains that share
@@ -80,6 +82,7 @@ type Querier interface {
 	InsertUser(ctx context.Context, arg db.InsertUserParams) (db.User, error)
 	GetUserByUsername(ctx context.Context, username string) (db.User, error)
 	GetUserByID(ctx context.Context, id int32) (db.User, error)
+	UpdateUserPassword(ctx context.Context, arg db.UpdateUserPasswordParams) (int64, error)
 
 	// Refresh-token queries — see backend/queries/users.sql for the
 	// SQL bodies. Method names mirror the @name annotations verbatim
@@ -137,6 +140,7 @@ type Repository interface {
 	CreateUser(ctx context.Context, u *User) error
 	GetUserByUsername(ctx context.Context, username string) (*User, error)
 	GetUserByID(ctx context.Context, id int) (*User, error)
+	UpdatePasswordAndRevokeTokens(ctx context.Context, id int, passwordHash string) error
 
 	// Refresh-token operations. CreateRefreshToken mints a row whose
 	// family_id == its own id (self-stamped by the repository via a
@@ -237,6 +241,33 @@ func (r *sqlRepository) GetUserByID(ctx context.Context, id int) (*User, error) 
 	}
 	u := toUser(row)
 	return &u, nil
+}
+
+func (r *sqlRepository) UpdatePasswordAndRevokeTokens(ctx context.Context, id int, passwordHash string) error {
+	if r.pool == nil {
+		return errors.New("user.UpdatePasswordAndRevokeTokens requires a pool; use NewRepository, not NewRepositoryFromQuerier")
+	}
+	tx, err := r.pool.BeginTx(ctx, pgx.TxOptions{})
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	qtx := r.q.WithTx(tx)
+	rows, err := qtx.UpdateUserPassword(ctx, db.UpdateUserPasswordParams{
+		PasswordHash: passwordHash,
+		ID:           toInt32(id),
+	})
+	if err != nil {
+		return err
+	}
+	if rows == 0 {
+		return ErrUserNotFound
+	}
+	if _, err := qtx.RevokeRefreshTokensByUser(ctx, toInt32(id)); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
 }
 
 // toUser projects a sqlc-generated db.User into the API-shaped User.

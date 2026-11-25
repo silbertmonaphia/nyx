@@ -7,6 +7,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -947,4 +948,191 @@ func TestMeHandler_NotFoundReturns404(t *testing.T) {
 	newTestRouterWithRepo(repo).ServeHTTP(rr, req)
 
 	decodeEnvelope(t, rr, http.StatusNotFound)
+}
+
+func TestChangePasswordHandler_NoContent(t *testing.T) {
+	tokens, err := auth.NewTokenService([]byte(auth.TestSecret), 15*time.Minute)
+	if err != nil {
+		t.Fatalf("auth.NewTokenService: %v", err)
+	}
+	accessToken, err := tokens.GenerateToken(7, testUsername)
+	if err != nil {
+		t.Fatalf("GenerateToken: %v", err)
+	}
+
+	var seenUser int
+	var seenHash string
+	repo := &stubRepo{
+		getByIDFn: func(_ context.Context, id int) (*User, error) {
+			seenUser = id
+			return &User{ID: id, Username: testUsername, PasswordHash: testHash(t, "oldpass1")}, nil
+		},
+		updatePasswordAndRevokeFn: func(_ context.Context, id int, hash string) error {
+			if id != 7 {
+				t.Errorf("UpdatePasswordAndRevokeTokens id = %d, want 7", id)
+			}
+			seenHash = hash
+			return nil
+		},
+	}
+
+	req := authedPostRequest(t, "/api/change-password", accessToken, ChangePasswordRequest{
+		CurrentPassword: "oldpass1",
+		NewPassword:     "newpass2",
+	})
+	rr := httptest.NewRecorder()
+	newTestRouterWithRepo(repo).ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusNoContent {
+		t.Fatalf("status = %d, want 204; body=%s", rr.Code, rr.Body.String())
+	}
+	if rr.Body.Len() != 0 {
+		t.Errorf("204 body should be empty, got %q", rr.Body.String())
+	}
+	if seenUser != 7 {
+		t.Errorf("repo received userID=%d, want 7", seenUser)
+	}
+	if seenHash == "" || seenHash == "newpass2" {
+		t.Errorf("stored hash = %q, want a bcrypt hash", seenHash)
+	}
+}
+
+func TestChangePasswordHandler_WrongCurrentPasswordReturns400Not401(t *testing.T) {
+	tokens, err := auth.NewTokenService([]byte(auth.TestSecret), 15*time.Minute)
+	if err != nil {
+		t.Fatalf("auth.NewTokenService: %v", err)
+	}
+	accessToken, err := tokens.GenerateToken(7, testUsername)
+	if err != nil {
+		t.Fatalf("GenerateToken: %v", err)
+	}
+
+	repo := &stubRepo{
+		getByIDFn: func(_ context.Context, id int) (*User, error) {
+			return &User{ID: id, Username: testUsername, PasswordHash: testHash(t, "oldpass1")}, nil
+		},
+		updatePasswordAndRevokeFn: func(_ context.Context, _ int, _ string) error {
+			t.Error("UpdatePasswordAndRevokeTokens must not be reached on a wrong current password")
+			return nil
+		},
+	}
+
+	req := authedPostRequest(t, "/api/change-password", accessToken, ChangePasswordRequest{
+		CurrentPassword: "wrongpass",
+		NewPassword:     "newpass2",
+	})
+	rr := httptest.NewRecorder()
+	newTestRouterWithRepo(repo).ServeHTTP(rr, req)
+
+	env := decodeEnvelope(t, rr, http.StatusBadRequest)
+	if env.Message != "Current password is incorrect" {
+		t.Errorf("envelope.error = %q, want the current-password message", env.Message)
+	}
+}
+
+func TestChangePasswordHandler_RequiresAuth(t *testing.T) {
+	repo := &stubRepo{
+		getByIDFn: func(_ context.Context, _ int) (*User, error) {
+			t.Error("GetUserByID must not be reached when auth fails")
+			return nil, ErrUserNotFound
+		},
+	}
+
+	req := authedPostRequest(t, "/api/change-password", "", ChangePasswordRequest{
+		CurrentPassword: "oldpass1",
+		NewPassword:     "newpass2",
+	})
+	rr := httptest.NewRecorder()
+	newTestRouterWithRepo(repo).ServeHTTP(rr, req)
+
+	decodeEnvelope(t, rr, http.StatusUnauthorized)
+}
+
+func TestChangePasswordHandler_TooShortNewPasswordReturns400(t *testing.T) {
+	tokens, err := auth.NewTokenService([]byte(auth.TestSecret), 15*time.Minute)
+	if err != nil {
+		t.Fatalf("auth.NewTokenService: %v", err)
+	}
+	accessToken, err := tokens.GenerateToken(7, testUsername)
+	if err != nil {
+		t.Fatalf("GenerateToken: %v", err)
+	}
+
+	repo := &stubRepo{
+		getByIDFn: func(_ context.Context, _ int) (*User, error) {
+			t.Error("GetUserByID must not be reached when the new password is too short")
+			return nil, ErrUserNotFound
+		},
+	}
+
+	req := authedPostRequest(t, "/api/change-password", accessToken, ChangePasswordRequest{
+		CurrentPassword: "oldpass1",
+		NewPassword:     "x",
+	})
+	rr := httptest.NewRecorder()
+	newTestRouterWithRepo(repo).ServeHTTP(rr, req)
+
+	decodeEnvelope(t, rr, http.StatusBadRequest)
+}
+
+func TestChangePasswordHandler_TooLongNewPasswordReturns400(t *testing.T) {
+	tokens, err := auth.NewTokenService([]byte(auth.TestSecret), 15*time.Minute)
+	if err != nil {
+		t.Fatalf("auth.NewTokenService: %v", err)
+	}
+	accessToken, err := tokens.GenerateToken(7, testUsername)
+	if err != nil {
+		t.Fatalf("GenerateToken: %v", err)
+	}
+
+	repo := &stubRepo{
+		getByIDFn: func(_ context.Context, _ int) (*User, error) {
+			t.Error("GetUserByID must not be reached when the new password exceeds 72 bytes")
+			return nil, ErrUserNotFound
+		},
+	}
+
+	req := authedPostRequest(t, "/api/change-password", accessToken, ChangePasswordRequest{
+		CurrentPassword: "oldpass1",
+		NewPassword:     strings.Repeat("密", 30),
+	})
+	rr := httptest.NewRecorder()
+	newTestRouterWithRepo(repo).ServeHTTP(rr, req)
+
+	env := decodeEnvelope(t, rr, http.StatusBadRequest)
+	if env.Message != "Password is too long" {
+		t.Errorf("envelope.error = %q, want the password-too-long message", env.Message)
+	}
+}
+
+func TestChangePasswordHandler_RepoErrorReturns500(t *testing.T) {
+	tokens, err := auth.NewTokenService([]byte(auth.TestSecret), 15*time.Minute)
+	if err != nil {
+		t.Fatalf("auth.NewTokenService: %v", err)
+	}
+	accessToken, err := tokens.GenerateToken(7, testUsername)
+	if err != nil {
+		t.Fatalf("GenerateToken: %v", err)
+	}
+
+	repo := &stubRepo{
+		getByIDFn: func(_ context.Context, _ int) (*User, error) {
+			return nil, errors.New("connection reset")
+		},
+	}
+
+	req := authedPostRequest(t, "/api/change-password", accessToken, ChangePasswordRequest{
+		CurrentPassword: "oldpass1",
+		NewPassword:     "newpass2",
+	})
+	rr := httptest.NewRecorder()
+	newTestRouterWithRepo(repo).ServeHTTP(rr, req)
+
+	env := decodeEnvelope(t, rr, http.StatusInternalServerError)
+	if env.Details != "Failed to change password" {
+		t.Errorf("envelope.details = %v, want %q", env.Details, "Failed to change password")
+	}
+	if bytes.Contains(rr.Body.Bytes(), []byte("connection reset")) {
+		t.Errorf("response leaks internal error text: %s", rr.Body.String())
+	}
 }

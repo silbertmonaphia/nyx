@@ -58,6 +58,7 @@ type Querier interface {
 	// Step 2: set family_id to the row's own id. RETURNING gives back
 	// the full row so the caller doesn't need a second SELECT.
 	StampRefreshTokenFamily(ctx context.Context, id int64) (StampRefreshTokenFamilyRow, error)
+	UpdateUserPassword(ctx context.Context, arg UpdateUserPasswordParams) (int64, error)
 }
 
 var _ Querier = (*Queries)(nil)

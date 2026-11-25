@@ -370,6 +370,7 @@ See `k8s/*.yaml` for per-resource config.
 | POST | `/api/refresh` | — | Body `{refresh_token}`. Returns a fresh Bearer pair + user. Reuse revokes the entire family |
 | POST | `/api/logout` | Bearer | Body `{refresh_token}`. Revokes that token's family (this login chain only). Returns 204 |
 | POST | `/api/logout-all` | Bearer | Revokes every active refresh token for the caller. Returns 204 |
+| POST | `/api/change-password` | Bearer | Body `{current_password, new_password}`. Verifies the current password, replaces the bcrypt hash, and revokes every active refresh token (re-login required). Returns 204 |
 | GET | `/api/me` | Bearer | Access-token subject's profile — the SPA calls it on every page load |
 | GET | `/api/feeds` | JWT | Lists feeds **owned by the caller**; `?q=`, `?page=`, `?page_size=` |
 | GET | `/api/feeds/{id}` | JWT | Single feed; 404 for missing *or* other users' — no existence leak |
