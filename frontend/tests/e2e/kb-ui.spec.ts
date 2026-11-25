@@ -132,8 +132,10 @@ async function dismissBlockingDialog(page: Page): Promise<void> {
 async function openKb(page: Page): Promise<void> {
   await dismissBlockingDialog(page);
   await closeChatPanel(page);
+  await expect(page.getByTestId('feed-search')).toBeVisible();
   await page.getByTestId('view-tab-knowledge').click();
   await expect(page.getByTestId('kb-page')).toBeVisible();
+  await expect(page.getByTestId('feed-search')).toHaveCount(0);
 }
 
 async function registerWithKb(page: Page, options: KbMockOptions = {}): Promise<void> {
@@ -152,6 +154,24 @@ test.describe('Knowledge base UI (agent-free)', () => {
     await expect(page.getByTestId('view-tab-feeds')).toBeVisible();
     await expect(page.getByTestId('view-tab-knowledge')).toHaveCount(0);
     await expect(page.getByTestId('view-tab-knowledge-mobile')).toHaveCount(0);
+  });
+
+  test('renders the toolbar action icons at the same size', async ({ page }) => {
+    await registerWithKb(page);
+    await openKb(page);
+
+    const uploadIcon = await page
+      .getByTestId('kb-upload')
+      .locator('svg')
+      .boundingBox();
+    const newDocumentIcon = await page
+      .getByTestId('kb-new-document')
+      .locator('svg')
+      .boundingBox();
+    expect(uploadIcon).not.toBeNull();
+    expect(newDocumentIcon).not.toBeNull();
+    expect(newDocumentIcon?.width).toBe(uploadIcon?.width);
+    expect(newDocumentIcon?.height).toBe(uploadIcon?.height);
   });
 
   test('shows the empty knowledge base', async ({ page }) => {
