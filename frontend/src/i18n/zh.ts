@@ -355,6 +355,9 @@ export const zh = {
       deleteSource: '删除来源',
       documents: '文档',
       documentsFiltered: '此来源中的文档',
+      documentCount_one: '共 {{count}} 篇文档',
+      documentCount_other: '共 {{count}} 篇文档',
+      documentCountOfTotal: '已加载 {{loaded}} / 共 {{total}} 篇',
       emptyDocuments: '还没有文档',
       deleteDocument: '删除文档',
       origin: {

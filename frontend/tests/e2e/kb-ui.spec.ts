@@ -181,7 +181,10 @@ test.describe('Knowledge base UI (agent-free)', () => {
       rel_path: `notes-${index}.md`,
       title: `Notes ${index}`,
     }));
-    await registerWithKb(page, { documents });
+    await registerWithKb(page, {
+      sources: [{ ...source, document_count: 30 }],
+      documents,
+    });
     await openKb(page);
 
     const rows = page.getByTestId('kb-document-row');
@@ -192,6 +195,24 @@ test.describe('Knowledge base UI (agent-free)', () => {
     await page.mouse.move(640, 400);
     await page.mouse.wheel(0, 4000);
     await expect(lastRow).toBeInViewport();
+  });
+
+  test('shows loaded and total document counts in the list header', async ({ page }) => {
+    const documents = Array.from({ length: 30 }, (_, index) => ({
+      ...document,
+      id: 100 + index,
+      rel_path: `notes-${index}.md`,
+      title: `Notes ${index}`,
+    }));
+    await registerWithKb(page, {
+      sources: [{ ...source, document_count: 40 }],
+      documents,
+    });
+    await openKb(page);
+
+    await expect(page.getByTestId('kb-document-count')).toHaveText(
+      '30 of 40 documents loaded',
+    );
   });
 
   test('shows the empty knowledge base', async ({ page }) => {

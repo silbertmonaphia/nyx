@@ -104,6 +104,49 @@ describe('KnowledgeBasePage', () => {
     expect(screen.getByTestId('kb-document-status')).toHaveTextContent('Indexed');
   });
 
+  it('shows how many documents are loaded of the total', async () => {
+    mockedService.listSources.mockResolvedValue([
+      { ...source, document_count: 3 },
+    ]);
+    mockedService.listDocuments.mockResolvedValue([
+      document,
+      { ...document, id: 11, rel_path: 'more.md', title: 'More' },
+    ]);
+    renderPage();
+
+    expect(await screen.findByTestId('kb-document-count')).toHaveTextContent(
+      '2 of 3 documents loaded',
+    );
+  });
+
+  it('shows the plain document count when everything is loaded', async () => {
+    mockedService.listSources.mockResolvedValue([source]);
+    mockedService.listDocuments.mockResolvedValue([
+      document,
+      { ...document, id: 11, rel_path: 'more.md', title: 'More' },
+    ]);
+    renderPage();
+
+    expect(await screen.findByTestId('kb-document-count')).toHaveTextContent(
+      '2 documents',
+    );
+  });
+
+  it('uses the selected source total when filtering', async () => {
+    mockedService.listSources.mockResolvedValue([
+      source,
+      { ...source, id: 2, name: 'other', document_count: 5 },
+    ]);
+    mockedService.listDocuments.mockResolvedValue([document]);
+    renderPage();
+
+    await screen.findByText('other');
+    await userEvent.click(screen.getAllByTestId('kb-source-open')[1]);
+    expect(await screen.findByTestId('kb-document-count')).toHaveTextContent(
+      '1 of 5 documents loaded',
+    );
+  });
+
   it('labels a disabled source and its documents as excluded from search', async () => {
     mockedService.listSources.mockResolvedValue([{ ...source, enabled: false }]);
     mockedService.listDocuments.mockResolvedValue([document]);

@@ -381,6 +381,9 @@ export const en: Translation = {
       deleteSource: 'Delete source',
       documents: 'Documents',
       documentsFiltered: 'Documents in this source',
+      documentCount_one: '{{count}} document',
+      documentCount_other: '{{count}} documents',
+      documentCountOfTotal: '{{loaded}} of {{total}} documents loaded',
       emptyDocuments: 'No documents yet',
       deleteDocument: 'Delete document',
       origin: {

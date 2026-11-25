@@ -231,6 +231,15 @@ export const KnowledgeBasePage: React.FC = () => {
   const sources = sourcesQuery.data ?? [];
   const sourcesById = new Map(sources.map((source) => [source.id, source]));
   const documents = [...(documentsQuery.data ?? [])].sort(newestFirst);
+  let totalDocuments: number | undefined;
+  if (selectedSource !== undefined) {
+    totalDocuments = sourcesById.get(selectedSource)?.document_count;
+  } else if (sourcesQuery.isSuccess) {
+    totalDocuments = sources.reduce(
+      (sum, source) => sum + source.document_count,
+      0,
+    );
+  }
 
   const uploadFile = async (file: File) => {
     if (file.size === 0) {
@@ -417,9 +426,25 @@ export const KnowledgeBasePage: React.FC = () => {
       )}
 
       <section className="space-y-2">
-        <h3 className="text-sm font-medium">
-          {selectedSource ? t('kb.documentsFiltered') : t('kb.documents')}
-        </h3>
+        <div className="flex items-center justify-between gap-2">
+          <h3 className="text-sm font-medium">
+            {selectedSource ? t('kb.documentsFiltered') : t('kb.documents')}
+          </h3>
+          {documents.length > 0 && totalDocuments !== undefined && (
+            <span
+              className="text-sm text-muted-foreground"
+              data-testid="kb-document-count"
+              aria-live="polite"
+            >
+              {documents.length < totalDocuments
+                ? t('kb.documentCountOfTotal', {
+                    loaded: documents.length,
+                    total: totalDocuments,
+                  })
+                : t('kb.documentCount', { count: documents.length })}
+            </span>
+          )}
+        </div>
         {documentsQuery.isLoading && (
           <p className="text-sm text-muted-foreground" data-testid="kb-documents-loading">
             {t('kb.loading')}
