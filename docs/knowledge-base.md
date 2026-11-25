@@ -12,6 +12,11 @@ not modified and `rag: true` still means "my feeds".
   are never exposed through the HTTP API. Excluding a source from search skips
   its scans and keeps it out of retrieval, but leaves its documents listed and
   editable in the SPA so the source can be re-enabled.
+- **Listing.** `GET /api/kb/documents` returns the caller's documents
+  newest-updated first (`updated_at DESC`, then relative path), 50 per page by
+  default and at most 100. The SPA loads one page at a time and fetches the next
+  when the list is scrolled to the bottom, so a source of any size stays fully
+  browsable; the list header reports loaded versus total documents.
 - **Chunking.** Markdown is parsed into a heading-aware block sequence. A chunk
   never spans two heading paths; tables and fenced code blocks are never split;
   every embedded text starts with `relative/path › heading / path` while the
@@ -52,7 +57,7 @@ not modified and `rag: true` still means "my feeds".
 | `GET` | `/api/kb/sources` | The caller's sources with counts, freshness, and indexed embedding identities |
 | `PATCH` | `/api/kb/sources/{id}` | Enable or disable a source the caller owns |
 | `DELETE` | `/api/kb/sources/{id}` | Remove a source the caller owns and everything indexed from it |
-| `GET` | `/api/kb/documents` | List documents (`source_id`, `origin`, `status`, `limit`, `offset`) |
+| `GET` | `/api/kb/documents` | List documents, newest-updated first (`source_id`, `origin`, `status`, `limit`, `offset`) |
 | `POST` | `/api/kb/documents` | Create a document: multipart (`file`) or JSON (`{name, content}`) |
 | `GET` | `/api/kb/documents/{id}` | Document detail, content and heading paths |
 | `PUT` | `/api/kb/documents/{id}` | Replace an inline document's content and re-index it |
