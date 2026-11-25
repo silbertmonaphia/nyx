@@ -71,7 +71,7 @@ WHERE d.owner_id = sqlc.arg(owner_id)::bigint
   AND (sqlc.narg(source_id)::bigint IS NULL OR d.source_id = sqlc.narg(source_id)::bigint)
   AND (sqlc.narg(origin)::text IS NULL OR d.origin = sqlc.narg(origin)::text)
   AND (sqlc.narg(status)::text IS NULL OR d.status = sqlc.narg(status)::text)
-ORDER BY d.rel_path, d.id
+ORDER BY d.updated_at DESC, d.rel_path, d.id
 LIMIT sqlc.arg(limit_count)::int OFFSET sqlc.arg(offset_count)::int;
 
 -- name: SourceEmbeddingModels :many

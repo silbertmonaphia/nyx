@@ -536,7 +536,7 @@ WHERE d.owner_id = $1::bigint
   AND ($2::bigint IS NULL OR d.source_id = $2::bigint)
   AND ($3::text IS NULL OR d.origin = $3::text)
   AND ($4::text IS NULL OR d.status = $4::text)
-ORDER BY d.rel_path, d.id
+ORDER BY d.updated_at DESC, d.rel_path, d.id
 LIMIT $6::int OFFSET $5::int
 `
 
