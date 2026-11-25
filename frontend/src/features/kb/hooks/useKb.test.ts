@@ -3,12 +3,19 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { TestProviders, renderHook } from '~/test/test-utils';
 import { useAuthStore } from '~/store/authStore';
 import { kbService } from '../services/kbService';
-import { useKbAvailability, useKbSettings, useKbSources } from './useKb';
+import {
+  useKbAvailability,
+  useKbDocuments,
+  useKbSettings,
+  useKbSources,
+} from './useKb';
+import type { KbDocument } from '../types/kb';
 
 vi.mock('../services/kbService');
 
 const mockedService = kbService as unknown as {
   listSources: ReturnType<typeof vi.fn>;
+  listDocuments: ReturnType<typeof vi.fn>;
   getSettings: ReturnType<typeof vi.fn>;
 };
 
@@ -50,6 +57,60 @@ describe('useKbSources identity scoping', () => {
 const useAvailabilityProbe = () => ({
   status: useKbSettings().status,
   available: useKbAvailability(),
+});
+
+const makeDocument = (id: number): KbDocument => ({
+  id,
+  source_id: 1,
+  origin: 'inline',
+  rel_path: `notes-${id}.md`,
+  title: `Notes ${id}`,
+  doc_type: 'markdown',
+  byte_size: 10,
+  status: 'indexed',
+  generation: 1,
+  mtime: null,
+  updated_at: '2026-01-01T00:00:00Z',
+});
+
+describe('useKbDocuments pagination', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    useAuthStore.setState({ user: user(1), isAuthenticated: true });
+  });
+
+  it('loads pages until a short page ends the list', async () => {
+    mockedService.listDocuments
+      .mockResolvedValueOnce(
+        Array.from({ length: 50 }, (_, index) => makeDocument(index + 1)),
+      )
+      .mockResolvedValueOnce(
+        Array.from({ length: 20 }, (_, index) => makeDocument(index + 51)),
+      );
+
+    const { result } = renderHook(() => useKbDocuments({ sourceId: 7 }), {
+      wrapper: TestProviders,
+    });
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+    expect(mockedService.listDocuments).toHaveBeenCalledWith({
+      sourceId: 7,
+      limit: 50,
+      offset: 0,
+    });
+    expect(result.current.hasNextPage).toBe(true);
+
+    await act(async () => {
+      await result.current.fetchNextPage();
+    });
+
+    expect(mockedService.listDocuments).toHaveBeenLastCalledWith({
+      sourceId: 7,
+      limit: 50,
+      offset: 50,
+    });
+    await waitFor(() => expect(result.current.hasNextPage).toBe(false));
+    expect(result.current.data?.pages.flat()).toHaveLength(70);
+  });
 });
 
 describe('useKbAvailability', () => {

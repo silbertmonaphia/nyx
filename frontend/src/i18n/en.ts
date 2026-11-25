@@ -364,6 +364,7 @@ export const en: Translation = {
       createDone: 'Document created',
       createFailed: 'Could not create the document',
       loading: 'Loading…',
+      loadingMore: 'Loading more documents…',
       error: 'Could not load the knowledge base',
       emptySources: 'No knowledge sources yet',
       sources: 'Sources',

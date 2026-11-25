@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { act, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { KnowledgeBasePage } from './KnowledgeBasePage';
 import { kbService } from '../services/kbService';
@@ -12,6 +12,15 @@ vi.mock('../services/kbService');
 
 const mockedService = kbService as unknown as {
   [K in keyof typeof kbService]: ReturnType<typeof vi.fn>;
+};
+
+const IntersectionObserverStub = globalThis.IntersectionObserver as unknown as {
+  last: {
+    trigger: (isIntersecting: boolean, target?: Element | null) => void;
+    root: Element | null;
+    rootMargin: string;
+  } | null;
+  reset: () => void;
 };
 
 const source: KbSource = {
@@ -64,6 +73,7 @@ const renderPage = () =>
 describe('KnowledgeBasePage', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    IntersectionObserverStub.reset();
     useUiStore.setState({ toasts: [] });
     setupAuth();
     mockedService.listSources.mockResolvedValue([]);
@@ -145,6 +155,54 @@ describe('KnowledgeBasePage', () => {
     expect(await screen.findByTestId('kb-document-count')).toHaveTextContent(
       '1 of 5 documents loaded',
     );
+  });
+
+  it('loads the next page when the sentinel intersects', async () => {
+    mockedService.listSources.mockResolvedValue([
+      { ...source, document_count: 60 },
+    ]);
+    mockedService.listDocuments
+      .mockResolvedValueOnce(
+        Array.from({ length: 50 }, (_, index) => ({
+          ...document,
+          id: 100 + index,
+          rel_path: `notes-${index}.md`,
+          title: `Notes ${index}`,
+        })),
+      )
+      .mockResolvedValueOnce(
+        Array.from({ length: 10 }, (_, index) => ({
+          ...document,
+          id: 200 + index,
+          rel_path: `tail-${index}.md`,
+          title: `Tail ${index}`,
+        })),
+      );
+    renderPage();
+
+    expect(
+      await screen.findByTestId('kb-documents-sentinel'),
+    ).toBeInTheDocument();
+    expect(screen.getByTestId('kb-document-count')).toHaveTextContent(
+      '50 of 60 documents loaded',
+    );
+
+    const observer = IntersectionObserverStub.last;
+    expect(observer).not.toBeNull();
+    expect(observer?.rootMargin).toBe('200px');
+    await act(async () => {
+      observer?.trigger(true);
+    });
+
+    await waitFor(() =>
+      expect(screen.getAllByTestId('kb-document-row')).toHaveLength(60),
+    );
+    expect(screen.getByTestId('kb-document-count')).toHaveTextContent(
+      '60 documents',
+    );
+    expect(
+      screen.queryByTestId('kb-documents-sentinel'),
+    ).not.toBeInTheDocument();
   });
 
   it('labels a disabled source and its documents as excluded from search', async () => {

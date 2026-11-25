@@ -1,4 +1,9 @@
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import {
+  useInfiniteQuery,
+  useMutation,
+  useQuery,
+  useQueryClient,
+} from '@tanstack/react-query';
 import { kbService } from '../services/kbService';
 import type { KbDocumentFilters } from '../types/kb';
 import { useAuthStore } from '~/store/authStore';
@@ -43,11 +48,23 @@ export const useKbAvailability = (): boolean => {
   return settings.data?.enabled === true;
 };
 
+const KB_DOCUMENTS_PAGE_SIZE = 50;
+
 export const useKbDocuments = (filters: KbDocumentFilters = {}) => {
   const userId = useKbUserId();
-  return useQuery({
+  return useInfiniteQuery({
     queryKey: [KB_DOCUMENTS_QUERY_KEY, userId, filters],
-    queryFn: () => kbService.listDocuments(filters),
+    queryFn: ({ pageParam }) =>
+      kbService.listDocuments({
+        ...filters,
+        limit: KB_DOCUMENTS_PAGE_SIZE,
+        offset: pageParam,
+      }),
+    initialPageParam: 0,
+    getNextPageParam: (lastPage, allPages) =>
+      lastPage.length < KB_DOCUMENTS_PAGE_SIZE
+        ? undefined
+        : allPages.reduce((count, page) => count + page.length, 0),
     enabled: userId !== undefined,
     staleTime: 15_000,
   });

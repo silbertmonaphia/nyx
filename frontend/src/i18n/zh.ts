@@ -340,6 +340,7 @@ export const zh = {
       createDone: '文档已创建',
       createFailed: '创建文档失败',
       loading: '加载中…',
+      loadingMore: '正在加载更多文档…',
       error: '加载知识库失败',
       emptySources: '还没有知识来源',
       sources: '来源',

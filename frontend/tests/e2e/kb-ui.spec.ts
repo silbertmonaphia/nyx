@@ -84,10 +84,16 @@ async function mockKb(page: Page, options: KbMockOptions = {}): Promise<void> {
         });
         return;
       }
+      const limit = Number(url.searchParams.get('limit') ?? '0');
+      const offset = Number(url.searchParams.get('offset') ?? '0');
+      const page =
+        limit > 0
+          ? documents.slice(offset, offset + limit)
+          : documents.slice(offset);
       await route.fulfill({
         status: 200,
         contentType: 'application/json',
-        body: JSON.stringify({ documents }),
+        body: JSON.stringify({ documents: page }),
       });
       return;
     }
@@ -213,6 +219,40 @@ test.describe('Knowledge base UI (agent-free)', () => {
     await expect(page.getByTestId('kb-document-count')).toHaveText(
       '30 of 40 documents loaded',
     );
+  });
+
+  test('loads more documents when the list scrolls to the bottom', async ({ page }) => {
+    const documents = Array.from({ length: 120 }, (_, index) => ({
+      ...document,
+      id: 1000 + index,
+      rel_path: `notes-${index}.md`,
+      title: `Notes ${index}`,
+    }));
+    await registerWithKb(page, {
+      sources: [{ ...source, document_count: 120 }],
+      documents,
+    });
+    await openKb(page);
+
+    const rows = page.getByTestId('kb-document-row');
+    await expect(rows).toHaveCount(50);
+    await expect(page.getByTestId('kb-document-count')).toHaveText(
+      '50 of 120 documents loaded',
+    );
+
+    await page.mouse.move(640, 400);
+    await page.mouse.wheel(0, 20000);
+    await expect(rows).toHaveCount(100);
+    await expect(page.getByTestId('kb-document-count')).toHaveText(
+      '100 of 120 documents loaded',
+    );
+
+    await page.mouse.wheel(0, 20000);
+    await expect(rows).toHaveCount(120);
+    await expect(page.getByTestId('kb-document-count')).toHaveText(
+      '120 documents',
+    );
+    await expect(page.getByTestId('kb-documents-sentinel')).toHaveCount(0);
   });
 
   test('shows the empty knowledge base', async ({ page }) => {

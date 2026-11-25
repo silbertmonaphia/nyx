@@ -1,4 +1,4 @@
-import React, { useRef, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { FilePlus, Trash2, Upload } from 'lucide-react';
 import { Button } from '~/components/ui/Button';
@@ -20,9 +20,6 @@ import { DocumentView } from './DocumentView';
 type PendingDelete =
   | { kind: 'source'; id: number; label: string }
   | { kind: 'document'; id: number; label: string };
-
-const newestFirst = (a: KbDocument, b: KbDocument) =>
-  b.updated_at.localeCompare(a.updated_at);
 
 const SourceCard: React.FC<{
   source: KbSource;
@@ -209,6 +206,8 @@ export const KnowledgeBasePage: React.FC = () => {
   const documentsQuery = useKbDocuments(
     selectedSource ? { sourceId: selectedSource } : {},
   );
+  const { hasNextPage, isFetchingNextPage, fetchNextPage } = documentsQuery;
+  const sentinelRef = useRef<HTMLDivElement | null>(null);
   const [editingDocument, setEditingDocument] = useState<number | null>(null);
   const [pendingDelete, setPendingDelete] = useState<PendingDelete | null>(null);
   const [showNewDocument, setShowNewDocument] = useState(false);
@@ -217,6 +216,20 @@ export const KnowledgeBasePage: React.FC = () => {
   const fileInput = useRef<HTMLInputElement>(null);
   const addToast = useUiStore((state) => state.addToast);
   const mutations = useKbMutations();
+
+  useEffect(() => {
+    if (!hasNextPage || isFetchingNextPage) return;
+    const node = sentinelRef.current;
+    if (!node) return;
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries[0]?.isIntersecting) void fetchNextPage();
+      },
+      { rootMargin: '200px' },
+    );
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, [hasNextPage, isFetchingNextPage, fetchNextPage]);
 
   if (editingDocument !== null) {
     return (
@@ -230,7 +243,7 @@ export const KnowledgeBasePage: React.FC = () => {
 
   const sources = sourcesQuery.data ?? [];
   const sourcesById = new Map(sources.map((source) => [source.id, source]));
-  const documents = [...(documentsQuery.data ?? [])].sort(newestFirst);
+  const documents = (documentsQuery.data?.pages ?? []).flat();
   let totalDocuments: number | undefined;
   if (selectedSource !== undefined) {
     totalDocuments = sourcesById.get(selectedSource)?.document_count;
@@ -478,6 +491,21 @@ export const KnowledgeBasePage: React.FC = () => {
               />
             ))}
           </ul>
+        )}
+        {isFetchingNextPage && (
+          <p
+            className="text-sm text-muted-foreground"
+            data-testid="kb-documents-loading-more"
+          >
+            {t('kb.loadingMore')}
+          </p>
+        )}
+        {hasNextPage && (
+          <div
+            ref={sentinelRef}
+            data-testid="kb-documents-sentinel"
+            className="h-1"
+          />
         )}
       </section>
 
