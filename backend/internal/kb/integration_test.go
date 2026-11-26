@@ -392,6 +392,67 @@ func TestIntegrationUpsertDirSourceRepointAndKindGuard(t *testing.T) {
 	assert.Empty(t, sources, "a reserved-name registration must not create a source")
 }
 
+func TestIntegrationListDocumentsNewestFirst(t *testing.T) {
+	pool := requireKBPgvector(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	store := NewSQLStore(pool)
+	owner := integrationUser(t, pool, "kb_order_")
+	sourceName := "integration-order-" + time.Now().Format("150405.000")
+	src, err := store.UpsertDirSource(ctx, owner, sourceName, t.TempDir())
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_, _ = pool.Exec(context.Background(), `DELETE FROM kb_sources WHERE id = $1`, src.ID)
+	})
+
+	insert := func(relPath string) int64 {
+		doc, err := store.UpsertFileDocument(ctx, Document{
+			SourceID:    src.ID,
+			OwnerID:     owner,
+			Origin:      OriginFile,
+			RelPath:     relPath,
+			Title:       relPath,
+			DocType:     DocTypeMarkdown,
+			ContentHash: []byte(relPath),
+			ByteSize:    int64(len(relPath)),
+		})
+		require.NoError(t, err)
+		return doc.ID
+	}
+	setUpdated := func(id int64, ts time.Time) {
+		_, err := pool.Exec(ctx,
+			`UPDATE kb_documents SET updated_at = $1 WHERE id = $2`, ts, id)
+		require.NoError(t, err)
+	}
+
+	base := time.Now().UTC().Truncate(time.Second)
+	oldest := insert("a-old.md")
+	middle := insert("b-mid.md")
+	newest := insert("c-new.md")
+	tieA := insert("a-tie.md")
+	tieB := insert("b-tie.md")
+	setUpdated(oldest, base.Add(-2*time.Hour))
+	setUpdated(middle, base.Add(-1*time.Hour))
+	setUpdated(newest, base)
+	setUpdated(tieA, base.Add(-3*time.Hour))
+	setUpdated(tieB, base.Add(-3*time.Hour))
+
+	want := []string{"c-new.md", "b-mid.md", "a-old.md", "a-tie.md", "b-tie.md"}
+	var got []string
+	for offset := int32(0); ; offset += 2 {
+		page, err := store.ListDocumentsByOwner(ctx, owner, nil, "", "", 2, offset)
+		require.NoError(t, err)
+		for _, doc := range page {
+			got = append(got, doc.RelPath)
+		}
+		if len(page) < 2 {
+			break
+		}
+	}
+	assert.Equal(t, want, got)
+}
+
 func TestIntegrationInlineDocumentWithoutHeadingsIndexes(t *testing.T) {
 	pool := requireKBPgvector(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
