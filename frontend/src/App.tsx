@@ -453,13 +453,17 @@ function App() {
           onInteractOutside={(e) => e.preventDefault()}
         >
           <DialogHeader>
-            <DialogTitle>{t('app.authDialog.title')}</DialogTitle>
+            <div className="flex items-center justify-between gap-3">
+              <DialogTitle className="min-w-0">
+                {t('app.authDialog.title')}
+              </DialogTitle>
+              <div className="flex shrink-0 items-center gap-2">
+                <LocaleToggle alwaysVisible />
+                <ThemeToggle alwaysVisible />
+              </div>
+            </div>
             <DialogDescription>{t('app.authDialog.description')}</DialogDescription>
           </DialogHeader>
-          <div className="flex items-center justify-center gap-2">
-            <LocaleToggle alwaysVisible />
-            <ThemeToggle alwaysVisible />
-          </div>
           <AuthForm required onSuccess={() => setChatDismissed(false)} />
         </DialogContent>
       </Dialog>
