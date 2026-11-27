@@ -1,0 +1,16 @@
+event: run_id
+data: {"run_id":"6f1c5d9e-0000-4000-8000-000000000001"}
+
+event: note
+data: {"text":"fresh_run","provider":null,"kind":"fresh_run","last_step_id":null,"run_id":"6f1c5d9e-0000-4000-8000-000000000001"}
+
+event: error
+data: {"error":"LLM API quota or balance exhausted — check the provider account","code":"llm_quota_exceeded","request_id":null}
+
+event: done
+data: {"usage":{"prompt_tokens":0,"completion_tokens":0,"total_tokens":0}}
+
+event: terminator
+data: {"reason":"provider quota exhausted"}
+
+data: [DONE]

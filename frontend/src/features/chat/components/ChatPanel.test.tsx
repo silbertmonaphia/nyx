@@ -63,6 +63,7 @@ function resetStore(
     messages: [],
     isStreaming: false,
     error: null,
+    errorCode: null,
     currentSessionId: null,
     sessionList: [],
     sessionListNextCursor: null,
@@ -203,6 +204,65 @@ describe('ChatPanel', () => {
     render(<ChatPanel open={true} onOpenChange={vi.fn()} />);
 
     expect(screen.getByTestId('chat-error')).toHaveTextContent('boom');
+  });
+
+  it('offers the LLM settings shortcut for provider-fault errors', async () => {
+    useChatStore.setState({
+      messages: [{ role: 'user', content: 'hi' }],
+      isStreaming: false,
+      error: 'LLM API quota or balance exhausted — check the provider account',
+      errorCode: 'llm_quota_exceeded',
+    });
+    const onOpenLlmSettings = vi.fn();
+
+    render(
+      <ChatPanel
+        open={true}
+        onOpenChange={vi.fn()}
+        onOpenLlmSettings={onOpenLlmSettings}
+      />,
+    );
+
+    expect(screen.getByTestId('chat-error')).toHaveTextContent('quota');
+    expect(screen.getByTestId('chat-error')).toHaveTextContent(
+      'Check your LLM provider settings.',
+    );
+    await userEvent.click(screen.getByTestId('chat-error-llm-settings'));
+    expect(onOpenLlmSettings).toHaveBeenCalledTimes(1);
+  });
+
+  it('hides the LLM settings shortcut for non-provider errors', () => {
+    useChatStore.setState({
+      messages: [{ role: 'user', content: 'hi' }],
+      isStreaming: false,
+      error: 'Plan is invalid',
+      errorCode: 'plan_invalid',
+    });
+
+    render(
+      <ChatPanel
+        open={true}
+        onOpenChange={vi.fn()}
+        onOpenLlmSettings={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByTestId('chat-error')).toHaveTextContent('Plan is invalid');
+    expect(screen.queryByTestId('chat-error-llm-settings')).toBeNull();
+  });
+
+  it('hides the LLM settings shortcut when no handler is wired', () => {
+    useChatStore.setState({
+      messages: [{ role: 'user', content: 'hi' }],
+      isStreaming: false,
+      error: 'LLM API quota or balance exhausted — check the provider account',
+      errorCode: 'llm_quota_exceeded',
+    });
+
+    render(<ChatPanel open={true} onOpenChange={vi.fn()} />);
+
+    expect(screen.getByTestId('chat-error')).toHaveTextContent('quota');
+    expect(screen.queryByTestId('chat-error-llm-settings')).toBeNull();
   });
 
   it('renders chat-note testids on an assistant row that carries notes', async () => {

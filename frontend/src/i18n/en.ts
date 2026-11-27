@@ -203,6 +203,8 @@ export const en: Translation = {
         sessionNoId: 'Chat session creation returned no id',
         streamInterrupted:
           'Connection to the agent was lost — recovery failed.',
+        llmConfigHint: 'Check your LLM provider settings.',
+        openLlmSettings: 'Open LLM settings',
       },
     },
     llmConfig: {

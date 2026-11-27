@@ -30,15 +30,22 @@ vi.mock('./features/chat/components/ChatPanel', () => ({
   ChatPanel: ({
     open,
     onOpenChange,
+    onOpenLlmSettings,
   }: {
     open: boolean;
     onOpenChange: (open: boolean) => void;
+    onOpenLlmSettings?: () => void;
   }) =>
     open ? (
       <div data-testid="chat-panel-mock">
         <button type="button" onClick={() => onOpenChange(false)}>
           close-chat-mock
         </button>
+        {onOpenLlmSettings && (
+          <button type="button" onClick={onOpenLlmSettings}>
+            open-llm-settings-mock
+          </button>
+        )}
       </div>
     ) : null,
 }));
@@ -285,6 +292,28 @@ describe('App LLM config gating', () => {
     await waitFor(() => {
       expect(screen.queryByText('LLM configuration')).not.toBeInTheDocument();
     });
+  });
+
+  it('opens the dismissible settings modal from the chat error shortcut', async () => {
+    authenticate();
+    mockHook({ status: configuredStatus });
+    render(<App />);
+
+    await userEvent.click(await screen.findByText('open-llm-settings-mock'));
+
+    expect(await screen.findByText('LLM configuration')).toBeInTheDocument();
+    expect(screen.queryByTestId('llm-config-clear')).toBeInTheDocument();
+    expect(screen.getByTestId('chat-panel-mock')).toBeInTheDocument();
+  });
+
+  it('passes no LLM settings shortcut when the LLM feature is disabled', async () => {
+    vi.stubEnv('VITE_LLM_FEATURE_ENABLED', 'false');
+    authenticate();
+    mockHook({ status: configuredStatus });
+    render(<App />);
+
+    expect(await screen.findByTestId('chat-panel-mock')).toBeInTheDocument();
+    expect(screen.queryByText('open-llm-settings-mock')).not.toBeInTheDocument();
   });
 
   it('hides the gear and the gate when the config endpoint is unavailable', async () => {

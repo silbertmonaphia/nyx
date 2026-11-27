@@ -520,6 +520,13 @@ function App() {
         open={chatOpen && !llmModalBlocking}
         onOpenChange={(open) => setChatDismissed(!open)}
         agentMode={agentEnabled === true}
+        onOpenLlmSettings={
+          llmFeatureActive
+            ? () => {
+                if (user) setLlmSettingsOwner(user.id);
+              }
+            : undefined
+        }
       />
 
       {llmFeatureActive && (

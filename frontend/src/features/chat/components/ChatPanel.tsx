@@ -144,6 +144,7 @@ interface ChatPanelProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   agentMode?: boolean;
+  onOpenLlmSettings?: () => void;
 }
 
 /**
@@ -168,6 +169,7 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
   open,
   onOpenChange,
   agentMode = false,
+  onOpenLlmSettings,
 }) => {
   const { t } = useTranslation();
   const messages = useChat((s) => s.messages);
@@ -176,6 +178,7 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
   const stoppedReason = useChat((s) => s.stoppedReason);
   const possiblyIncomplete = useChat((s) => s.possiblyIncomplete);
   const error = useChat((s) => s.error);
+  const errorCode = useChat((s) => s.errorCode);
   const send = useChat((s) => s.send);
   const cancel = useChat((s) => s.cancel);
   const submitApproval = useChat((s) => s.submitApproval);
@@ -522,6 +525,19 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
                   role="alert"
                 >
                   {error}
+                  {errorCode?.startsWith("llm_") && onOpenLlmSettings && (
+                    <div className="mt-1 text-muted-foreground">
+                      {t("chat.errors.llmConfigHint")}{" "}
+                      <button
+                        type="button"
+                        className="underline underline-offset-2"
+                        data-testid="chat-error-llm-settings"
+                        onClick={onOpenLlmSettings}
+                      >
+                        {t("chat.errors.openLlmSettings")}
+                      </button>
+                    </div>
+                  )}
                 </div>
               )}
               {possiblyIncomplete && (

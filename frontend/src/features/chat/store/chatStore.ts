@@ -53,6 +53,7 @@ interface ChatState {
   stoppedReason: "user_cancelled" | null;
   possiblyIncomplete: boolean;
   error: string | null;
+  errorCode: string | null;
   isLoadingReplay: boolean;
   replayNextBefore: string | null;
   replayHasMore: boolean;
@@ -551,6 +552,7 @@ interface LadderContext {
   onRunId: (id: string) => void;
   kb: boolean;
   rag: boolean;
+  terminalError: { error: string; code: string | null } | null;
 }
 
 function isAbortError(err: unknown): boolean {
@@ -818,6 +820,7 @@ async function consumeRecoveryStream(
           applyStoppedTurn(ctx.set, ctx.assistantIndex);
           return "stopped";
         }
+        ctx.terminalError = { error: event.error, code: event.code ?? null };
         return "failed";
       }
       if (event.kind === "replay_truncated") {
@@ -987,6 +990,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
   stoppedReason: null,
   possiblyIncomplete: false,
   error: null,
+  errorCode: null,
   llmGateOpen: false,
   setLlmGateOpen: (open) => {
     set({ llmGateOpen: open });
@@ -1054,6 +1058,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
       stoppedReason: null,
       possiblyIncomplete: false,
       error: null,
+      errorCode: null,
     });
 
     const assistantIndex = baseMessages.length;
@@ -1191,7 +1196,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
         if (event.kind === "stream_incomplete") {
           if (!isAttached()) continue;
           railMark(runSessionId);
-          const outcome = await runRecoveryLadder({
+          const ladder: LadderContext = {
             set,
             runId: runSessionId,
             sessionId: runSessionId,
@@ -1207,7 +1212,9 @@ export const useChatStore = create<ChatState>((set, get) => ({
             onRunId: handleRunId,
             kb: get().knowledgeEnabled,
             rag: get().feedsEnabled,
-          });
+            terminalError: null,
+          };
+          const outcome = await runRecoveryLadder(ladder);
           if (outcome === "finished") {
             turnEndedClean = true;
             continue;
@@ -1220,7 +1227,10 @@ export const useChatStore = create<ChatState>((set, get) => ({
                 assistant?.role === "assistant" &&
                 assistant.content.length > 0;
               return {
-                error: t("chat.errors.streamInterrupted"),
+                error:
+                  ladder.terminalError?.error ??
+                  t("chat.errors.streamInterrupted"),
+                errorCode: ladder.terminalError?.code ?? null,
                 messages: hasContent
                   ? state.messages
                   : state.messages.slice(0, assistantIndex),
@@ -1240,6 +1250,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
               assistant?.role === "assistant" && assistant.content.length > 0;
             return {
               error: event.error,
+              errorCode: event.code ?? null,
               messages: hasContent
                 ? state.messages.slice(0, assistantIndex + 1)
                 : state.messages.slice(0, assistantIndex),
@@ -1288,6 +1299,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
           assistant?.role === "assistant" && assistant.content.length > 0;
         set({
           error: message,
+          errorCode: null,
           messages: hasContent
             ? get().messages.slice(0, assistantIndex + 1)
             : get().messages.slice(0, assistantIndex),
@@ -1375,6 +1387,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
       stoppedReason: null,
       possiblyIncomplete: false,
       error: null,
+      errorCode: null,
       isLoadingReplay: false,
       replayHasMore: false,
       replayNextBefore: null,
@@ -1566,6 +1579,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
       stoppedReason: null,
       possiblyIncomplete: false,
       error: null,
+      errorCode: null,
       isLoadingReplay: true,
       replayHasMore: false,
       replayNextBefore: null,
@@ -1585,6 +1599,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
       stoppedReason: null,
       possiblyIncomplete: false,
       error: null,
+      errorCode: null,
       isLoadingReplay: false,
       replayHasMore: false,
       replayNextBefore: null,
@@ -1607,6 +1622,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
       stoppedReason: null,
       possiblyIncomplete: false,
       error: null,
+      errorCode: null,
       isLoadingReplay: false,
       replayHasMore: false,
       replayNextBefore: null,
@@ -1749,6 +1765,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
       stoppedReason: null,
       possiblyIncomplete: false,
       error: null,
+      errorCode: null,
       llmGateOpen: false,
       currentSessionId: null,
       sessionList: [],

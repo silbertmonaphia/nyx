@@ -39,6 +39,7 @@ function resetStore() {
     messages: [],
     isStreaming: false,
     error: null,
+    errorCode: null,
     llmGateOpen: false,
     possiblyIncomplete: false,
     currentSessionId: null,
@@ -386,6 +387,7 @@ describe('useChatStore', () => {
                 kind: 'error',
                 error: 'upstream failed',
                 request_id: 'req-x',
+                code: 'llm_quota_exceeded',
               },
             ],
             signal,
@@ -401,6 +403,24 @@ describe('useChatStore', () => {
       });
 
       expect(useChatStore.getState().error).toBe('upstream failed');
+      expect(useChatStore.getState().errorCode).toBe('llm_quota_exceeded');
+    });
+
+    it('clears a stale errorCode when a later failure carries no code', async () => {
+      useChatStore.setState({ errorCode: 'llm_quota_exceeded' });
+
+      mockedService.streamMessage.mockImplementationOnce(
+        () =>
+          (async function* () {
+            throw new Error('network down');
+          })(),
+      );
+
+      await act(async () => {
+        useChatStore.getState().send('hi');
+      });
+
+      expect(useChatStore.getState().errorCode).toBeNull();
     });
 
     it('captures a thrown service error into store.error', async () => {
@@ -3417,6 +3437,53 @@ describe('useChatStore', () => {
         expect(mockedService.reattachRun).toHaveBeenCalledTimes(3);
         expect(mockedService.getMessages).toHaveBeenCalledTimes(3);
         expect(mockedService.streamMessage).toHaveBeenCalledTimes(4);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('exhausting the ladder keeps the last typed provider error', async () => {
+      vi.useFakeTimers();
+      try {
+        mockedService.streamMessage
+          .mockImplementationOnce(
+            streamOf(
+              [
+                { kind: 'delta', delta: 'kept' },
+                { kind: 'stream_incomplete' },
+              ],
+              'run-1',
+            ),
+          )
+          .mockRejectedValue(new Error('still offline'));
+        mockedService.reattachRun.mockImplementation(
+          streamOf(
+            [
+              {
+                kind: 'error',
+                error:
+                  'LLM API quota or balance exhausted — check the provider account',
+                request_id: 'req-1',
+                code: 'llm_quota_exceeded',
+              },
+            ],
+            'run-1',
+          ),
+        );
+        mockedService.getMessages.mockResolvedValue([
+          makeMessageRow({ id: 1, role: 'user', content: 'hi' }),
+        ]);
+
+        act(() => {
+          void useChatStore.getState().send('hi');
+        });
+        await vi.runAllTimersAsync();
+
+        const state = useChatStore.getState();
+        expect(state.error).toBe(
+          'LLM API quota or balance exhausted — check the provider account',
+        );
+        expect(state.errorCode).toBe('llm_quota_exceeded');
       } finally {
         vi.useRealTimers();
       }

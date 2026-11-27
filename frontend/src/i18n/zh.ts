@@ -186,6 +186,8 @@ export const zh = {
         streamError: '聊天流错误',
         sessionNoId: '聊天会话创建未返回 id',
         streamInterrupted: '与助手的连接已断开 — 恢复失败。',
+        llmConfigHint: '请检查你的 LLM 服务配置。',
+        openLlmSettings: '打开 LLM 设置',
       },
     },
     llmConfig: {

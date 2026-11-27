@@ -50,10 +50,9 @@ export type ChatError = {
   error: string;
   request_id: string;
   // New in the agent path: a typed code ("plan_too_large",
-  // "react_iterations_exceeded", "budget_exceeded",
-  // "budget_unavailable", "plan_invalid", "auth_required",
-  // "planner_failed"). Absent on legacy error frames; old clients
-  // ignore the field, new clients can branch on it.
+  // "react_iterations_exceeded", "budget_exceeded", "budget_unavailable",
+  // "plan_invalid", "auth_required", "planner_failed", "llm_auth_failed",
+  // "llm_quota_exceeded", ...). Old clients ignore the field.
   code?: string;
 };
 export type ChatNote = { kind: "note"; text: string; provider: string };

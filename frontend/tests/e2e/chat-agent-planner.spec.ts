@@ -201,4 +201,32 @@ test.describe('Chat / planner failure frames (recorded wire bytes)', () => {
     );
     await expect(page.getByTestId('chat-agent-steps')).toHaveCount(0);
   });
+
+  test('provider quota fault surfaces the LLM settings shortcut', async ({
+    page,
+  }) => {
+    await page.route('**/api/chat*', (route) =>
+      route.fulfill({
+        status: 200,
+        contentType: 'text/event-stream',
+        body: fixture('planner-quota-error.sse'),
+      }),
+    );
+
+    await page.getByTestId('chat-input').fill('hi');
+    await page.getByTestId('chat-send').click();
+
+    await expect(page.getByTestId('chat-cancel')).toHaveCount(0, {
+      timeout: 15000,
+    });
+    await expect(page.getByTestId('chat-error')).toContainText('quota');
+    await expect(page.getByTestId('chat-error')).toContainText(
+      'Check your LLM provider settings.',
+    );
+
+    await page.getByTestId('chat-error-llm-settings').click();
+    await expect(
+      page.getByRole('dialog', { name: 'LLM configuration' }),
+    ).toBeVisible();
+  });
 });
