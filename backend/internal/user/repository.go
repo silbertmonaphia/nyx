@@ -54,6 +54,7 @@ func init() {
 	api.RegisterSentinel(ErrRefreshTokenExpired, http.StatusUnauthorized, "Refresh token expired")
 	api.RegisterSentinel(ErrInvalidCurrentPassword, http.StatusBadRequest, "Current password is incorrect")
 	api.RegisterSentinel(ErrPasswordTooLong, http.StatusBadRequest, "Password is too long")
+	api.RegisterSentinel(ErrRegistrationNotAllowed, http.StatusForbidden, "Registration is not available")
 
 	// Register pgerr matchers for the user-domain unique constraints.
 	// Switched on ConstraintName (not Code) so other domains that share

@@ -72,8 +72,8 @@ const (
 // posture:
 //
 //   - middleware.NewAuth runs FIRST, so an unauthenticated decision is
-//     401ed at the edge and is NEVER forwarded to the Python service
-//     (spec scenario "Missing or invalid JWT is rejected at the edge").
+//     401ed at the edge; NewAIAllowlist then 403s callers outside
+//     AI_ALLOWLIST before anything is forwarded.
 //   - the per-user limiter (when non-nil) runs next, same token-bucket
 //     type the chat stream and MCP surfaces use. The caller supplies a
 //     dedicated bucket instance: approval decisions are cheap
@@ -93,11 +93,14 @@ const (
 // subrouter's /* mount cannot swallow this route regardless of
 // registration order. TestApprovals_ChatRoutesStillRouted pins the
 // coexistence.
-func RegisterApprovalsRoute(router chi.Router, h *Handler, tokens auth.TokenService, limiter *UserRateLimiter) {
+func RegisterApprovalsRoute(router chi.Router, h *Handler, tokens auth.TokenService, limiter *UserRateLimiter, aiAllowlist []string) {
 	if h == nil {
 		panic("chat.RegisterApprovalsRoute: handler is required")
 	}
-	chain := []func(http.Handler) http.Handler{middleware.NewAuth(tokens)}
+	chain := []func(http.Handler) http.Handler{
+		middleware.NewAuth(tokens),
+		middleware.NewAIAllowlist(aiAllowlist),
+	}
 	if limiter != nil {
 		chain = append(chain, limiter.Middleware)
 	}

@@ -36,6 +36,8 @@ func TestGenerateSpec(t *testing.T) {
 		"/api/feeds/{id}",
 		"/api/login",
 		"/api/register",
+		"/api/config",
+		"/api/features",
 	} {
 		if _, ok := doc.Paths[p]; !ok {
 			t.Errorf("spec is missing path %q", p)

@@ -53,8 +53,8 @@ func newApprovalsHarness(t *testing.T, proxy *AgentProxy, approvalsLimiter *User
 	r.Use(middleware.RequestID)
 	r.Use(middleware.StoreRequest)
 	h := NewHandler(svc)
-	RegisterChatRoute(r, h, tokens, NewUserRateLimiter(5.0/60.0, 3))
-	RegisterApprovalsRoute(r, h, tokens, approvalsLimiter)
+	RegisterChatRoute(r, h, tokens, NewUserRateLimiter(5.0/60.0, 3), nil)
+	RegisterApprovalsRoute(r, h, tokens, approvalsLimiter, nil)
 	return r, tokens
 }
 
@@ -71,8 +71,8 @@ func newLegacyApprovalsHarness(t *testing.T) (http.Handler, auth.TokenService) {
 	r.Use(middleware.RequestID)
 	r.Use(middleware.StoreRequest)
 	h := NewHandler(svc)
-	RegisterChatRoute(r, h, tokens, nil)
-	RegisterApprovalsRoute(r, h, tokens, nil)
+	RegisterChatRoute(r, h, tokens, nil, nil)
+	RegisterApprovalsRoute(r, h, tokens, nil, nil)
 	return r, tokens
 }
 
@@ -440,7 +440,7 @@ func TestRegisterApprovalsRoute_PanicsOnNilHandler(t *testing.T) {
 	tokens, err := auth.NewTokenService([]byte(auth.TestSecret), 15*time.Minute)
 	require.NoError(t, err)
 	assert.Panics(t, func() {
-		RegisterApprovalsRoute(chi.NewRouter(), nil, tokens, nil)
+		RegisterApprovalsRoute(chi.NewRouter(), nil, tokens, nil, nil)
 	})
 }
 
@@ -463,8 +463,8 @@ func TestApprovals_AgentMisconfigured_FailsClosed(t *testing.T) {
 	r.Use(middleware.RequestID)
 	r.Use(middleware.StoreRequest)
 	h := NewHandler(svc)
-	RegisterChatRoute(r, h, tokens, nil)
-	RegisterApprovalsRoute(r, h, tokens, nil)
+	RegisterChatRoute(r, h, tokens, nil, nil)
+	RegisterApprovalsRoute(r, h, tokens, nil, nil)
 	server := httptest.NewServer(r)
 	t.Cleanup(server.Close)
 

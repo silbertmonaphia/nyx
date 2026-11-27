@@ -18,7 +18,7 @@ import (
 	"nyx/internal/platform/auth"
 )
 
-func setupFeaturesRouter(t *testing.T, agentEnabled bool) (chi.Router, auth.TokenService) {
+func setupFeaturesRouter(t *testing.T, agentEnabled, llmEnabled bool, aiAllowlist []string) (chi.Router, auth.TokenService) {
 	t.Helper()
 	platapi.OverrideHumaErrors()
 	tokens, err := auth.NewTokenService([]byte(auth.TestSecret), 15*time.Minute)
@@ -26,7 +26,7 @@ func setupFeaturesRouter(t *testing.T, agentEnabled bool) (chi.Router, auth.Toke
 	router := chi.NewMux()
 	router.Use(middleware.StoreRequest)
 	hapi := humachi.New(router, platapi.HumaConfig())
-	RegisterFeatureOps(hapi, NewHandler(agentEnabled), tokens)
+	RegisterFeatureOps(hapi, NewHandler(agentEnabled, llmEnabled, aiAllowlist), tokens)
 	return router, tokens
 }
 
@@ -41,27 +41,75 @@ func featuresGET(t *testing.T, router chi.Router, token string) *httptest.Respon
 	return rr
 }
 
+type featuresBody struct {
+	AgentEnabled bool `json:"agent_enabled"`
+	ChatAllowed  bool `json:"chat_allowed"`
+}
+
 func TestGetFeatures_ReportsAgentEnabled(t *testing.T) {
 	for _, enabled := range []bool{true, false} {
 		t.Run(fmt.Sprintf("agent_enabled=%t", enabled), func(t *testing.T) {
-			router, tokens := setupFeaturesRouter(t, enabled)
+			router, tokens := setupFeaturesRouter(t, enabled, true, nil)
 			token, err := tokens.GenerateToken(42, "user-42")
 			require.NoError(t, err)
 
 			rr := featuresGET(t, router, token)
 			require.Equal(t, http.StatusOK, rr.Code)
 
-			var body struct {
-				AgentEnabled bool `json:"agent_enabled"`
-			}
+			var body featuresBody
 			require.NoError(t, json.Unmarshal(rr.Body.Bytes(), &body))
 			assert.Equal(t, enabled, body.AgentEnabled)
 		})
 	}
 }
 
+func TestGetFeatures_ChatAllowed(t *testing.T) {
+	listed := "allowed-user"
+	unlisted := "other-user"
+
+	t.Run("empty allowlist allows every authenticated user", func(t *testing.T) {
+		router, tokens := setupFeaturesRouter(t, false, true, nil)
+		token, err := tokens.GenerateToken(42, unlisted)
+		require.NoError(t, err)
+
+		var body featuresBody
+		require.NoError(t, json.Unmarshal(featuresGET(t, router, token).Body.Bytes(), &body))
+		assert.True(t, body.ChatAllowed)
+	})
+
+	t.Run("listed user is allowed", func(t *testing.T) {
+		router, tokens := setupFeaturesRouter(t, false, true, []string{listed})
+		token, err := tokens.GenerateToken(42, listed)
+		require.NoError(t, err)
+
+		var body featuresBody
+		require.NoError(t, json.Unmarshal(featuresGET(t, router, token).Body.Bytes(), &body))
+		assert.True(t, body.ChatAllowed)
+	})
+
+	t.Run("unlisted user is denied", func(t *testing.T) {
+		router, tokens := setupFeaturesRouter(t, false, true, []string{listed})
+		token, err := tokens.GenerateToken(42, unlisted)
+		require.NoError(t, err)
+
+		var body featuresBody
+		require.NoError(t, json.Unmarshal(featuresGET(t, router, token).Body.Bytes(), &body))
+		assert.False(t, body.ChatAllowed)
+	})
+
+	t.Run("LLM disabled denies everyone", func(t *testing.T) {
+		router, tokens := setupFeaturesRouter(t, false, false, []string{listed})
+		token, err := tokens.GenerateToken(42, listed)
+		require.NoError(t, err)
+
+		var body featuresBody
+		require.NoError(t, json.Unmarshal(featuresGET(t, router, token).Body.Bytes(), &body))
+		assert.False(t, body.ChatAllowed)
+	})
+}
+
 func TestGetFeatures_RequiresAuth(t *testing.T) {
-	router, _ := setupFeaturesRouter(t, true)
+	router, _ := setupFeaturesRouter(t, true, true, nil)
 	rr := featuresGET(t, router, "")
 	assert.Equal(t, http.StatusUnauthorized, rr.Code)
 }

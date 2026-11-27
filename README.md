@@ -156,6 +156,13 @@ service — every Go → Python hop carries it as `X-Nyx-Service-Token`). A publ
 agent must be addressed over `https://`; plain `http://` is accepted only for loopback and
 private service names. Everything else works the same either way.
 
+Registration and AI access can be narrowed per deployment with
+`REGISTRATION_ALLOWLIST` / `AI_ALLOWLIST` (comma-separated usernames; empty keeps both
+fully open). The SPA reads `GET /api/config` and `GET /api/features` and adapts —
+registration closes in the UI, and non-listed users lose the chat entry point and the
+Knowledge tab (KB embeddings use the same BYOK settings). See
+`backend/.env.example` and [`docs/deployment-selfhost.md`](docs/deployment-selfhost.md).
+
 ## Deploy
 
 SPA on Vercel, API on Render — the repo carries the config (`render.yaml`,

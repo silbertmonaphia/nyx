@@ -243,10 +243,15 @@
           "agent_enabled": {
             "description": "True when the chat handler proxies to the Python agent (AGENT_ENABLED=true).",
             "type": "boolean"
+          },
+          "chat_allowed": {
+            "description": "True when the caller may use AI surfaces: LLM_ENABLED=true and the caller is on AI_ALLOWLIST (an empty list allows every authenticated user).",
+            "type": "boolean"
           }
         },
         "required": [
-          "agent_enabled"
+          "agent_enabled",
+          "chat_allowed"
         ],
         "type": "object"
       },
@@ -558,6 +563,24 @@
         },
         "required": [
           "refresh_token"
+        ],
+        "type": "object"
+      },
+      "PublicConfigResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "registration_mode": {
+            "description": "Registration availability for this deployment: open (anyone), invite_only (only usernames on the operator allowlist), closed (no new accounts).",
+            "enum": [
+              "open",
+              "invite_only",
+              "closed"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "registration_mode"
         ],
         "type": "object"
       },
@@ -999,9 +1022,41 @@
         ]
       }
     },
+    "/api/config": {
+      "get": {
+        "description": "Anonymous probe the SPA uses to render registration affordances. Reports only the registration mode, never usernames or allowlist contents.",
+        "operationId": "get-public-config",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicConfigResponse"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Get public site configuration",
+        "tags": [
+          "config"
+        ]
+      }
+    },
     "/api/features": {
       "get": {
-        "description": "Reports operator-level feature switches the SPA renders conditionally. agent_enabled is true when the chat handler proxies to the Python agent.",
+        "description": "Reports feature switches the SPA renders conditionally. agent_enabled is true when the chat handler proxies to the Python agent; chat_allowed is true when the caller may use AI surfaces (LLM_ENABLED plus AI_ALLOWLIST).",
         "operationId": "get-features",
         "responses": {
           "200": {

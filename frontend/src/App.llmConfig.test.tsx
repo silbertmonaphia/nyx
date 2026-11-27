@@ -6,6 +6,8 @@ import { useFeeds } from './features/feeds/hooks/useFeeds';
 import { useAuthStore } from './store/authStore';
 import { useFeedUiStore } from './features/feeds/store/feedUiStore';
 import { useLlmConfig, useLlmSlotProbe } from './features/chat/hooks/useLlmConfig';
+import { useFeatureFlags } from './features/chat/hooks/useAgentEnabled';
+import { usePublicConfig } from './features/auth/hooks/usePublicConfig';
 import { useChatStore } from './features/chat/store/chatStore';
 import type { LlmConfigStatus } from './features/chat/types/llmConfig';
 import { i18n } from '~/i18n';
@@ -14,6 +16,7 @@ vi.mock('./features/feeds/hooks/useFeeds');
 vi.mock('./store/authStore');
 vi.mock('./features/chat/hooks/useLlmConfig');
 vi.mock('./features/chat/hooks/useAgentEnabled');
+vi.mock('./features/auth/hooks/usePublicConfig');
 const kbSettingsMock = vi.hoisted(() => ({
   data: { enabled: false, embedding_model: '' } as { enabled: boolean; embedding_model: string },
 }));
@@ -51,6 +54,8 @@ vi.mock('./features/chat/components/ChatPanel', () => ({
 }));
 
 const mockUseFeeds = useFeeds as any;
+const mockUseFeatureFlags = useFeatureFlags as any;
+const mockUsePublicConfig = usePublicConfig as any;
 const mockUseAuthStore = useAuthStore as any;
 const mockUseLlmConfig = useLlmConfig as any;
 const mockUseLlmSlotProbe = useLlmSlotProbe as any;
@@ -164,6 +169,11 @@ describe('App LLM config gating', () => {
   beforeEach(async () => {
     await i18n.changeLanguage('en');
     mockUseFeeds.mockReturnValue({ ...baseFeeds });
+    mockUseFeatureFlags.mockReturnValue({
+      data: { agentEnabled: false, chatAllowed: true },
+      isLoading: false,
+    });
+    mockUsePublicConfig.mockReturnValue({ data: 'open', isLoading: false });
     mockUseAuthStore.mockReturnValue({
       isAuthenticated: false,
       user: null,

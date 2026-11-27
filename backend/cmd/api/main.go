@@ -10,6 +10,7 @@ import (
 	"syscall"
 	"time"
 
+	"nyx/internal/access"
 	"nyx/internal/chat"
 	"nyx/internal/features"
 	"nyx/internal/feed"
@@ -71,7 +72,7 @@ func loadConfigOrFatal() *config.Config {
 	return cfg
 }
 
-func mountLLMSettingsOps(humaAPI huma.API, cfg *config.Config, db *pgxpool.Pool, tracerProvider trace.TracerProvider, tokens auth.TokenService) (*llmsettings.Resolver, *llmsettings.Handler, func()) {
+func mountLLMSettingsOps(humaAPI huma.API, cfg *config.Config, db *pgxpool.Pool, tracerProvider trace.TracerProvider, tokens auth.TokenService, aiAllowlist []string) (*llmsettings.Resolver, *llmsettings.Handler, func()) {
 	if !cfg.LLMEnabled {
 		return nil, nil, func() {}
 	}
@@ -83,7 +84,7 @@ func mountLLMSettingsOps(humaAPI huma.API, cfg *config.Config, db *pgxpool.Pool,
 	service.SetEmbeddingProbe(newEmbeddingProbe(cfg, tracerProvider))
 	service.SetBYOKAllowPrivate(cfg.BYOKAllowPrivateURL)
 	handler := llmsettings.NewHandler(service)
-	llmsettings.RegisterLLMConfigOps(humaAPI, handler, tokens)
+	llmsettings.RegisterLLMConfigOps(humaAPI, handler, tokens, aiAllowlist)
 	resolver := llmsettings.NewResolver(service, cfg, tracerProvider)
 	handler.SetValidator(resolver.ValidateValues)
 	validateLimiter := chat.NewUserRateLimiter(6.0/60.0, 4)
@@ -261,6 +262,17 @@ func buildAndServe(cfg *config.Config) {
 	// validated them as positive durations and refresh > access.
 	userRepo := user.NewRepository(db)
 	userService := user.NewService(userRepo, tokens, accessTTL, refreshTTL, tracing.Provider.Tracer("nyx.user"))
+	registrationPolicy := access.RegistrationPolicy{
+		Enabled:   cfg.RegistrationEnabled,
+		Allowlist: middleware.SplitNonEmpty(cfg.RegistrationAllowlist),
+	}
+	userService.SetRegistrationPolicy(registrationPolicy)
+	aiAllowlist := middleware.SplitNonEmpty(cfg.AIAllowlist)
+	log.Info().
+		Str("registration_mode", registrationPolicy.Mode()).
+		Int("registration_allowlist_size", len(registrationPolicy.Allowlist)).
+		Int("ai_allowlist_size", len(aiAllowlist)).
+		Msg("access gates configured")
 
 	// Background refresh-token cleanup. The goroutine sweeps for
 	// revoked/expired rows older than RefreshTokenRetention and
@@ -320,9 +332,10 @@ func buildAndServe(cfg *config.Config) {
 
 	feed.RegisterFeedOps(humaAPI, feedHandler, tokens)
 	user.RegisterUserOps(humaAPI, userHandler, tokens)
-	features.RegisterFeatureOps(humaAPI, features.NewHandler(cfg.AgentEnabled), tokens)
+	features.RegisterFeatureOps(humaAPI, features.NewHandler(cfg.AgentEnabled, cfg.LLMEnabled, aiAllowlist), tokens)
+	access.RegisterConfigOps(humaAPI, access.NewConfigHandler(registrationPolicy))
 
-	userLLMResolver, userLLMSettingsHandler, stopValidateGC := mountLLMSettingsOps(humaAPI, cfg, db, tracing.Provider, tokens)
+	userLLMResolver, userLLMSettingsHandler, stopValidateGC := mountLLMSettingsOps(humaAPI, cfg, db, tracing.Provider, tokens, aiAllowlist)
 	defer stopValidateGC()
 
 	// Build the LLM provider (single-provider or router with
@@ -330,7 +343,7 @@ func buildAndServe(cfg *config.Config) {
 	// ragSvc drives the chat service's RAG injection; the indexer
 	// swaps the feed service's noop indexer so subsequent writes
 	// embed.
-	stopChatGC, ragSvc, ragIndexer, kbSvc := mountChatRoute(router, cfg, db, feedRepo, tracing.Provider, tokens, userLLMResolver)
+	stopChatGC, ragSvc, ragIndexer, kbSvc := mountChatRoute(router, cfg, db, feedRepo, tracing.Provider, tokens, userLLMResolver, aiAllowlist)
 	defer stopChatGC()
 	wireEmbeddingInvalidation(userLLMSettingsHandler, ragSvc, ragIndexer)
 	if ragIndexer != nil {
@@ -458,7 +471,7 @@ func newAgentRunTokenService(cfg *config.Config) auth.TokenService {
 // RAG facade and its indexer (both nil when LLM is disabled) so
 // main() can swap the feed service's noop indexer for the real
 // rag.Indexer.
-func mountChatRoute(router chi.Router, cfg *config.Config, db *pgxpool.Pool, feedRepo feed.Repository, tracerProvider trace.TracerProvider, tokens auth.TokenService, userLLMResolver *llmsettings.Resolver) (shutdown func(), ragSvc *rag.Service, ragIndexer feed.EmbeddingIndexer, kbSvc *kb.Service) {
+func mountChatRoute(router chi.Router, cfg *config.Config, db *pgxpool.Pool, feedRepo feed.Repository, tracerProvider trace.TracerProvider, tokens auth.TokenService, userLLMResolver *llmsettings.Resolver, aiAllowlist []string) (shutdown func(), ragSvc *rag.Service, ragIndexer feed.EmbeddingIndexer, kbSvc *kb.Service) {
 	if !cfg.LLMEnabled {
 		log.Info().Msg("LLM chat disabled (LLM_ENABLED=false)")
 		return func() {}, nil, nil, nil
@@ -595,7 +608,7 @@ func mountChatRoute(router chi.Router, cfg *config.Config, db *pgxpool.Pool, fee
 	// see chat/ratelimit.go for the cost trade-off.
 	chatLimiter := chat.NewUserRateLimiter(5.0/60.0, 3)
 	stopGC := chatLimiter.RunGC(time.Minute, time.Hour)
-	chat.RegisterChatRoute(router, chatHandler, tokens, chatLimiter)
+	chat.RegisterChatRoute(router, chatHandler, tokens, chatLimiter, aiAllowlist)
 
 	// Approval-decision hop for the agent's confirmation gate
 	// (openspec/changes/agent-feed-tools §5). Dedicated limiter
@@ -607,7 +620,7 @@ func mountChatRoute(router chi.Router, cfg *config.Config, db *pgxpool.Pool, fee
 	// middleware first; 503 inside the handler when AGENT_ENABLED=false.
 	chatApprovalsLimiter := chat.NewUserRateLimiter(30.0/60.0, 10)
 	stopApprovalsGC := chatApprovalsLimiter.RunGC(time.Minute, time.Hour)
-	chat.RegisterApprovalsRoute(router, chatHandler, tokens, chatApprovalsLimiter)
+	chat.RegisterApprovalsRoute(router, chatHandler, tokens, chatApprovalsLimiter, aiAllowlist)
 
 	return func() {
 		stopGC()

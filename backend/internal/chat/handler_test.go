@@ -91,7 +91,7 @@ func buildRouter(t *testing.T, svc *Service, limiter *UserRateLimiter) (http.Han
 	r.Use(middleware.StoreRequest)
 
 	h := NewHandler(svc)
-	RegisterChatRoute(r, h, tokens, limiter)
+	RegisterChatRoute(r, h, tokens, limiter, nil)
 	return r, tokens
 }
 

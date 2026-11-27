@@ -17,9 +17,14 @@ describe('featuresService', () => {
     vi.clearAllMocks();
   });
 
-  it('reads agent_enabled from the features envelope', async () => {
-    mockedApi.get.mockResolvedValue({ data: { agent_enabled: true } });
-    await expect(featuresService.get()).resolves.toEqual({ agentEnabled: true });
+  it('reads agent_enabled and chat_allowed from the features envelope', async () => {
+    mockedApi.get.mockResolvedValue({
+      data: { agent_enabled: true, chat_allowed: false },
+    });
+    await expect(featuresService.get()).resolves.toEqual({
+      agentEnabled: true,
+      chatAllowed: false,
+    });
     expect(mockedApi.get).toHaveBeenCalledWith('/features', {
       skipErrorToast: true,
       skipSentry: true,
@@ -28,9 +33,25 @@ describe('featuresService', () => {
 
   it('treats a missing or non-boolean flag as disabled', async () => {
     mockedApi.get.mockResolvedValue({ data: {} });
-    await expect(featuresService.get()).resolves.toEqual({ agentEnabled: false });
+    await expect(featuresService.get()).resolves.toEqual({
+      agentEnabled: false,
+      chatAllowed: undefined,
+    });
 
     mockedApi.get.mockResolvedValue({ data: { agent_enabled: 'true' } });
-    await expect(featuresService.get()).resolves.toEqual({ agentEnabled: false });
+    await expect(featuresService.get()).resolves.toEqual({
+      agentEnabled: false,
+      chatAllowed: undefined,
+    });
+  });
+
+  it('leaves chat_allowed undefined when the backend omits or mistypes it', async () => {
+    mockedApi.get.mockResolvedValue({
+      data: { agent_enabled: true, chat_allowed: 'false' },
+    });
+    await expect(featuresService.get()).resolves.toEqual({
+      agentEnabled: true,
+      chatAllowed: undefined,
+    });
   });
 });

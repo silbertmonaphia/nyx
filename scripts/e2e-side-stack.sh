@@ -92,8 +92,13 @@ start_backend() {
     if [[ -n "${E2E_JWT_ACCESS_TTL:-}" ]]; then
       access_ttl_env=("JWT_ACCESS_TTL=$E2E_JWT_ACCESS_TTL")
     fi
+    gate_env=()
+    [[ -n "${REGISTRATION_ENABLED:-}" ]] && gate_env+=("REGISTRATION_ENABLED=$REGISTRATION_ENABLED")
+    [[ -n "${REGISTRATION_ALLOWLIST:-}" ]] && gate_env+=("REGISTRATION_ALLOWLIST=$REGISTRATION_ALLOWLIST")
+    [[ -n "${AI_ALLOWLIST:-}" ]] && gate_env+=("AI_ALLOWLIST=$AI_ALLOWLIST")
     setsid env \
     ${access_ttl_env[@]+"${access_ttl_env[@]}"} \
+    ${gate_env[@]+"${gate_env[@]}"} \
     PORT="$GO_PORT" \
     DB_URL="$DB_URL_SIDE" \
     REDIS_URL='redis://localhost:6380' \

@@ -11,6 +11,7 @@ import { t as translate } from "~/i18n";
 import { Button } from "~/components/ui/Button";
 import { Input } from "~/components/ui/Input";
 import { Label } from "~/components/ui/Label";
+import { usePublicConfig } from "../hooks/usePublicConfig";
 
 const authSchema = z.object({
   username: z
@@ -40,6 +41,10 @@ export const AuthForm: React.FC<AuthFormProps> = ({
   const [serverError, setServerError] = useState<string | null>(null);
   const setAuth = useAuthStore((state) => state.setAuth);
   const addToast = useUiStore((state) => state.addToast);
+  const { data: registrationMode } = usePublicConfig();
+  const registrationClosed = registrationMode === "closed";
+  const inviteOnly = registrationMode === "invite_only";
+  const registerMode = !registrationClosed && !isLogin;
 
   const {
     register,
@@ -56,7 +61,7 @@ export const AuthForm: React.FC<AuthFormProps> = ({
   const onSubmit = async (data: AuthFormData) => {
     setServerError(null);
     try {
-      const endpoint = isLogin ? "/login" : "/register";
+      const endpoint = registerMode ? "/register" : "/login";
       const payload = { username: data.username, password: data.password };
       const response = await api.post(endpoint, payload);
       // Wire the token store (localStorage when "Remember me" is
@@ -74,16 +79,18 @@ export const AuthForm: React.FC<AuthFormProps> = ({
         tokenStore.setTokens(body.access_token, body.refresh_token, remember);
       }
       addToast(
-        isLogin ? t("auth.loginSuccess") : t("auth.registerSuccess"),
+        registerMode ? t("auth.registerSuccess") : t("auth.loginSuccess"),
         "success",
       );
       onSuccess?.();
     } catch (err) {
       const status = (err as { response?: { status?: number } }).response?.status;
-      if (isLogin && status === 401) {
+      if (!registerMode && status === 401) {
         setServerError(t("auth.invalidCredentials"));
-      } else if (!isLogin && status === 409) {
+      } else if (registerMode && status === 409) {
         setServerError(t("auth.usernameTaken"));
+      } else if (registerMode && status === 403) {
+        setServerError(t("auth.registrationNotAllowed"));
       } else if (status === 429) {
         setServerError(t("auth.tooManyAttempts"));
       } else {
@@ -147,7 +154,7 @@ export const AuthForm: React.FC<AuthFormProps> = ({
       <div className="flex flex-col gap-4 pt-2">
         <div className="flex gap-2 w-full">
           <Button type="submit" className="flex-1">
-            {isLogin ? t("auth.login") : t("auth.register")}
+            {registerMode ? t("auth.register") : t("auth.login")}
           </Button>
           {!required && (
             <Button
@@ -160,19 +167,38 @@ export const AuthForm: React.FC<AuthFormProps> = ({
             </Button>
           )}
         </div>
-        <p className="text-sm text-center text-muted-foreground">
-          {isLogin ? t("auth.noAccount") : t("auth.haveAccount")}{" "}
-          <button
-            type="button"
-            className="text-primary font-semibold hover:underline underline-offset-4"
-            onClick={() => {
-              setServerError(null);
-              setIsLogin(!isLogin);
-            }}
+        {registrationClosed ? (
+          <p
+            className="text-sm text-center text-muted-foreground"
+            data-testid="registration-closed-hint"
           >
-            {isLogin ? t("auth.register") : t("auth.login")}
-          </button>
-        </p>
+            {t("auth.registrationClosed")}
+          </p>
+        ) : (
+          <>
+            <p className="text-sm text-center text-muted-foreground">
+              {isLogin ? t("auth.noAccount") : t("auth.haveAccount")}{" "}
+              <button
+                type="button"
+                className="text-primary font-semibold hover:underline underline-offset-4"
+                onClick={() => {
+                  setServerError(null);
+                  setIsLogin(!isLogin);
+                }}
+              >
+                {isLogin ? t("auth.register") : t("auth.login")}
+              </button>
+            </p>
+            {inviteOnly && !isLogin && (
+              <p
+                className="text-xs text-center text-muted-foreground"
+                data-testid="registration-invite-hint"
+              >
+                {t("auth.inviteOnlyHint")}
+              </p>
+            )}
+          </>
+        )}
       </div>
     </form>
   );

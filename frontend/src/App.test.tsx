@@ -6,7 +6,8 @@ import { useFeeds } from './features/feeds/hooks/useFeeds';
 import { useAuthStore } from './store/authStore';
 import { useFeedUiStore } from './features/feeds/store/feedUiStore';
 import { useLlmConfig } from './features/chat/hooks/useLlmConfig';
-import { useAgentEnabled } from './features/chat/hooks/useAgentEnabled';
+import { useFeatureFlags } from './features/chat/hooks/useAgentEnabled';
+import { usePublicConfig } from './features/auth/hooks/usePublicConfig';
 import { useKbAvailability } from './features/kb/hooks/useKb';
 import { useUiStore } from './store/uiStore';
 import { i18n } from '~/i18n';
@@ -15,6 +16,7 @@ vi.mock('./features/feeds/hooks/useFeeds');
 vi.mock('./store/authStore');
 vi.mock('./features/chat/hooks/useLlmConfig');
 vi.mock('./features/chat/hooks/useAgentEnabled');
+vi.mock('./features/auth/hooks/usePublicConfig');
 vi.mock('./features/kb/components/KnowledgeBasePage', () => ({
   KnowledgeBasePage: () => <div data-testid="kb-page-mock" />,
 }));
@@ -45,7 +47,8 @@ vi.mock('./features/chat/components/ChatPanel', () => ({
 const mockUseFeeds = useFeeds as any;
 const mockUseAuthStore = useAuthStore as any;
 const mockUseLlmConfig = useLlmConfig as any;
-const mockUseAgentEnabled = useAgentEnabled as any;
+const mockUseFeatureFlags = useFeatureFlags as any;
+const mockUsePublicConfig = usePublicConfig as any;
 const mockUseKbAvailability = useKbAvailability as any;
 
 const baseFeeds = {
@@ -64,7 +67,11 @@ const baseFeeds = {
 describe('App', () => {
   beforeEach(() => {
     mockUseKbAvailability.mockReturnValue(true);
-    mockUseAgentEnabled.mockReturnValue(false);
+    mockUseFeatureFlags.mockReturnValue({
+      data: { agentEnabled: false, chatAllowed: true },
+      isLoading: false,
+    });
+    mockUsePublicConfig.mockReturnValue({ data: 'open', isLoading: false });
     useUiStore.setState({ activeView: 'feeds' });
     mockUseFeeds.mockReturnValue({ ...baseFeeds });
     mockUseLlmConfig.mockReturnValue({
@@ -159,7 +166,10 @@ describe('App', () => {
   });
 
   it('passes the agent-mode flag to the chat panel', () => {
-    mockUseAgentEnabled.mockReturnValue(true);
+    mockUseFeatureFlags.mockReturnValue({
+      data: { agentEnabled: true, chatAllowed: true },
+      isLoading: false,
+    });
     const authed = {
       isAuthenticated: true,
       user: { id: 1, username: 'alice', created_at: '', updated_at: '' },
@@ -178,7 +188,7 @@ describe('App', () => {
   });
 
   it('defaults the chat panel to legacy mode while the probe is unknown', () => {
-    mockUseAgentEnabled.mockReturnValue(undefined);
+    mockUseFeatureFlags.mockReturnValue({ data: undefined, isLoading: false });
     const authed = {
       isAuthenticated: true,
       user: { id: 1, username: 'alice', created_at: '', updated_at: '' },
@@ -194,6 +204,68 @@ describe('App', () => {
       'data-agent-mode',
       'false',
     );
+  });
+
+  it('hides every AI surface when chat_allowed is false', () => {
+    mockUseFeatureFlags.mockReturnValue({
+      data: { agentEnabled: true, chatAllowed: false },
+      isLoading: false,
+    });
+    const authed = {
+      isAuthenticated: true,
+      user: { id: 1, username: 'alice', created_at: '', updated_at: '' },
+      logout: vi.fn(),
+      logoutAll: vi.fn(),
+    };
+    mockUseAuthStore.mockReturnValue(authed);
+    mockUseAuthStore.getState = vi.fn().mockReturnValue(authed);
+
+    render(<App />);
+
+    expect(screen.queryByTestId('chat-panel-mock')).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('Open AI Agent')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('llm-config-button')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('view-tab-knowledge')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('view-tab-knowledge-mobile')).not.toBeInTheDocument();
+    expect(mockUseLlmConfig).toHaveBeenCalledWith(
+      expect.objectContaining({ enabled: false }),
+    );
+  });
+
+  it('waits for the feature probe before opening the chat panel', () => {
+    mockUseFeatureFlags.mockReturnValue({ data: undefined, isLoading: true });
+    const authed = {
+      isAuthenticated: true,
+      user: { id: 1, username: 'alice', created_at: '', updated_at: '' },
+      logout: vi.fn(),
+      logoutAll: vi.fn(),
+    };
+    mockUseAuthStore.mockReturnValue(authed);
+    mockUseAuthStore.getState = vi.fn().mockReturnValue(authed);
+
+    render(<App />);
+
+    expect(screen.queryByTestId('chat-panel-mock')).not.toBeInTheDocument();
+  });
+
+  it('fails open when the feature probe errors', () => {
+    mockUseFeatureFlags.mockReturnValue({
+      data: undefined,
+      isLoading: false,
+      isError: true,
+    });
+    const authed = {
+      isAuthenticated: true,
+      user: { id: 1, username: 'alice', created_at: '', updated_at: '' },
+      logout: vi.fn(),
+      logoutAll: vi.fn(),
+    };
+    mockUseAuthStore.mockReturnValue(authed);
+    mockUseAuthStore.getState = vi.fn().mockReturnValue(authed);
+
+    render(<App />);
+
+    expect(screen.getByTestId('chat-panel-mock')).toBeInTheDocument();
   });
 
   it('hides the knowledge tabs when the backend has KB disabled', () => {

@@ -211,11 +211,11 @@ type deleteConfigOutput struct {
 	Status int `status:"204"`
 }
 
-func RegisterLLMConfigOps(api huma.API, h *Handler, tokens auth.TokenService) {
-	RegisterLLMConfigOpsTest(api, h, tokens, true)
+func RegisterLLMConfigOps(api huma.API, h *Handler, tokens auth.TokenService, aiAllowlist []string) {
+	RegisterLLMConfigOpsTest(api, h, tokens, true, aiAllowlist)
 }
 
-func RegisterLLMConfigOpsTest(api huma.API, h *Handler, tokens auth.TokenService, withAuth bool) {
+func RegisterLLMConfigOpsTest(api huma.API, h *Handler, tokens auth.TokenService, withAuth bool, aiAllowlist []string) {
 	huma.Register(api, huma.Operation{
 		OperationID: "get-llm-config",
 		Method:      http.MethodGet,
@@ -224,7 +224,7 @@ func RegisterLLMConfigOpsTest(api huma.API, h *Handler, tokens auth.TokenService
 		Description: "Returns the authenticated caller's per-user LLM configuration with API keys masked to their last four characters. A user with no saved configuration receives configured=false with null sections.",
 		Tags:        []string{"llm-config"},
 		Security:    []map[string][]string{{"BearerAuth": {}}},
-		Middlewares: llmConfigMiddlewares(tokens, withAuth),
+		Middlewares: llmConfigMiddlewares(tokens, withAuth, aiAllowlist),
 	}, h.GetConfig)
 
 	huma.Register(api, huma.Operation{
@@ -235,7 +235,7 @@ func RegisterLLMConfigOpsTest(api huma.API, h *Handler, tokens auth.TokenService
 		Description: "Validates and upserts the authenticated caller's optional main LLM, optional embedding, optional rerank, optional Tavily, and optional retry-model configuration. API keys are write-only: a blank key on update keeps the stored key; on create a key is required unless the endpoint is loopback. Omitting Tavily disables web search for the agent; omitting rerank keeps retrieval in dense order. Responds with the masked configuration.",
 		Tags:        []string{"llm-config"},
 		Security:    []map[string][]string{{"BearerAuth": {}}},
-		Middlewares: llmConfigMiddlewares(tokens, withAuth),
+		Middlewares: llmConfigMiddlewares(tokens, withAuth, aiAllowlist),
 	}, h.UpdateConfig)
 
 	huma.Register(api, huma.Operation{
@@ -246,7 +246,7 @@ func RegisterLLMConfigOpsTest(api huma.API, h *Handler, tokens auth.TokenService
 		Description: "Removes the authenticated caller's LLM configuration. Idempotent: deleting an unconfigured user also returns 204.",
 		Tags:        []string{"llm-config"},
 		Security:    []map[string][]string{{"BearerAuth": {}}},
-		Middlewares: llmConfigMiddlewares(tokens, withAuth),
+		Middlewares: llmConfigMiddlewares(tokens, withAuth, aiAllowlist),
 	}, h.DeleteConfig)
 
 	huma.Register(api, huma.Operation{
@@ -257,15 +257,18 @@ func RegisterLLMConfigOpsTest(api huma.API, h *Handler, tokens auth.TokenService
 		Description: "Runs one minimal live request per filled slot (main LLM, embedding, rerank, fallback, Tavily) using the submitted values, resolving a blank key against the stored key exactly as PUT does. Returns a classified per-slot result plus the exact outbound request with credentials masked to their last four characters. Saves nothing.",
 		Tags:        []string{"llm-config"},
 		Security:    []map[string][]string{{"BearerAuth": {}}},
-		Middlewares: llmConfigMiddlewares(tokens, withAuth),
+		Middlewares: llmConfigMiddlewares(tokens, withAuth, aiAllowlist),
 	}, h.ValidateConfig)
 }
 
-func llmConfigMiddlewares(tokens auth.TokenService, withAuth bool) huma.Middlewares {
+func llmConfigMiddlewares(tokens auth.TokenService, withAuth bool, aiAllowlist []string) huma.Middlewares {
 	if !withAuth {
 		return nil
 	}
-	return huma.Middlewares{middleware.NewHumaAuth(tokens)}
+	return huma.Middlewares{
+		middleware.NewHumaAuth(tokens),
+		middleware.NewHumaAIAllowlist(aiAllowlist),
+	}
 }
 
 //nolint:revive // unexported-return is huma's idiomatic op pattern

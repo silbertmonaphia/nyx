@@ -1401,3 +1401,91 @@ func TestLoad_BindsAgentAllowPrivateURL(t *testing.T) {
 		t.Error("AgentAllowPrivateURL = false, want true from env")
 	}
 }
+
+func TestLoadAccessGateDefaults(t *testing.T) {
+	t.Setenv("DB_URL", "postgres://x")
+	t.Setenv("JWT_SECRET", auth.TestSecret)
+	t.Setenv("REGISTRATION_ENABLED", "")
+	t.Setenv("REGISTRATION_ALLOWLIST", "")
+	t.Setenv("AI_ALLOWLIST", "")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if !cfg.RegistrationEnabled {
+		t.Error("RegistrationEnabled default = false, want true")
+	}
+	if cfg.RegistrationAllowlist != "" {
+		t.Errorf("RegistrationAllowlist default = %q, want empty", cfg.RegistrationAllowlist)
+	}
+	if cfg.AIAllowlist != "" {
+		t.Errorf("AIAllowlist default = %q, want empty", cfg.AIAllowlist)
+	}
+}
+
+func TestLoadAccessGatesFromEnv(t *testing.T) {
+	t.Setenv("DB_URL", "postgres://x")
+	t.Setenv("JWT_SECRET", auth.TestSecret)
+	t.Setenv("REGISTRATION_ENABLED", "false")
+	t.Setenv("REGISTRATION_ALLOWLIST", "alice, bob")
+	t.Setenv("AI_ALLOWLIST", "alice")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg.RegistrationEnabled {
+		t.Error("RegistrationEnabled = true, want false from env")
+	}
+	if cfg.RegistrationAllowlist != "alice, bob" {
+		t.Errorf("RegistrationAllowlist = %q, want from env", cfg.RegistrationAllowlist)
+	}
+	if cfg.AIAllowlist != "alice" {
+		t.Errorf("AIAllowlist = %q, want from env", cfg.AIAllowlist)
+	}
+}
+
+func TestLoadValidatesAccessAllowlists(t *testing.T) {
+	cases := []struct {
+		name string
+		key  string
+		raw  string
+	}{
+		{"registration trailing comma", "REGISTRATION_ALLOWLIST", "alice,"},
+		{"registration empty segment", "REGISTRATION_ALLOWLIST", "alice,,bob"},
+		{"registration short entry", "REGISTRATION_ALLOWLIST", "alice,ab"},
+		{"registration long entry", "REGISTRATION_ALLOWLIST", strings.Repeat("a", 51)},
+		{"registration control char", "REGISTRATION_ALLOWLIST", "ali\x01ce"},
+		{"ai trailing comma", "AI_ALLOWLIST", "alice,"},
+		{"ai empty segment", "AI_ALLOWLIST", "alice,,bob"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("DB_URL", "postgres://x")
+			t.Setenv("JWT_SECRET", auth.TestSecret)
+			t.Setenv("REGISTRATION_ALLOWLIST", "")
+			t.Setenv("AI_ALLOWLIST", "")
+			t.Setenv(tc.key, tc.raw)
+
+			_, err := Load()
+			if err == nil {
+				t.Fatalf("Load() succeeded for %s=%q, want validation error", tc.key, tc.raw)
+			}
+			if !strings.Contains(err.Error(), tc.key) {
+				t.Errorf("Load() error = %q, want it to name %s", err, tc.key)
+			}
+		})
+	}
+}
+
+func TestLoadAcceptsValidAccessAllowlists(t *testing.T) {
+	t.Setenv("DB_URL", "postgres://x")
+	t.Setenv("JWT_SECRET", auth.TestSecret)
+	t.Setenv("REGISTRATION_ALLOWLIST", "alice, bob,carol")
+	t.Setenv("AI_ALLOWLIST", "alice,bob")
+
+	if _, err := Load(); err != nil {
+		t.Errorf("Load() error = %v, want nil", err)
+	}
+}

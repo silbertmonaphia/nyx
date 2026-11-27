@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"nyx/internal/access"
 	"nyx/internal/platform/auth"
 
 	"go.opentelemetry.io/otel/trace/noop"
@@ -913,5 +914,76 @@ func TestRegister_TooLongPassword(t *testing.T) {
 	})
 	if !errors.Is(err, ErrPasswordTooLong) {
 		t.Errorf("Register err = %v, want ErrPasswordTooLong", err)
+	}
+}
+
+func TestRegister_RegistrationPolicy(t *testing.T) {
+	cases := []struct {
+		name     string
+		policy   *access.RegistrationPolicy
+		username string
+		wantDeny bool
+	}{
+		{"unset policy allows", nil, "alice", false},
+		{"disabled denies", &access.RegistrationPolicy{Enabled: false}, "alice", true},
+		{"listed allows", &access.RegistrationPolicy{Enabled: true, Allowlist: []string{"alice"}}, "alice", false},
+		{"unlisted denies", &access.RegistrationPolicy{Enabled: true, Allowlist: []string{"alice"}}, "bob", true},
+		{"empty allowlist allows", &access.RegistrationPolicy{Enabled: true}, "bob", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			created := false
+			repo := &stubRepo{
+				createFn: func(_ context.Context, u *User) error {
+					created = true
+					u.ID = 42
+					return nil
+				},
+			}
+			svc := NewService(repo, newTestTokens(t), 15*time.Minute, 7*24*time.Hour, noop.NewTracerProvider().Tracer("test"))
+			if tc.policy != nil {
+				svc.SetRegistrationPolicy(*tc.policy)
+			}
+
+			_, err := svc.Register(context.Background(), RegisterRequest{
+				Username: tc.username,
+				Password: "hunter2",
+			})
+
+			if tc.wantDeny {
+				if !errors.Is(err, ErrRegistrationNotAllowed) {
+					t.Fatalf("Register err = %v, want ErrRegistrationNotAllowed", err)
+				}
+				if created {
+					t.Error("CreateUser was called for a denied registration")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("Register: %v", err)
+			}
+			if !created {
+				t.Error("CreateUser was not called for an allowed registration")
+			}
+		})
+	}
+}
+
+func TestRegister_PolicyRunsBeforePasswordValidation(t *testing.T) {
+	repo := &stubRepo{
+		createFn: func(_ context.Context, _ *User) error {
+			t.Error("CreateUser must not be reached for a denied registration")
+			return nil
+		},
+	}
+	svc := NewService(repo, newTestTokens(t), 15*time.Minute, 7*24*time.Hour, noop.NewTracerProvider().Tracer("test"))
+	svc.SetRegistrationPolicy(access.RegistrationPolicy{Enabled: true, Allowlist: []string{"alice"}})
+
+	_, err := svc.Register(context.Background(), RegisterRequest{
+		Username: "bob",
+		Password: strings.Repeat("a", 100),
+	})
+	if !errors.Is(err, ErrRegistrationNotAllowed) {
+		t.Errorf("Register err = %v, want ErrRegistrationNotAllowed to run before the password check", err)
 	}
 }

@@ -101,6 +101,9 @@ export const zh = {
       usernameTaken: '用户名已被占用',
       tooManyAttempts: '尝试次数过多，请稍后再试',
       requestFailed: '操作失败，请稍后再试',
+      registrationClosed: '当前已关闭新用户注册。',
+      registrationNotAllowed: '当前无法注册。',
+      inviteOnlyHint: '注册仅限受邀用户。',
     },
     feeds: {
       newFeed: '新建知识碎片',

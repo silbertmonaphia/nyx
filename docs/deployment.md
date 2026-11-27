@@ -80,6 +80,8 @@ has a default and is opt-in.
 | `REDIS_ENABLED` / `REDIS_URL` | no | — | Cache is off by default; `GET /api/feeds` goes straight to Postgres |
 | `LLM_ENABLED` / `LLM_*` | no | — | Only needed for the chat path |
 | `KB_ENABLED` / `KB_*` | no | — | Knowledge corpus; off by default. Requires `LLM_ENABLED=true` so users can save their BYOK embedding configuration; directory sources are registered per user by the operator CLI |
+| `REGISTRATION_ENABLED` / `REGISTRATION_ALLOWLIST` | no | `true` / empty | Access gate. Empty allowlist keeps public sign-up; a non-empty list limits registration to those exact usernames; `false` closes registration for everyone (existing accounts still log in). Changes apply on the next backend restart; the SPA reads the mode from `GET /api/config` |
+| `AI_ALLOWLIST` | no | empty | Empty lets every authenticated user use AI. Non-empty limits `/api/chat*`, `/api/chat/approvals`, and `/api/me/llm-config*` to the listed usernames; `GET /api/features` reports `chat_allowed` for the caller, and the SPA hides the Knowledge tab too (its embeddings need the same BYOK settings). The KB REST routes stay auth-only |
 
 ### Knowledge base
 
@@ -256,8 +258,11 @@ curl -s "https://<app>.vercel.app${JS}" | grep -o 'https://<api>\.onrender\.com/
 ```
 
 In the browser: open the SPA, register, and watch the Network tab — the
-`/api/register` request must carry `Authorization: Bearer …` and return
-200. API docs live at `https://<api>.onrender.com/api/swagger`.
+`/api/register` request is anonymous (no `Authorization` header) and
+returns 201; a 403 means the deployment's registration gate is closed
+(`REGISTRATION_ENABLED=false` or a username outside
+`REGISTRATION_ALLOWLIST`). API docs live at
+`https://<api>.onrender.com/api/swagger`.
 
 ---
 

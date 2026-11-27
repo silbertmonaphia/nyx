@@ -97,7 +97,11 @@ curl -fsS http://localhost:9000/healthz
 
 ### After step 4 (`AGENT_ENABLED=true`)
 
-Smoke a single chat request end-to-end:
+Smoke a single chat request end-to-end. On a gated deployment the smoke
+username must be on both `REGISTRATION_ALLOWLIST` and `AI_ALLOWLIST`
+(otherwise `/api/register` and `/api/chat` return 403); for the golden
+eval, set `EVAL_USERNAME=<that username>` instead of the per-run
+generated account, or run evals against a non-gated stack.
 
 ```bash
 # Register a test user + get a token (existing flow).

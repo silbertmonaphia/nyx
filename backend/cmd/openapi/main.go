@@ -20,6 +20,7 @@ import (
 	"os"
 	"time"
 
+	"nyx/internal/access"
 	"nyx/internal/features"
 	"nyx/internal/feed"
 	"nyx/internal/kb"
@@ -87,8 +88,9 @@ func generateSpec() ([]byte, error) {
 	// funcs are never called.
 	feed.RegisterFeedOps(humaAPI, feed.NewHandler(nil), tokens)
 	user.RegisterUserOps(humaAPI, user.NewHandler(nil), tokens)
-	features.RegisterFeatureOps(humaAPI, features.NewHandler(false), tokens)
-	llmsettings.RegisterLLMConfigOps(humaAPI, llmsettings.NewHandler(nil), tokens)
+	features.RegisterFeatureOps(humaAPI, features.NewHandler(false, false, nil), tokens)
+	access.RegisterConfigOps(humaAPI, access.NewConfigHandler(access.RegistrationPolicy{Enabled: true}))
+	llmsettings.RegisterLLMConfigOps(humaAPI, llmsettings.NewHandler(nil), tokens, nil)
 	kb.RegisterKBOps(humaAPI, kb.NewHandler(nil), tokens)
 
 	b, err := json.MarshalIndent(humaAPI.OpenAPI(), "", "  ")

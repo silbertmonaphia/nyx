@@ -1395,6 +1395,16 @@ class TestConfig:
             "eval-golden-20260101T000000Z@eval.nyx.local"
         )
 
+    def test_eval_username_overrides_the_generated_email(self, tmp_path: Path) -> None:
+        config = agent_run.resolve_config(
+            {
+                "EVAL_ARTIFACTS_DIR": str(tmp_path),
+                "EVAL_RUN_STAMP": "20260101T000000Z",
+                "EVAL_USERNAME": "eval-golden-svc",
+            }
+        )
+        assert agent_run.eval_user_email(config) == "eval-golden-svc"
+
 
 class TestRecordedFixtureShapes:
     def frames_of(self, name: str) -> list[agent_run.Frame]:

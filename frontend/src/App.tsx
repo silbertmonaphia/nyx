@@ -37,7 +37,7 @@ import { resetLlmConfigStateForNewUser } from './features/chat/services/resetLlm
 import { resetKbStateForNewUser } from './features/kb/services/resetKbState';
 import { LlmConfigModal } from './features/chat/components/LlmConfigModal';
 import { useLlmConfig } from './features/chat/hooks/useLlmConfig';
-import { useAgentEnabled } from './features/chat/hooks/useAgentEnabled';
+import { useFeatureFlags } from './features/chat/hooks/useAgentEnabled';
 import { useChatStore } from './features/chat/store/chatStore';
 import { KnowledgeBasePage } from './features/kb/components/KnowledgeBasePage';
 import { useKbAvailability } from './features/kb/hooks/useKb';
@@ -59,18 +59,21 @@ function App() {
   const { isAuthenticated, user, logout, logoutAll } = useAuthStore();
   const activeView = useUiStore((state) => state.activeView);
   const setActiveView = useUiStore((state) => state.setActiveView);
-  const kbAvailable = useKbAvailability();
-  const agentEnabled = useAgentEnabled();
+  const featureFlags = useFeatureFlags();
+  const kbAvailable = useKbAvailability() && featureFlags.data?.chatAllowed !== false;
+  const agentEnabled = featureFlags.data?.agentEnabled;
+  const chatAllowed = featureFlags.data?.chatAllowed !== false;
   const [confirmDeleteId, setConfirmDeleteId] = useState<number | null>(null);
   const [chatDismissed, setChatDismissed] = useState(false);
-  const chatOpen = isAuthenticated && !chatDismissed;
+  const chatOpen =
+    isAuthenticated && !chatDismissed && chatAllowed && !featureFlags.isLoading;
   const [showLogoutAll, setShowLogoutAll] = useState(false);
   const [loggingOutAll, setLoggingOutAll] = useState(false);
   const [changePasswordOwner, setChangePasswordOwner] = useState<number | null>(null);
   const llmFeatureEnabled = import.meta.env.VITE_LLM_FEATURE_ENABLED !== 'false';
   const [llmSettingsOwner, setLlmSettingsOwner] = useState<number | null>(null);
   const llmSettingsOpen =
-    llmSettingsOwner !== null && llmSettingsOwner === user?.id;
+    chatAllowed && llmSettingsOwner !== null && llmSettingsOwner === user?.id;
   const llmGateOpen = useChatStore((state) => state.llmGateOpen);
   const setLlmGateOpen = useChatStore((state) => state.setLlmGateOpen);
   const {
@@ -80,14 +83,15 @@ function App() {
   } = useLlmConfig({
     enabled: llmFeatureEnabled && isAuthenticated && chatOpen,
   });
-  const llmFeatureActive = llmFeatureEnabled && !llmUnavailable;
+  const llmFeatureActive = llmFeatureEnabled && !llmUnavailable && chatAllowed;
   const llmGate =
     llmFeatureActive &&
     isAuthenticated &&
     chatOpen &&
     !llmStatusLoading &&
     llmAgentReady === false;
-  const llmModalBlocking = llmGate || llmGateOpen;
+  const llmModalBlocking = chatAllowed && (llmGate || llmGateOpen);
+  const llmModalOpen = chatAllowed && (llmSettingsOpen || llmGate || llmGateOpen);
 
   const handleLlmModalChange = (open: boolean) => {
     if (!open) {
@@ -289,16 +293,18 @@ function App() {
                     <Settings className="h-4 w-4" />
                   </Button>
                 )}
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={() => setChatDismissed(false)}
-                  aria-label={t('nav.openChat')}
-                  className="gap-2"
-                >
-                  <MessageSquare className="h-4 w-4" />
-                  {t('nav.chat')}
-                </Button>
+                {chatAllowed && (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => setChatDismissed(false)}
+                    aria-label={t('nav.openChat')}
+                    className="gap-2"
+                  >
+                    <MessageSquare className="h-4 w-4" />
+                    {t('nav.chat')}
+                  </Button>
+                )}
                 <UserMenu
                   username={user?.username ?? ''}
                   onChangePassword={() => setChangePasswordOwner(user?.id ?? null)}
@@ -532,7 +538,7 @@ function App() {
 
       {llmFeatureActive && (
         <LlmConfigModal
-          open={llmSettingsOpen || llmGate || llmGateOpen}
+          open={llmModalOpen}
           blocking={llmModalBlocking}
           onOpenChange={handleLlmModalChange}
           onDismissed={handleLlmModalDismissed}

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"time"
 
+	"nyx/internal/access"
 	"nyx/internal/platform/auth"
 
 	"github.com/rs/zerolog/log"
@@ -19,6 +20,8 @@ var (
 	ErrInvalidCurrentPassword = errors.New("invalid current password")
 
 	ErrPasswordTooLong = errors.New("password too long")
+
+	ErrRegistrationNotAllowed = errors.New("registration not allowed")
 
 	// ErrInvalidRefreshToken — the refresh token either doesn't exist
 	// in the DB or its hash doesn't match a row. Distinguished from
@@ -64,6 +67,7 @@ func init() {
 }
 
 type Service interface {
+	SetRegistrationPolicy(policy access.RegistrationPolicy)
 	Register(ctx context.Context, req RegisterRequest) (*AuthResult, error)
 	Login(ctx context.Context, req LoginRequest) (*AuthResult, error)
 	// Refresh takes the raw refresh token read by the handler from
@@ -101,11 +105,16 @@ type AuthResult struct {
 // tokens with the configured lifetimes and stamp refresh tokens with
 // the right expiry.
 type service struct {
-	repo       Repository
-	tokens     auth.TokenService
-	accessTTL  time.Duration
-	refreshTTL time.Duration
-	tracer     trace.Tracer
+	repo               Repository
+	tokens             auth.TokenService
+	accessTTL          time.Duration
+	refreshTTL         time.Duration
+	tracer             trace.Tracer
+	registrationPolicy *access.RegistrationPolicy
+}
+
+func (s *service) SetRegistrationPolicy(policy access.RegistrationPolicy) {
+	s.registrationPolicy = &policy
 }
 
 // NewService builds the user/auth service. The two TTLs feed both
@@ -189,6 +198,10 @@ func (s *service) accessExpires() time.Time {
 func (s *service) Register(ctx context.Context, req RegisterRequest) (*AuthResult, error) {
 	ctx, span := s.tracer.Start(ctx, "user.Register", trace.WithSpanKind(trace.SpanKindInternal))
 	defer span.End()
+
+	if s.registrationPolicy != nil && !s.registrationPolicy.Allows(req.Username) {
+		return nil, ErrRegistrationNotAllowed
+	}
 
 	if len(req.Password) > 72 {
 		return nil, ErrPasswordTooLong

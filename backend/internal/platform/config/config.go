@@ -7,6 +7,8 @@ import (
 	"net/url"
 	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/spf13/viper"
 	"nyx/internal/platform/auth"
@@ -58,6 +60,10 @@ type Config struct {
 	// combining "*" with cookie-based auth is similarly unsafe; if
 	// you turn this on, audit the auth surface.
 	CORSAllowedOrigins string `mapstructure:"CORS_ALLOWED_ORIGINS"`
+
+	RegistrationEnabled   bool   `mapstructure:"REGISTRATION_ENABLED"`
+	RegistrationAllowlist string `mapstructure:"REGISTRATION_ALLOWLIST"`
+	AIAllowlist           string `mapstructure:"AI_ALLOWLIST"`
 
 	// OpenTelemetry — distributed tracing.
 	//
@@ -351,6 +357,9 @@ func setDefaults() {
 	// Vite proxy in development keeps the SPA unaffected by this
 	// default.
 	viper.SetDefault("CORS_ALLOWED_ORIGINS", "")
+	viper.SetDefault("REGISTRATION_ENABLED", true)
+	viper.SetDefault("REGISTRATION_ALLOWLIST", "")
+	viper.SetDefault("AI_ALLOWLIST", "")
 
 	// Cookie-based auth was retired in favour of Bearer tokens (see
 	// FUTURE.md §4). The legacy COOKIE_* env vars are no longer
@@ -473,6 +482,7 @@ func bindEnvVars() {
 		"DB_CONN_MAX_LIFETIME", "DB_CONN_MAX_IDLE_TIME",
 		"REDIS_URL", "REDIS_ENABLED", "CACHE_TTL",
 		"CORS_ALLOWED_ORIGINS",
+		"REGISTRATION_ENABLED", "REGISTRATION_ALLOWLIST", "AI_ALLOWLIST",
 		"OTEL_ENABLED", "OTEL_SERVICE_NAME",
 		"OTEL_EXPORTER_OTLP_ENDPOINT",
 		"LLM_ENABLED", "LLM_PROVIDER", "LLM_BASE_URL", "LLM_API_KEY", "LLM_MODEL",
@@ -671,12 +681,43 @@ const (
 )
 
 func validateFeatureConfigs(cfg *Config) error {
+	if err := validateAccessConfigs(cfg); err != nil {
+		return err
+	}
 	if cfg.MCPEnabled {
 		if err := validateMCPConfig(cfg); err != nil {
 			return err
 		}
 	}
 	return validateKBConfig(cfg)
+}
+
+func validateAccessConfigs(cfg *Config) error {
+	if err := validateAllowlist("REGISTRATION_ALLOWLIST", cfg.RegistrationAllowlist); err != nil {
+		return err
+	}
+	return validateAllowlist("AI_ALLOWLIST", cfg.AIAllowlist)
+}
+
+func validateAllowlist(name, raw string) error {
+	if raw == "" {
+		return nil
+	}
+	for i, entry := range strings.Split(raw, ",") {
+		entry = strings.TrimSpace(entry)
+		if entry == "" {
+			return fmt.Errorf("%s entry %d is empty", name, i+1)
+		}
+		if n := utf8.RuneCountInString(entry); n < 3 || n > 50 {
+			return fmt.Errorf("%s entry %q must be 3-50 characters, got %d", name, entry, n)
+		}
+		for _, r := range entry {
+			if unicode.IsControl(r) {
+				return fmt.Errorf("%s entry %q contains a control character", name, entry)
+			}
+		}
+	}
+	return nil
 }
 
 func validateKBConfig(cfg *Config) error {

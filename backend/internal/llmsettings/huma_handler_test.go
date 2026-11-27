@@ -31,7 +31,7 @@ func setupConfigRouter(t *testing.T) (*chi.Mux, *Service, *stubRepo, auth.TokenS
 	router := chi.NewMux()
 	router.Use(middleware.StoreRequest)
 	hapi := humachi.New(router, platapi.HumaConfig())
-	RegisterLLMConfigOpsTest(hapi, NewHandler(svc), tokens, true)
+	RegisterLLMConfigOpsTest(hapi, NewHandler(svc), tokens, true, nil)
 	return router, svc, repo, tokens
 }
 
@@ -245,7 +245,7 @@ func TestHandler_PutRejectsPrivateBaseURLWhenBYOKPrivateIsDenied(t *testing.T) {
 	router := chi.NewMux()
 	router.Use(middleware.StoreRequest)
 	hapi := humachi.New(router, platapi.HumaConfig())
-	RegisterLLMConfigOpsTest(hapi, NewHandler(svc), tokens, true)
+	RegisterLLMConfigOpsTest(hapi, NewHandler(svc), tokens, true, nil)
 
 	tok := mustToken(t, tokens, 1)
 	for _, field := range []string{"llm_base_url", "embedding_base_url", "tavily_base_url"} {
@@ -478,7 +478,7 @@ func TestHandler_KeysAreWriteOnlyInSpec(t *testing.T) {
 	router := chi.NewMux()
 	router.Use(middleware.StoreRequest)
 	hapi := humachi.New(router, platapi.HumaConfig())
-	RegisterLLMConfigOpsTest(hapi, NewHandler(nil), tokens, false)
+	RegisterLLMConfigOpsTest(hapi, NewHandler(nil), tokens, false, nil)
 
 	spec, err := json.Marshal(hapi.OpenAPI())
 	require.NoError(t, err)
@@ -496,7 +496,7 @@ func setupConfigRouterWithHook(t *testing.T, hook func(ctx context.Context, user
 	hapi := humachi.New(router, platapi.HumaConfig())
 	handler := NewHandler(svc)
 	handler.SetEmbeddingInvalidatedHook(hook)
-	RegisterLLMConfigOpsTest(hapi, handler, tokens, true)
+	RegisterLLMConfigOpsTest(hapi, handler, tokens, true, nil)
 	return router, svc, tokens
 }
 
@@ -574,4 +574,53 @@ func TestHandler_PutWithoutLLMIsAccepted(t *testing.T) {
 	rr = configRequest(t, router, http.MethodGet, tok, nil)
 	require.Equal(t, http.StatusOK, rr.Code)
 	assert.Nil(t, decodeConfig(t, rr).LLM)
+}
+
+func TestLLMConfigOps_AIAllowlistGate(t *testing.T) {
+	platapi.OverrideHumaErrors()
+	svc, _, _ := newTestService(t)
+	tokens, err := auth.NewTokenService([]byte(auth.TestSecret), 15*time.Minute)
+	require.NoError(t, err)
+
+	router := chi.NewMux()
+	router.Use(middleware.StoreRequest)
+	hapi := humachi.New(router, platapi.HumaConfig())
+	RegisterLLMConfigOpsTest(hapi, NewHandler(svc), tokens, true, []string{"allowed-user"})
+
+	allowedToken, err := tokens.GenerateToken(1, "allowed-user")
+	require.NoError(t, err)
+	deniedToken, err := tokens.GenerateToken(2, "other-user")
+	require.NoError(t, err)
+
+	rr := configRequest(t, router, http.MethodGet, allowedToken, nil)
+	require.Equal(t, http.StatusOK, rr.Code, rr.Body.String())
+
+	for _, method := range []string{http.MethodGet, http.MethodPut, http.MethodDelete} {
+		t.Run(method+" denies unlisted user", func(t *testing.T) {
+			var body any
+			if method == http.MethodPut {
+				body = validPutBody()
+			}
+			resp := configRequest(t, router, method, deniedToken, body)
+			assert.Equal(t, http.StatusForbidden, resp.Code, resp.Body.String())
+		})
+	}
+
+	t.Run("POST validate denies unlisted user", func(t *testing.T) {
+		raw, err := json.Marshal(validPutBody())
+		require.NoError(t, err)
+		req := httptest.NewRequest(
+			http.MethodPost,
+			"/api/me/llm-config/validate",
+			bytes.NewReader(raw),
+		)
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Authorization", "Bearer "+deniedToken)
+		resp := httptest.NewRecorder()
+		router.ServeHTTP(resp, req)
+		assert.Equal(t, http.StatusForbidden, resp.Code, resp.Body.String())
+	})
+
+	rr = configRequest(t, router, http.MethodGet, "", nil)
+	assert.Equal(t, http.StatusUnauthorized, rr.Code)
 }

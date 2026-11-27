@@ -24,6 +24,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/config": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get public site configuration
+         * @description Anonymous probe the SPA uses to render registration affordances. Reports only the registration mode, never usernames or allowlist contents.
+         */
+        get: operations["get-public-config"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/features": {
         parameters: {
             query?: never;
@@ -33,7 +53,7 @@ export interface paths {
         };
         /**
          * Get feature availability
-         * @description Reports operator-level feature switches the SPA renders conditionally. agent_enabled is true when the chat handler proxies to the Python agent.
+         * @description Reports feature switches the SPA renders conditionally. agent_enabled is true when the chat handler proxies to the Python agent; chat_allowed is true when the caller may use AI surfaces (LLM_ENABLED plus AI_ALLOWLIST).
          */
         get: operations["get-features"];
         put?: never;
@@ -486,6 +506,8 @@ export interface components {
         FeaturesResponse: {
             /** @description True when the chat handler proxies to the Python agent (AGENT_ENABLED=true). */
             agent_enabled: boolean;
+            /** @description True when the caller may use AI surfaces: LLM_ENABLED=true and the caller is on AI_ALLOWLIST (an empty list allows every authenticated user). */
+            chat_allowed: boolean;
         };
         Feed: {
             /** Format: date-time */
@@ -585,6 +607,13 @@ export interface components {
         };
         LogoutRequest: {
             refresh_token: string;
+        };
+        PublicConfigResponse: {
+            /**
+             * @description Registration availability for this deployment: open (anyone), invite_only (only usernames on the operator allowlist), closed (no new accounts).
+             * @enum {string}
+             */
+            registration_mode: "open" | "invite_only" | "closed";
         };
         RefreshRequest: {
             refresh_token: string;
@@ -720,6 +749,35 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    "get-public-config": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PublicConfigResponse"];
+                };
             };
             /** @description Error */
             default: {

@@ -5,6 +5,7 @@ import { AuthForm } from './AuthForm';
 import api, { tokenStore } from '../../../services/api';
 import { useAuthStore } from '../../../store/authStore';
 import type { AuthResponse, User } from '~/api/openapi';
+import { usePublicConfig } from '../hooks/usePublicConfig';
 
 // Replace the wrapped axios instance's `post` so we can dictate the
 // login/register response without touching the real network. The form
@@ -15,6 +16,11 @@ vi.spyOn(api, 'post');
 // inspect end-state without hitting the real Zustand persist middleware
 // (which writes to localStorage in jsdom and pollutes later tests).
 vi.mock('../../../store/authStore');
+vi.mock('../hooks/usePublicConfig');
+
+const mockUsePublicConfig = usePublicConfig as unknown as {
+  mockReturnValue: (value: unknown) => void;
+};
 
 const mockedPost = api.post as unknown as ReturnType<typeof vi.fn>;
 
@@ -48,6 +54,7 @@ describe('AuthForm', () => {
 
   beforeEach(() => {
     mockedPost.mockReset();
+    mockUsePublicConfig.mockReturnValue({ data: 'open', isLoading: false });
     setAuth = vi.fn();
     logout = vi.fn();
     onSuccess = vi.fn();
@@ -181,6 +188,66 @@ describe('AuthForm', () => {
         refreshToken: 'test.refresh.token',
       });
       expect(localStorage.getItem('nyx-token-store')).toBeNull();
+    });
+  });
+
+  describe('registration availability', () => {
+    it('hides the register toggle and explains when registration is closed', () => {
+      mockUsePublicConfig.mockReturnValue({ data: 'closed', isLoading: false });
+
+      render(<AuthForm onSuccess={onSuccess} onCancel={onCancel} />);
+
+      expect(
+        screen.queryByRole('button', { name: /^register$/i }),
+      ).not.toBeInTheDocument();
+      expect(screen.getByTestId('registration-closed-hint')).toHaveTextContent(
+        'New registrations are currently closed.',
+      );
+    });
+
+    it('keeps the register form and shows a hint in invite-only mode', async () => {
+      mockUsePublicConfig.mockReturnValue({ data: 'invite_only', isLoading: false });
+
+      render(<AuthForm onSuccess={onSuccess} onCancel={onCancel} />);
+      await userEvent.click(screen.getByRole('button', { name: /^register$/i }));
+
+      expect(screen.getByTestId('registration-invite-hint')).toHaveTextContent(
+        'Registration is invite-only.',
+      );
+      expect(
+        screen.getByRole('button', { name: /^register$/i }),
+      ).toBeInTheDocument();
+    });
+
+    it('fails open when the public config probe errors', () => {
+      mockUsePublicConfig.mockReturnValue({
+        data: undefined,
+        isLoading: false,
+        isError: true,
+      });
+
+      render(<AuthForm onSuccess={onSuccess} onCancel={onCancel} />);
+
+      expect(
+        screen.getByRole('button', { name: /^register$/i }),
+      ).toBeInTheDocument();
+      expect(
+        screen.queryByTestId('registration-closed-hint'),
+      ).not.toBeInTheDocument();
+    });
+
+    it('shows a dedicated inline error for a register 403', async () => {
+      mockedPost.mockRejectedValueOnce({ response: { status: 403 } });
+
+      render(<AuthForm onSuccess={onSuccess} onCancel={onCancel} />);
+      await userEvent.click(screen.getByRole('button', { name: /^register$/i }));
+      await userEvent.type(screen.getByLabelText(/username/i), 'not-invited');
+      await userEvent.type(screen.getByLabelText(/password/i), 'hunter2');
+      await userEvent.click(screen.getByRole('button', { name: /^register$/i }));
+
+      const alert = await screen.findByRole('alert');
+      expect(alert).toHaveTextContent('Registration is not available.');
+      expect(onSuccess).not.toHaveBeenCalled();
     });
   });
 

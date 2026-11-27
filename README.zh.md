@@ -119,6 +119,11 @@ make dev-vllm-rerank  # 重排序模型 (bge-reranker-v2-m3, :8002, 可选 reran
 
 聊天由 `LLM_ENABLED=true` 开启；再加上 `AGENT_ENABLED=true` 则会路由到 agent，而不是普通的单轮 RAG 聊天。agent 路径还需要 `PYTHON_AGENT_URL` 与共享的 `AGENT_SERVICE_TOKEN`（至少 32 字节，Go API 与 agent 服务必须一致 —— 每次 Go → Python 调用都以 `X-Nyx-Service-Token` 携带）。公网可达的 agent 必须用 `https://` 地址访问；`http://` 只对 loopback 与私网服务名放行。其余一切不受影响。
 
+每个部署还可以用 `REGISTRATION_ALLOWLIST` / `AI_ALLOWLIST`（逗号分隔的用户名；留空则完全开放）
+收窄注册与 AI 访问范围。前端会读取 `GET /api/config` 与 `GET /api/features` 自动适配 ——
+注册入口按模式隐藏，名单外的用户看不到聊天入口和知识库页签（知识库嵌入用的是同一套 BYOK 配置）。
+详见 `backend/.env.example` 与 [`docs/deployment-selfhost.md`](docs/deployment-selfhost.md)。
+
 ## 部署
 
 前端 Vercel、后端 Render —— 配置已随仓库提交（`render.yaml`、`frontend/vercel.json`）。

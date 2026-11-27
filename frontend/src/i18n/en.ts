@@ -112,6 +112,9 @@ export const en: Translation = {
       usernameTaken: 'Username already taken',
       tooManyAttempts: 'Too many attempts. Please try again later.',
       requestFailed: 'Something went wrong. Please try again.',
+      registrationClosed: 'New registrations are currently closed.',
+      registrationNotAllowed: 'Registration is not available.',
+      inviteOnlyHint: 'Registration is invite-only.',
     },
     feeds: {
       newFeed: 'New Feed',

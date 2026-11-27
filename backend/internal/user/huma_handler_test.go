@@ -20,6 +20,7 @@ import (
 	"go.opentelemetry.io/otel/trace/noop"
 	"golang.org/x/crypto/bcrypt"
 
+	"nyx/internal/access"
 	"nyx/internal/middleware"
 )
 
@@ -68,6 +69,16 @@ func newTestRouterWithRepo(repo Repository) *chi.Mux {
 		panic(err) // test setup; never expected to fail
 	}
 	return setupTestRouter(NewHandler(NewService(repo, tokens, 15*time.Minute, 7*24*time.Hour, noop.NewTracerProvider().Tracer("test"))), tokens)
+}
+
+func newTestRouterWithRegistrationPolicy(repo Repository, policy access.RegistrationPolicy) *chi.Mux {
+	tokens, err := auth.NewTokenService([]byte(auth.TestSecret), 15*time.Minute)
+	if err != nil {
+		panic(err)
+	}
+	svc := NewService(repo, tokens, 15*time.Minute, 7*24*time.Hour, noop.NewTracerProvider().Tracer("test"))
+	svc.SetRegistrationPolicy(policy)
+	return setupTestRouter(NewHandler(svc), tokens)
 }
 
 // testHash bcrypt-hashes plain at MinCost. The default cost is ~60ms
@@ -155,6 +166,85 @@ func decodeEnvelope(t *testing.T, rr *httptest.ResponseRecorder, wantStatus int)
 }
 
 // ---- Register ----
+
+func TestRegisterHandler_ForbiddenWhenRegistrationDisabled(t *testing.T) {
+	repo := &stubRepo{
+		createFn: func(_ context.Context, _ *User) error {
+			t.Error("CreateUser must not be reached when registration is disabled")
+			return nil
+		},
+	}
+	rr := postJSON(t, newTestRouterWithRegistrationPolicy(repo, access.RegistrationPolicy{Enabled: false}), "/api/register", RegisterRequest{
+		Username: testUsername,
+		Password: "hunter2",
+	})
+
+	env := decodeEnvelope(t, rr, http.StatusForbidden)
+	if env.Message != "Registration is not available" {
+		t.Errorf("envelope.error = %q, want the static registration message", env.Message)
+	}
+	if env.Details != nil {
+		t.Errorf("envelope.details = %v, want nil", env.Details)
+	}
+}
+
+func TestRegisterHandler_ForbiddenForUnlistedUser(t *testing.T) {
+	repo := &stubRepo{
+		createFn: func(_ context.Context, _ *User) error {
+			t.Error("CreateUser must not be reached for an unlisted username")
+			return nil
+		},
+	}
+	policy := access.RegistrationPolicy{Enabled: true, Allowlist: []string{"someone-else"}}
+	rr := postJSON(t, newTestRouterWithRegistrationPolicy(repo, policy), "/api/register", RegisterRequest{
+		Username: testUsername,
+		Password: "hunter2",
+	})
+
+	env := decodeEnvelope(t, rr, http.StatusForbidden)
+	if env.Message != "Registration is not available" {
+		t.Errorf("envelope.error = %q, want the static registration message", env.Message)
+	}
+	if strings.Contains(rr.Body.String(), testUsername) {
+		t.Errorf("response echoes the submitted username: %s", rr.Body.String())
+	}
+}
+
+func TestRegisterHandler_ForbiddenResponsesAreIdentical(t *testing.T) {
+	body := RegisterRequest{Username: testUsername, Password: "hunter2"}
+	disabledRepo := &stubRepo{}
+	unlistedRepo := &stubRepo{}
+
+	disabled := decodeEnvelope(t, postJSON(t, newTestRouterWithRegistrationPolicy(disabledRepo, access.RegistrationPolicy{Enabled: false}), "/api/register", body), http.StatusForbidden)
+	unlisted := decodeEnvelope(t, postJSON(t, newTestRouterWithRegistrationPolicy(unlistedRepo, access.RegistrationPolicy{Enabled: true, Allowlist: []string{"someone-else"}}), "/api/register", body), http.StatusForbidden)
+
+	if disabled.Message != unlisted.Message || disabled.Code != unlisted.Code {
+		t.Errorf("403 envelopes differ between disabled and unlisted: disabled=%+v unlisted=%+v", disabled, unlisted)
+	}
+	if disabled.Details != nil || unlisted.Details != nil {
+		t.Errorf("403 envelopes must carry no details: disabled=%v unlisted=%v", disabled.Details, unlisted.Details)
+	}
+}
+
+func TestRegisterHandler_ListedUserCanRegister(t *testing.T) {
+	repo := &stubRepo{
+		createFn: func(_ context.Context, u *User) error {
+			u.ID = 42
+			u.CreatedAt = time.Now()
+			u.UpdatedAt = u.CreatedAt
+			return nil
+		},
+	}
+	policy := access.RegistrationPolicy{Enabled: true, Allowlist: []string{testUsername}}
+	rr := postJSON(t, newTestRouterWithRegistrationPolicy(repo, policy), "/api/register", RegisterRequest{
+		Username: testUsername,
+		Password: "hunter2",
+	})
+
+	if rr.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want 201; body=%s", rr.Code, rr.Body.String())
+	}
+}
 
 // TestRegisterHandler_Created is the happy path: 201 with the access
 // + refresh tokens, token type, expiry, and user profile all in the

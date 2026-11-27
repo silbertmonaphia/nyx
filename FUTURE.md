@@ -27,6 +27,7 @@ Single source of truth for "what's done / what's next" across the stack. Tick an
 - [x] JWT Secret via Viper Config — `auth.SetSecret(cfg.JWTSecret)` is called once in `main.go`; `auth/jwt.go` no longer reads `os.Getenv`.
 - [x] JWT Refresh Tokens — short-lived access tokens (default 15m, configurable via `JWT_ACCESS_TTL`) paired with opaque rotated refresh tokens (default 7d, `JWT_REFRESH_TTL`) and family-level reuse detection. Frontend refreshes on `WWW-Authenticate: Bearer error="invalid_token", error_description="expired"`.
 - [x] Per-owner feed authorization — `feeds.user_id` BIGINT (FK to `users.id`), every sqlc query filters `WHERE user_id = @user_id`, `GET /api/feeds` is auth-required and returns only the caller's feeds, cross-owner `PUT` / `DELETE` map to `feed.ErrNotFound` (single 404, no `ErrForbidden` leak). Cache keys and invalidation prefixes are per-user (`feeds:u={id}:...`) so a write by user A cannot evict user B's cache.
+- [x] Per-deployment access gates — `REGISTRATION_ENABLED` / `REGISTRATION_ALLOWLIST` close or narrow public sign-up (one identical 403 for disabled vs. not-listed usernames; existing accounts still log in); `AI_ALLOWLIST` restricts `/api/chat*`, `/api/chat/approvals`, and `/api/me/llm-config*` to listed users. `GET /api/config` anonymously exposes the registration mode, `GET /api/features` reports per-user `chat_allowed`, and the SPA hides the register form / chat entry, failing open when the probes are unavailable. Baked into deployment env (both allowlists default empty = fully open).
 
 ## 3. Database Lifecycle
 

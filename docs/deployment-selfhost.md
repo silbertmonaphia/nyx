@@ -98,6 +98,8 @@ SERVER_HOST=0.0.0.0
 REDIS_ENABLED=true
 REDIS_URL=redis://redis:6379
 CORS_ALLOWED_ORIGINS=https://app.<domain>
+# REGISTRATION_ALLOWLIST=alice,bob
+# AI_ALLOWLIST=alice,bob
 OTEL_ENABLED=true
 OTEL_EXPORTER_OTLP_ENDPOINT=http://jaeger:4318
 LLM_ENABLED=true
@@ -116,6 +118,27 @@ default is loopback (`127.0.0.1`) since 2026-11, and a container bound
 to loopback is unreachable through its published port. Upgrading a
 server provisioned before that change: append the line to
 `backend/.env` and `docker compose --profile app up -d backend`.
+
+`REGISTRATION_ALLOWLIST` / `AI_ALLOWLIST` are the access gates for this
+instance: a non-empty registration allowlist closes public sign-up while
+still letting the listed usernames register (exact, case-sensitive;
+`REGISTRATION_ENABLED=false` closes registration entirely — existing
+accounts keep logging in). A non-empty `AI_ALLOWLIST` restricts chat,
+approvals, and BYOK settings to those users; the SPA also hides the
+Knowledge tab for non-listed users because its embeddings are configured
+through the same BYOK settings (the KB REST routes themselves stay
+auth-only). Leave both empty for an open instance; changes apply on the
+next backend restart, and the SPA adapts automatically via
+`GET /api/config` and `GET /api/features`. For an SPA built with
+`npm run build` on the host, the variables still live in `backend/.env`.
+
+If the operator's `backend/.env` sets these gates, live e2e runs on a
+side stack inherit them unless the shell overrides the variables with
+explicit values — specs that register random usernames will then get
+403s. Start the side stack with an explicit
+`REGISTRATION_ALLOWLIST=e2e_gate_allowed,e2e_gate_writer
+AI_ALLOWLIST=e2e_gate_allowed` for the gated `access-gates` spec, and
+unset them for the rest of the suite.
 
 `USER_LLM_ENCRYPTION_KEY` (≥ 32 bytes) is required once
 `LLM_ENABLED=true`; rotating it makes every stored per-user BYOK key

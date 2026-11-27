@@ -63,8 +63,8 @@ func NewHandler(s *Service) *Handler {
 //
 // Middleware on these routes specifically:
 //   - NewAuth: bearer JWT validation; stamps user ID on the context.
-//     Runs FIRST for every route in the group, so an unauthenticated
-//     session call is 401ed before the proxy is ever reached.
+//     Runs FIRST; NewAIAllowlist runs next and 403s callers outside
+//     AI_ALLOWLIST.
 //   - userLimiter: per-user 5-streams/min bucket (FUTURE.md §6).
 //     May be nil to disable the limiter (useful for tests).
 //
@@ -82,12 +82,13 @@ func NewHandler(s *Service) *Handler {
 // in-memory buffer (the session routes share the mount point for
 // auth parity, and forward JSON they do not own). See
 // backend/HUMA.md for the full rationale.
-func RegisterChatRoute(router chi.Router, h *Handler, tokens auth.TokenService, userLimiter *UserRateLimiter) {
+func RegisterChatRoute(router chi.Router, h *Handler, tokens auth.TokenService, userLimiter *UserRateLimiter, aiAllowlist []string) {
 	if h == nil {
 		panic("chat.RegisterChatRoute: handler is required")
 	}
 	router.Route("/api/chat", func(r chi.Router) {
 		r.Use(middleware.NewAuth(tokens))
+		r.Use(middleware.NewAIAllowlist(aiAllowlist))
 
 		streamRoute := r
 		if userLimiter != nil {
@@ -96,9 +97,9 @@ func RegisterChatRoute(router chi.Router, h *Handler, tokens auth.TokenService, 
 		streamRoute.Post("/", h.stream)
 		streamRoute.Get("/runs/{run_id}/stream", h.runStream)
 
-		// Session REST surface (plain JSON, no SSE). Authenticated by
-		// the group's NewAuth; forwarded to PYTHON_AGENT_URL under
-		// /agent/sessions...; 503 when the agent is disabled.
+		// Session REST surface (plain JSON, no SSE). Authenticated and
+		// AI-gated by the group's middleware (NewAuth + NewAIAllowlist);
+		// forwards to PYTHON_AGENT_URL under /agent/sessions...; 503 when disabled.
 		r.Get("/sessions", h.sessionsList)
 		r.Post("/sessions", h.sessionsCreate)
 		r.Get("/sessions/{session_id}/messages", h.sessionsMessages)

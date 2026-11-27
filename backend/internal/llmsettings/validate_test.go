@@ -452,7 +452,7 @@ func setupValidateRouter(t *testing.T, allow func(int) bool) (*chi.Mux, auth.Tok
 	router := chi.NewMux()
 	router.Use(middleware.StoreRequest)
 	hapi := humachi.New(router, platapi.HumaConfig())
-	RegisterLLMConfigOpsTest(hapi, handler, tokens, true)
+	RegisterLLMConfigOpsTest(hapi, handler, tokens, true, nil)
 	return router, tokens
 }
 

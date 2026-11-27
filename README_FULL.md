@@ -365,7 +365,9 @@ See `k8s/*.yaml` for per-resource config.
 |---|---|---|---|
 | GET | `/api/health` | — | Deep readiness (DB + cache status) |
 | GET | `/api/livez` | — | Shallow liveness — 200 while the process is up |
-| POST | `/api/register` | — | Body `{username, password}`. Returns `{access_token, refresh_token, token_type: "Bearer", expires_at, user}` |
+| POST | `/api/register` | — | Body `{username, password}`. Returns `{access_token, refresh_token, token_type: "Bearer", expires_at, user}`. 403 when the registration gate (`REGISTRATION_ENABLED` / `REGISTRATION_ALLOWLIST`) rejects the username |
+| GET | `/api/config` | — | Public probe: `{registration_mode}` = `open` / `invite_only` / `closed` |
+| GET | `/api/features` | Bearer | `{agent_enabled, chat_allowed}` — `chat_allowed` reflects `LLM_ENABLED` plus `AI_ALLOWLIST` for the caller |
 | POST | `/api/login` | — | Body `{username, password}`. Returns the Bearer pair + user |
 | POST | `/api/refresh` | — | Body `{refresh_token}`. Returns a fresh Bearer pair + user. Reuse revokes the entire family |
 | POST | `/api/logout` | Bearer | Body `{refresh_token}`. Revokes that token's family (this login chain only). Returns 204 |
@@ -377,7 +379,7 @@ See `k8s/*.yaml` for per-resource config.
 | POST | `/api/feeds` | JWT | |
 | PUT | `/api/feeds/{id}` | JWT | |
 | DELETE | `/api/feeds/{id}` | JWT | Soft-delete |
-| POST | `/api/chat` | JWT | SSE (`text/event-stream`). Requires `LLM_ENABLED=true`. Single-turn RAG chat, or an SSE proxy to the Python agent when `AGENT_ENABLED=true` |
+| POST | `/api/chat` | JWT | SSE (`text/event-stream`). Requires `LLM_ENABLED=true`. Single-turn RAG chat, or an SSE proxy to the Python agent when `AGENT_ENABLED=true`. 403 when `AI_ALLOWLIST` is non-empty and excludes the caller |
 | POST | `/mcp` | JWT | MCP Streamable HTTP exposing the feed tools (`MCP_ENABLED=true`) |
 | GET | `/internal/rag/retrieve` | JWT | RAG bridge consumed by the Python agent |
 

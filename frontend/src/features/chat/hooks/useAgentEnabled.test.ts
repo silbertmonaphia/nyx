@@ -3,7 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { TestProviders, renderHook } from '~/test/test-utils';
 import { useAuthStore } from '~/store/authStore';
 import { featuresService } from '../services/featuresService';
-import { useAgentEnabled } from './useAgentEnabled';
+import { useAgentEnabled, useChatAllowed } from './useAgentEnabled';
 
 vi.mock('../services/featuresService');
 
@@ -53,5 +53,25 @@ describe('useAgentEnabled', () => {
     useAuthStore.setState({ user: null, isAuthenticated: false });
     renderHook(() => useAgentEnabled(), { wrapper: TestProviders });
     expect(mockedService.get).not.toHaveBeenCalled();
+  });
+
+  it('reports chat_allowed once loaded', async () => {
+    mockedService.get.mockResolvedValue({
+      agentEnabled: false,
+      chatAllowed: false,
+    });
+    const { result } = renderHook(() => useChatAllowed(), {
+      wrapper: TestProviders,
+    });
+    await waitFor(() => expect(result.current).toBe(false));
+  });
+
+  it('leaves chat_allowed undefined when the backend omits it', async () => {
+    mockedService.get.mockResolvedValue({ agentEnabled: true });
+    const { result } = renderHook(() => useChatAllowed(), {
+      wrapper: TestProviders,
+    });
+    await waitFor(() => expect(mockedService.get).toHaveBeenCalled());
+    expect(result.current).toBeUndefined();
   });
 });

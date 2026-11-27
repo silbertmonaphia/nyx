@@ -49,6 +49,9 @@ Environment (names frozen by the Makefile integration owner):
                                   as X-Nyx-Service-Token on agent calls only)
     EVAL_ARTIFACTS_DIR            artifact root (Makefile creates it)
     EVAL_RUN_STAMP                UTC stamp used in the eval-user email
+    EVAL_USERNAME                 optional fixed eval username; add it to
+                                  REGISTRATION_ALLOWLIST / AI_ALLOWLIST on
+                                  gated stacks
     EVAL_DB_DSN                   prefs-poll DSN (default: dev stack)
     EVAL_WEB_SEARCH               on|off, informational only (the running
                                   stack owns the real flag; the weather case
@@ -190,6 +193,7 @@ class Config:
     embed_base_url: str = DEFAULT_EMBED_BASE_URL
     embed_model: str = DEFAULT_EMBED_MODEL
     embed_api_key: str = ""
+    eval_username: str = ""
 
 
 class Transport(Protocol):
@@ -519,6 +523,7 @@ def resolve_config(env: dict[str, str] | None = None) -> Config:
         ).rstrip("/"),
         embed_model=source.get("EVAL_EMBED_MODEL") or DEFAULT_EMBED_MODEL,
         embed_api_key=(source.get("EVAL_EMBED_API_KEY") or "").strip(),
+        eval_username=(source.get("EVAL_USERNAME") or "").strip(),
         artifacts_dir=artifacts_dir,
         run_stamp=run_stamp,
         db_dsn=source.get("EVAL_DB_DSN") or DEFAULT_DB_DSN,
@@ -572,6 +577,8 @@ def preflight(config: Config, runtime: Runtime) -> None:
 
 
 def eval_user_email(config: Config) -> str:
+    if config.eval_username:
+        return config.eval_username
     return EVAL_EMAIL_TEMPLATE.format(stamp=config.run_stamp)
 
 
