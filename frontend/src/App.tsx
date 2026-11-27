@@ -26,6 +26,7 @@ import {
 } from './components/ui/Dialog';
 import { Plus, X, Search, LogOut, MessageSquare, ArrowDownNarrowWide, ArrowUpNarrowWide, Users, Settings } from 'lucide-react';
 import { PageMeta } from './components/app/PageMeta';
+import { SiteFooter } from './components/app/SiteFooter';
 import { ThemeToggle } from './components/app/ThemeToggle';
 import { LocaleToggle } from './components/app/LocaleToggle';
 import { logger } from './services/logger';
@@ -539,7 +540,9 @@ function App() {
         />
       )}
 
-      <section id="spacer"></section>
+      <footer id="spacer" className="flex items-center justify-center">
+        <SiteFooter raised={!isAuthenticated} />
+      </footer>
     </div>
   );
 }

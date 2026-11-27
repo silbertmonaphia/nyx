@@ -598,6 +598,7 @@ services:
         # also hides the gear when GET /api/me/llm-config returns 404, so
         # the defaults self-align even if this is left unset.
         - VITE_LLM_FEATURE_ENABLED=${VITE_LLM_FEATURE_ENABLED:-true}
+        - VITE_ICP_BEIAN=${VITE_ICP_BEIAN:-}
         - SENTRY_AUTH_TOKEN=${SENTRY_AUTH_TOKEN:-}
         - SENTRY_ORG=${SENTRY_ORG:-}
         - SENTRY_PROJECT=${SENTRY_PROJECT:-nyx-frontend}

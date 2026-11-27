@@ -71,12 +71,19 @@ POSTGRES_PASSWORD=<openssl rand -hex 16>
 POSTGRES_DB=nyx
 VITE_API_URL=https://api.<domain>/api
 API_ORIGIN=https://api.<domain>
+VITE_ICP_BEIAN=粤ICP备20xxxxxxxxxx号
 PYTHON_AGENT_LLM_BASE_URL=https://api.deepseek.com/v1
 PYTHON_AGENT_LLM_MODEL=deepseek-chat
 ```
 
-`VITE_API_URL` / `API_ORIGIN` are interpolated into the frontend
-image **at build time** — changing them means rebuilding the image.
+`VITE_API_URL` / `API_ORIGIN` / `VITE_ICP_BEIAN` are interpolated into
+the frontend image **at build time** — changing them means rebuilding
+the image. Set `VITE_ICP_BEIAN` only for a site filed in mainland
+China: the SPA then shows the number in the footer of every page,
+linked to the MIIT filing site (https://beian.miit.gov.cn/), as MIIT
+requires. For an SPA built with `npm run build` on the host instead of
+the image, set the same variable in `frontend/.env` before building.
+
 `PYTHON_AGENT_LLM_BASE_URL` must be here and **not** in
 `backend/.env`: the compose `agent.environment:` block interpolates it
 from the root `.env` and masks any `env_file` value; left unset it

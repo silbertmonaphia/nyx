@@ -383,6 +383,7 @@ jobs:
       KB_ENABLED: "true"
       E2E_BYOK_PRIVATE_DENIED: "false"
       USER_LLM_ENCRYPTION_KEY: "ci-user-llm-encryption-key-0123456789"
+      VITE_ICP_BEIAN: "粤ICP备2026191358号"
     steps:
     - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
     - name: Set up Go
@@ -512,6 +513,7 @@ jobs:
       KB_ENABLED: "true"
       E2E_BYOK_PRIVATE_DENIED: "false"
       USER_LLM_ENCRYPTION_KEY: "ci-user-llm-encryption-key-0123456789"
+      VITE_ICP_BEIAN: "粤ICP备2026191358号"
     steps:
     - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
     - name: Set up Go

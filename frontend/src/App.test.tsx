@@ -1,7 +1,7 @@
 import { render, screen, waitFor, act, fireEvent } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import App from './App';
-import { vi, describe, it, expect, beforeEach } from 'vitest';
+import { vi, describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { useFeeds } from './features/feeds/hooks/useFeeds';
 import { useAuthStore } from './store/authStore';
 import { useFeedUiStore } from './features/feeds/store/feedUiStore';
@@ -99,9 +99,37 @@ describe('App', () => {
     });
   });
 
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
   it('renders the brand in the nav', () => {
     render(<App />);
     expect(screen.getAllByText('Nyx').length).toBeGreaterThan(0);
+  });
+
+  it('renders the ICP filing link for guests and signed-in users', () => {
+    vi.stubEnv('VITE_ICP_BEIAN', '粤ICP备2026191358号');
+
+    const { unmount } = render(<App />);
+    const guestLink = screen.getByTestId('icp-beian-link');
+    expect(guestLink).toHaveTextContent('粤ICP备2026191358号');
+    expect(guestLink.className).toContain('z-[60]');
+    unmount();
+
+    const authed = {
+      isAuthenticated: true,
+      user: { id: 1, username: 'alice', created_at: '', updated_at: '' },
+      logout: vi.fn(),
+      logoutAll: vi.fn(),
+    };
+    mockUseAuthStore.mockReturnValue(authed);
+    mockUseAuthStore.getState = vi.fn().mockReturnValue(authed);
+
+    render(<App />);
+    const authedLink = screen.getByTestId('icp-beian-link');
+    expect(authedLink).toHaveTextContent('粤ICP备2026191358号');
+    expect(authedLink.className).not.toContain('z-[60]');
   });
 
   it('switches the main area between feeds and knowledge without unmounting the chat panel', async () => {
