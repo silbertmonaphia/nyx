@@ -267,12 +267,14 @@ test.describe('Theme toggle', () => {
     await expect.poll(async () => luminance(await navBg())).toBeLessThan(50);
   });
 
-  test('the toggle is hidden below the md breakpoint', async ({ page }) => {
+  test('the login screen offers the toggle below the md breakpoint', async ({
+    page,
+  }) => {
     await page.setViewportSize({ width: 390, height: 844 });
     await page.goto('/');
 
     await expect(page.getByTestId('theme-toggle')).toHaveCount(1);
-    await expect(page.getByTestId('theme-toggle')).toBeHidden();
+    await expect(page.getByTestId('theme-toggle')).toBeVisible();
     await expect(page.getByText('Nyx').first()).toBeVisible();
   });
 });

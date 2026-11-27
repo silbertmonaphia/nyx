@@ -238,8 +238,8 @@ function App() {
             <div className="text-2xl font-bold bg-gradient-to-r from-primary to-accent bg-clip-text text-transparent">
               Nyx
             </div>
-            <LocaleToggle />
-            <ThemeToggle />
+            {isAuthenticated && <LocaleToggle />}
+            {isAuthenticated && <ThemeToggle />}
             <div className="hidden md:flex items-center gap-1 rounded-md border p-1">
               <Button
                 variant={activeView === 'feeds' ? 'default' : 'ghost'}
@@ -456,6 +456,10 @@ function App() {
             <DialogTitle>{t('app.authDialog.title')}</DialogTitle>
             <DialogDescription>{t('app.authDialog.description')}</DialogDescription>
           </DialogHeader>
+          <div className="flex items-center justify-center gap-2">
+            <LocaleToggle alwaysVisible />
+            <ThemeToggle alwaysVisible />
+          </div>
           <AuthForm required onSuccess={() => setChatDismissed(false)} />
         </DialogContent>
       </Dialog>

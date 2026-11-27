@@ -96,6 +96,9 @@ async function loginStubbed(page: Page): Promise<void> {
   await page.getByLabel('密码').fill('secret123');
   await page.getByRole('button', { name: '登录', exact: true }).click();
   await expect(page.getByText('登录成功！')).toBeVisible();
+  await expect(
+    page.getByRole('heading', { name: '登录或注册' }),
+  ).toHaveCount(0);
   await closeChatIfOpen(page);
 }
 
@@ -118,6 +121,24 @@ test('defaults to Chinese for a browser whose language is English', async ({
       LOCALE_STORAGE_KEY,
     ),
   ).toBeNull();
+});
+
+test('switches the login screen locale before sign-in', async ({ page }) => {
+  await stubApi(page);
+  await page.goto('/');
+
+  await expect(
+    page.getByRole('heading', { name: '登录或注册' }),
+  ).toBeVisible();
+  await page.getByTestId('locale-en').click();
+  await expect(
+    page.getByRole('heading', { name: 'Login or Register' }),
+  ).toBeVisible();
+
+  await page.getByTestId('locale-zh').click();
+  await expect(
+    page.getByRole('heading', { name: '登录或注册' }),
+  ).toBeVisible();
 });
 
 test('applies a locale switch immediately', async ({ page }) => {

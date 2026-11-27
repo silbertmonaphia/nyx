@@ -334,9 +334,27 @@ describe('App', () => {
   });
 
   it('renders the theme toggle next to the brand in the nav', () => {
+    const authed = {
+      isAuthenticated: true,
+      user: { id: 1, username: 'alice', created_at: '', updated_at: '' },
+      logout: vi.fn(),
+      logoutAll: vi.fn(),
+    };
+    mockUseAuthStore.mockReturnValue(authed);
+    mockUseAuthStore.getState = vi.fn().mockReturnValue(authed);
+
     render(<App />);
+
     const toggle = screen.getByTestId('theme-toggle');
     expect(toggle.parentElement).toHaveTextContent('Nyx');
+  });
+
+  it('offers locale and theme toggles on the login screen', () => {
+    render(<App />);
+
+    const dialog = screen.getByRole('dialog');
+    expect(dialog).toContainElement(screen.getByTestId('locale-toggle'));
+    expect(dialog).toContainElement(screen.getByTestId('theme-toggle'));
   });
 
   it('renders the navbar in both locales', async () => {

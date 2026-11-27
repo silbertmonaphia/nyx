@@ -7,7 +7,7 @@ const OPTIONS: { locale: Locale; label: string }[] = [
   { locale: 'en', label: 'EN' },
 ];
 
-export function LocaleToggle() {
+export function LocaleToggle({ alwaysVisible = false }: { alwaysVisible?: boolean }) {
   const { t, i18n } = useTranslation();
   const active = i18n.language;
 
@@ -17,7 +17,11 @@ export function LocaleToggle() {
       aria-label={t('locale.switch')}
       title={t('locale.switch')}
       data-testid="locale-toggle"
-      className="hidden md:inline-flex items-center gap-0.5 rounded-full border border-border p-0.5"
+      className={
+        alwaysVisible
+          ? 'inline-flex items-center gap-0.5 rounded-full border border-border p-0.5'
+          : 'hidden md:inline-flex items-center gap-0.5 rounded-full border border-border p-0.5'
+      }
     >
       {OPTIONS.map(({ locale, label }) => (
         <button

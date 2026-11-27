@@ -57,6 +57,14 @@ describe('ThemeToggle', () => {
     expect(toggle).toHaveAccessibleName('Switch to dark theme');
   });
 
+  it('stays visible below the md breakpoint when alwaysVisible is set', () => {
+    render(<ThemeToggle alwaysVisible />);
+    const toggle = screen.getByTestId('theme-toggle');
+
+    expect(toggle.className).toContain('inline-flex');
+    expect(toggle.className).not.toContain('hidden');
+  });
+
   it('tracks a theme the OS drives while no choice is stored', () => {
     render(<ThemeToggle />);
     const toggle = screen.getByTestId('theme-toggle');
