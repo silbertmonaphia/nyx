@@ -14,6 +14,7 @@ real bound chain is covered by `test_planner_parity.py`.
 
 from __future__ import annotations
 
+import httpx
 import pytest
 from langchain_core.exceptions import OutputParserException
 from pydantic import ValidationError
@@ -33,6 +34,7 @@ from agent.planner import (
     _parse_and_validate,
     _PlanError,
     _previous_assistant_message,
+    _provider_fault,
     _state_change_intents,
     plan_node,
 )
@@ -725,6 +727,177 @@ def test_provider_error_returns_planner_failed_no_retry(monkeypatch, scripted_se
     assert isinstance(plan_or_error, _PlanError)
     assert plan_or_error.code == "planner_failed"
     assert client._call_count == 1  # no retry on provider faults
+
+
+class _ProviderFailure(Exception):
+    def __init__(self, status_code: int | None = None, code: str | None = None):
+        super().__init__("SECRET provider detail sk-live-123")
+        if status_code is not None:
+            self.status_code = status_code
+        if code is not None:
+            self.code = code
+
+
+class _ResponseStatusFailure(Exception):
+    def __init__(self, status_code: int):
+        super().__init__("SECRET provider detail sk-live-123")
+        self.response = type("_Resp", (), {"status_code": status_code})()
+
+
+def _wrapped_transport_failure() -> Exception:
+    exc = RuntimeError("SECRET provider detail sk-live-123")
+    exc.__cause__ = httpx.ConnectError("connection refused")
+    return exc
+
+
+_PROVIDER_FAULT_CASES = [
+    (
+        _ProviderFailure(401),
+        "llm_auth_failed",
+        "LLM API rejected the API key — check the LLM settings",
+    ),
+    (
+        _ProviderFailure(403),
+        "llm_auth_failed",
+        "LLM API rejected the request — check the API key and account permissions",
+    ),
+    (
+        _ProviderFailure(402),
+        "llm_quota_exceeded",
+        "LLM API quota or balance exhausted — check the provider account",
+    ),
+    (
+        _ProviderFailure(429, "insufficient_quota"),
+        "llm_quota_exceeded",
+        "LLM API quota or balance exhausted — check the provider account",
+    ),
+    (
+        _ProviderFailure(429, "insufficient_balance"),
+        "llm_quota_exceeded",
+        "LLM API quota or balance exhausted — check the provider account",
+    ),
+    (
+        _ProviderFailure(429),
+        "llm_rate_limited",
+        "LLM API rate limited — retry shortly",
+    ),
+    (
+        _ProviderFailure(404),
+        "llm_model_missing",
+        "LLM model not found — check the model name",
+    ),
+    (
+        _ResponseStatusFailure(404),
+        "llm_model_missing",
+        "LLM model not found — check the model name",
+    ),
+    (
+        httpx.ConnectError("connection refused"),
+        "llm_unreachable",
+        "LLM API unreachable — check the base URL and network",
+    ),
+    (
+        _wrapped_transport_failure(),
+        "llm_unreachable",
+        "LLM API unreachable — check the base URL and network",
+    ),
+]
+
+
+@pytest.mark.parametrize("failure,code,detail", _PROVIDER_FAULT_CASES)
+def test_provider_faults_are_classified(
+    monkeypatch, scripted_settings, failure, code, detail
+):
+    class _FailingClient(_ScriptedStructuredClient):
+        async def ainvoke(self, messages, config=None):
+            self._call_count += 1
+            self._captured_messages.append(messages)
+            raise failure
+
+    client = _FailingClient(script=[])
+    monkeypatch.setattr(
+        "agent.planner._build_structured_client",
+        lambda _s, _state, _secrets=None: client,
+    )
+
+    state = new_state(
+        user_id=1,
+        run_id="r1",
+        model="test-model",
+        messages=[{"role": "user", "content": "hi"}],
+    )
+    plan_or_error = await_call(
+        _emit_structured_plan(state, scripted_settings, _NoopTracer())
+    )
+
+    assert isinstance(plan_or_error, _PlanError)
+    assert plan_or_error.code == code
+    assert plan_or_error.detail == detail
+    assert "SECRET" not in plan_or_error.detail
+    assert "SECRET" not in plan_or_error.reason
+    assert "sk-live" not in plan_or_error.reason
+    assert client._call_count == 1
+
+
+def test_real_openai_errors_satisfy_the_classifier_contract():
+    import openai
+
+    request = httpx.Request("POST", "http://llm.test/v1/chat/completions")
+    response = httpx.Response(402, request=request)
+
+    quota = _provider_fault(
+        openai.APIStatusError("Insufficient Balance", response=response, body=None)
+    )
+    assert quota.code == "llm_quota_exceeded"
+
+    rate_limited = openai.RateLimitError(
+        "Rate limit reached",
+        response=httpx.Response(429, request=request),
+        body={"error": {"type": "insufficient_quota", "code": "insufficient_quota"}},
+    )
+    assert _provider_fault(rate_limited).code == "llm_quota_exceeded"
+
+    throttled = openai.RateLimitError(
+        "Rate limit reached",
+        response=httpx.Response(429, request=request),
+        body={"error": {"type": "requests", "code": "rate_limit_exceeded"}},
+    )
+    assert _provider_fault(throttled).code == "llm_rate_limited"
+
+    unreachable = _provider_fault(openai.APIConnectionError(request=request))
+    assert unreachable.code == "llm_unreachable"
+
+
+def test_legacy_provider_fault_is_classified(monkeypatch):
+    monkeypatch.setenv("PYTHON_AGENT_LLM_BASE_URL", "http://planner.test/v1")
+    monkeypatch.setenv("PYTHON_AGENT_LLM_API_KEY", "test-key")
+    monkeypatch.setenv("PYTHON_AGENT_LLM_MODEL", "test-model")
+    monkeypatch.setenv("PYTHON_AGENT_PLANNER_STRUCTURED_ENABLED", "false")
+    settings = Settings(_env_file=None)
+
+    class _FailingClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def ainvoke(self, messages, config=None):
+            raise _ProviderFailure(402)
+
+    monkeypatch.setattr("agent.planner.ChatOpenAI", _FailingClient)
+
+    state = new_state(
+        user_id=1,
+        run_id="r1",
+        model="test-model",
+        messages=[{"role": "user", "content": "hi"}],
+    )
+    plan_or_error = await_call(_emit_legacy_plan(state, settings, _NoopTracer()))
+
+    assert isinstance(plan_or_error, _PlanError)
+    assert plan_or_error.code == "llm_quota_exceeded"
+    assert plan_or_error.detail == (
+        "LLM API quota or balance exhausted — check the provider account"
+    )
+    assert "SECRET" not in plan_or_error.detail
 
 
 def test_construction_fault_returns_planner_failed(monkeypatch, scripted_settings):

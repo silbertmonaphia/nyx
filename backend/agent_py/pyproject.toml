@@ -30,6 +30,10 @@ dependencies = [
     "opentelemetry-exporter-otlp-proto-http>=1.45",
     "prometheus-client>=0.26",
     "httpx>=0.28",
+    # Direct use in planner.py: provider-fault classification keys on the
+    # SDK's exception hierarchy and structured status/code fields. Floor
+    # mirrors langchain-openai 1.7's own constraint.
+    "openai>=2.45,<4",
     # Direct use in observability.py: a trust_env=False session for the
     # OTLP exporter so span export bypasses HTTP_PROXY. Also a transitive
     # dep of opentelemetry-exporter-otlp-proto-http; declared here because

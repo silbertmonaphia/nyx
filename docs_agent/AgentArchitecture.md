@@ -116,7 +116,16 @@ START → planner → executor → END
   error under a `PREVIOUS_ATTEMPT_FAILED` block, bounded by
   `planner_retry_max` (default 1); persistent failure → typed
   `error{code: "plan_invalid"}`. `plan_too_large` (> `plan_max_steps` = 10) and
-  duplicate step ids are typed errors too. A legacy free-text path
+  duplicate step ids are typed errors too. Provider-call faults are
+  non-retryable and classified by `_provider_fault`: 401 → `llm_auth_failed`,
+  403 → `llm_auth_failed` (permissions wording), 402 or 429 carrying an
+  `insufficient_quota`/`insufficient_balance` signal → `llm_quota_exceeded`,
+  plain 429 → `llm_rate_limited`, 404 → `llm_model_missing`, transport
+  failures (including `__cause__` chains) → `llm_unreachable`; anything else
+  keeps `planner_failed`. Detail and terminator-reason strings are static —
+  the provider's message stays in the log/span — and the SPA renders an
+  "Open LLM settings" shortcut for the `llm_*` codes, preserving the last
+  typed code when the recovery ladder exhausts. A legacy free-text path
   (fence-strip + `json.loads`, `_parse_and_validate` at `:534-560`) stays
   reachable via `PYTHON_AGENT_PLANNER_STRUCTURED_ENABLED=false` for vLLM
   parsers that don't honour `response_format`; both paths apply equivalent

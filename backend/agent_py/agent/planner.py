@@ -33,6 +33,7 @@ import logging
 import re
 from typing import Any, cast
 
+from httpx import TransportError
 from langchain_core.callbacks import UsageMetadataCallbackHandler
 from langchain_core.exceptions import OutputParserException
 from langchain_core.messages import HumanMessage, SystemMessage
@@ -40,6 +41,7 @@ from langchain_core.output_parsers import JsonOutputParser
 from langchain_core.runnables import RunnableLambda
 from langchain_core.runnables.config import ensure_config, merge_configs
 from langchain_openai import ChatOpenAI
+from openai import APIConnectionError
 from opentelemetry import trace
 from pydantic import SecretStr, ValidationError
 
@@ -198,6 +200,97 @@ class _PlanError:
         self.code = code
         self.detail = detail
         self.reason = reason
+
+
+_PROVIDER_QUOTA_SIGNALS = frozenset(
+    {"insufficient_quota", "insufficient_balance", "quota_exceeded"}
+)
+
+
+def _upstream_status(exc: BaseException) -> int | None:
+    status = getattr(exc, "status_code", None)
+    if isinstance(status, int):
+        return status
+    response = getattr(exc, "response", None)
+    status = getattr(response, "status_code", None)
+    return status if isinstance(status, int) else None
+
+
+def _quota_signal(exc: BaseException) -> bool:
+    signals = {getattr(exc, "code", None), getattr(exc, "type", None)}
+    body = getattr(exc, "body", None)
+    if isinstance(body, dict):
+        error = body.get("error")
+        if isinstance(error, dict):
+            signals.add(error.get("code"))
+            signals.add(error.get("type"))
+    return any(
+        isinstance(signal, str) and signal in _PROVIDER_QUOTA_SIGNALS
+        for signal in signals
+    )
+
+
+def _is_transport_fault(exc: BaseException) -> bool:
+    seen: set[int] = set()
+    current: BaseException | None = exc
+    while current is not None and id(current) not in seen:
+        if isinstance(
+            current,
+            (TransportError, APIConnectionError, ConnectionError, TimeoutError),
+        ):
+            return True
+        seen.add(id(current))
+        current = current.__cause__ or current.__context__
+    return False
+
+
+def _provider_fault(exc: BaseException) -> _PlanError:
+    """Classify a provider fault into a typed, wire-safe plan error.
+
+    Only exception types and structured status/code fields are inspected —
+    never the message — so provider text (which can echo credential
+    fragments) cannot reach the SSE frame or the terminator reason.
+    """
+    status = _upstream_status(exc)
+    if status == 401:
+        return _PlanError(
+            "llm_auth_failed",
+            "LLM API rejected the API key — check the LLM settings",
+            "provider auth failed",
+        )
+    if status == 403:
+        return _PlanError(
+            "llm_auth_failed",
+            "LLM API rejected the request — check the API key and account permissions",
+            "provider auth failed",
+        )
+    if status == 402 or (status == 429 and _quota_signal(exc)):
+        return _PlanError(
+            "llm_quota_exceeded",
+            "LLM API quota or balance exhausted — check the provider account",
+            "provider quota exhausted",
+        )
+    if status == 429:
+        return _PlanError(
+            "llm_rate_limited",
+            "LLM API rate limited — retry shortly",
+            "provider rate limited",
+        )
+    if status == 404:
+        return _PlanError(
+            "llm_model_missing",
+            "LLM model not found — check the model name",
+            "provider model missing",
+        )
+    if _is_transport_fault(exc):
+        return _PlanError(
+            "llm_unreachable",
+            "LLM API unreachable — check the base URL and network",
+            "provider unreachable",
+        )
+    return _PlanError(
+        "planner_failed", "Plan generation failed", "provider call failed"
+    )
 
 
 async def plan_node(
@@ -606,7 +699,7 @@ async def _emit_structured_plan(
                 # one-shot retry bounds the cost of the occasional
                 # misclassification. Non-ValueError provider faults —
                 # auth, network, API-status errors — do NOT match here
-                # and fall through to the `planner_failed` branch.)
+                # and fall through to the `_provider_fault` branch.)
                 last_error = _extract_structured_error(exc)
                 had_validation_failure = True
                 span.set_attribute("ok", False)
@@ -622,16 +715,14 @@ async def _emit_structured_plan(
                 continue
             except Exception as exc:  # noqa: BLE001 — non-retryable provider fault
                 # Parity with the legacy path: upstream faults (auth,
-                # network, a provider that rejects `response_format`)
-                # surface as the typed `planner_failed` error instead of
+                # quota, network, a provider that rejects `response_format`)
+                # surface as typed errors instead of
                 # escaping the graph node. Retrying these is pointless.
                 _accrue_callback_usage(state, usage_cb, settings)
                 span.set_attribute("ok", False)
                 span.set_attribute("error", repr(exc)[:200])
                 log.warning("planner provider call failed: %r", exc)
-                return _PlanError(
-                    "planner_failed", "Plan generation failed", "provider call failed"
-                )
+                return _provider_fault(exc)
 
             _accrue_callback_usage(state, usage_cb, settings)
             if not isinstance(plan_obj, Plan):
@@ -822,9 +913,7 @@ async def _emit_legacy_plan(
             )
         except Exception as exc:  # noqa: BLE001 — surface as a typed error event
             log.warning("planner provider call failed (legacy path): %r", exc)
-            return _PlanError(
-                "planner_failed", "Plan generation failed", "provider call failed"
-            )
+            return _provider_fault(exc)
 
         _prompt, _completion, _total = accumulate_usage(state, resp)
         if _total:
